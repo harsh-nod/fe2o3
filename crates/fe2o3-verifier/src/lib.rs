@@ -21,6 +21,7 @@ mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_proof_binding_v3;
 mod compiler_target_lineage_v1;
+mod constrained_affine_bounds_certificate_v2;
 mod control_flow_binding;
 mod executor;
 mod functional_refinement_receipt_v2;
@@ -96,6 +97,14 @@ pub use authenticated_proof_binding::{
 pub use compiler_target_lineage_v1::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
     validate_compiler_target_lineage_v1,
+};
+pub use constrained_affine_bounds_certificate_v2::{
+    CONSTRAINED_AFFINE_BOUNDS_PROOF_SOURCE_SHA256_V2,
+    CONSTRAINED_AFFINE_BOUNDS_VERUS_CLOSURE_MANIFEST_SHA256_V2,
+    CONSTRAINED_AFFINE_BOUNDS_VERUS_EXECUTABLE_SHA256_V2,
+    CompilerConstrainedAffineBoundsVerificationErrorV2, ConstrainedAffineBoundsProofBindingV2,
+    VerifiedCompilerConstrainedAffineBoundsV2,
+    verify_compiler_constrained_affine_bounds_certificate_v2,
 };
 pub use control_flow_binding::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,

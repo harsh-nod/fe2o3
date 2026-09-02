@@ -22,6 +22,7 @@ use dialect_kernel::{
 use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
+    RankedConstrainedAffineBoundsCertificateV2,
 };
 #[cfg(test)]
 use fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionReceiptV1;
@@ -55,7 +56,7 @@ use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
     SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, semantic_option_producers_v1,
 };
-use fe2o3_proof_contracts::DigestV1;
+use fe2o3_proof_contracts::{AffineInequalityV2, DigestV1};
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
@@ -820,6 +821,7 @@ pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
 pub(crate) struct AuthenticatedRankedVerificationV5 {
     middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
     affine_bounds: Box<[AuthenticatedRankedAffineBoundsV1]>,
+    constrained_affine_bounds: Box<[AuthenticatedRankedConstrainedAffineBoundsV2]>,
     functional: Option<AuthenticatedFunctionalVerificationV1>,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 }
@@ -830,6 +832,30 @@ struct AuthenticatedRankedAffineBoundsV1 {
     operation: usize,
     dimension: usize,
     verification: fe2o3_verifier::VerifiedCompilerAffineBoundsV1,
+}
+
+/// Independently checked constrained theorem retained at its exact ranked-IR site.
+struct AuthenticatedRankedConstrainedAffineBoundsV2 {
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    access_view: String,
+    access_index: String,
+    guards: Box<[AuthenticatedRankedAffineGuardV2]>,
+    verification: fe2o3_verifier::VerifiedCompilerConstrainedAffineBoundsV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuthenticatedRankedAffineGuardV2 {
+    branch_block: usize,
+    branch_operation: usize,
+    lhs_value: String,
+    rhs_value: String,
+    true_successor: usize,
+    false_successor: usize,
+    accepted_successor: usize,
+    accepted_on_true_edge: bool,
+    normalized_constraint: AffineInequalityV2,
 }
 
 /// One canonically ordered ranked-verification owner bound to its exact root
@@ -953,6 +979,11 @@ impl AuthenticatedRankedVerificationV5 {
         self.affine_bounds.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn independently_checked_constrained_affine_bound_count(&self) -> usize {
+        self.constrained_affine_bounds.len()
+    }
+
     pub(crate) fn retained_functional_verification_is_coherent(&self) -> bool {
         self.functional.as_ref().is_none_or(|functional| {
             functional.aggregate.report().contract_identity()
@@ -989,6 +1020,8 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
     AffineBounds(fe2o3_verifier::CompilerAffineBoundsVerificationErrorV1),
     AffineBoundsCustody,
+    ConstrainedAffineBounds(fe2o3_verifier::CompilerConstrainedAffineBoundsVerificationErrorV2),
+    ConstrainedAffineBoundsCustody,
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
     AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
@@ -1013,6 +1046,10 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::AffineBoundsCustody => formatter.write_str(
                 "ranked affine-bounds verification no longer matches its exact report site",
             ),
+            Self::ConstrainedAffineBounds(error) => error.fmt(formatter),
+            Self::ConstrainedAffineBoundsCustody => formatter.write_str(
+                "ranked constrained affine-bounds verification no longer matches its exact report site",
+            ),
             Self::SemanticContract(error) => {
                 write!(
                     formatter,
@@ -1035,12 +1072,16 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
 impl std::error::Error for ProductionRankedVerificationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::RosterMetadata(_) | Self::RosterIdentity | Self::AffineBoundsCustody => None,
+            Self::RosterMetadata(_)
+            | Self::RosterIdentity
+            | Self::AffineBoundsCustody
+            | Self::ConstrainedAffineBoundsCustody => None,
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
             Self::AffineBounds(error) => Some(error),
+            Self::ConstrainedAffineBounds(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
             Self::AggregateVerus(error) => Some(error),
@@ -1252,6 +1293,7 @@ fn authenticate_ranked_root_v5(
         fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
             .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
     let affine_bounds = independently_verify_affine_bounds_v1(lowering)?;
+    let constrained_affine_bounds = independently_verify_constrained_affine_bounds_v2(lowering)?;
     let functional = if lowering.has_retained_policy_checked_refinement_staging() {
         let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
             lowering,
@@ -1288,6 +1330,7 @@ fn authenticate_ranked_root_v5(
     Ok(AuthenticatedRankedVerificationV5 {
         middle_end_evidence,
         affine_bounds,
+        constrained_affine_bounds,
         functional,
         semantic_u32_induction,
     })
@@ -1341,6 +1384,768 @@ fn revalidate_affine_bounds_custody_v1(
         }
     }
     Ok(())
+}
+
+fn independently_verify_constrained_affine_bounds_v2(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+) -> Result<Box<[AuthenticatedRankedConstrainedAffineBoundsV2]>, ProductionRankedVerificationErrorV1>
+{
+    let report = lowering.bounds_report();
+    let required = report.required_constrained_affine_site_count_v2();
+    let records = report.constrained_affine_certificates();
+    if required == 0 {
+        return if records.is_empty() {
+            Ok(Vec::new().into_boxed_slice())
+        } else {
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        };
+    }
+    let complete = report
+        .complete_constrained_affine_site_roster_v2()
+        .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+    if complete.len() != required {
+        return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+    }
+    let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel())?;
+    let mut sites = HashSet::with_capacity(complete.len());
+    complete
+        .iter()
+        .map(|record| {
+            if !sites.insert((record.block(), record.operation(), record.dimension())) {
+                return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+            }
+            replay.verify_record(record)?;
+            let verification =
+                fe2o3_verifier::verify_compiler_constrained_affine_bounds_certificate_v2(
+                    record.certificate(),
+                )
+                .map_err(ProductionRankedVerificationErrorV1::ConstrainedAffineBounds)?;
+            Ok(AuthenticatedRankedConstrainedAffineBoundsV2 {
+                block: record.block(),
+                operation: record.operation(),
+                dimension: record.dimension(),
+                access_view: record.access_view().to_owned(),
+                access_index: record.access_index().to_owned(),
+                guards: record
+                    .guards()
+                    .iter()
+                    .map(|guard| AuthenticatedRankedAffineGuardV2 {
+                        branch_block: guard.branch_block(),
+                        branch_operation: guard.branch_operation(),
+                        lhs_value: guard.lhs_value().to_owned(),
+                        rhs_value: guard.rhs_value().to_owned(),
+                        true_successor: guard.true_successor(),
+                        false_successor: guard.false_successor(),
+                        accepted_successor: guard.accepted_successor(),
+                        accepted_on_true_edge: guard.accepted_on_true_edge(),
+                        normalized_constraint: guard.normalized_constraint().clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                verification,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
+}
+
+fn revalidate_constrained_affine_bounds_custody_v2(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    retained: &[AuthenticatedRankedConstrainedAffineBoundsV2],
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    let report = lowering.bounds_report();
+    let required = report.required_constrained_affine_site_count_v2();
+    let records = report.constrained_affine_certificates();
+    if records.len() != retained.len()
+        || records.len() != required
+        || (required != 0
+            && report
+                .complete_constrained_affine_site_roster_v2()
+                .is_none())
+        || (required == 0 && !retained.is_empty())
+    {
+        return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+    }
+    let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel())?;
+    let mut sites = HashSet::with_capacity(records.len());
+    for (record, retained) in records.iter().zip(retained) {
+        if !sites.insert((record.block(), record.operation(), record.dimension())) {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        replay.verify_record(record)?;
+        if record.block() != retained.block
+            || record.operation() != retained.operation
+            || record.dimension() != retained.dimension
+            || record.access_view() != retained.access_view
+            || record.access_index() != retained.access_index
+            || !authenticated_guards_match_record_v2(record, &retained.guards)
+            || record.certificate() != retained.verification.certificate()
+            || !retained
+                .verification
+                .establishes_nonempty_constrained_domain()
+            || retained.verification.grants_compiler_refinement_authority()
+            || retained.verification.grants_artifact_or_launch_authority()
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        replay.verify_authenticated_record(retained)?;
+        let rechecked = fe2o3_verifier::verify_compiler_constrained_affine_bounds_certificate_v2(
+            record.certificate(),
+        )
+        .map_err(ProductionRankedVerificationErrorV1::ConstrainedAffineBounds)?;
+        if rechecked.certificate() != retained.verification.certificate()
+            || rechecked.proof_binding() != retained.verification.proof_binding()
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+    }
+    Ok(())
+}
+
+fn authenticated_guards_match_record_v2(
+    record: &RankedConstrainedAffineBoundsCertificateV2,
+    retained: &[AuthenticatedRankedAffineGuardV2],
+) -> bool {
+    record.guards().len() == retained.len()
+        && record
+            .guards()
+            .iter()
+            .zip(retained)
+            .all(|(record, retained)| {
+                record.branch_block() == retained.branch_block
+                    && record.branch_operation() == retained.branch_operation
+                    && record.lhs_value() == retained.lhs_value
+                    && record.rhs_value() == retained.rhs_value
+                    && record.true_successor() == retained.true_successor
+                    && record.false_successor() == retained.false_successor
+                    && record.accepted_successor() == retained.accepted_successor
+                    && record.accepted_on_true_edge() == retained.accepted_on_true_edge
+                    && record.normalized_constraint() == &retained.normalized_constraint
+            })
+}
+
+const MAX_CONSTRAINED_AFFINE_REPLAY_DEPTH_V2: usize = 256;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProductionAffineExpressionV2 {
+    constant: i128,
+    coefficients: Vec<i128>,
+}
+
+impl ProductionAffineExpressionV2 {
+    fn constant(value: u64, rank: usize) -> Self {
+        Self {
+            constant: i128::from(value),
+            coefficients: vec![0; rank],
+        }
+    }
+
+    fn checked_add(&self, other: &Self) -> Option<Self> {
+        (self.coefficients.len() == other.coefficients.len()).then_some(())?;
+        Some(Self {
+            constant: self.constant.checked_add(other.constant)?,
+            coefficients: self
+                .coefficients
+                .iter()
+                .zip(&other.coefficients)
+                .map(|(left, right)| left.checked_add(*right))
+                .collect::<Option<Vec<_>>>()?,
+        })
+    }
+
+    fn checked_sub(&self, other: &Self) -> Option<Self> {
+        (self.coefficients.len() == other.coefficients.len()).then_some(())?;
+        Some(Self {
+            constant: self.constant.checked_sub(other.constant)?,
+            coefficients: self
+                .coefficients
+                .iter()
+                .zip(&other.coefficients)
+                .map(|(left, right)| left.checked_sub(*right))
+                .collect::<Option<Vec<_>>>()?,
+        })
+    }
+
+    fn checked_scale(&self, factor: i128) -> Option<Self> {
+        Some(Self {
+            constant: self.constant.checked_mul(factor)?,
+            coefficients: self
+                .coefficients
+                .iter()
+                .map(|coefficient| coefficient.checked_mul(factor))
+                .collect::<Option<Vec<_>>>()?,
+        })
+    }
+
+    fn constant_value(&self) -> Option<i128> {
+        self.coefficients
+            .iter()
+            .all(|coefficient| *coefficient == 0)
+            .then_some(self.constant)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProductionAffineDefinitionV2 {
+    Constant(u64),
+    Invocation {
+        dimension: u32,
+        launch_extent: u64,
+    },
+    Binary {
+        kind: IndexBinaryKindAttr,
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
+    },
+    Dimension {
+        view: ProductionRankedValueV1,
+        dimension: u32,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct ReplayGuardRefV2<'a> {
+    branch_block: usize,
+    branch_operation: usize,
+    lhs_value: &'a str,
+    rhs_value: &'a str,
+    true_successor: usize,
+    false_successor: usize,
+    accepted_successor: usize,
+    accepted_on_true_edge: bool,
+    normalized_constraint: &'a AffineInequalityV2,
+}
+
+struct ProductionConstrainedAffineReplayV2<'a> {
+    kernel: &'a ProductionRankedKernelV1,
+    launch_extents: Vec<u64>,
+    definitions: HashMap<ProductionRankedValueIdV1, ProductionAffineDefinitionV2>,
+    view_shapes: HashMap<ProductionRankedValueIdV1, &'a [u64]>,
+    successors: Vec<Vec<usize>>,
+    reachable: Vec<bool>,
+    cut_reachability: HashMap<(usize, usize), Vec<bool>>,
+}
+
+impl<'a> ProductionConstrainedAffineReplayV2<'a> {
+    fn new(
+        kernel: &'a ProductionRankedKernelV1,
+    ) -> Result<Self, ProductionRankedVerificationErrorV1> {
+        let mut definitions = HashMap::new();
+        let mut view_shapes = HashMap::new();
+        let mut declared_extents = Vec::<Option<u64>>::new();
+        let mut operation_count = 0_usize;
+        if kernel.blocks().is_empty() || kernel.blocks().len() > MAX_RANKED_BOUNDS_BLOCKS {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        for block in kernel.blocks() {
+            for operation in block.operations() {
+                operation_count = operation_count.saturating_add(1);
+                if operation_count > MAX_RANKED_BOUNDS_OPERATIONS {
+                    return Err(
+                        ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody,
+                    );
+                }
+                let definition = match operation {
+                    ProductionRankedOperationV1::IndexConstant { result, value } => {
+                        Some((*result, ProductionAffineDefinitionV2::Constant(*value)))
+                    }
+                    ProductionRankedOperationV1::InvocationIndex {
+                        result,
+                        dimension,
+                        launch_extent,
+                    } => {
+                        let dimension_index = usize::try_from(*dimension).map_err(|_| {
+                            ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody
+                        })?;
+                        if dimension_index >= MAX_RANKED_MEMORY_RANK || *launch_extent == 0 {
+                            return Err(
+                                ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody,
+                            );
+                        }
+                        if declared_extents.len() <= dimension_index {
+                            declared_extents.resize(dimension_index + 1, None);
+                        }
+                        match declared_extents[dimension_index] {
+                            Some(extent) if extent != *launch_extent => {
+                                return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+                            }
+                            None => declared_extents[dimension_index] = Some(*launch_extent),
+                            Some(_) => {}
+                        }
+                        Some((
+                            *result,
+                            ProductionAffineDefinitionV2::Invocation {
+                                dimension: *dimension,
+                                launch_extent: *launch_extent,
+                            },
+                        ))
+                    }
+                    ProductionRankedOperationV1::IndexBinary {
+                        result,
+                        kind,
+                        lhs,
+                        rhs,
+                    } => Some((
+                        *result,
+                        ProductionAffineDefinitionV2::Binary {
+                            kind: *kind,
+                            lhs: *lhs,
+                            rhs: *rhs,
+                        },
+                    )),
+                    ProductionRankedOperationV1::Dimension {
+                        result,
+                        view,
+                        dimension,
+                    } => Some((
+                        *result,
+                        ProductionAffineDefinitionV2::Dimension {
+                            view: *view,
+                            dimension: *dimension,
+                        },
+                    )),
+                    ProductionRankedOperationV1::View { result, shape, .. }
+                    | ProductionRankedOperationV1::ViewInSpace { result, shape, .. } => {
+                        if view_shapes.insert(*result, shape.as_slice()).is_some() {
+                            return Err(
+                                ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody,
+                            );
+                        }
+                        None
+                    }
+                    _ => None,
+                };
+                if let Some((result, definition)) = definition
+                    && definitions.insert(result, definition).is_some()
+                {
+                    return Err(
+                        ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody,
+                    );
+                }
+            }
+        }
+        let launch_extents = if declared_extents.is_empty() {
+            vec![1]
+        } else {
+            declared_extents
+                .into_iter()
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?
+        };
+        let mut successors = Vec::with_capacity(kernel.blocks().len());
+        let mut edge_count = 0_usize;
+        for block in kernel.blocks() {
+            let block_successors = production_ranked_successors_v2(block.terminator())
+                .into_iter()
+                .map(|target| {
+                    usize::try_from(target)
+                        .ok()
+                        .filter(|target| *target < kernel.blocks().len())
+                        .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            edge_count = edge_count.saturating_add(block_successors.len());
+            if edge_count > MAX_RANKED_BOUNDS_EDGES {
+                return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+            }
+            successors.push(block_successors);
+        }
+        let reachable = production_reachable_blocks_v2(&successors, None);
+        Ok(Self {
+            kernel,
+            launch_extents,
+            definitions,
+            view_shapes,
+            successors,
+            reachable,
+            cut_reachability: HashMap::new(),
+        })
+    }
+
+    fn verify_record(
+        &mut self,
+        record: &RankedConstrainedAffineBoundsCertificateV2,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let guards = record
+            .guards()
+            .iter()
+            .map(|guard| ReplayGuardRefV2 {
+                branch_block: guard.branch_block(),
+                branch_operation: guard.branch_operation(),
+                lhs_value: guard.lhs_value(),
+                rhs_value: guard.rhs_value(),
+                true_successor: guard.true_successor(),
+                false_successor: guard.false_successor(),
+                accepted_successor: guard.accepted_successor(),
+                accepted_on_true_edge: guard.accepted_on_true_edge(),
+                normalized_constraint: guard.normalized_constraint(),
+            })
+            .collect::<Vec<_>>();
+        self.verify_site(
+            record.block(),
+            record.operation(),
+            record.dimension(),
+            record.access_view(),
+            record.access_index(),
+            record.certificate(),
+            &guards,
+        )
+    }
+
+    fn verify_authenticated_record(
+        &mut self,
+        retained: &AuthenticatedRankedConstrainedAffineBoundsV2,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let guards = retained
+            .guards
+            .iter()
+            .map(|guard| ReplayGuardRefV2 {
+                branch_block: guard.branch_block,
+                branch_operation: guard.branch_operation,
+                lhs_value: &guard.lhs_value,
+                rhs_value: &guard.rhs_value,
+                true_successor: guard.true_successor,
+                false_successor: guard.false_successor,
+                accepted_successor: guard.accepted_successor,
+                accepted_on_true_edge: guard.accepted_on_true_edge,
+                normalized_constraint: &guard.normalized_constraint,
+            })
+            .collect::<Vec<_>>();
+        self.verify_site(
+            retained.block,
+            retained.operation,
+            retained.dimension,
+            &retained.access_view,
+            &retained.access_index,
+            retained.verification.certificate(),
+            &guards,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_site(
+        &mut self,
+        block: usize,
+        operation: usize,
+        dimension: usize,
+        access_view: &str,
+        access_index: &str,
+        certificate: &fe2o3_proof_contracts::ConstrainedAffineBoundsCertificateV2,
+        guards: &[ReplayGuardRefV2<'_>],
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let query = certificate.query();
+        if guards.is_empty()
+            || guards.len() != query.constraints().len()
+            || query.lower().len() != self.launch_extents.len()
+            || !query.lower().iter().all(|lower| *lower == 0)
+            || query.upper_exclusive().iter().copied().ne(self
+                .launch_extents
+                .iter()
+                .copied()
+                .map(i128::from))
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let access_block = self
+            .kernel
+            .blocks()
+            .get(block)
+            .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        let access_operation = access_block
+            .operations()
+            .get(operation)
+            .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        let (view, indices) = production_ranked_access_operands_v2(access_operation)
+            .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        let index = *indices
+            .get(dimension)
+            .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        if ranked_value_pliron_identity_v2(view) != access_view
+            || ranked_value_pliron_identity_v2(index) != access_index
+            || self.static_view_extent(view, dimension) != Some(query.extent())
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let index_expression = self.affine_expression(index)?;
+        if index_expression.constant != query.constant()
+            || index_expression.coefficients != query.coefficients()
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let mut origins = HashSet::with_capacity(guards.len());
+        for (guard, query_constraint) in guards.iter().zip(query.constraints()) {
+            if !origins.insert((guard.branch_block, guard.branch_operation)) {
+                return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+            }
+            self.verify_guard(*guard, query_constraint, block)?;
+        }
+        Ok(())
+    }
+
+    fn verify_guard(
+        &mut self,
+        guard: ReplayGuardRefV2<'_>,
+        query_constraint: &AffineInequalityV2,
+        access_block: usize,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        if !guard.accepted_on_true_edge
+            || guard.accepted_successor != guard.true_successor
+            || guard.normalized_constraint != query_constraint
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let branch = self
+            .kernel
+            .blocks()
+            .get(guard.branch_block)
+            .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        if guard.branch_operation != branch.operations().len() {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let (lhs, rhs, true_block, false_block) = match branch.terminator() {
+            ProductionRankedTerminatorV1::IndexLessThan {
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+            }
+            | ProductionRankedTerminatorV1::IndexLessThanArgs {
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+                ..
+            } => (*lhs, *rhs, *true_block, *false_block),
+            _ => {
+                return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+            }
+        };
+        if ranked_value_pliron_identity_v2(lhs) != guard.lhs_value
+            || ranked_value_pliron_identity_v2(rhs) != guard.rhs_value
+            || usize::try_from(true_block).ok() != Some(guard.true_successor)
+            || usize::try_from(false_block).ok() != Some(guard.false_successor)
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let lhs = self.affine_expression(lhs)?;
+        let rhs = self.affine_expression(rhs)?;
+        let normalized = lhs
+            .checked_sub(&rhs)
+            .and_then(|row| {
+                row.checked_add(&ProductionAffineExpressionV2::constant(
+                    1,
+                    self.launch_extents.len(),
+                ))
+            })
+            .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        if normalized.constant != query_constraint.constant()
+            || normalized.coefficients != query_constraint.coefficients()
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        if !self.reachable.get(access_block).copied().unwrap_or(false) {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let removed_edge = (guard.branch_block, 0);
+        if !self.cut_reachability.contains_key(&removed_edge) {
+            let reachable = production_reachable_blocks_v2(&self.successors, Some(removed_edge));
+            self.cut_reachability.insert(removed_edge, reachable);
+        }
+        if self
+            .cut_reachability
+            .get(&removed_edge)
+            .and_then(|reachable| reachable.get(access_block))
+            .copied()
+            .unwrap_or(false)
+        {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        Ok(())
+    }
+
+    fn affine_expression(
+        &self,
+        value: ProductionRankedValueV1,
+    ) -> Result<ProductionAffineExpressionV2, ProductionRankedVerificationErrorV1> {
+        self.affine_expression_inner(value, &mut HashMap::new(), &mut HashSet::new(), 0)
+    }
+
+    fn affine_expression_inner(
+        &self,
+        value: ProductionRankedValueV1,
+        memo: &mut HashMap<ProductionRankedValueV1, ProductionAffineExpressionV2>,
+        visiting: &mut HashSet<ProductionRankedValueV1>,
+        depth: usize,
+    ) -> Result<ProductionAffineExpressionV2, ProductionRankedVerificationErrorV1> {
+        if let Some(expression) = memo.get(&value) {
+            return Ok(expression.clone());
+        }
+        if depth == MAX_CONSTRAINED_AFFINE_REPLAY_DEPTH_V2 || !visiting.insert(value) {
+            return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+        }
+        let result = (|| -> Option<ProductionAffineExpressionV2> {
+            match value {
+                ProductionRankedValueV1::Local(identity) => match self.definitions.get(&identity) {
+                    Some(ProductionAffineDefinitionV2::Constant(value)) => Some(
+                        ProductionAffineExpressionV2::constant(*value, self.launch_extents.len()),
+                    ),
+                    Some(ProductionAffineDefinitionV2::Invocation {
+                        dimension,
+                        launch_extent,
+                    }) => {
+                        let dimension = usize::try_from(*dimension).ok()?;
+                        if self.launch_extents.get(dimension) != Some(launch_extent) {
+                            None
+                        } else {
+                            let mut coefficients = vec![0; self.launch_extents.len()];
+                            coefficients[dimension] = 1;
+                            Some(ProductionAffineExpressionV2 {
+                                constant: 0,
+                                coefficients,
+                            })
+                        }
+                    }
+                    Some(ProductionAffineDefinitionV2::Binary { kind, lhs, rhs }) => {
+                        let lhs = self
+                            .affine_expression_inner(*lhs, memo, visiting, depth + 1)
+                            .ok()?;
+                        let rhs = self
+                            .affine_expression_inner(*rhs, memo, visiting, depth + 1)
+                            .ok()?;
+                        match kind {
+                            IndexBinaryKindAttr::Add => lhs.checked_add(&rhs),
+                            IndexBinaryKindAttr::Multiply => lhs
+                                .constant_value()
+                                .and_then(|factor| rhs.checked_scale(factor))
+                                .or_else(|| {
+                                    rhs.constant_value()
+                                        .and_then(|factor| lhs.checked_scale(factor))
+                                }),
+                            IndexBinaryKindAttr::Remainder | IndexBinaryKindAttr::Divide => None,
+                        }
+                    }
+                    Some(ProductionAffineDefinitionV2::Dimension { view, dimension }) => {
+                        usize::try_from(*dimension)
+                            .ok()
+                            .and_then(|dimension| self.static_view_extent(*view, dimension))
+                            .map(|extent| {
+                                ProductionAffineExpressionV2::constant(
+                                    extent,
+                                    self.launch_extents.len(),
+                                )
+                            })
+                    }
+                    None => None,
+                },
+                ProductionRankedValueV1::Argument(_)
+                | ProductionRankedValueV1::BlockArgument { .. } => None,
+            }
+        })();
+        visiting.remove(&value);
+        let result =
+            result.ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
+        memo.insert(value, result.clone());
+        Ok(result)
+    }
+
+    fn static_view_extent(&self, view: ProductionRankedValueV1, dimension: usize) -> Option<u64> {
+        let ProductionRankedValueV1::Local(view) = view else {
+            return None;
+        };
+        self.view_shapes
+            .get(&view)?
+            .get(dimension)
+            .copied()
+            .filter(|extent| *extent != DYNAMIC_EXTENT)
+    }
+}
+
+fn production_reachable_blocks_v2(
+    successors: &[Vec<usize>],
+    removed_edge: Option<(usize, usize)>,
+) -> Vec<bool> {
+    let mut reachable = vec![false; successors.len()];
+    if successors.is_empty() {
+        return reachable;
+    }
+    let mut pending = VecDeque::from([0_usize]);
+    reachable[0] = true;
+    while let Some(block) = pending.pop_front() {
+        for (successor_index, successor) in successors[block].iter().copied().enumerate() {
+            if removed_edge == Some((block, successor_index)) {
+                continue;
+            }
+            if !reachable[successor] {
+                reachable[successor] = true;
+                pending.push_back(successor);
+            }
+        }
+    }
+    reachable
+}
+
+fn production_ranked_successors_v2(terminator: &ProductionRankedTerminatorV1) -> Vec<u32> {
+    match terminator {
+        ProductionRankedTerminatorV1::IndexLessThan {
+            true_block,
+            false_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexLessThanArgs {
+            true_block,
+            false_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexEqual {
+            true_block,
+            false_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::IndexEqualArgs {
+            true_block,
+            false_block,
+            ..
+        } => vec![*true_block, *false_block],
+        ProductionRankedTerminatorV1::AnalysisSplit {
+            first_block,
+            second_block,
+            ..
+        }
+        | ProductionRankedTerminatorV1::AnalysisSplitArgs {
+            first_block,
+            second_block,
+            ..
+        } => vec![*first_block, *second_block],
+        ProductionRankedTerminatorV1::Branch { target }
+        | ProductionRankedTerminatorV1::BranchArgs { target, .. }
+        | ProductionRankedTerminatorV1::BranchArgsAdd { target, .. }
+        | ProductionRankedTerminatorV1::BranchArgsAddAt { target, .. } => vec![*target],
+        ProductionRankedTerminatorV1::Return | ProductionRankedTerminatorV1::Trap => Vec::new(),
+    }
+}
+
+fn production_ranked_access_operands_v2(
+    operation: &ProductionRankedOperationV1,
+) -> Option<(ProductionRankedValueV1, &[ProductionRankedValueV1])> {
+    match operation {
+        ProductionRankedOperationV1::Access { view, indices, .. }
+        | ProductionRankedOperationV1::ValueAccess { view, indices, .. }
+        | ProductionRankedOperationV1::AtomicAccess { view, indices, .. }
+        | ProductionRankedOperationV1::AtomicValueAccess { view, indices, .. } => {
+            Some((*view, indices))
+        }
+        _ => None,
+    }
+}
+
+fn ranked_value_pliron_identity_v2(value: ProductionRankedValueV1) -> String {
+    match value {
+        ProductionRankedValueV1::Local(identity) => format!("v{}", identity.get()),
+        ProductionRankedValueV1::Argument(argument) => format!("arg{argument}"),
+        ProductionRankedValueV1::BlockArgument { block, argument } => {
+            format!("bb{block}_arg{argument}")
+        }
+    }
 }
 
 fn ranked_roster_identity_records_v1(
@@ -1457,6 +2262,10 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 ));
             }
             revalidate_affine_bounds_custody_v1(&root.lowering, &root.verification.affine_bounds)?;
+            revalidate_constrained_affine_bounds_custody_v2(
+                &root.lowering,
+                &root.verification.constrained_affine_bounds,
+            )?;
             validate_ranked_root_induction_custody_v1(&self.semantic_owner, root)?;
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
@@ -20046,10 +20855,13 @@ mod tests {
             AuthenticatedRankedVerificationV5::semantic_u32_induction;
         let affine_count_accessor: fn(&AuthenticatedRankedVerificationV5) -> usize =
             AuthenticatedRankedVerificationV5::independently_checked_affine_bound_count;
+        let constrained_count_accessor: fn(&AuthenticatedRankedVerificationV5) -> usize =
+            AuthenticatedRankedVerificationV5::independently_checked_constrained_affine_bound_count;
         let _ = (
             middle_end_accessor,
             induction_accessor,
             affine_count_accessor,
+            constrained_count_accessor,
         );
     }
 
@@ -22218,6 +23030,303 @@ mod tests {
         assert!(lowering.race_report().is_clean());
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
         assert!(ranked_ir.contains("kernel.br ^bb4"));
+    }
+
+    #[test]
+    fn production_guarded_affine_site_has_independent_v2_custody() {
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let extent = ProductionRankedValueIdV1::new(1);
+        let view = ProductionRankedValueIdV1::new(2);
+        let entry = vec![
+            ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 16,
+            },
+            ProductionRankedOperationV1::IndexConstant {
+                result: extent,
+                value: 8,
+            },
+            ProductionRankedOperationV1::ViewInSpace {
+                result: view,
+                element_width: 32,
+                writable: false,
+                shape: vec![8],
+                dynamic_extents: vec![],
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin: 0,
+                noalias_class: 0,
+            },
+        ];
+        let guarded = GuardedRankedAccessV1 {
+            view,
+            indices: vec![ProductionRankedValueV1::Local(invocation)],
+            checked_success: None,
+            comparisons: vec![(
+                ProductionRankedValueV1::Local(invocation),
+                ProductionRankedValueV1::Local(extent),
+            )],
+            access: AccessKindAttr::Read,
+            memory_space: MemorySpaceAttr::Global,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: None,
+        };
+        let (blocks, _, _) = single_guarded_cfg(entry, guarded);
+        let kernel = ProductionRankedKernelV1::new("guarded_affine", 0, blocks).unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("guarded_affine_module", kernel).unwrap();
+        let lowering = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        let [record] = lowering.bounds_report().constrained_affine_certificates() else {
+            panic!("production guarded affine access emitted no V2 theorem")
+        };
+        assert_eq!(
+            (record.block(), record.operation(), record.dimension()),
+            (2, 0, 0)
+        );
+        assert_eq!(record.certificate().query().constraints().len(), 1);
+        assert_eq!(record.certificate().query().extent(), 8);
+        assert_eq!(
+            lowering
+                .bounds_report()
+                .required_constrained_affine_site_count_v2(),
+            1
+        );
+        assert_eq!(
+            lowering
+                .bounds_report()
+                .complete_constrained_affine_site_roster_v2()
+                .map(<[_]>::len),
+            Some(1)
+        );
+        let [guard] = record.guards() else {
+            panic!("production constrained theorem did not retain one exact guard")
+        };
+        assert_eq!(
+            (
+                guard.branch_block(),
+                guard.branch_operation(),
+                guard.true_successor(),
+                guard.false_successor(),
+                guard.accepted_successor(),
+                guard.accepted_on_true_edge(),
+            ),
+            (1, 0, 2, 3, 2, true)
+        );
+        assert_eq!((guard.lhs_value(), guard.rhs_value()), ("v0", "v1"));
+
+        let mut retained = independently_verify_constrained_affine_bounds_v2(&lowering).unwrap();
+        assert_eq!(retained.len(), 1);
+        assert!(
+            retained[0]
+                .verification
+                .establishes_nonempty_constrained_domain()
+        );
+        assert_eq!(retained[0].verification.certificate(), record.certificate());
+        revalidate_constrained_affine_bounds_custody_v2(&lowering, &retained).unwrap();
+
+        retained[0].block += 1;
+        let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel()).unwrap();
+        assert!(replay.verify_authenticated_record(&retained[0]).is_err());
+        assert!(matches!(
+            revalidate_constrained_affine_bounds_custody_v2(&lowering, &retained),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
+
+        let mut reversed = independently_verify_constrained_affine_bounds_v2(&lowering)
+            .unwrap()
+            .into_vec();
+        let true_successor = reversed[0].guards[0].true_successor;
+        reversed[0].guards[0].true_successor = reversed[0].guards[0].false_successor;
+        reversed[0].guards[0].false_successor = true_successor;
+        reversed[0].guards[0].accepted_successor = reversed[0].guards[0].true_successor;
+        let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel()).unwrap();
+        assert!(replay.verify_authenticated_record(&reversed[0]).is_err());
+        assert!(matches!(
+            revalidate_constrained_affine_bounds_custody_v2(&lowering, &reversed),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
+
+        let mut substituted = independently_verify_constrained_affine_bounds_v2(&lowering)
+            .unwrap()
+            .into_vec();
+        substituted[0].guards[0].lhs_value = "v1".to_owned();
+        let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel()).unwrap();
+        assert!(replay.verify_authenticated_record(&substituted[0]).is_err());
+        assert!(matches!(
+            revalidate_constrained_affine_bounds_custody_v2(&lowering, &substituted),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
+
+        let missing = Vec::new();
+        assert!(matches!(
+            revalidate_constrained_affine_bounds_custody_v2(&lowering, &missing),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
+        let mut extra = independently_verify_constrained_affine_bounds_v2(&lowering)
+            .unwrap()
+            .into_vec();
+        let duplicate = independently_verify_constrained_affine_bounds_v2(&lowering)
+            .unwrap()
+            .into_vec()
+            .pop()
+            .unwrap();
+        extra.push(duplicate);
+        assert!(matches!(
+            revalidate_constrained_affine_bounds_custody_v2(&lowering, &extra),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
+
+        let join_kernel = ProductionRankedKernelV1::new(
+            "guarded_affine_join_mutation",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::InvocationIndex {
+                            result: invocation,
+                            dimension: 0,
+                            launch_extent: 16,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: extent,
+                            value: 8,
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::Branch { target: 1 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThan {
+                        lhs: ProductionRankedValueV1::Local(invocation),
+                        rhs: ProductionRankedValueV1::Local(extent),
+                        true_block: 2,
+                        false_block: 3,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::Branch { target: 4 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::Branch { target: 4 },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap();
+        let mut join_replay = ProductionConstrainedAffineReplayV2::new(&join_kernel).unwrap();
+        assert!(matches!(
+            join_replay.verify_guard(
+                ReplayGuardRefV2 {
+                    branch_block: guard.branch_block(),
+                    branch_operation: guard.branch_operation(),
+                    lhs_value: guard.lhs_value(),
+                    rhs_value: guard.rhs_value(),
+                    true_successor: guard.true_successor(),
+                    false_successor: guard.false_successor(),
+                    accepted_successor: guard.accepted_successor(),
+                    accepted_on_true_edge: guard.accepted_on_true_edge(),
+                    normalized_constraint: guard.normalized_constraint(),
+                },
+                record.certificate().query().constraints().first().unwrap(),
+                4,
+            ),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
+    }
+
+    #[test]
+    fn production_ambiguous_guard_origins_fail_v2_completeness_gate() {
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let extent = ProductionRankedValueIdV1::new(1);
+        let view = ProductionRankedValueIdV1::new(2);
+        let kernel = ProductionRankedKernelV1::new(
+            "ambiguous_affine_guards",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::InvocationIndex {
+                            result: invocation,
+                            dimension: 0,
+                            launch_extent: 16,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: extent,
+                            value: 8,
+                        },
+                        ProductionRankedOperationV1::ViewInSpace {
+                            result: view,
+                            element_width: 32,
+                            writable: false,
+                            shape: vec![8],
+                            dynamic_extents: vec![],
+                            memory_space: MemorySpaceAttr::Global,
+                            allocation_origin: 0,
+                            noalias_class: 0,
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::AnalysisSplit {
+                        control_dependencies: vec![],
+                        first_block: 1,
+                        second_block: 2,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThan {
+                        lhs: ProductionRankedValueV1::Local(invocation),
+                        rhs: ProductionRankedValueV1::Local(extent),
+                        true_block: 3,
+                        false_block: 4,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThan {
+                        lhs: ProductionRankedValueV1::Local(invocation),
+                        rhs: ProductionRankedValueV1::Local(extent),
+                        true_block: 3,
+                        false_block: 4,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Read,
+                        view: ProductionRankedValueV1::Local(view),
+                        indices: vec![ProductionRankedValueV1::Local(invocation)],
+                    }],
+                    ProductionRankedTerminatorV1::Branch { target: 4 },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("ambiguous_affine_module", kernel).unwrap();
+        let lowering = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        let report = lowering.bounds_report();
+        assert!(report.is_clean());
+        assert_eq!(report.required_constrained_affine_site_count_v2(), 1);
+        assert!(report.constrained_affine_certificates().is_empty());
+        assert!(
+            report
+                .complete_constrained_affine_site_roster_v2()
+                .is_none()
+        );
+        assert!(matches!(
+            independently_verify_constrained_affine_bounds_v2(&lowering),
+            Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)
+        ));
     }
 
     #[test]

@@ -6,7 +6,10 @@ use fe2o3_kernel_analysis::{
     PresburgerMapExprV1, PresburgerMapV1, PresburgerRangeDecisionV1, PresburgerSetDecisionV1,
     PresburgerSetV1,
 };
-use fe2o3_proof_contracts::check_affine_bounds_certificate_v1;
+use fe2o3_proof_contracts::{
+    ConstrainedAffineBoundsCertificateErrorV2, check_affine_bounds_certificate_v1,
+    check_constrained_affine_bounds_certificate_v2,
+};
 
 fn affine(constant: i128, coefficients: &[i128]) -> PresburgerAffineExprV1 {
     PresburgerAffineExprV1::new(constant, coefficients.to_vec()).unwrap()
@@ -418,5 +421,101 @@ fn dynamic_launch_without_a_finite_bound_is_unsupported() {
         Err(PresburgerFailureV1::Unsupported {
             detail: "a dynamic launch extent has no finite compiler bound",
         })
+    );
+}
+
+#[test]
+fn constrained_certificate_uses_a_path_row_beyond_box_endpoints() {
+    let constrained = PresburgerMapV1::new(
+        PresburgerSetV1::new(
+            PresburgerBoxV1::zero_based(&[16]).unwrap(),
+            vec![PresburgerConstraintV1::LessEqualZero(affine(-7, &[1]))],
+        )
+        .unwrap(),
+        vec![PresburgerMapExprV1::Affine(affine(0, &[1]))],
+    )
+    .unwrap();
+    assert!(
+        constrained
+            .checked_affine_box_bounds_certificate_v1(0, 8)
+            .unwrap()
+            .is_none()
+    );
+    let certificate = constrained
+        .checked_constrained_affine_bounds_certificate_v2(0, 8)
+        .unwrap()
+        .expect("x <= 7 must furnish the upper multiplier");
+    check_constrained_affine_bounds_certificate_v2(&certificate).unwrap();
+    assert_eq!(certificate.query().constraints().len(), 1);
+    assert_eq!(certificate.upper_multipliers()[0], 1);
+}
+
+#[test]
+fn constrained_certificate_rejects_constraint_and_extent_substitution() {
+    let make = |constraint_constant, extent| {
+        PresburgerMapV1::new(
+            PresburgerSetV1::new(
+                PresburgerBoxV1::zero_based(&[16]).unwrap(),
+                vec![PresburgerConstraintV1::LessEqualZero(affine(
+                    constraint_constant,
+                    &[1],
+                ))],
+            )
+            .unwrap(),
+            vec![PresburgerMapExprV1::Affine(affine(0, &[1]))],
+        )
+        .unwrap()
+        .checked_constrained_affine_bounds_certificate_v2(0, extent)
+        .unwrap()
+    };
+    assert!(make(-7, 8).is_some());
+    assert!(make(-8, 8).is_none());
+    assert!(make(-7, 7).is_none());
+}
+
+#[test]
+fn constrained_certificate_fails_closed_for_unsupported_rows() {
+    let constrained = PresburgerMapV1::new(
+        PresburgerSetV1::new(
+            PresburgerBoxV1::zero_based(&[4]).unwrap(),
+            vec![PresburgerConstraintV1::EqualZero(affine(0, &[1]))],
+        )
+        .unwrap(),
+        vec![PresburgerMapExprV1::Affine(affine(0, &[1]))],
+    )
+    .unwrap();
+    assert!(matches!(
+        constrained.checked_constrained_affine_bounds_certificate_v2(0, 4),
+        Err(PresburgerFailureV1::Unsupported { .. })
+    ));
+
+    let certificate = PresburgerMapV1::new(
+        PresburgerSetV1::new(
+            PresburgerBoxV1::zero_based(&[4]).unwrap(),
+            vec![PresburgerConstraintV1::LessEqualZero(affine(-3, &[1]))],
+        )
+        .unwrap(),
+        vec![PresburgerMapExprV1::Affine(affine(0, &[1]))],
+    )
+    .unwrap()
+    .checked_constrained_affine_bounds_certificate_v2(0, 4)
+    .unwrap()
+    .unwrap();
+    let tightened = fe2o3_proof_contracts::ConstrainedAffineBoundsCertificateV2::new(
+        fe2o3_proof_contracts::ConstrainedAffineBoundsQueryV2::new(
+            certificate.query().lower().to_vec(),
+            certificate.query().upper_exclusive().to_vec(),
+            certificate.query().constraints().to_vec(),
+            certificate.query().constant(),
+            certificate.query().coefficients().to_vec(),
+            3,
+        ),
+        certificate.domain_witness().to_vec(),
+        certificate.lower_multipliers().to_vec(),
+        certificate.upper_multipliers().to_vec(),
+    );
+    assert_eq!(
+        check_constrained_affine_bounds_certificate_v2(&tightened).unwrap_err(),
+        ConstrainedAffineBoundsCertificateErrorV2::UpperConstantNotDominated
     );
 }

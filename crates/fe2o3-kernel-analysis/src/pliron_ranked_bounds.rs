@@ -29,7 +29,9 @@ use dialect_proof::{
     EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
     RequireRefinementOp, RequireTensorRefinementOp,
 };
-use fe2o3_proof_contracts::AffineBoundsCertificateV1;
+use fe2o3_proof_contracts::{
+    AffineBoundsCertificateV1, AffineInequalityV2, ConstrainedAffineBoundsCertificateV2,
+};
 use pliron::{
     builtin::ops::FuncOp,
     common_traits::Named,
@@ -42,8 +44,9 @@ use pliron::{
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, PlironPresburgerAnalysisV1,
-    PresburgerRangeDecisionV1, SparseIndexAnalysisV1, SparseIndexFactV1, SparseIndexFailureV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, PlironPresburgerAnalysisV1, PresburgerAffineExprV1,
+    PresburgerConstraintV1, PresburgerMapExprV1, PresburgerRangeDecisionV1, SparseIndexAnalysisV1,
+    SparseIndexFactV1, SparseIndexFailureV1,
 };
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
@@ -256,6 +259,105 @@ pub struct RankedAffineBoundsCertificateV1 {
     certificate: AffineBoundsCertificateV1,
 }
 
+/// One constrained affine theorem bound to an exact ranked-access coordinate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RankedConstrainedAffineBoundsCertificateV2 {
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    access_view: String,
+    access_index: String,
+    guards: Vec<RankedAffineGuardProvenanceV2>,
+    certificate: ConstrainedAffineBoundsCertificateV2,
+}
+
+/// Exact CFG origin for one affine inequality used at a ranked access.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RankedAffineGuardProvenanceV2 {
+    branch_block: usize,
+    branch_operation: usize,
+    lhs_value: String,
+    rhs_value: String,
+    true_successor: usize,
+    false_successor: usize,
+    accepted_successor: usize,
+    accepted_on_true_edge: bool,
+    normalized_constraint: AffineInequalityV2,
+}
+
+impl RankedAffineGuardProvenanceV2 {
+    pub const fn branch_block(&self) -> usize {
+        self.branch_block
+    }
+
+    pub const fn branch_operation(&self) -> usize {
+        self.branch_operation
+    }
+
+    pub fn lhs_value(&self) -> &str {
+        &self.lhs_value
+    }
+
+    pub fn rhs_value(&self) -> &str {
+        &self.rhs_value
+    }
+
+    pub const fn true_successor(&self) -> usize {
+        self.true_successor
+    }
+
+    pub const fn false_successor(&self) -> usize {
+        self.false_successor
+    }
+
+    pub const fn accepted_successor(&self) -> usize {
+        self.accepted_successor
+    }
+
+    pub const fn accepted_on_true_edge(&self) -> bool {
+        self.accepted_on_true_edge
+    }
+
+    pub const fn normalized_constraint(&self) -> &AffineInequalityV2 {
+        &self.normalized_constraint
+    }
+}
+
+impl RankedConstrainedAffineBoundsCertificateV2 {
+    pub const fn block(&self) -> usize {
+        self.block
+    }
+
+    pub const fn operation(&self) -> usize {
+        self.operation
+    }
+
+    pub const fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    pub fn access_view(&self) -> &str {
+        &self.access_view
+    }
+
+    pub fn access_index(&self) -> &str {
+        &self.access_index
+    }
+
+    pub fn guards(&self) -> &[RankedAffineGuardProvenanceV2] {
+        &self.guards
+    }
+
+    /// Exact launch box, path inequalities, index map, extent, witness, and proof rows.
+    pub const fn certificate(&self) -> &ConstrainedAffineBoundsCertificateV2 {
+        &self.certificate
+    }
+
+    pub const fn grants_lowering_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 impl RankedAffineBoundsCertificateV1 {
     /// Zero-based basic-block coordinate of the admitted access.
     pub const fn block(&self) -> usize {
@@ -287,6 +389,8 @@ impl RankedAffineBoundsCertificateV1 {
 pub struct RankedBoundsReportV1 {
     findings: Vec<RankedBoundsFindingV1>,
     affine_certificates: Vec<RankedAffineBoundsCertificateV1>,
+    constrained_affine_certificates: Vec<RankedConstrainedAffineBoundsCertificateV2>,
+    required_constrained_affine_sites: usize,
 }
 
 impl RankedBoundsReportV1 {
@@ -309,6 +413,31 @@ impl RankedBoundsReportV1 {
     /// Exact affine-box certificates checked while admitting ranked accesses.
     pub fn affine_certificates(&self) -> &[RankedAffineBoundsCertificateV1] {
         &self.affine_certificates
+    }
+
+    /// Generated constrained affine theorem candidates.
+    ///
+    /// This slice is not a completeness claim. Use
+    /// [`Self::complete_constrained_affine_site_roster_v2`] for V2 proof status.
+    pub fn constrained_affine_certificates(&self) -> &[RankedConstrainedAffineBoundsCertificateV2] {
+        &self.constrained_affine_certificates
+    }
+
+    /// Number of statically extended affine dimensions admitted by path facts.
+    pub const fn required_constrained_affine_site_count_v2(&self) -> usize {
+        self.required_constrained_affine_sites
+    }
+
+    /// Returns the exact V2 roster only when it is nonempty and complete.
+    ///
+    /// `is_clean()` does not imply this result is present. Missing, duplicate,
+    /// unsupported, or incomplete certificates fail this separate proof gate.
+    pub fn complete_constrained_affine_site_roster_v2(
+        &self,
+    ) -> Option<&[RankedConstrainedAffineBoundsCertificateV2]> {
+        (self.required_constrained_affine_sites != 0
+            && self.constrained_affine_certificates.len() == self.required_constrained_affine_sites)
+            .then_some(self.constrained_affine_certificates.as_slice())
     }
 
     pub fn is_clean(&self) -> bool {
@@ -377,6 +506,16 @@ impl IndexExpr {
 struct LessThanFact {
     lhs: IndexExpr,
     rhs: IndexExpr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LessThanGuardOriginV2 {
+    branch_block: usize,
+    branch_operation: usize,
+    lhs_value: String,
+    rhs_value: String,
+    true_successor: usize,
+    false_successor: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -857,7 +996,10 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     let mut predecessors = vec![Vec::new(); blocks.len()];
     let mut findings = Vec::new();
     let mut affine_certificates = Vec::new();
+    let mut constrained_affine_certificates = Vec::new();
+    let mut required_constrained_affine_sites = 0_usize;
     let mut fact_indices = HashMap::new();
+    let mut fact_origins = Vec::<Vec<LessThanGuardOriginV2>>::new();
 
     for (block_index, block) in blocks.iter().enumerate() {
         let Some(terminator) = block.deref(context).get_terminator(context) else {
@@ -888,6 +1030,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 }
                 let next = fact_indices.len();
                 fact_indices.insert(fact, next);
+                fact_origins.push(Vec::new());
                 Some(next)
             }
         } else {
@@ -895,6 +1038,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         };
 
         let raw = terminator.deref(context);
+        let mut successor_targets = Vec::new();
         for (successor_index, successor) in raw.successors().enumerate() {
             if let Err(finding) = budget.work(1) {
                 return finding_failure(finding);
@@ -912,10 +1056,31 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 }
                 continue;
             };
+            successor_targets.push(target);
             successors[block_index].push(target);
             predecessors[target].push(PredecessorEdge {
                 block: block_index,
                 guard_fact: (successor_index == 0).then_some(guard_fact).flatten(),
+            });
+        }
+        if let (Some((lhs, rhs)), Some(fact), [true_successor, false_successor]) =
+            (operands, guard_fact, successor_targets.as_slice())
+        {
+            let Some(branch_operation) = inventory
+                .block_operations(block_index)
+                .iter()
+                .find(|site| site.pointer() == terminator)
+                .map(|site| site.operation())
+            else {
+                return structural_failure();
+            };
+            fact_origins[fact].push(LessThanGuardOriginV2 {
+                branch_block: block_index,
+                branch_operation,
+                lhs_value: lhs.unique_name(context).to_string(),
+                rhs_value: rhs.unique_name(context).to_string(),
+                true_successor: *true_successor,
+                false_successor: *false_successor,
             });
         }
     }
@@ -1029,11 +1194,14 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                     &mut AccessCheck {
                         facts: &inputs[block_index],
                         fact_indices: &fact_indices,
+                        fact_origins: &fact_origins,
                         context,
                         sparse_indices,
                         presburger,
                         findings: &mut findings,
                         affine_certificates: &mut affine_certificates,
+                        constrained_affine_certificates: &mut constrained_affine_certificates,
+                        required_constrained_affine_sites: &mut required_constrained_affine_sites,
                         budget: &mut budget,
                     },
                 )
@@ -1046,6 +1214,8 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     RankedBoundsReportV1 {
         findings,
         affine_certificates,
+        constrained_affine_certificates,
+        required_constrained_affine_sites,
     }
 }
 
@@ -1095,6 +1265,8 @@ fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
     RankedBoundsReportV1 {
         findings: vec![finding],
         affine_certificates: Vec::new(),
+        constrained_affine_certificates: Vec::new(),
+        required_constrained_affine_sites: 0,
     }
 }
 
@@ -1176,6 +1348,8 @@ mod status_tests {
         let report = RankedBoundsReportV1 {
             findings: vec![unproved_bound(), static_out_of_bounds()],
             affine_certificates: vec![],
+            constrained_affine_certificates: vec![],
+            required_constrained_affine_sites: 0,
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
         assert!(!report.is_clean());
@@ -1183,6 +1357,8 @@ mod status_tests {
             RankedBoundsReportV1 {
                 findings: vec![],
                 affine_certificates: vec![],
+                constrained_affine_certificates: vec![],
+                required_constrained_affine_sites: 0,
             }
             .status(),
             KernelCheckStatusV1::Clean
@@ -1248,11 +1424,14 @@ fn intersect_predecessor_facts(
 struct AccessCheck<'a> {
     facts: &'a FactSet,
     fact_indices: &'a HashMap<LessThanFact, usize>,
+    fact_origins: &'a [Vec<LessThanGuardOriginV2>],
     context: &'a Context,
     sparse_indices: &'a SparseIndexAnalysisV1,
     presburger: &'a PlironPresburgerAnalysisV1,
     findings: &'a mut Vec<RankedBoundsFindingV1>,
     affine_certificates: &'a mut Vec<RankedAffineBoundsCertificateV1>,
+    constrained_affine_certificates: &'a mut Vec<RankedConstrainedAffineBoundsCertificateV2>,
+    required_constrained_affine_sites: &'a mut usize,
     budget: &'a mut RankedBoundsBudget,
 }
 
@@ -1304,16 +1483,48 @@ fn verify_access(
         }
         let index_expr = canonical_index_expr(index, check.context);
         let extent_expr = extent_expr(view, &view_type, dimension, check.context);
-        if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices)
-            || remainder_bound_is_proven(index, extent_expr, check.context)
-        {
-            continue;
-        }
         let static_extent = match extent_expr {
             IndexExpr::Constant(extent) => Some(extent),
             IndexExpr::Value(value) => check.sparse_indices.fact(value).constant_value(),
             IndexExpr::Dimension { .. } => None,
         };
+        let statically_proven = matches!(
+            (index_expr, extent_expr),
+            (IndexExpr::Constant(index), IndexExpr::Constant(extent)) if index < extent
+        );
+        let active_bound_fact = (!statically_proven)
+            .then(|| {
+                active_less_than_fact(index_expr, extent_expr, check.facts, check.fact_indices)
+            })
+            .flatten();
+        if statically_proven || active_bound_fact.is_some() {
+            let declared_static_extent = view_type
+                .shape()
+                .get(dimension)
+                .copied()
+                .filter(|extent| *extent != dialect_kernel::DYNAMIC_EXTENT);
+            if let (Some(fact), Some(extent), SparseIndexFactV1::Affine(_)) =
+                (active_bound_fact, declared_static_extent, &sparse_fact)
+            {
+                *check.required_constrained_affine_sites =
+                    check.required_constrained_affine_sites.saturating_add(1);
+                let _retained = retain_constrained_affine_certificate_v2(
+                    &sparse_fact,
+                    extent,
+                    fact,
+                    view.unique_name(check.context).to_string(),
+                    index.unique_name(check.context).to_string(),
+                    block,
+                    operation,
+                    dimension,
+                    check,
+                )?;
+            }
+            continue;
+        }
+        if remainder_bound_is_proven(index, extent_expr, check.context) {
+            continue;
+        }
         match (index_expr, extent_expr) {
             (IndexExpr::Constant(index), IndexExpr::Constant(extent)) => {
                 push_finding(
@@ -1398,6 +1609,121 @@ fn verify_access(
     Ok(())
 }
 
+fn retain_constrained_affine_certificate_v2(
+    output: &SparseIndexFactV1,
+    extent: u64,
+    bound_fact: usize,
+    access_view: String,
+    access_index: String,
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    check: &mut AccessCheck<'_>,
+) -> Result<bool, RankedBoundsFindingV1> {
+    let Some((fact, _)) = check
+        .fact_indices
+        .iter()
+        .find(|(_, index)| **index == bound_fact)
+    else {
+        return Ok(false);
+    };
+    let [origin] = check
+        .fact_origins
+        .get(bound_fact)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    else {
+        return Ok(false);
+    };
+    let Some(constraint) = affine_constraint_for_fact_v2(fact, check) else {
+        return Ok(false);
+    };
+    let Ok(map) = check.presburger.map_for_facts_with_constraints(
+        core::slice::from_ref(output),
+        vec![PresburgerConstraintV1::LessEqualZero(constraint.clone())],
+    ) else {
+        return Ok(false);
+    };
+    let Ok(Some(certificate)) = map.checked_constrained_affine_bounds_certificate_v2(0, extent)
+    else {
+        return Ok(false);
+    };
+    let normalized_constraint = AffineInequalityV2::new(
+        constraint.constant_term(),
+        constraint.coefficients().to_vec(),
+    );
+    if certificate.query().constraints() != core::slice::from_ref(&normalized_constraint) {
+        return Ok(false);
+    }
+    let query = certificate.query();
+    let rows = query.constraints().len().saturating_add(
+        query
+            .coefficients()
+            .len()
+            .checked_mul(2)
+            .unwrap_or(usize::MAX),
+    );
+    check.budget.work(rows.saturating_add(1))?;
+    check.budget.storage(
+        rows.saturating_mul(2)
+            .saturating_add(query.coefficients().len().saturating_mul(4))
+            .saturating_add(1),
+    )?;
+    check
+        .constrained_affine_certificates
+        .push(RankedConstrainedAffineBoundsCertificateV2 {
+            block,
+            operation,
+            dimension,
+            access_view,
+            access_index,
+            guards: vec![RankedAffineGuardProvenanceV2 {
+                branch_block: origin.branch_block,
+                branch_operation: origin.branch_operation,
+                lhs_value: origin.lhs_value.clone(),
+                rhs_value: origin.rhs_value.clone(),
+                true_successor: origin.true_successor,
+                false_successor: origin.false_successor,
+                accepted_successor: origin.true_successor,
+                accepted_on_true_edge: true,
+                normalized_constraint,
+            }],
+            certificate,
+        });
+    Ok(true)
+}
+
+fn affine_constraint_for_fact_v2(
+    fact: &LessThanFact,
+    check: &AccessCheck<'_>,
+) -> Option<PresburgerAffineExprV1> {
+    let lhs = affine_expression_for_index_v2(fact.lhs, check.sparse_indices, check.presburger)?;
+    let rhs = affine_expression_for_index_v2(fact.rhs, check.sparse_indices, check.presburger)?;
+    let one = PresburgerAffineExprV1::constant(1, check.presburger.launch_extents().len()).ok()?;
+    lhs.checked_sub(&rhs).ok()?.checked_add(&one).ok()
+}
+
+fn affine_expression_for_index_v2(
+    expression: IndexExpr,
+    sparse_indices: &SparseIndexAnalysisV1,
+    presburger: &PlironPresburgerAnalysisV1,
+) -> Option<PresburgerAffineExprV1> {
+    match expression {
+        IndexExpr::Constant(value) => {
+            PresburgerAffineExprV1::constant(i128::from(value), presburger.launch_extents().len())
+                .ok()
+        }
+        IndexExpr::Value(value) => match presburger
+            .map_expr_for_fact(&sparse_indices.fact(value))
+            .ok()?
+        {
+            PresburgerMapExprV1::Affine(expression) => Some(expression),
+            PresburgerMapExprV1::Remainder { .. } => None,
+        },
+        IndexExpr::Dimension { .. } => None,
+    }
+}
+
 fn remainder_bound_is_proven(index: Value, extent: IndexExpr, context: &Context) -> bool {
     let IndexExpr::Constant(extent) = extent else {
         return false;
@@ -1462,21 +1788,19 @@ fn sparse_index_failure(failure: SparseIndexFailureV1) -> RankedBoundsFindingV1 
     RankedBoundsFindingV1::SparseIndexAnalysisFailed { detail }
 }
 
-fn bound_is_proven(
+fn active_less_than_fact(
     index: IndexExpr,
     extent: IndexExpr,
     facts: &FactSet,
     fact_indices: &HashMap<LessThanFact, usize>,
-) -> bool {
-    match (index, extent) {
-        (IndexExpr::Constant(index), IndexExpr::Constant(extent)) => index < extent,
-        _ => fact_indices
-            .get(&LessThanFact {
-                lhs: index,
-                rhs: extent,
-            })
-            .is_some_and(|fact| facts.contains(*fact)),
-    }
+) -> Option<usize> {
+    fact_indices
+        .get(&LessThanFact {
+            lhs: index,
+            rhs: extent,
+        })
+        .copied()
+        .filter(|fact| facts.contains(*fact))
 }
 
 fn extent_expr(

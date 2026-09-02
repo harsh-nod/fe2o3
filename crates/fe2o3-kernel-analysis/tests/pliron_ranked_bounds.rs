@@ -1,15 +1,17 @@
 use dialect_kernel::{
-    AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DeterministicJoinOp, DimensionOp,
-    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp,
-    IndexType, InvocationIndexOp, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, TrapOp,
-    register_dialect,
+    AccessKindAttr, AlgorithmOp, AnalysisSplitOp, BranchOp, DIALECT_NAME, DeterministicJoinOp,
+    DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp,
+    IndexLessThanBranchOp, IndexType, InvocationIndexOp, RankedAccessOp, RankedViewOp,
+    RankedViewType, ReturnOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
     MAX_RANKED_BOUNDS_FINDINGS, RankedBoundsFindingV1,
     require_pliron_ranked_bounds_before_lowering_v1, run_pliron_ranked_bounds_check_v1,
 };
-use fe2o3_proof_contracts::check_affine_bounds_certificate_v1;
+use fe2o3_proof_contracts::{
+    check_affine_bounds_certificate_v1, check_constrained_affine_bounds_certificate_v2,
+};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
@@ -271,6 +273,12 @@ fn static_ranked_accesses_are_proved_without_explicit_guards() {
     assert_eq!(report.pass(), KernelCheckPassKindV1::MemoryBounds);
     assert_eq!(report.status(), KernelCheckStatusV1::Clean);
     assert!(report.findings().is_empty());
+    assert_eq!(report.required_constrained_affine_site_count_v2(), 0);
+    assert!(
+        report
+            .complete_constrained_affine_site_roster_v2()
+            .is_none()
+    );
     assert!(!report.grants_compiler_refinement_authority());
     assert!(!report.grants_artifact_or_launch_authority());
 }
@@ -838,6 +846,154 @@ fn ranked_affine_access_emits_a_checked_box_bounds_certificate() {
     assert_eq!(certificate.query().extent(), 16);
     assert_eq!((certificate.minimum(), certificate.maximum()), (1, 15));
     check_affine_bounds_certificate_v1(certificate).unwrap();
+}
+
+#[test]
+fn guarded_affine_access_emits_a_site_bound_constrained_certificate() {
+    let context = &mut setup();
+    let (function, _) = function(context, "guarded_affine_certificate", 0);
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let view_type = RankedViewType::new(context, 32, false, vec![8]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 16);
+    let extent = IndexConstantOp::new(context, 8);
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![invocation.result(context)],
+    )
+    .unwrap();
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        view.get_operation(),
+        invocation.get_operation(),
+        extent.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, access_block, &access);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert!(report.is_clean());
+    assert!(report.affine_certificates().is_empty());
+    assert_eq!(report.required_constrained_affine_site_count_v2(), 1);
+    assert_eq!(
+        report
+            .complete_constrained_affine_site_roster_v2()
+            .map(<[_]>::len),
+        Some(1)
+    );
+    let [record] = report.constrained_affine_certificates() else {
+        panic!("expected one constrained affine certificate")
+    };
+    assert_eq!(
+        (record.block(), record.operation(), record.dimension()),
+        (1, 0, 0)
+    );
+    assert!(!record.grants_lowering_or_launch_authority());
+    let certificate = record.certificate();
+    let [guard_provenance] = record.guards() else {
+        panic!("expected one exact guard origin")
+    };
+    assert_eq!(
+        (
+            guard_provenance.branch_block(),
+            guard_provenance.branch_operation(),
+            guard_provenance.true_successor(),
+            guard_provenance.false_successor(),
+            guard_provenance.accepted_successor(),
+            guard_provenance.accepted_on_true_edge(),
+        ),
+        (0, 3, 1, 2, 1, true)
+    );
+    assert_eq!(
+        guard_provenance.normalized_constraint(),
+        &certificate.query().constraints()[0]
+    );
+    assert_eq!(certificate.query().lower(), &[0]);
+    assert_eq!(certificate.query().upper_exclusive(), &[16]);
+    assert_eq!(certificate.query().constraints().len(), 1);
+    assert_eq!(certificate.query().constant(), 0);
+    assert_eq!(certificate.query().coefficients(), &[1]);
+    assert_eq!(certificate.query().extent(), 8);
+    assert_eq!(certificate.domain_witness(), &[0]);
+    check_constrained_affine_bounds_certificate_v2(certificate).unwrap();
+}
+
+#[test]
+fn clean_analysis_with_ambiguous_guard_origins_has_no_v2_proof_roster() {
+    let context = &mut setup();
+    let (function, _) = function(context, "ambiguous_guard_origins", 0);
+    let entry = function.get_entry_block(context);
+    let left = block(context, &function, "left");
+    let right = block(context, &function, "right");
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let view_type = RankedViewType::new(context, 32, false, vec![8]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 16);
+    let extent = IndexConstantOp::new(context, 8);
+    let split = AnalysisSplitOp::new(context, left, right);
+    let left_guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let right_guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        extent.result(context),
+        access_block,
+        exit,
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![invocation.result(context)],
+    )
+    .unwrap();
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        view.get_operation(),
+        invocation.get_operation(),
+        extent.get_operation(),
+        split.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, left, &left_guard);
+    append(context, right, &right_guard);
+    append(context, access_block, &access);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert!(report.is_clean());
+    assert_eq!(report.required_constrained_affine_site_count_v2(), 1);
+    assert!(report.constrained_affine_certificates().is_empty());
+    assert!(
+        report
+            .complete_constrained_affine_site_roster_v2()
+            .is_none()
+    );
 }
 
 #[test]

@@ -12,7 +12,10 @@ use std::fmt;
 
 use fe2o3_proof_contracts::{
     AffineBoundsCertificateErrorV1, AffineBoundsCertificateV1, AffineBoundsQueryV1,
-    check_affine_bounds_certificate_v1,
+    AffineInequalityV2, ConstrainedAffineBoundsCertificateErrorV2,
+    ConstrainedAffineBoundsCertificateV2, ConstrainedAffineBoundsQueryV2,
+    MAX_CONSTRAINED_AFFINE_MULTIPLIER_V2, check_affine_bounds_certificate_v1,
+    check_constrained_affine_bounds_certificate_v2,
 };
 
 use crate::{SparseIndexAnalysisV1, SparseIndexFactV1};
@@ -547,6 +550,120 @@ impl PresburgerMapV1 {
             .collect()
     }
 
+    /// Constructs a checked linear-combination certificate for one affine
+    /// output over a nonempty box with affine `<= 0` constraints.
+    ///
+    /// Equality, congruence, and remainder rows are outside this V2 theorem.
+    /// The generator is intentionally incomplete: it uses either one exact
+    /// constraint row or the canonical box facets for each side. Failure to
+    /// find those multipliers returns `None`, never an unproved clean result.
+    pub fn checked_constrained_affine_bounds_certificate_v2(
+        &self,
+        output: usize,
+        extent: u64,
+    ) -> Result<Option<ConstrainedAffineBoundsCertificateV2>, PresburgerFailureV1> {
+        if extent == 0 || self.domain.constraints().is_empty() {
+            return Ok(None);
+        }
+        let Some(PresburgerMapExprV1::Affine(expression)) = self.outputs.get(output) else {
+            return Ok(None);
+        };
+        let domain = self.domain.domain();
+        if domain.rank() == 0
+            || domain
+                .lower()
+                .iter()
+                .zip(domain.upper_exclusive())
+                .any(|(lower, upper)| lower >= upper)
+        {
+            return Ok(None);
+        }
+        let domain_witness = match self.domain.find_witness() {
+            PresburgerSetDecisionV1::Witness(witness) => witness.point().to_vec(),
+            PresburgerSetDecisionV1::Empty => return Ok(None),
+            PresburgerSetDecisionV1::Incomplete(failure) => return Err(failure),
+        };
+        let constraints = self
+            .domain
+            .constraints()
+            .iter()
+            .map(|constraint| match constraint {
+                PresburgerConstraintV1::LessEqualZero(row) => Ok(AffineInequalityV2::new(
+                    row.constant_term(),
+                    row.coefficients().to_vec(),
+                )),
+                PresburgerConstraintV1::EqualZero(_)
+                | PresburgerConstraintV1::CongruentZero { .. } => {
+                    Err(PresburgerFailureV1::Unsupported {
+                        detail: "constrained affine certificate supports only <= rows",
+                    })
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let query = ConstrainedAffineBoundsQueryV2::new(
+            domain.lower().to_vec(),
+            domain.upper_exclusive().to_vec(),
+            constraints,
+            expression.constant_term(),
+            expression.coefficients().to_vec(),
+            extent,
+        );
+        let lower_constant = expression
+            .constant_term()
+            .checked_neg()
+            .ok_or(PresburgerFailureV1::ArithmeticOverflow)?;
+        let lower_coefficients = expression
+            .coefficients()
+            .iter()
+            .map(|coefficient| coefficient.checked_neg())
+            .collect::<Option<Vec<_>>>()
+            .ok_or(PresburgerFailureV1::ArithmeticOverflow)?;
+        let upper_constant = expression
+            .constant_term()
+            .checked_sub(i128::from(extent) - 1)
+            .ok_or(PresburgerFailureV1::ArithmeticOverflow)?;
+
+        let lower_multipliers = exact_constraint_multipliers_v2(
+            query.constraints(),
+            lower_constant,
+            &lower_coefficients,
+            domain.rank(),
+        )
+        .or_else(|| box_facet_multipliers_v2(expression, true, query.constraints().len()));
+        let upper_multipliers = exact_constraint_multipliers_v2(
+            query.constraints(),
+            upper_constant,
+            expression.coefficients(),
+            domain.rank(),
+        )
+        .or_else(|| box_facet_multipliers_v2(expression, false, query.constraints().len()));
+        let Some((lower_multipliers, upper_multipliers)) = lower_multipliers.zip(upper_multipliers)
+        else {
+            return Ok(None);
+        };
+        let certificate = ConstrainedAffineBoundsCertificateV2::new(
+            query,
+            domain_witness,
+            lower_multipliers,
+            upper_multipliers,
+        );
+        match check_constrained_affine_bounds_certificate_v2(&certificate) {
+            Ok(_) => Ok(Some(certificate)),
+            Err(
+                ConstrainedAffineBoundsCertificateErrorV2::LowerCoefficientMismatch { .. }
+                | ConstrainedAffineBoundsCertificateErrorV2::UpperCoefficientMismatch { .. }
+                | ConstrainedAffineBoundsCertificateErrorV2::LowerConstantNotDominated
+                | ConstrainedAffineBoundsCertificateErrorV2::UpperConstantNotDominated,
+            ) => Ok(None),
+            Err(ConstrainedAffineBoundsCertificateErrorV2::ArithmeticOverflow) => {
+                Err(PresburgerFailureV1::ArithmeticOverflow)
+            }
+            Err(_) => Err(PresburgerFailureV1::InvalidModel {
+                detail: "generated constrained affine certificate failed structural checking",
+            }),
+        }
+    }
+
     /// Constructs and checks the endpoint theorem certificate for one affine
     /// output over an unconstrained rectangular domain.
     ///
@@ -1060,6 +1177,28 @@ impl PlironPresburgerAnalysisV1 {
         PresburgerMapV1::new(domain, outputs)
     }
 
+    /// Builds a map over the exact launch box and caller-retained path rows.
+    pub fn map_for_facts_with_constraints(
+        &self,
+        facts: &[SparseIndexFactV1],
+        constraints: Vec<PresburgerConstraintV1>,
+    ) -> Result<PresburgerMapV1, PresburgerFailureV1> {
+        if self.launch_extents.contains(&0) {
+            return Err(PresburgerFailureV1::Unsupported {
+                detail: "a dynamic launch extent has no finite compiler bound",
+            });
+        }
+        let domain = PresburgerSetV1::new(
+            PresburgerBoxV1::zero_based(&self.launch_extents)?,
+            constraints,
+        )?;
+        let outputs = facts
+            .iter()
+            .map(|fact| self.map_expr_for_fact(fact))
+            .collect::<Result<Vec<_>, _>>()?;
+        PresburgerMapV1::new(domain, outputs)
+    }
+
     pub fn map_expr_for_fact(
         &self,
         fact: &SparseIndexFactV1,
@@ -1118,4 +1257,46 @@ impl PlironPresburgerAnalysisV1 {
             }),
         }
     }
+}
+
+fn exact_constraint_multipliers_v2(
+    constraints: &[AffineInequalityV2],
+    target_constant: i128,
+    target_coefficients: &[i128],
+    rank: usize,
+) -> Option<Vec<u64>> {
+    constraints
+        .iter()
+        .position(|row| {
+            row.coefficients() == target_coefficients && target_constant <= row.constant()
+        })
+        .map(|selected| {
+            let mut multipliers = vec![0; constraints.len() + 2 * rank];
+            multipliers[selected] = 1;
+            multipliers
+        })
+}
+
+fn box_facet_multipliers_v2(
+    expression: &PresburgerAffineExprV1,
+    lower_target: bool,
+    constraint_count: usize,
+) -> Option<Vec<u64>> {
+    let rank = expression.coefficients().len();
+    let mut multipliers = vec![0; constraint_count + 2 * rank];
+    for (dimension, coefficient) in expression.coefficients().iter().copied().enumerate() {
+        let magnitude = coefficient.unsigned_abs();
+        if magnitude > u128::from(MAX_CONSTRAINED_AFFINE_MULTIPLIER_V2) {
+            return None;
+        }
+        let magnitude = u64::try_from(magnitude).ok()?;
+        let use_lower_facet = if lower_target {
+            coefficient >= 0
+        } else {
+            coefficient < 0
+        };
+        let row = constraint_count + 2 * dimension + usize::from(!use_lower_facet);
+        multipliers[row] = magnitude;
+    }
+    Some(multipliers)
 }

@@ -60,6 +60,30 @@ HSA handle, filesystem access, networking, unsafe code, or target-specific
 logic. Process supervision remains owned by fe2o3-verifier. Proof production,
 artifact authentication, and runtime admission remain outside this crate.
 
+## Constrained affine bounds V2
+
+The V2 certificate proves `0 <= f(x) < extent` for every integer point in one
+exact, nonempty constrained launch box. The certificate binds the ordered
+inequalities, affine map, box, extent, a satisfying-domain witness, and two
+bounded nonnegative multiplier vectors. The canonical checker rejects empty,
+malformed, unsupported, over-limit, or overflowing inputs.
+
+For the production-connected subset, kernel analysis separately counts every
+static-shape affine access dimension admitted by an affine path fact. A V2 site
+roster exists only when that count is nonzero and exactly one certificate is
+present per required site. `RankedBoundsReportV1::is_clean()` is a legacy
+analysis decision and does not imply that this V2 roster exists. An empty V2
+roster has no proof meaning.
+
+Production custody re-derives the launch box and affine expressions from the
+exact ranked recipe, matches the access and branch SSA identities, and checks
+that deleting the retained true edge makes the access block unreachable. The
+Verus proof establishes both the universal multiplier theorem and the generic
+cut-edge dominance lemma. The correspondence between the executable Rust
+checker and the Verus integer model, plus ranked-recipe-to-PLIRON SSA and CFG
+semantics, remains explicitly in the trusted computing base; this work does
+not prove all bounds analysis, race analysis, or compiler passes sound.
+
 ## Integration
 
 Adapters belong in verifier, compiler, Pliron, and runtime crates rather than

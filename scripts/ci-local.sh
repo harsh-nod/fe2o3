@@ -955,6 +955,9 @@ run_verus() {
   run_step affine-bounds-soundness-verus \
     env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/scripts/test-affine-bounds-soundness-verus.sh"
+  run_step constrained-affine-bounds-soundness-verus \
+    env VERUS="${runtime_verus}" \
+    "${REPO_ROOT}/scripts/test-constrained-affine-bounds-soundness-verus-v2.sh"
 }
 
 run_authority_launcher_tests() {
