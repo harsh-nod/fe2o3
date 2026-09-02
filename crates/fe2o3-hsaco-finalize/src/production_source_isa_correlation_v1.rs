@@ -39,6 +39,9 @@ pub enum ProductionSourceIsaCorrelationUnavailableV1 {
     /// unavailable. V1 validates the independent anchor/artifact path and refuses to infer V9
     /// source coordinates.
     SourceProjectionForKirV9,
+    /// Target-KIR optimization changed operation coordinates, but Wave 1
+    /// carries no exact pre-to-post optimization coordinate map.
+    TargetOptimizationWithoutCoordinateMap,
 }
 
 #[derive(Debug)]
@@ -670,7 +673,15 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             return Err(ProductionSourceIsaCorrelationErrorV1::ArtifactIdentityMismatch);
         }
 
-        let structural_binding = replay.structural_binding();
+        if replay.has_target_optimization_mutations() {
+            return Ok(
+                UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
+                    ProductionSourceIsaCorrelationUnavailableV1::TargetOptimizationWithoutCoordinateMap,
+                ),
+            );
+        }
+
+        let structural_binding = replay.pre_optimization_structural_binding();
         let target_identity = structural_binding.target_bound_kernel_ir();
         if anchors.target_bound_kir_version() != target_identity.version()
             || anchors.target_bound_kir_sha256() != &target_identity.sha256()

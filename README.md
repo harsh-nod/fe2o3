@@ -15,6 +15,7 @@ artifact, runtime, and proof boundaries described below. See the
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [runtime community architecture V1](docs/runtime-community-architecture-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
+[general optimizing compiler Wave 1](docs/general-optimizing-compiler-wave1.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
 [evidence-backed parity dashboard](docs/generated/cuda-oxide-parity-dashboard.md),

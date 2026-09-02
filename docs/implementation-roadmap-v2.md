@@ -2,6 +2,32 @@
 
 Status: living execution roadmap and chronological milestone record.
 
+## 2026-09-02 General Optimizing Compiler Wave 1
+
+Wave 1 adds three reusable compiler components without promoting fe2o3 to a
+general compiler:
+
+- `fe2o3-kernel-analysis` now owns an epoch-scoped analysis manager with
+  cached control-flow, post-dominance, and SSA-liveness queries. Uniformity
+  remains outside the manager until it has the same deterministic budgets.
+- `fe2o3-kernel-opt` owns a deterministic, transactional, resource-bounded KIR
+  pass pipeline. Its first closed roster removes unreachable blocks and dead
+  non-trapping pure operations, verifies the admitted input and every changed
+  checkpoint, and emits mutation epochs and per-pass accounting.
+- production MIR lowering now represents non-Boolean integer `SwitchInt`
+  terminators as typed KIR integer switches for signed and unsigned 8-, 16-,
+  32-, and 64-bit values plus pointer-sized indexes. Unsupported 128-bit
+  switches remain fail-closed.
+
+The production transaction runs the optimizer as a target-KIR cleanup after
+AMDGPU binding and before canonical target identity and LLVM lowering. The
+canonical KIR-to-LLVM replay record independently repeats the fixed optimizer
+and rejects module or accounting drift. This establishes exact deterministic
+transformation replay and structural KIR validity, not semantic preservation.
+Formal Compiler V3 continues to describe only its original bounded
+target-neutral fragment. See
+[general optimizing compiler Wave 1](general-optimizing-compiler-wave1.md).
+
 Commit identities in individual sections identify those bounded historical
 checkpoints, not the current repository head. Statements such as "next
 blocker" inside a checkpoint are local to that checkpoint unless repeated in

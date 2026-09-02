@@ -15,11 +15,11 @@ use fe2o3_kernel_ir::{
     ComparePredicate, Constant, Convergence, F32MathFunction, FloatConversionKind, FloatOperation,
     FormalMemoryIncompleteReason, Function, FunctionBody, FunctionId, FunctionOperationLocation,
     Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
-    IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
-    MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MatrixOperationKind,
-    MemoryAccess, MemoryEffect, MemoryIntrinsicOperation, MemoryOrdering, Module, Operation,
-    OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, TensorLayoutContractV1,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
+    IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain,
+    LaunchExtent, MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation,
+    MatrixOperationKind, MemoryAccess, MemoryEffect, MemoryIntrinsicOperation, MemoryOrdering,
+    Module, Operation, OperationKind, ScalarType, Signature, SynchronizationScope,
+    TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
     VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
     VerifiedCanonicalKernelIrIdentityV8, VerifiedCanonicalKernelIrIdentityV9,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, WaveF32ReductionKindV1,
@@ -13672,19 +13672,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         else_arguments: self.edge_arguments(block, else_target, operations)?,
                     });
                 }
-                let cases = targets
+                let mut cases = targets
                     .values()
                     .iter()
                     .map(|target| {
-                        Ok(SwitchCase {
-                            value: u64::try_from(target.value()).map_err(|_| {
-                                unsupported(
-                                    0,
-                                    Some(block.index()),
-                                    None,
-                                    "switch value exceeds Kernel IR V1",
-                                )
-                            })?,
+                        Ok(IntegerSwitchCase {
+                            value: integer_switch_constant_v2(&selector_ty, target.value())
+                                .map_err(|detail| {
+                                    unsupported(0, Some(block.index()), None, detail)
+                                })?,
                             target: BlockId(target.edge().target().index()),
                             arguments: self.edge_arguments(
                                 block,
@@ -13694,7 +13690,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         })
                     })
                     .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
-                Ok(Terminator::Switch {
+                // rustc records cases in increasing raw-bit order. Signed Kernel IR
+                // cases are canonical in numeric order, so the sign-bit partition
+                // must be reordered after the exact typed conversion.
+                cases.sort_by(|left, right| left.value.cmp(&right.value));
+                if cases.windows(2).any(|pair| pair[0].value == pair[1].value) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "integer switch cases collide after typed normalization",
+                    ));
+                }
+                Ok(Terminator::IntegerSwitch {
                     selector,
                     cases,
                     default_target: BlockId(targets.otherwise().target().index()),
@@ -22721,6 +22729,52 @@ fn integer_constant(ty: &Type, bits: u128) -> Result<Constant, ProductionSemanti
     }
 }
 
+/// Converts rustc's raw switch bits to the selector's exact Kernel IR type.
+///
+/// Switch targets are width-sized raw bit patterns even for signed integers.
+/// Conversion validates the raw width before interpreting the sign bit. KIR's
+/// typed switch constants currently end at 64 bits, so wider selectors remain
+/// explicitly closed.
+fn integer_switch_constant_v2(ty: &Type, bits: u128) -> Result<Constant, &'static str> {
+    const OUT_OF_RANGE: &str = "integer switch case does not fit its selector type";
+    match ty.as_scalar() {
+        Some(ScalarType::I8) => u8::try_from(bits)
+            .map(|value| Constant::I8(value as i8))
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::I16) => u16::try_from(bits)
+            .map(|value| Constant::I16(value as i16))
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::I32) => u32::try_from(bits)
+            .map(|value| Constant::I32(value as i32))
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::I64) => u64::try_from(bits)
+            .map(|value| Constant::I64(value as i64))
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::U8) => u8::try_from(bits)
+            .map(Constant::U8)
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::U16) => u16::try_from(bits)
+            .map(Constant::U16)
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::U32) => u32::try_from(bits)
+            .map(Constant::U32)
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::U64) => u64::try_from(bits)
+            .map(Constant::U64)
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::Index) => u64::try_from(bits)
+            .map(Constant::Index)
+            .map_err(|_| OUT_OF_RANGE),
+        Some(ScalarType::I128 | ScalarType::U128) => {
+            Err("128-bit integer switch selectors have no typed Kernel IR constant representation")
+        }
+        Some(ScalarType::Bool) => Err("boolean switch reached integer switch normalization"),
+        Some(ScalarType::F16 | ScalarType::Bf16 | ScalarType::F32 | ScalarType::F64) | None => {
+            Err("semantic switch selector is not a Kernel IR integer")
+        }
+    }
+}
+
 fn checked_constant_range_v1(bytes: &[u8], offset: u64, size: u64) -> Option<&[u8]> {
     let start = usize::try_from(offset).ok()?;
     let size = usize::try_from(size).ok()?;
@@ -22926,6 +22980,26 @@ mod resource_tests {
         ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
         compile_ranked_kernel_for_lowering_v1,
     };
+
+    #[test]
+    fn typed_integer_switch_constant_preserves_index_and_rejects_narrowing() {
+        assert_eq!(
+            integer_switch_constant_v2(&Type::INDEX, u128::from(u64::MAX)),
+            Ok(Constant::Index(u64::MAX)),
+        );
+        assert_eq!(
+            integer_switch_constant_v2(&Type::INDEX, u128::from(u64::MAX) + 1),
+            Err("integer switch case does not fit its selector type"),
+        );
+        assert_eq!(
+            integer_switch_constant_v2(&Type::Scalar(ScalarType::I8), u128::from(u8::MAX)),
+            Ok(Constant::I8(-1)),
+        );
+        assert_eq!(
+            integer_switch_constant_v2(&Type::Scalar(ScalarType::I8), u128::from(u8::MAX) + 1,),
+            Err("integer switch case does not fit its selector type"),
+        );
+    }
 
     #[test]
     fn workgroup_reduction_accepts_only_the_closed_scalar_and_geometry_contract() {

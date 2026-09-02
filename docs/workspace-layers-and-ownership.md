@@ -179,6 +179,11 @@ in-memory representations, not a connected compiler pipeline.
 The `kernel.*` shell additionally owns ranked-memory and closed-CFG operations
 with local MLIR-style verifiers. `fe2o3-kernel-analysis` owns their bounded,
 non-mutating whole-function bounds stage and terminal pre-lowering check.
+`fe2o3-kernel-opt` owns deterministic, budgeted Kernel IR transformation policy;
+canonical IR data and structural verification remain owned by
+`fe2o3-kernel-ir`. Its V1 passes do not need whole-function analysis; a future
+pass adds an analysis dependency only when it consumes an immutable stamped
+report.
 Its target-neutral analyses remain available without the default
 `authenticated-machine-effect` feature, so the production Pliron owner does
 not inherit process-control machinery; rustc enables that feature explicitly

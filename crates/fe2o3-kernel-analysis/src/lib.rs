@@ -15,6 +15,7 @@ mod gfx942_machine_dataflow;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_register;
 mod kernel_check_model;
+mod kir_analysis_manager;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_analysis;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -93,6 +94,7 @@ pub use gfx942_machine_dataflow::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_register::*;
 pub use kernel_check_model::*;
+pub use kir_analysis_manager::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_analysis::*;
 #[cfg(feature = "authenticated-machine-effect")]

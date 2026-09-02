@@ -63,6 +63,7 @@
         "dialect-schedule",
         "dialect-tile",
         "fe2o3-kernel-analysis",
+        "fe2o3-kernel-opt",
         "fe2o3-lower-mir-kernel",
         "fe2o3-pliron",
         "fe2o3-pliron-owner-core"

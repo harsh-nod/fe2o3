@@ -229,6 +229,9 @@ const fn map_unavailable_reason(
         ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9 => {
             SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
         }
+        ProductionSourceIsaCorrelationUnavailableV1::TargetOptimizationWithoutCoordinateMap => {
+            SourceIsaObservationUnavailableReasonV1::TargetOptimizationWithoutCoordinateMap
+        }
     }
 }
 
@@ -998,6 +1001,12 @@ mod tests {
                 ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
             ),
             SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
+        );
+        assert_eq!(
+            map_unavailable_reason(
+                ProductionSourceIsaCorrelationUnavailableV1::TargetOptimizationWithoutCoordinateMap
+            ),
+            SourceIsaObservationUnavailableReasonV1::TargetOptimizationWithoutCoordinateMap
         );
     }
 }

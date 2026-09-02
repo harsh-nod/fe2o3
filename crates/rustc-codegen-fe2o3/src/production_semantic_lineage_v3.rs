@@ -885,7 +885,7 @@ impl PreparedProductionSemanticLineageV3 {
         let bound_kir_identity = TargetLineageIdentityV3::new(bound_kir_digest, bound_kir_length)?;
         let kernel_ir = InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir)?;
         let amdgpu_lowering_replay =
-            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v3(
                 neutral_kir,
                 target_module,
                 rustc_target.profile(),
@@ -1999,7 +1999,9 @@ mod layout_tests {
     #[test]
     fn production_capsule_requires_shared_independent_kir_to_llvm_replay() {
         let source = include_str!("production_semantic_lineage_v3.rs");
-        assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
+        assert!(source.contains(
+            "CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v3"
+        ));
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::new"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::decode"));

@@ -1,6 +1,6 @@
 use fe2o3_kernel_ir::{
-    BinaryOp, BlockId, CheckedBinaryOperator, Operation, OperationKind, ScalarType, Terminator,
-    Type, decode_module_v8, verify_module,
+    BinaryOp, BlockId, CheckedBinaryOperator, Constant, Operation, OperationKind, ScalarType,
+    Terminator, Type, decode_module_v8, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
@@ -580,6 +580,63 @@ fn checked_cfg_owner() -> ProductionSemanticMirOwnerV1 {
     ))
 }
 
+fn integer_switch_owner(integer: IntegerCase) -> ProductionSemanticMirOwnerV1 {
+    let sign_bit = 1_u128 << (integer.bits - 1);
+    let maximum = if integer.bits == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << integer.bits) - 1
+    };
+    let cases = [1_u128, sign_bit, maximum]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, value)| {
+            SemanticSwitchTargetV1::new(
+                value,
+                edge(SemanticEdgeRoleV1::SwitchValue, ordinal as u32 + 1),
+            )
+        })
+        .collect();
+    owner(request_with_arguments(
+        vec![unit_type(), integer_type(2, integer.signed, integer.bits)],
+        vec![UNIT, INTEGER],
+        1,
+        vec![
+            block(
+                80,
+                vec![],
+                SemanticTerminatorKindV1::SwitchInt {
+                    discriminant: SemanticOperandV1::Copy(local_place(1, INTEGER)),
+                    targets: SemanticSwitchTargetsV1::new(
+                        cases,
+                        edge(SemanticEdgeRoleV1::SwitchOtherwise, 4),
+                    )
+                    .unwrap(),
+                },
+            ),
+            block(81, vec![], SemanticTerminatorKindV1::Return),
+            block(82, vec![], SemanticTerminatorKindV1::Return),
+            block(83, vec![], SemanticTerminatorKindV1::Return),
+            block(84, vec![], SemanticTerminatorKindV1::Return),
+        ],
+        b"typed_integer_switch",
+    ))
+}
+
+fn expected_switch_constant(scalar: ScalarType, bits: u128) -> Constant {
+    match scalar {
+        ScalarType::I8 => Constant::I8(bits as u8 as i8),
+        ScalarType::I16 => Constant::I16(bits as u16 as i16),
+        ScalarType::I32 => Constant::I32(bits as u32 as i32),
+        ScalarType::I64 => Constant::I64(bits as u64 as i64),
+        ScalarType::U8 => Constant::U8(bits as u8),
+        ScalarType::U16 => Constant::U16(bits as u16),
+        ScalarType::U32 => Constant::U32(bits as u32),
+        ScalarType::U64 => Constant::U64(bits as u64),
+        _ => panic!("unsupported typed-switch test scalar {scalar:?}"),
+    }
+}
+
 #[test]
 fn every_operator_and_admitted_integer_width_lowers_with_scalar_signedness() {
     for integer in INTEGER_CASES {
@@ -674,7 +731,7 @@ fn tuple_results_flow_independently_through_liveness_cfg_assert_and_switch() {
 
     let switch = by_id(4);
     assert_eq!(switch.parameters.len(), 2);
-    let Terminator::Switch { selector, .. } = switch.terminator.as_ref().unwrap() else {
+    let Terminator::IntegerSwitch { selector, .. } = switch.terminator.as_ref().unwrap() else {
         panic!("wrapped value must remain an integer switch selector");
     };
     assert_eq!(*selector, switch.parameters[0].id);
@@ -688,6 +745,127 @@ fn tuple_results_flow_independently_through_liveness_cfg_assert_and_switch() {
         lowered.correspondence().synthetic_operation_spans().len(),
         1
     );
+}
+
+#[test]
+fn production_owner_lowers_typed_integer_switches_in_numeric_order() {
+    for integer in INTEGER_CASES
+        .into_iter()
+        .filter(|integer| integer.bits <= 64)
+    {
+        let lowered = ProductionSemanticKirOwnerV1::try_lower(
+            integer_switch_owner(integer),
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .unwrap_or_else(|error| panic!("{} switch failed: {error}", integer.name));
+        lowered.verify_equivalence().unwrap();
+        verify_module(lowered.module()).unwrap();
+
+        let body = lowered.module().functions[0].body.as_ref().unwrap();
+        let entry = body
+            .blocks
+            .iter()
+            .find(|block| block.id == BlockId(0))
+            .unwrap();
+        let Terminator::IntegerSwitch {
+            selector,
+            cases,
+            default_target,
+            default_arguments,
+        } = entry.terminator.as_ref().unwrap()
+        else {
+            panic!("{} did not produce a typed integer switch", integer.name);
+        };
+        assert_eq!(*selector, body.parameters[0]);
+        assert_eq!(*default_target, BlockId(4));
+        assert!(default_arguments.is_empty());
+        assert!(cases.windows(2).all(|pair| pair[0].value < pair[1].value));
+        assert!(
+            cases
+                .iter()
+                .all(|case| case.value.ty() == Type::Scalar(integer.scalar))
+        );
+
+        let sign_bit = 1_u128 << (integer.bits - 1);
+        let maximum = (1_u128 << integer.bits) - 1;
+        let expected_raw_and_targets = if integer.signed {
+            [
+                (sign_bit, BlockId(2)),
+                (maximum, BlockId(3)),
+                (1, BlockId(1)),
+            ]
+        } else {
+            [
+                (1, BlockId(1)),
+                (sign_bit, BlockId(2)),
+                (maximum, BlockId(3)),
+            ]
+        };
+        let actual = cases
+            .iter()
+            .map(|case| (case.value.clone(), case.target))
+            .collect::<Vec<_>>();
+        let expected = expected_raw_and_targets
+            .into_iter()
+            .map(|(raw, target)| (expected_switch_constant(integer.scalar, raw), target))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{}", integer.name);
+
+        let entry_span = lowered
+            .correspondence()
+            .terminator_operation_spans()
+            .iter()
+            .find(|span| span.semantic_block().index() == 0)
+            .unwrap();
+        assert_eq!(entry_span.operation_count(), 0);
+        let decoded = decode_module_v8(lowered.canonical_kernel_ir_v8().canonical_bytes()).unwrap();
+        assert_eq!(decoded, *lowered.module());
+    }
+}
+
+#[test]
+fn typed_integer_switches_reject_unrepresentable_128_bit_selectors() {
+    for integer in INTEGER_CASES
+        .into_iter()
+        .filter(|integer| integer.bits == 128)
+    {
+        let error = match ProductionSemanticKirOwnerV1::try_lower(
+            integer_switch_owner(integer),
+            ProductionSemanticKirLimitsV1::default(),
+        ) {
+            Ok(_) => panic!("{} unexpectedly lowered", integer.name),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(
+                "128-bit integer switch selectors have no typed Kernel IR constant representation"
+            ),
+            "{} produced an unexpected error: {error}",
+            integer.name,
+        );
+    }
+}
+
+#[test]
+fn semantic_switch_targets_reject_duplicate_or_descending_raw_cases() {
+    for values in [[1_u128, 1], [2, 1]] {
+        assert_eq!(
+            SemanticSwitchTargetsV1::new(
+                values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ordinal, value)| SemanticSwitchTargetV1::new(
+                        value,
+                        edge(SemanticEdgeRoleV1::SwitchValue, ordinal as u32 + 1),
+                    ))
+                    .collect(),
+                edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+            ),
+            Err(SemanticMirErrorV1::NonDeterministicOrder {
+                entity: SemanticMirEntityV1::SwitchTarget,
+            }),
+        );
+    }
 }
 
 #[test]

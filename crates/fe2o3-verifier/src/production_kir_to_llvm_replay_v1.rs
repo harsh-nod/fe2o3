@@ -147,7 +147,7 @@ mod tests {
                 .unwrap();
         let dialect = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(target.module()).unwrap();
         let llvm = bind_production_upstream_llvm_layout_v1(&dialect).unwrap();
-        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v3(
             neutral_bytes,
             target.module(),
             ProductionAmdTargetProfileV1::Gfx942,
