@@ -2,7 +2,9 @@
 
 use std::{error::Error, fmt};
 
-use fe2o3_kernel_ir::{BinaryOp, Operation, OperationKind, ScalarType, Type, ValueId};
+use fe2o3_kernel_ir::{
+    BinaryOp, FunctionId, Module, Operation, OperationKind, ScalarType, Type, ValueId,
+};
 use fe2o3_mir_model::{
     InertSourceMirScalarRefinementEvidenceV1, SourceMirLocalBindingV1, SourceMirScalarOperatorV1,
     semantic_mir_v1::{
@@ -497,6 +499,32 @@ fn validate_joined_kir_operation_v2(
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LiveKirFunctionBindingV2 {
+    correspondence_owner: u32,
+    semantic_function: u32,
+    kernel_ir_function: FunctionId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LiveKirStatementSpanV2 {
+    correspondence_owner: u32,
+    semantic_function: u32,
+    semantic_block: u32,
+    semantic_statement: u32,
+    kernel_ir_block: u32,
+    kernel_ir_operation: u32,
+    operation_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LiveKirParameterBindingV2 {
+    correspondence_owner: u32,
+    semantic_function: u32,
+    semantic_local: u32,
+    kernel_ir_value: ValueId,
+}
+
 fn validate_live_kir_step_v2(
     owner: &ProductionSemanticKirOwnerV1,
     step: &SourceMirKirScalarCompositionStepV2,
@@ -505,32 +533,75 @@ fn validate_live_kir_step_v2(
         .correspondence()
         .lowered_functions()
         .iter()
-        .filter(|binding| {
-            binding.correspondence_owner().index() == step.correspondence_owner
-                && binding.semantic_function().index() == step.semantic_function
+        .map(|binding| LiveKirFunctionBindingV2 {
+            correspondence_owner: binding.correspondence_owner().index(),
+            semantic_function: binding.semantic_function().index(),
+            kernel_ir_function: binding.kernel_ir_function().clone(),
         })
         .collect::<Vec<_>>();
-    let [function_binding] = functions.as_slice() else {
-        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
-    };
     let spans = owner
         .correspondence()
         .statement_operation_spans()
         .iter()
         .copied()
+        .map(|span| LiveKirStatementSpanV2 {
+            correspondence_owner: span.correspondence_owner().index(),
+            semantic_function: span.semantic_function().index(),
+            semantic_block: span.semantic_block().index(),
+            semantic_statement: span.statement_ordinal(),
+            kernel_ir_block: span.kernel_ir_block().0,
+            kernel_ir_operation: span.first_operation_ordinal(),
+            operation_count: span.operation_count(),
+        })
+        .collect::<Vec<_>>();
+    let parameters = owner
+        .correspondence()
+        .parameter_bindings()
+        .iter()
+        .copied()
+        .map(|binding| LiveKirParameterBindingV2 {
+            correspondence_owner: binding.correspondence_owner().index(),
+            semantic_function: binding.semantic_function().index(),
+            semantic_local: binding.semantic_local().index(),
+            kernel_ir_value: binding.kernel_ir_value(),
+        })
+        .collect::<Vec<_>>();
+    validate_live_kir_step_lookup_v2(owner.module(), &functions, &spans, &parameters, step)
+}
+
+fn validate_live_kir_step_lookup_v2(
+    module: &Module,
+    functions: &[LiveKirFunctionBindingV2],
+    spans: &[LiveKirStatementSpanV2],
+    parameters: &[LiveKirParameterBindingV2],
+    step: &SourceMirKirScalarCompositionStepV2,
+) -> Result<(), SourceMirKirScalarCompositionErrorV2> {
+    let functions = functions
+        .iter()
+        .filter(|binding| {
+            binding.correspondence_owner == step.correspondence_owner
+                && binding.semantic_function == step.semantic_function
+        })
+        .collect::<Vec<_>>();
+    let [function_binding] = functions.as_slice() else {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    };
+    let spans = spans
+        .iter()
+        .copied()
         .filter(|span| {
-            span.correspondence_owner().index() == step.correspondence_owner
-                && span.semantic_function().index() == step.semantic_function
-                && span.semantic_block().index() == step.semantic_block
-                && span.statement_ordinal() == step.semantic_statement
+            span.correspondence_owner == step.correspondence_owner
+                && span.semantic_function == step.semantic_function
+                && span.semantic_block == step.semantic_block
+                && span.semantic_statement == step.semantic_statement
         })
         .collect::<Vec<_>>();
     let [span] = spans.as_slice() else {
         return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
     };
-    if span.kernel_ir_block().0 != step.kernel_ir_block
-        || span.operation_count() != 1
-        || span.first_operation_ordinal() != step.kernel_ir_operation
+    if span.kernel_ir_block != step.kernel_ir_block
+        || span.operation_count != 1
+        || span.kernel_ir_operation != step.kernel_ir_operation
     {
         return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
     }
@@ -546,27 +617,24 @@ fn validate_live_kir_step_v2(
             step.kernel_ir_right,
         ),
     ] {
-        let parameter_bindings = owner
-            .correspondence()
-            .parameter_bindings()
+        let parameter_bindings = parameters
             .iter()
             .copied()
             .filter(|candidate| {
-                candidate.correspondence_owner().index() == step.correspondence_owner
-                    && candidate.semantic_function().index() == step.semantic_function
-                    && candidate.semantic_local().index() == local
+                candidate.correspondence_owner == step.correspondence_owner
+                    && candidate.semantic_function == step.semantic_function
+                    && candidate.semantic_local == local
             })
             .collect::<Vec<_>>();
         let [parameter] = parameter_bindings.as_slice() else {
             return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
         };
-        if binding.semantic_local().index() != local || parameter.kernel_ir_value() != value {
+        if binding.semantic_local().index() != local || parameter.kernel_ir_value != value {
             return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
         }
     }
-    let operation = owner
-        .module()
-        .function(function_binding.kernel_ir_function())
+    let operation = module
+        .function(&function_binding.kernel_ir_function)
         .and_then(|function| function.body.as_ref())
         .and_then(|body| {
             body.blocks
@@ -709,6 +777,70 @@ fn evidence_identity_v2(bytes: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn live_lookup_fixture_v2() -> (
+        Module,
+        Vec<LiveKirFunctionBindingV2>,
+        Vec<LiveKirStatementSpanV2>,
+        Vec<LiveKirParameterBindingV2>,
+        SourceMirKirScalarCompositionStepV2,
+    ) {
+        use fe2o3_kernel_ir::{BasicBlock, BlockId, Function, Signature, ValueDef};
+
+        let step = inert_fixture_v2().steps[0].clone();
+        let function_id = FunctionId::new("composition_helper");
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(12), Type::Scalar(ScalarType::U32)),
+            OperationKind::Binary {
+                op: BinaryOp::Subtract,
+                lhs: ValueId(10),
+                rhs: ValueId(11),
+            },
+        ));
+        let mut module = Module::new("composition_fixture");
+        module.functions.push(Function::internal_helper(
+            function_id.clone(),
+            Signature::new(
+                vec![Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U32)],
+                vec![Type::Scalar(ScalarType::U32)],
+            ),
+            vec![ValueId(10), ValueId(11)],
+            vec![block],
+        ));
+        (
+            module,
+            vec![LiveKirFunctionBindingV2 {
+                correspondence_owner: 7,
+                semantic_function: 2,
+                kernel_ir_function: function_id,
+            }],
+            vec![LiveKirStatementSpanV2 {
+                correspondence_owner: 7,
+                semantic_function: 2,
+                semantic_block: 0,
+                semantic_statement: 1,
+                kernel_ir_block: 0,
+                kernel_ir_operation: 0,
+                operation_count: 1,
+            }],
+            vec![
+                LiveKirParameterBindingV2 {
+                    correspondence_owner: 7,
+                    semantic_function: 2,
+                    semantic_local: 1,
+                    kernel_ir_value: ValueId(10),
+                },
+                LiveKirParameterBindingV2 {
+                    correspondence_owner: 7,
+                    semantic_function: 2,
+                    semantic_local: 2,
+                    kernel_ir_value: ValueId(11),
+                },
+            ],
+            step,
+        )
+    }
 
     fn inert_fixture_v2() -> InertSourceMirKirScalarCompositionEvidenceV2 {
         use fe2o3_mir_model::semantic_mir_v1::{SemanticLocalIdV1, SemanticSourceFileIdentityV1};
@@ -884,6 +1016,47 @@ mod tests {
         assert_eq!(
             validate_semantic_identity_v2(&[1; 32], &[2; 32]),
             Err(SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch),
+        );
+    }
+
+    #[test]
+    fn live_step_lookup_rejects_parameter_binding_substitution() {
+        let (module, functions, spans, mut parameters, step) = live_lookup_fixture_v2();
+        validate_live_kir_step_lookup_v2(&module, &functions, &spans, &parameters, &step).unwrap();
+
+        parameters[0].kernel_ir_value = ValueId(99);
+        assert_eq!(
+            validate_live_kir_step_lookup_v2(&module, &functions, &spans, &parameters, &step),
+            Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch),
+        );
+    }
+
+    #[test]
+    fn live_step_lookup_rejects_statement_span_substitution() {
+        let (module, functions, mut spans, parameters, step) = live_lookup_fixture_v2();
+        validate_live_kir_step_lookup_v2(&module, &functions, &spans, &parameters, &step).unwrap();
+
+        spans[0].kernel_ir_operation = 1;
+        assert_eq!(
+            validate_live_kir_step_lookup_v2(&module, &functions, &spans, &parameters, &step),
+            Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch),
+        );
+    }
+
+    #[test]
+    fn live_step_lookup_rejects_wrong_live_binary_opcode() {
+        let (mut module, functions, spans, parameters, step) = live_lookup_fixture_v2();
+        validate_live_kir_step_lookup_v2(&module, &functions, &spans, &parameters, &step).unwrap();
+
+        let operation = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[0];
+        operation.kind = OperationKind::Binary {
+            op: BinaryOp::Add,
+            lhs: ValueId(10),
+            rhs: ValueId(11),
+        };
+        assert_eq!(
+            validate_live_kir_step_lookup_v2(&module, &functions, &spans, &parameters, &step),
+            Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch),
         );
     }
 }
