@@ -107,6 +107,7 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
         .arg(target)
         .args(["--exact", "hardware_v2_live_target", "--nocapture"])
         .env(TARGET_ENV, "1")
+        .env_remove("RUST_MIN_STACK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

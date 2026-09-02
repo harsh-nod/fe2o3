@@ -207,7 +207,7 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         .args(["--exact", "live_kfd_v3_live_target", "--nocapture"])
         .env(TARGET_ENV, "1")
         .env(TARGET_HSACO_ENV, &inputs.hsaco)
-        .env("RUST_MIN_STACK", "33554432")
+        .env_remove("RUST_MIN_STACK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
