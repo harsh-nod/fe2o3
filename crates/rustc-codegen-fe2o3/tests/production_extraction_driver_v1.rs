@@ -280,6 +280,75 @@ fn two_and_three_kernel_collections_reach_one_exact_multi_entry_llvm_module() {
     }
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn real_rustc_cfg_fixture_retains_verified_internal_helper_call_result_status() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("formal-cfg-v2.ll");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", &llvm_output)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "55".repeat(32),
+        )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "formal-cfg-v2",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("run real rustc/HIR/MIR CFG fixture");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "real rustc CFG production fixture failed:\n{stderr}",
+    );
+    assert!(
+        stderr.contains("bounded MIR-to-KIR u32 internal-helper/call-result status verified")
+            && stderr.contains("artifact/launch authority false"),
+        "real rustc CFG production path omitted verified private custody:\n{stderr}",
+    );
+    let llvm = std::fs::read_to_string(&llvm_output)
+        .expect("real rustc CFG production path emits deterministic LLVM");
+    assert!(
+        llvm.contains("define amdgpu_kernel void @formal_cfg_root_v2("),
+        "real rustc CFG LLVM omitted the kernel root:\n{llvm}",
+    );
+    let call_result = llvm
+        .lines()
+        .find(|line| line.contains(" = call i32 @__fe2o3_internal_helper_v1_"))
+        .and_then(|line| line.split_whitespace().next())
+        .expect("real rustc CFG LLVM has one internal-helper call result");
+    assert!(
+        llvm.contains(&format!("store i32 {call_result}, ptr addrspace(1)")),
+        "fixture did not consume the exact helper call result in its separately verified store:\n{llvm}",
+    );
+}
+
 fn assert_multi_root_extraction(
     features: &str,
     expected_symbols: &[&str],

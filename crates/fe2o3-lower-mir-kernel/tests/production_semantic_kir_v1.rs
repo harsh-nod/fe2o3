@@ -11,11 +11,11 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertMirKirCfgRefinementEvidenceV2,
-    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
-    ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
-    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
-    ProductionSemanticKirResourceV1, SemanticKirSyntheticOperationRuleV1,
-    validate_borrowed_ranked_semantic_projection_candidate_v1,
+    MirKirCfgRefinementStatusV2, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
+    ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
+    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
+    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
+    SemanticKirSyntheticOperationRuleV1, validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -2770,6 +2770,10 @@ fn live_u32_diamond_call_derives_nonzero_formal_cfg_evidence() {
     assert_ne!(evidence.semantic_sha256(), &[0; 32]);
     assert_ne!(evidence.bindings().kir_join_parameter.0, 0);
     assert!(!evidence.grants_authority());
+    let status = MirKirCfgRefinementStatusV2::from_live_owner(&lowered).unwrap();
+    assert!(matches!(status, MirKirCfgRefinementStatusV2::Verified(_)));
+    status.revalidate_against(&lowered).unwrap();
+    assert!(!status.grants_authority());
 }
 
 #[test]
@@ -2783,6 +2787,10 @@ fn cfg_refinement_fails_closed_for_the_neighboring_u64_shape() {
         InertMirKirCfgRefinementEvidenceV2::from_live_owner(&lowered),
         Err(fe2o3_lower_mir_kernel::MirKirCfgRefinementErrorV2::UnsupportedShape)
     ));
+    assert_eq!(
+        MirKirCfgRefinementStatusV2::from_live_owner(&lowered).unwrap(),
+        MirKirCfgRefinementStatusV2::NotEligible
+    );
 }
 
 #[test]

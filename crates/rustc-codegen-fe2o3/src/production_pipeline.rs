@@ -47,6 +47,7 @@ pub(crate) enum ProductionPipelineError {
     SourceMirKirComposition(
         crate::production_source_mir_scalar_v1::ProductionSourceMirKirCompositionErrorV2,
     ),
+    MirKirCfgRefinement(fe2o3_lower_mir_kernel::MirKirCfgRefinementErrorV2),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -106,6 +107,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::SourceMirKirComposition(error) => write!(
                 formatter,
                 "production compilation source-to-KIR scalar composition failed: {error}"
+            ),
+            Self::MirKirCfgRefinement(error) => write!(
+                formatter,
+                "production compilation bounded MIR-to-KIR CFG refinement failed: {error}"
             ),
             Self::MissingMirPlironTranslationValidation => formatter.write_str(
                 "production compilation reached target-neutral custody without independent MIR-to-PLIRON translation validation",
@@ -221,6 +226,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
+            Self::MirKirCfgRefinement(error) => Some(error),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
@@ -392,6 +398,7 @@ pub(crate) struct TargetNeutralProductionCompilation {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     source_mir_kir:
         crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
+    cfg_refinement: crate::production_mir_kir_cfg_v2::AuthenticatedMirKirCfgRefinementStatusV2,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
@@ -403,6 +410,7 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     source_mir_kir:
         crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
+    cfg_refinement: crate::production_mir_kir_cfg_v2::AuthenticatedMirKirCfgRefinementStatusV2,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
@@ -414,6 +422,7 @@ pub(crate) struct TargetLoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     source_mir_kir:
         crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
+    cfg_refinement: crate::production_mir_kir_cfg_v2::AuthenticatedMirKirCfgRefinementStatusV2,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     target_module: fe2o3_kernel_ir::Module,
@@ -504,9 +513,13 @@ impl TargetNeutralProductionCompilation {
         let Self {
             lowered,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification: _,
             bindings,
         } = self;
+        cfg_refinement
+            .revalidate(&lowered)
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         lowered
             .verify_equivalence()
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
@@ -605,14 +618,22 @@ impl TargetNeutralProductionCompilation {
         let Self {
             lowered,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             bindings,
         } = self;
+        cfg_refinement
+            .revalidate(&lowered)
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
             .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
+        cfg_refinement
+            .revalidate(admitted.semantic_kir())
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             bindings,
         })
@@ -626,12 +647,16 @@ impl FormalMemoryAdmittedProductionCompilation {
         let Self {
             admitted,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             bindings,
         } = self;
         source_mir_kir
             .revalidate()
             .map_err(ProductionPipelineError::SourceMirKirComposition)?;
+        cfg_refinement
+            .revalidate(admitted.semantic_kir())
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         let target_profile = bindings.rustc_target.profile();
         let semantic = admitted.semantic_kir().semantic().semantic();
         if semantic.roots().is_empty()
@@ -744,6 +769,7 @@ impl FormalMemoryAdmittedProductionCompilation {
         Ok(TargetLoweredProductionCompilation {
             admitted,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             target_module,
             workgroups,
@@ -889,7 +915,11 @@ impl TargetLoweredProductionCompilation {
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        8 + self
+        let _ = (
+            self.cfg_refinement.status_name(),
+            self.cfg_refinement.grants_authority(),
+        );
+        9 + self
             .bindings
             .transaction
             .compiler_custody
@@ -900,18 +930,26 @@ impl TargetLoweredProductionCompilation {
         false
     }
 
+    pub(crate) fn mir_kir_cfg_refinement_status_name(&self) -> &'static str {
+        self.cfg_refinement.status_name()
+    }
+
     pub(crate) fn into_inert_worker_handoff_for_extraction(
         self,
     ) -> Result<fe2o3_compiler_ffi::CompilerModuleHandoffV2, ProductionPipelineError> {
         let Self {
             admitted,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification: _,
             target_module,
             workgroups: _,
             llvm_ir,
             bindings,
         } = self;
+        cfg_refinement
+            .revalidate(admitted.semantic_kir())
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
@@ -966,12 +1004,16 @@ impl TargetLoweredProductionCompilation {
         let Self {
             admitted,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             target_module,
             workgroups: _,
             llvm_ir,
             bindings,
         } = self;
+        cfg_refinement
+            .revalidate(admitted.semantic_kir())
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
@@ -1047,10 +1089,11 @@ impl TargetLoweredProductionCompilation {
         self,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s) and bounded MIR-to-KIR u32 internal-helper/call-result status {}, then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
+            self.mir_kir_cfg_refinement_status_name(),
             self.formal_witness_extent(),
             self.formal_allocation_count(),
             self.formal_access_count(),
@@ -1067,12 +1110,16 @@ impl TargetLoweredProductionCompilation {
         let Self {
             admitted,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             target_module,
             workgroups: _,
             llvm_ir,
             bindings,
         } = self;
+        cfg_refinement
+            .revalidate(admitted.semantic_kir())
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
@@ -2254,6 +2301,11 @@ impl RankedVerifiedProductionCompilation {
                 fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
             )
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        let cfg_refinement =
+            crate::production_mir_kir_cfg_v2::AuthenticatedMirKirCfgRefinementStatusV2::try_derive(
+                &lowered,
+            )
+            .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
         let exact_translation_roster = {
             let mut translations = lowered.mir_pliron_translation_validations();
             translations.len() == lowered.module().kernels.len()
@@ -2273,6 +2325,7 @@ impl RankedVerifiedProductionCompilation {
         Ok(TargetNeutralProductionCompilation {
             lowered,
             source_mir_kir,
+            cfg_refinement,
             ranked_verification,
             bindings,
         })
