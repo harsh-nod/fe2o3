@@ -332,7 +332,10 @@ mod platform {
         io::{Read, Seek, SeekFrom, Write},
         os::{
             fd::AsRawFd,
-            unix::{fs::MetadataExt, process::CommandExt},
+            unix::{
+                fs::{FileExt, MetadataExt},
+                process::CommandExt,
+            },
         },
         process::{Child, Command, Stdio},
         thread,
@@ -669,21 +672,72 @@ mod platform {
                 WorkerExecutionErrorKind::WorkerChangedDuringCapture,
             ));
         }
-        rustix::fs::fcntl_add_seals(
-            &image,
-            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
-        )
-        .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
-        .map_err(|error| {
-            WorkerExecutionError::io(WorkerExecutionErrorKind::PreparePinnedImage, error.into())
-        })?;
+        let digest: [u8; 32] = hasher.finalize().into();
+        seal_immutable_image(&image)?;
+        require_image_digest(&image, initial.size, digest)?;
         image.seek(SeekFrom::Start(0)).map_err(|error| {
             WorkerExecutionError::io(WorkerExecutionErrorKind::PreparePinnedImage, error)
         })?;
         let snapshot = Snapshot::from_metadata(&image.metadata().map_err(|error| {
             WorkerExecutionError::io(WorkerExecutionErrorKind::PreparePinnedImage, error)
         })?);
-        Ok((image, snapshot, hasher.finalize().into()))
+        Ok((image, snapshot, digest))
+    }
+
+    fn seal_immutable_image(image: &File) -> Result<(), WorkerExecutionError> {
+        // A fresh descriptor is still reachable by same-UID `/proc` observers. The bounded wait
+        // is paired with an independent exact-length image digest before construction succeeds.
+        fe2o3_process_identity::seal_immutable_memfd_v1(
+            image,
+            fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
+        )
+        .map_err(|error| {
+            WorkerExecutionError::io(WorkerExecutionErrorKind::PreparePinnedImage, error.into())
+        })
+    }
+
+    fn digest_image_exact(image: &File, size: u64) -> Result<[u8; 32], WorkerExecutionError> {
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; IO_CHUNK_BYTES];
+        let mut offset = 0_u64;
+        while offset < size {
+            let requested = usize::try_from((size - offset).min(IO_CHUNK_BYTES as u64))
+                .expect("bounded chunk fits usize");
+            let read = image
+                .read_at(&mut buffer[..requested], offset)
+                .map_err(|error| {
+                    WorkerExecutionError::io(WorkerExecutionErrorKind::PreparePinnedImage, error)
+                })?;
+            if read == 0 {
+                return Err(WorkerExecutionError::plain(
+                    WorkerExecutionErrorKind::WorkerChangedDuringCapture,
+                ));
+            }
+            hasher.update(&buffer[..read]);
+            offset += read as u64;
+        }
+        if image.read_at(&mut buffer[..1], size).map_err(|error| {
+            WorkerExecutionError::io(WorkerExecutionErrorKind::PreparePinnedImage, error)
+        })? != 0
+        {
+            return Err(WorkerExecutionError::plain(
+                WorkerExecutionErrorKind::WorkerChangedDuringCapture,
+            ));
+        }
+        Ok(hasher.finalize().into())
+    }
+
+    fn require_image_digest(
+        image: &File,
+        size: u64,
+        expected: [u8; 32],
+    ) -> Result<(), WorkerExecutionError> {
+        if digest_image_exact(image, size)? != expected {
+            return Err(WorkerExecutionError::plain(
+                WorkerExecutionErrorKind::WorkerChangedDuringCapture,
+            ));
+        }
+        Ok(())
     }
 
     fn validate_image(
@@ -949,6 +1003,59 @@ mod platform {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 result => return result,
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn sealed_worker_image_is_exact_and_digest_checked() {
+            let bytes = b"\x7fELFworker-image";
+            let fd = rustix::fs::memfd_create(
+                "fe2o3-worker-seal-test",
+                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+            )
+            .unwrap();
+            let mut source = File::from(fd);
+            source.write_all(bytes).unwrap();
+            source.seek(SeekFrom::Start(0)).unwrap();
+
+            let (image, snapshot, digest) = capture_and_seal(&mut source).unwrap();
+            assert_eq!(snapshot.size, bytes.len() as u64);
+            assert_eq!(rustix::fs::fcntl_get_seals(&image).unwrap(), REQUIRED_SEALS);
+            assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(bytes)));
+            require_image_digest(&image, snapshot.size, digest).unwrap();
+            let error = require_image_digest(&image, snapshot.size, [0; 32]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                &WorkerExecutionErrorKind::WorkerChangedDuringCapture
+            );
+            let mut writable_alias = image.try_clone().unwrap();
+            assert!(writable_alias.write_all(b"mutation").is_err());
+            assert!(writable_alias.set_len(0).is_err());
+        }
+
+        #[test]
+        fn worker_image_rejects_pre_seal_mutation() {
+            let bytes = b"\x7fELFworker-image";
+            let expected = <[u8; 32]>::from(Sha256::digest(bytes));
+            let fd = rustix::fs::memfd_create(
+                "fe2o3-worker-mutation-test",
+                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+            )
+            .unwrap();
+            let mut image = File::from(fd);
+            image.write_all(bytes).unwrap();
+            image.write_at(b"X", 0).unwrap();
+
+            seal_immutable_image(&image).unwrap();
+            let error = require_image_digest(&image, bytes.len() as u64, expected).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                &WorkerExecutionErrorKind::WorkerChangedDuringCapture
+            );
         }
     }
 }

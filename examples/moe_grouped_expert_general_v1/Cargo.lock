@@ -565,6 +565,7 @@ dependencies = [
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
+ "fe2o3-process-identity",
  "fe2o3-source-isa-observation",
  "object",
  "reserved-fe2o3-symbols",
@@ -704,6 +705,17 @@ name = "fe2o3-pliron-owner-core"
 version = "0.1.0"
 dependencies = [
  "pliron",
+]
+
+[[package]]
+name = "fe2o3-process-identity"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-rustc-invocation",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
 ]
 
 [[package]]

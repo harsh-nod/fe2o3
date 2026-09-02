@@ -578,17 +578,8 @@ mod platform {
                     source: source.into(),
                 }
             })?;
-            let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
-            rustix::fs::fcntl_add_seals(
-                &image,
-                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
-            )
-            .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
-            .map_err(|source| PinExecutableError::ExecutionStrategy {
-                path: self.display_path.clone(),
-                source: source.into(),
-            })?;
-            require_exact_seals(&image, seals, &self.display_path)?;
+            seal_immutable_image(&image, &self.display_path)?;
+            let seals = REQUIRED_INHERITED_SEALS;
             let writable_path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
             let read_only_fd = rustix::fs::open(
                 &writable_path,
@@ -753,17 +744,8 @@ mod platform {
                     source: source.into(),
                 }
             })?;
-            let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
-            rustix::fs::fcntl_add_seals(
-                &image,
-                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
-            )
-            .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
-            .map_err(|source| PinExecutableError::ExecutionStrategy {
-                path: self.display_path.clone(),
-                source: source.into(),
-            })?;
-            require_exact_seals(&image, seals, &self.display_path)?;
+            seal_immutable_image(&image, &self.display_path)?;
+            let seals = REQUIRED_INHERITED_SEALS;
             barrier(StaticSnapshotBarrier::SnapshotSealed);
 
             image
@@ -1090,6 +1072,19 @@ mod platform {
             });
         }
         Ok(())
+    }
+
+    fn seal_immutable_image(file: &File, display_path: &Path) -> Result<(), PinExecutableError> {
+        // A fresh descriptor is still reachable by same-UID `/proc` observers. Waiting is safe
+        // here because both callers rehash the exact sealed image before granting authority.
+        fe2o3_process_identity::seal_immutable_memfd_v1(
+            file,
+            fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
+        )
+        .map_err(|source| PinExecutableError::ExecutionStrategy {
+            path: display_path.to_path_buf(),
+            source: source.into(),
+        })
     }
 
     fn require_unused_child_descriptor(
