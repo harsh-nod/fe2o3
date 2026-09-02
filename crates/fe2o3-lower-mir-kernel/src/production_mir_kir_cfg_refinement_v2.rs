@@ -12,7 +12,8 @@ use fe2o3_kernel_ir::{FunctionRole, OperationKind, ScalarType, Terminator, Type,
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticConstantValueV1, SemanticEdgeRoleV1, SemanticFunctionRoleV1, SemanticLocalRoleV1,
     SemanticOperandV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticStatementKindV1,
-    SemanticTerminatorKindV1, SemanticTypeShapeV1, SemanticUnwindActionV1,
+    SemanticSwitchTargetV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeShapeV1,
+    SemanticUnwindActionV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -344,8 +345,13 @@ fn execute_kir_with_shape_v2(
 
 /// Checks equality of the two executable observations.
 pub fn mir_kir_u32_diamond_call_refines_v2(input: u32, fallback: u32, fuel: u8) -> bool {
-    execute_mir_u32_diamond_call_v2(input, fallback, fuel)
-        == execute_kir_u32_diamond_call_v2(input, fallback, fuel)
+    match (
+        execute_mir_u32_diamond_call_v2(input, fallback, fuel),
+        execute_kir_u32_diamond_call_v2(input, fallback, fuel),
+    ) {
+        (Some(mir), Some(kir)) => mir == kir,
+        _ => false,
+    }
 }
 
 /// Every semantic and KIR value/block identity checked by the relation.
@@ -490,11 +496,7 @@ impl InertMirKirCfgRefinementEvidenceV2 {
             u32::try_from(*helper_index)
                 .map_err(|_| MirKirCfgRefinementErrorV2::UnsupportedShape)?,
         );
-        if root.entry().index() != 0
-            || helper.entry().index() != 0
-            || helper.blocks().len() != 4
-            || helper.locals().len() != 2
-        {
+        if helper.blocks().len() != 4 || helper.locals().len() != 2 {
             return Err(MirKirCfgRefinementErrorV2::UnsupportedShape);
         }
         if semantic
@@ -516,21 +518,23 @@ impl InertMirKirCfgRefinementEvidenceV2 {
         require_u32_local(semantic.types(), helper, helper_argument)?;
         require_u32_local(semantic.types(), helper, helper_return)?;
 
+        let helper_entry = helper.entry().index();
+        let helper_entry_block = helper
+            .blocks()
+            .get(helper_entry as usize)
+            .ok_or(MirKirCfgRefinementErrorV2::UnsupportedShape)?;
         let SemanticTerminatorKindV1::SwitchInt {
             discriminant,
             targets,
-        } = helper.blocks()[0].terminator().kind()
+        } = helper_entry_block.terminator().kind()
         else {
             return Err(MirKirCfgRefinementErrorV2::UnsupportedShape);
         };
-        let helper_entry = helper.entry().index();
-        let zero_arm = targets.values()[0].edge().target().index();
+        let zero_target = exact_zero_switch_target_v2(targets)?;
+        let zero_arm = zero_target.edge().target().index();
         let nonzero_arm = targets.otherwise().target().index();
-        if !helper.blocks()[0].statements().is_empty()
+        if !helper_entry_block.statements().is_empty()
             || copied_local(discriminant) != Some(helper_argument)
-            || targets.values().len() != 1
-            || targets.values()[0].value() != 0
-            || targets.values()[0].edge().role() != SemanticEdgeRoleV1::SwitchValue
             || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
             || zero_arm == helper_entry
             || nonzero_arm == helper_entry
@@ -937,6 +941,17 @@ impl InertMirKirCfgRefinementEvidenceV2 {
     }
 }
 
+fn exact_zero_switch_target_v2(
+    targets: &SemanticSwitchTargetsV1,
+) -> Result<&SemanticSwitchTargetV1, MirKirCfgRefinementErrorV2> {
+    let [target] = targets.values() else {
+        return Err(MirKirCfgRefinementErrorV2::UnsupportedShape);
+    };
+    (target.value() == 0 && target.edge().role() == SemanticEdgeRoleV1::SwitchValue)
+        .then_some(target)
+        .ok_or(MirKirCfgRefinementErrorV2::UnsupportedShape)
+}
+
 /// Fail-closed derivation error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MirKirCfgRefinementErrorV2 {
@@ -1326,6 +1341,11 @@ mod tests {
             execute_mir_u32_diamond_call_v2(1, 17, MIR_KIR_CFG_REQUIRED_FUEL_V2 - 1),
             None
         );
+        assert!(!mir_kir_u32_diamond_call_refines_v2(
+            1,
+            17,
+            MIR_KIR_CFG_REQUIRED_FUEL_V2 - 1
+        ));
         assert_eq!(
             execute_mir_u32_diamond_call_v2(0, 17, MIR_KIR_CFG_REQUIRED_FUEL_V2)
                 .unwrap()
@@ -1337,6 +1357,34 @@ mod tests {
                 .unwrap()
                 .result,
             17
+        );
+    }
+    #[test]
+    fn empty_or_nonzero_switch_rosters_are_not_eligible_without_panicking() {
+        let otherwise = fe2o3_mir_model::semantic_mir_v1::SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::SwitchOtherwise,
+            fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1::from_index(1),
+        );
+        let empty = SemanticSwitchTargetsV1::new(Vec::new(), otherwise).unwrap();
+        assert_eq!(
+            exact_zero_switch_target_v2(&empty),
+            Err(MirKirCfgRefinementErrorV2::UnsupportedShape)
+        );
+
+        let nonzero = SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                1,
+                fe2o3_mir_model::semantic_mir_v1::SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::SwitchValue,
+                    fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1::from_index(2),
+                ),
+            )],
+            otherwise,
+        )
+        .unwrap();
+        assert_eq!(
+            exact_zero_switch_target_v2(&nonzero),
+            Err(MirKirCfgRefinementErrorV2::UnsupportedShape)
         );
     }
     #[test]

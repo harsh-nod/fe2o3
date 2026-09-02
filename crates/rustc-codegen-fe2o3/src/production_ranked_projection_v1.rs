@@ -1466,6 +1466,9 @@ fn revalidate_constrained_affine_bounds_custody_v2(
     {
         return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
     }
+    if required == 0 {
+        return Ok(());
+    }
     let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel())?;
     let mut sites = HashSet::with_capacity(records.len());
     for (record, retained) in records.iter().zip(retained) {
@@ -22984,7 +22987,7 @@ mod tests {
             ProductionRankedOperationV1::InvocationIndex {
                 result: invocation,
                 dimension: 0,
-                launch_extent: 64,
+                launch_extent: 0,
             },
             ProductionRankedOperationV1::ViewInSpace {
                 result: view,
@@ -23028,6 +23031,21 @@ mod tests {
         .unwrap();
         assert!(lowering.bounds_report().is_clean());
         assert!(lowering.race_report().is_clean());
+        assert_eq!(
+            lowering
+                .bounds_report()
+                .required_constrained_affine_site_count_v2(),
+            0
+        );
+        assert!(
+            lowering
+                .bounds_report()
+                .constrained_affine_certificates()
+                .is_empty()
+        );
+        let retained = independently_verify_constrained_affine_bounds_v2(&lowering).unwrap();
+        assert!(retained.is_empty());
+        revalidate_constrained_affine_bounds_custody_v2(&lowering, &retained).unwrap();
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
         assert!(ranked_ir.contains("kernel.br ^bb4"));
     }

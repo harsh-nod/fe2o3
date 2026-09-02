@@ -1,9 +1,10 @@
-name: Formal Compiler V1
+name: Formal Compiler V2
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/formal-compiler-v1.yml"
+      - ".github/workflows/formal-compiler-v2.yml"
+      - "README.md"
       - "crates/fe2o3-amdgcn-model/**"
       - "crates/fe2o3-host/**"
       - "crates/fe2o3-kernel-analysis/**"
@@ -13,12 +14,15 @@ on:
       - "crates/fe2o3-runtime-model/**"
       - "crates/fe2o3-verifier/**"
       - "crates/rustc-codegen-fe2o3/**"
+      - "docs/formal-compiler-v2.md"
+      - "docs/formal-compiler-v1.md"
       - "scripts/ci-local.sh"
       - "scripts/test-*-verus*.sh"
   push:
     branches: [main]
     paths:
-      - ".github/workflows/formal-compiler-v1.yml"
+      - ".github/workflows/formal-compiler-v2.yml"
+      - "README.md"
       - "crates/fe2o3-amdgcn-model/**"
       - "crates/fe2o3-host/**"
       - "crates/fe2o3-kernel-analysis/**"
@@ -28,6 +32,8 @@ on:
       - "crates/fe2o3-runtime-model/**"
       - "crates/fe2o3-verifier/**"
       - "crates/rustc-codegen-fe2o3/**"
+      - "docs/formal-compiler-v2.md"
+      - "docs/formal-compiler-v1.md"
       - "scripts/ci-local.sh"
       - "scripts/test-*-verus*.sh"
   workflow_dispatch:
@@ -36,7 +42,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: formal-compiler-v1-${{ github.ref }}
+  group: formal-compiler-v2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

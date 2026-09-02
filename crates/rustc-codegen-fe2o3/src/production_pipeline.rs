@@ -622,6 +622,9 @@ impl TargetNeutralProductionCompilation {
             ranked_verification,
             bindings,
         } = self;
+        source_mir_kir
+            .revalidate()
+            .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         cfg_refinement
             .revalidate(&lowered)
             .map_err(ProductionPipelineError::MirKirCfgRefinement)?;

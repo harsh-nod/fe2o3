@@ -21,7 +21,7 @@ artifact, runtime, and proof boundaries described below. See the
 [debugger and profiler architecture V1](docs/debugger-profiler-architecture-v1.md),
 [debugger and profiler task matrix V1](docs/debugger-profiler-task-matrix-v1.md),
 [verification model](docs/verification-model.md),
-[bounded Formal Compiler V1 ledger](docs/formal-compiler-v1.md),
+[bounded Formal Compiler V2 ledger](docs/formal-compiler-v2.md),
 [GPU safety contract v1](docs/gpu-safety-contract-v1.md), and
 [implementation roadmap](docs/implementation-roadmap-v2.md). The
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
