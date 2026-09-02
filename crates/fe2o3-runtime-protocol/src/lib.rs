@@ -88,6 +88,7 @@ pub use worker_v3_load_envelope_v2::{
     MAX_WORKER_V3_LOAD_ENVELOPE_REPLAY_BYTES_V2, RecoveredWorkerV3LoadEnvelopeV2,
     WORKER_V3_LOAD_ENVELOPE_MAGIC_V2, WORKER_V3_LOAD_ENVELOPE_VERSION_V2,
     WorkerV3LoadEnvelopeBindingFieldV2, WorkerV3LoadEnvelopeCodecBudgetV2,
-    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeWireV2,
+    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeEvidenceViewV2, WorkerV3LoadEnvelopeV2,
+    WorkerV3LoadEnvelopeWireV2, recover_worker_v3_load_envelope_from_retained_directory_v2,
     recover_worker_v3_load_envelope_v2,
 };

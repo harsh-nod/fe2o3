@@ -2,6 +2,7 @@ use std::{error::Error, fmt, marker::PhantomData};
 
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1,
+    WorkerV3LoadEnvelopeBindingV1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{
@@ -1411,6 +1412,60 @@ impl WorkerV3RosterVerificationChallengeIdentityV1 {
     }
 }
 
+/// Exact canonical Worker V3 V2 load-envelope bytes borrowed by a roster verifier.
+///
+/// The bytes are the original string admitted from durable custody, not a reserialization of host
+/// projections. This view cannot be cloned and cannot outlive or transfer custody from the
+/// aggregate request and its recovered owner. It grants no compiler, verification, publication,
+/// currentness, load, or launch authority.
+///
+/// ```compile_fail
+/// use fe2o3_host::WorkerV3RosterLoadEnvelopeEvidenceViewV1;
+/// fn duplicate(view: WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_>) {
+///     let _second = view.clone();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct WorkerV3RosterLoadEnvelopeEvidenceViewV1<'evidence> {
+    evidence: fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'evidence>,
+}
+
+impl WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_> {
+    /// Returns the exact originally admitted canonical V2 envelope bytes.
+    pub const fn exact_canonical_bytes(&self) -> &[u8] {
+        self.evidence.exact_canonical_bytes()
+    }
+
+    /// Returns the exact-byte digest and nonzero length admitted by durable custody.
+    pub const fn binding(&self) -> WorkerV3LoadEnvelopeBindingV1 {
+        self.evidence.binding()
+    }
+
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_verification_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_currentness_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Borrowed aggregate request presented once for one complete recovered artifact.
 ///
 /// V4 compiler proof inputs are common capsule evidence. They do not independently establish a
@@ -1437,6 +1492,13 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRe
 
     pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.admission.lineage_identity()
+    }
+
+    /// Borrows the exact canonical V2 envelope originally admitted for this aggregate request.
+    pub fn load_envelope_evidence_view(&self) -> WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_> {
+        WorkerV3RosterLoadEnvelopeEvidenceViewV1 {
+            evidence: self.admission.load_envelope_evidence_view(),
+        }
     }
 
     /// Returns the derivation independently reconstructed by host roster admission.
