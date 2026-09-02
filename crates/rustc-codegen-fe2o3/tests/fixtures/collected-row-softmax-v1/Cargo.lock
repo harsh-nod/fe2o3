@@ -377,6 +377,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-amd-target"
 version = "0.1.0"
+dependencies = [
+ "fe2o3-target-spec",
+]
 
 [[package]]
 name = "fe2o3-amdgcn-model"
@@ -797,6 +800,10 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
 ]
+
+[[package]]
+name = "fe2o3-target-spec"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-verifier"
