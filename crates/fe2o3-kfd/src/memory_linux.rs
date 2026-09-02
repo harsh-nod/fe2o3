@@ -62,8 +62,7 @@ pub(super) struct LinuxCpuMapping {
 
 const VA_GUARDED: u8 = 0;
 const VA_IDENTITY_MAPPED: u8 = 1;
-const VA_IDENTITY_UNMAPPED: u8 = 2;
-const VA_RELEASED: u8 = 3;
+const VA_RELEASED: u8 = 2;
 
 impl LinuxMemoryBackend {
     pub(super) fn new(device: CheckedGfx942XnackMinusDevice) -> Self {
@@ -149,17 +148,37 @@ impl LinuxMemoryBackend {
         if !mapping.active {
             return;
         }
-        // SAFETY: no readable/writable access has been enabled and no slice has
-        // been formed. Returning an ambiguously inheritable VMA would violate
-        // the safe API contract, so failed synchronous cleanup is fail-stop.
-        if unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }.is_err() {
+        if Self::restore_va_guard(mapping).is_err() {
             std::process::abort();
         }
         mapping.active = false;
         mapping.accessible = false;
         mapping
             .reservation_phase
-            .store(VA_IDENTITY_UNMAPPED, Ordering::Release);
+            .store(VA_GUARDED, Ordering::Release);
+    }
+
+    fn restore_va_guard(mapping: &LinuxCpuMapping) -> Result<(), MemorySessionError> {
+        let expected = mapping.address.as_ptr();
+        // SAFETY: the exact exclusively owned BO VMA is atomically replaced by
+        // an inaccessible anonymous guard at the same address. This preserves
+        // the process-wide GPU-VA reservation across repeated CPU access and
+        // prevents another allocation or session from reusing a live GPU VA.
+        let guarded = unsafe {
+            rustix::mm::mmap_anonymous(
+                expected,
+                mapping.bytes,
+                ProtFlags::empty(),
+                MapFlags::PRIVATE | MapFlags::FIXED | MapFlags::NORESERVE,
+            )
+        }
+        .map_err(|source| Self::syscall("restore retained GPU VA guard", source))?;
+        if guarded != expected {
+            // Linux MAP_FIXED must return the requested address. Continuing
+            // without the guard would permit aliasing a still-live GPU VA.
+            std::process::abort();
+        }
+        Ok(())
     }
 
     #[cfg(feature = "live-validation")]
@@ -894,16 +913,19 @@ impl MemoryBackend for LinuxMemoryBackend {
                 "CPU mapping state",
             ));
         }
-        // SAFETY: the mapping is exclusively borrowed and no safe slice can
-        // survive a closure call. The engine establishes the backing-specific
-        // ordering relative to FREE before invoking this primitive.
-        unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }
-            .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
+        // No safe slice can survive the closure call. Restoring the original
+        // inaccessible guard also removes the AMDGPU BO CPU mapping.
+        if Self::restore_va_guard(mapping).is_err() {
+            // MAP_FIXED cleanup cannot report whether the prior VMA survived
+            // every failure mode. Do not continue with ambiguous address-space
+            // ownership that could alias a still-live GPU mapping.
+            std::process::abort();
+        }
         mapping.active = false;
         mapping.accessible = false;
         mapping
             .reservation_phase
-            .store(VA_IDENTITY_UNMAPPED, Ordering::Release);
+            .store(VA_GUARDED, Ordering::Release);
         Ok(())
     }
 
@@ -918,13 +940,6 @@ impl MemoryBackend for LinuxMemoryBackend {
                     .map_err(|source| {
                         Self::syscall("release retained GPU VA reservation", source)
                     })?;
-                reservation.phase.store(VA_RELEASED, Ordering::Release);
-                Ok(())
-            }
-            VA_IDENTITY_UNMAPPED => {
-                // The fixed BO mapping already consumed the guard and explicit
-                // CPU unmap removed that VMA before FREE. Retire only the
-                // linear reservation authority; there is no second VMA.
                 reservation.phase.store(VA_RELEASED, Ordering::Release);
                 Ok(())
             }
@@ -1069,6 +1084,47 @@ mod tests {
 
     #[repr(C, align(64))]
     struct AmdAqlControl([u8; 4096]);
+
+    #[test]
+    fn cpu_unmap_guard_keeps_the_exact_gpu_va_reserved() {
+        let bytes = crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1 as usize;
+        // SAFETY: the test owns the returned page and releases it below.
+        let address = unsafe {
+            rustix::mm::mmap_anonymous(
+                core::ptr::null_mut(),
+                bytes,
+                ProtFlags::READ | ProtFlags::WRITE,
+                MapFlags::PRIVATE,
+            )
+        }
+        .unwrap();
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::new(address).unwrap(),
+            bytes,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+
+        LinuxMemoryBackend::restore_va_guard(&mapping).unwrap();
+        mapping.active = false;
+        mapping.accessible = false;
+        mapping
+            .reservation_phase
+            .store(VA_GUARDED, Ordering::Release);
+
+        // A successful protection change proves the exact VMA still exists;
+        // the second call restores the production inaccessible protection.
+        // SAFETY: the test exclusively owns this page and forms no references.
+        unsafe {
+            rustix::mm::mprotect(address, bytes, MprotectFlags::READ).unwrap();
+            rustix::mm::mprotect(address, bytes, MprotectFlags::empty()).unwrap();
+            rustix::mm::munmap(address, bytes).unwrap();
+        }
+        mapping
+            .reservation_phase
+            .store(VA_RELEASED, Ordering::Release);
+    }
 
     #[test]
     fn aql_counter_operations_use_the_reviewed_amd_control_offsets() {
