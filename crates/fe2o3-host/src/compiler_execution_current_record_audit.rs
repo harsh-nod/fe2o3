@@ -5,10 +5,16 @@ use std::fmt;
 use std::time::Duration;
 
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
-use fe2o3_compiler_execution_client::{CompilerExecutionClientErrorV1, CompilerExecutionClientV1};
+use fe2o3_compiler_execution_client::{
+    CompilerExecutionClientErrorV1, CompilerExecutionClientV1,
+    CompilerExecutionCurrentRecordChallengeV1,
+};
 use fe2o3_runtime_protocol::{
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3,
+    COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V3,
     CompilerExecutionCurrentRecordAttestationIdentityV3,
     CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationIdentityV3,
     CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, VerifiedCompilerExecutionCurrentRecordV3,
 };
@@ -22,6 +28,91 @@ use crate::{
 
 /// Complete deadline for one application-side current-record verification transaction.
 pub const WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1: Duration = Duration::from_secs(30);
+
+/// Lifetime-bound canonical records retained by one admitted FD195 current-record result.
+///
+/// The private constructor binds both byte arrays and both typed identities to the same already
+/// verified attestation. The view cannot outlive or transfer custody from its move-only owner.
+/// Copying either byte array creates only inert protocol input: a protected verifier must strictly
+/// decode and authenticate the exact pair again under its independently pinned policy, expected
+/// fresh challenge, request, and replay policy.
+///
+/// This view exposes no signing material and grants no service, currentness, verification, load, or
+/// launch authority.
+///
+/// ```compile_fail
+/// use fe2o3_host::WorkerV3CompilerCurrentRecordEvidenceViewV1;
+/// fn duplicate(view: WorkerV3CompilerCurrentRecordEvidenceViewV1<'_>) {
+///     let _second = view.clone();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct WorkerV3CompilerCurrentRecordEvidenceViewV1<'evidence> {
+    verified: &'evidence VerifiedCompilerExecutionCurrentRecordV3,
+}
+
+impl<'evidence> WorkerV3CompilerCurrentRecordEvidenceViewV1<'evidence> {
+    const fn from_verified(verified: &'evidence VerifiedCompilerExecutionCurrentRecordV3) -> Self {
+        Self { verified }
+    }
+
+    /// Returns the domain-separated identity of the exact canonical verification bytes below.
+    pub const fn verification_identity(
+        &self,
+    ) -> CompilerExecutionCurrentRecordVerificationIdentityV3 {
+        self.verified.verification().identity()
+    }
+
+    /// Returns the domain-separated identity of the exact canonical attestation bytes below.
+    pub const fn attestation_identity(
+        &self,
+    ) -> CompilerExecutionCurrentRecordAttestationIdentityV3 {
+        self.verified.attestation().identity()
+    }
+
+    /// Returns the exact expected challenge authenticated during admission.
+    ///
+    /// For a caller-supplied audit this must equal the independently retained caller value. Reading
+    /// it from the signed response alone does not establish freshness or replay exclusion.
+    pub const fn verification_challenge(&self) -> [u8; 32] {
+        self.verified.attestation().challenge()
+    }
+
+    /// Borrows the complete canonical current-record verification without transferring custody.
+    pub const fn verification_canonical_bytes(
+        &self,
+    ) -> &[u8; COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V3] {
+        self.verified.verification().canonical_bytes()
+    }
+
+    /// Borrows the complete signed, challenge-bound canonical attestation without transferring
+    /// custody.
+    pub const fn attestation_canonical_bytes(
+        &self,
+    ) -> &[u8; COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3] {
+        self.verified.attestation().canonical_bytes()
+    }
+
+    /// Reports that this borrowed record view grants no final-verifier authority.
+    pub const fn grants_verification_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that this borrowed record view grants no generic authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that this borrowed record view grants no executable-load authority.
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    /// Reports that this borrowed record view grants no launch authority.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
 
 /// Move-only signed endpoint evidence for one exact Worker V3 compiler receipt.
 ///
@@ -41,6 +132,15 @@ pub struct WorkerV3CompilerCurrentRecordAuditV1 {
 }
 
 impl WorkerV3CompilerCurrentRecordAuditV1 {
+    /// Borrows the exact canonical records authenticated by this move-only audit.
+    ///
+    /// The returned view is authority-free and cannot outlive this owner. A downstream protected
+    /// verifier must independently authenticate the byte pair rather than treating the host's
+    /// identities or currentness booleans as authority.
+    pub const fn canonical_evidence_view(&self) -> WorkerV3CompilerCurrentRecordEvidenceViewV1<'_> {
+        WorkerV3CompilerCurrentRecordEvidenceViewV1::from_verified(&self.verified)
+    }
+
     pub const fn verification(&self) -> &CompilerExecutionCurrentRecordVerificationV3 {
         self.verified.verification()
     }
@@ -318,6 +418,44 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         )
     }
 
+    /// Audits one aggregate request using a caller-owned expected challenge.
+    ///
+    /// The challenge is consumed with the one-use FD195 endpoint. Its caller remains responsible
+    /// for cryptographic freshness, uniqueness, and replay exclusion. The returned evidence and its
+    /// canonical byte view remain authority-free.
+    pub fn audit_roster_with_challenge<R>(
+        &mut self,
+        request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+        expected_challenge: CompilerExecutionCurrentRecordChallengeV1,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    where
+        R: CompilerGeneratedKernelExpectationRosterV1,
+    {
+        self.audit_exact_with_challenge(
+            request.compiler_execution_subject(),
+            request.compiler_execution_receipt_carriage(),
+            expected_challenge,
+        )
+    }
+
+    /// Audits one singleton request using a caller-owned expected challenge.
+    ///
+    /// This is the singleton counterpart of [`Self::audit_roster_with_challenge`].
+    pub fn audit_with_challenge<K>(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+        expected_challenge: CompilerExecutionCurrentRecordChallengeV1,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    where
+        K: CompilerGeneratedKernelExpectationV1,
+    {
+        self.audit_exact_with_challenge(
+            request.compiler_execution_subject(),
+            request.compiler_execution_receipt_carriage(),
+            expected_challenge,
+        )
+    }
+
     fn audit_exact(
         &mut self,
         subject: &InertCompilerExecutionSubjectV1,
@@ -333,6 +471,30 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         }
         let verified = client
             .verify_current_only(carriage.policy(), carriage.clone())
+            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
+        Ok(WorkerV3CompilerCurrentRecordAuditV1 { verified })
+    }
+
+    fn audit_exact_with_challenge(
+        &mut self,
+        subject: &InertCompilerExecutionSubjectV1,
+        carriage: &CompilerExecutionReceiptCarriageV1,
+        expected_challenge: CompilerExecutionCurrentRecordChallengeV1,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    {
+        let client = self
+            .client
+            .take()
+            .ok_or(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)?;
+        if carriage.request().subject() != subject {
+            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::RequestMismatch);
+        }
+        let verified = client
+            .verify_current_only_with_challenge(
+                carriage.policy(),
+                carriage.clone(),
+                expected_challenge,
+            )
             .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
         Ok(WorkerV3CompilerCurrentRecordAuditV1 { verified })
     }
@@ -750,6 +912,7 @@ mod tests {
         let service_key = fixture.signing_key.clone();
         let service_anchor_receipt = fixture.anchor_receipt();
         let service_anchor_key = fixture.anchor_signing_key.clone();
+        let expected_challenge_bytes = [0xb7; 32];
         let service = thread::spawn(move || {
             let request = receive_request(&service);
             assert_eq!(
@@ -758,6 +921,7 @@ mod tests {
             );
             assert_eq!(request.carriage(), Some(&service_carriage));
             let verification_challenge = request.verification_challenge().unwrap();
+            assert_eq!(verification_challenge, expected_challenge_bytes);
             let currentness_challenge = CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
                 &service_carriage,
                 &service_anchor_receipt,
@@ -805,8 +969,56 @@ mod tests {
         let client = CompilerExecutionClientV1::admit(client, Duration::from_secs(2)).unwrap();
         let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(client);
         let evidence = auditor
-            .audit_exact(&fixture.subject, &fixture.carriage)
+            .audit_exact_with_challenge(
+                &fixture.subject,
+                &fixture.carriage,
+                CompilerExecutionCurrentRecordChallengeV1::from_bytes(expected_challenge_bytes)
+                    .unwrap(),
+            )
             .unwrap();
+        let (verification_bytes, attestation_bytes, verification_identity, attestation_identity) = {
+            let view = evidence.canonical_evidence_view();
+            let decoded_verification = CompilerExecutionCurrentRecordVerificationV3::decode(
+                view.verification_canonical_bytes(),
+            )
+            .unwrap();
+            let decoded_attestation = CompilerExecutionCurrentRecordAttestationV3::decode(
+                view.attestation_canonical_bytes(),
+            )
+            .unwrap();
+            assert_eq!(
+                decoded_verification.identity(),
+                view.verification_identity()
+            );
+            assert_eq!(decoded_attestation.identity(), view.attestation_identity());
+            assert_eq!(view.verification_challenge(), expected_challenge_bytes);
+            assert_eq!(
+                decoded_attestation.verification().identity(),
+                view.verification_identity()
+            );
+            assert_eq!(
+                decoded_attestation.verification().canonical_bytes(),
+                view.verification_canonical_bytes()
+            );
+            assert!(!view.grants_verification_authority());
+            assert!(!view.grants_authority());
+            assert!(!view.grants_load_authority());
+            assert!(!view.grants_launch_authority());
+            (
+                *view.verification_canonical_bytes(),
+                *view.attestation_canonical_bytes(),
+                view.verification_identity(),
+                view.attestation_identity(),
+            )
+        };
+        let mut mutated_verification = verification_bytes;
+        *mutated_verification.last_mut().unwrap() ^= 1;
+        assert!(
+            CompilerExecutionCurrentRecordVerificationV3::decode(&mutated_verification).is_err()
+        );
+        let mut mutated_attestation = attestation_bytes;
+        *mutated_attestation.last_mut().unwrap() ^= 1;
+        assert!(CompilerExecutionCurrentRecordAttestationV3::decode(&mutated_attestation).is_err());
         assert!(evidence.authenticates_pinned_signing_key());
         assert!(evidence.authenticates_expected_fresh_challenge());
         assert_eq!(
@@ -845,6 +1057,22 @@ mod tests {
         );
         assert_ne!(bound.current_record_verification_sha256(), [0; 32]);
         assert_ne!(bound.current_record_attestation_sha256(), [0; 32]);
+        let bound_view = bound.current_record_evidence_view().unwrap();
+        assert_eq!(
+            bound_view.verification_canonical_bytes(),
+            &verification_bytes
+        );
+        assert_eq!(bound_view.attestation_canonical_bytes(), &attestation_bytes);
+        assert_eq!(bound_view.verification_identity(), verification_identity);
+        assert_eq!(bound_view.attestation_identity(), attestation_identity);
+        assert_eq!(
+            bound.current_record_verification_sha256(),
+            *bound_view.verification_identity().as_bytes()
+        );
+        assert_eq!(
+            bound.current_record_attestation_sha256(),
+            *bound_view.attestation_identity().as_bytes()
+        );
         assert!(bound.authenticates_signed_currentness_evidence());
         assert!(!bound.grants_verification_authority());
         service.join().unwrap();

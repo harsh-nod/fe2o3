@@ -21,7 +21,9 @@ use fe2o3_verifier::{
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
-use crate::compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1;
+use crate::compiler_execution_current_record_audit::{
+    WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordEvidenceViewV1,
+};
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
     CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
@@ -923,6 +925,25 @@ impl WorkerV3CompilerExecutionVerificationV1 {
 
     pub const fn current_record_attestation_sha256(&self) -> [u8; 32] {
         self.current_record_attestation_sha256
+    }
+
+    /// Borrows the complete canonical FD195 current-record records retained by this lane.
+    ///
+    /// Only a lane built from admitted signed current-record evidence returns a view. Synthetic test
+    /// support fails closed with `None`. The view cannot outlive this move-only owner and grants no
+    /// verification, load, or launch authority; a protected verifier must independently decode and
+    /// authenticate the exact records under its own policy and replay controls.
+    #[cfg(target_os = "linux")]
+    pub const fn current_record_evidence_view(
+        &self,
+    ) -> Option<WorkerV3CompilerCurrentRecordEvidenceViewV1<'_>> {
+        match &self._evidence {
+            WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence) => {
+                Some(evidence.canonical_evidence_view())
+            }
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3CompilerExecutionEvidenceV1::Synthetic => None,
+        }
     }
 
     pub const fn protected_policy_verification_sha256(&self) -> [u8; 32] {
@@ -3723,5 +3744,15 @@ mod tests {
         ] {
             assert!(required.contains(property));
         }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "worker-v3-verifier-test-support"))]
+    #[test]
+    fn synthetic_compiler_evidence_exposes_no_current_record_view() {
+        let synthetic = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+            [1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [8; 32], [9; 32], 1,
+            [10; 32], [11; 32], [12; 32], [13; 32], [14; 32], [15; 32], [16; 32],
+        );
+        assert!(synthetic.current_record_evidence_view().is_none());
     }
 }
