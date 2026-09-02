@@ -3,7 +3,7 @@ use fe2o3_completion::{
     CompletionGraphErrorV1, CompletionGraphV1, CompletionNodeIdV1, CompletionNodeStateV1,
     CompletionNodeV1, CompletionTransitionErrorV1, ContextIdentityV1, DeviceIdentityV1,
     EventIdentityV1, FailureCodeV1, FutureIdentityV1, MAX_COMPLETION_GRAPH_BYTES_V1,
-    MAX_COMPLETION_GRAPH_STREAMS_V1, StreamIdentityV1,
+    MAX_COMPLETION_GRAPH_NODES_V1, MAX_COMPLETION_GRAPH_STREAMS_V1, StreamIdentityV1,
 };
 
 fn bytes(value: u8) -> [u8; 32] {
@@ -16,6 +16,27 @@ fn node(value: u32) -> CompletionNodeIdV1 {
 
 fn context(device: u8, context: u8) -> ContextIdentityV1 {
     ContextIdentityV1::new(DeviceIdentityV1::from_bytes(bytes(device)), bytes(context))
+}
+
+fn indexed_bytes(value: u32) -> [u8; 32] {
+    let mut identity = [0; 32];
+    identity[..4].copy_from_slice(&value.to_le_bytes());
+    identity
+}
+
+fn chain_fixture(node_count: usize) -> CompletionGraphV1 {
+    let context = context(21, 22);
+    let stream = StreamIdentityV1::new(context, bytes(23));
+    let nodes = (1..=node_count as u32)
+        .map(|value| {
+            CompletionNodeV1::future(
+                node(value),
+                FutureIdentityV1::new(stream, indexed_bytes(value)),
+                (value > 1).then(|| node(value - 1)),
+            )
+        })
+        .collect();
+    CompletionGraphV1::new(context, vec![stream], nodes).unwrap()
 }
 
 fn fixture_parts() -> (
@@ -329,6 +350,34 @@ fn success_only_unblocks_exact_dependency_successors() {
     );
     assert!(!report.authenticates_backend_observations());
     assert!(!report.grants_resource_reclamation_authority());
+}
+
+#[test]
+fn maximum_size_chain_completes_with_incremental_successor_updates() {
+    let mut authority = chain_fixture(MAX_COMPLETION_GRAPH_NODES_V1).into_completion_authority();
+    for value in 1..=MAX_COMPLETION_GRAPH_NODES_V1 as u32 {
+        // SAFETY: This model-only test stands in for exact quiescent backend observations.
+        unsafe { authority.mark_succeeded(node(value)) }.unwrap();
+    }
+    assert!(authority.is_terminal());
+}
+
+#[test]
+fn maximum_size_chain_propagates_one_terminal_cause_to_its_tail() {
+    let mut authority = chain_fixture(MAX_COMPLETION_GRAPH_NODES_V1).into_completion_authority();
+    let error = FailureCodeV1::new(31).unwrap();
+    // SAFETY: This model-only test stands in for an exact quiescent backend failure.
+    unsafe { authority.mark_failed(node(1), error) }.unwrap();
+    assert_eq!(
+        authority
+            .state(node(MAX_COMPLETION_GRAPH_NODES_V1 as u32))
+            .unwrap(),
+        CompletionNodeStateV1::DependencyFailed {
+            origin: node(1),
+            error,
+        }
+    );
+    assert!(authority.is_terminal());
 }
 
 #[test]

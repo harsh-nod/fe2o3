@@ -10,5 +10,9 @@ description = "HIP-free completion and recovery policy for fe2o3 runtime resourc
 [lib]
 name = "fe2o3_completion"
 
+[[bench]]
+name = "completion_scaling"
+harness = false
+
 [dependencies]
 sha2.workspace = true

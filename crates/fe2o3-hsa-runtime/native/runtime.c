@@ -469,28 +469,80 @@ void fe2o3_hsa_test_release_malformed_queue_record(
   memset(record, 0, sizeof(*record));
 }
 
-int32_t fe2o3_hsa_publish_kernel_dispatch(
-    const Fe2o3HsaQueueRecord *queue_record, const uint32_t grid[3],
-    const uint32_t workgroup[3], uint32_t private_segment_size,
-    uint32_t group_segment_size, uint64_t kernel_object, void *kernarg,
-    uint64_t completion_signal, uint64_t *packet_id) {
-  if (queue_record == NULL || queue_record->pointer == 0 || grid == NULL ||
-      workgroup == NULL || kernarg == NULL || completion_signal == 0 ||
-      packet_id == NULL)
+static int32_t validate_dispatch_arguments(
+    const uint32_t grid[3], const uint32_t workgroup[3], void *kernarg,
+    uint64_t completion_signal, const uint64_t *dependency_signals,
+    size_t dependency_signal_count) {
+  if (grid == NULL || workgroup == NULL || kernarg == NULL ||
+      completion_signal == 0 || dependency_signal_count > 256 ||
+      (dependency_signal_count != 0 && dependency_signals == NULL))
     return (int32_t)HSA_STATUS_ERROR_INVALID_ARGUMENT;
   for (uint32_t index = 0; index != 3; ++index) {
     if (grid[index] == 0 || workgroup[index] == 0 ||
         workgroup[index] > UINT16_MAX || grid[index] < workgroup[index])
       return (int32_t)HSA_STATUS_ERROR_INVALID_ARGUMENT;
   }
+  for (size_t index = 0; index != dependency_signal_count; ++index) {
+    if (dependency_signals[index] == 0)
+      return (int32_t)HSA_STATUS_ERROR_INVALID_ARGUMENT;
+  }
+  return (int32_t)HSA_STATUS_SUCCESS;
+}
 
-  hsa_queue_t *queue = (hsa_queue_t *)queue_record->pointer;
-  uint64_t id = hsa_queue_add_write_index_relaxed(queue, 1);
-  while (id - hsa_queue_load_read_index_scacquire(queue) >= queue->size) {
+static int32_t reserve_packet_range(
+    uint32_t queue_size, uint64_t read_index, uint64_t write_index,
+    uint64_t observed_write_index, size_t dependency_signal_count,
+    uint64_t *first_id, uint64_t *packet_count) {
+  const uint64_t barrier_count =
+      ((uint64_t)dependency_signal_count + 4U) / 5U;
+  const uint64_t required = barrier_count + 1U;
+  const uint64_t used = write_index - read_index;
+  if (required > queue_size || used > queue_size ||
+      required > (uint64_t)queue_size - used ||
+      observed_write_index != write_index)
+    return (int32_t)HSA_STATUS_ERROR_OUT_OF_RESOURCES;
+  *first_id = write_index;
+  *packet_count = required;
+  return (int32_t)HSA_STATUS_SUCCESS;
+}
+
+static uint64_t publish_reserved_packets(
+    void *base_address, uint32_t queue_size, uint64_t first_id,
+    uint64_t packet_count, const uint32_t grid[3],
+    const uint32_t workgroup[3], uint32_t private_segment_size,
+    uint32_t group_segment_size, uint64_t kernel_object, void *kernarg,
+    uint64_t completion_signal, const uint64_t *dependency_signals,
+    size_t dependency_signal_count) {
+  const size_t barrier_count = (dependency_signal_count + 4U) / 5U;
+  const uint64_t id = first_id + packet_count - 1U;
+
+  _Static_assert(sizeof(hsa_barrier_and_packet_t) ==
+                     sizeof(hsa_kernel_dispatch_packet_t),
+                 "AQL packet size");
+  for (size_t barrier_index = 0; barrier_index != barrier_count;
+       ++barrier_index) {
+    const uint64_t barrier_id = first_id + (uint64_t)barrier_index;
+    hsa_barrier_and_packet_t *barrier =
+        &((hsa_barrier_and_packet_t *)base_address)
+             [barrier_id & (queue_size - 1)];
+    memset(barrier, 0, sizeof(*barrier));
+    for (size_t slot = 0; slot != 5; ++slot) {
+      const size_t dependency_index = barrier_index * 5U + slot;
+      if (dependency_index == dependency_signal_count)
+        break;
+      barrier->dep_signal[slot].handle = dependency_signals[dependency_index];
+    }
+    const uint16_t barrier_header =
+        (uint16_t)(HSA_PACKET_TYPE_BARRIER_AND << HSA_PACKET_HEADER_TYPE) |
+        (uint16_t)(HSA_FENCE_SCOPE_SYSTEM
+                   << HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE) |
+        (uint16_t)(HSA_FENCE_SCOPE_SYSTEM
+                   << HSA_PACKET_HEADER_SCRELEASE_FENCE_SCOPE);
+    atomic_store_explicit((_Atomic uint16_t *)&barrier->header,
+                          barrier_header, memory_order_release);
   }
   hsa_kernel_dispatch_packet_t *packet =
-      &((hsa_kernel_dispatch_packet_t *)
-            queue->base_address)[id & (queue->size - 1)];
+      &((hsa_kernel_dispatch_packet_t *)base_address)[id & (queue_size - 1)];
   _Static_assert(offsetof(hsa_kernel_dispatch_packet_t, header) == 0,
                  "AQL header offset");
   _Static_assert(offsetof(hsa_kernel_dispatch_packet_t, setup) == 2,
@@ -513,6 +565,7 @@ int32_t fe2o3_hsa_publish_kernel_dispatch(
       (uint16_t)(dimensions << HSA_KERNEL_DISPATCH_PACKET_SETUP_DIMENSIONS);
   uint16_t header =
       (uint16_t)(HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE) |
+      (uint16_t)(1U << HSA_PACKET_HEADER_BARRIER) |
       (uint16_t)(HSA_FENCE_SCOPE_SYSTEM
                  << HSA_PACKET_HEADER_SCACQUIRE_FENCE_SCOPE) |
       (uint16_t)(HSA_FENCE_SCOPE_SYSTEM
@@ -520,6 +573,76 @@ int32_t fe2o3_hsa_publish_kernel_dispatch(
   uint32_t full_header = (uint32_t)header | ((uint32_t)setup << 16);
   atomic_store_explicit((_Atomic uint32_t *)&packet->header, full_header,
                         memory_order_release);
+  return id;
+}
+
+#ifdef FE2O3_HSA_NATIVE_TEST_HOOKS
+int32_t fe2o3_hsa_test_publish_kernel_dispatch(
+    void *ring, uint32_t queue_size, uint64_t read_index,
+    uint64_t write_index, uint64_t observed_write_index,
+    const uint32_t grid[3], const uint32_t workgroup[3],
+    uint32_t private_segment_size, uint32_t group_segment_size,
+    uint64_t kernel_object, void *kernarg, uint64_t completion_signal,
+    const uint64_t *dependency_signals, size_t dependency_signal_count,
+    uint64_t *new_write_index, uint64_t *packet_id) {
+  if (ring == NULL || queue_size == 0 ||
+      (queue_size & (queue_size - 1U)) != 0 || new_write_index == NULL ||
+      packet_id == NULL)
+    return (int32_t)HSA_STATUS_ERROR_INVALID_ARGUMENT;
+  int32_t status = validate_dispatch_arguments(
+      grid, workgroup, kernarg, completion_signal, dependency_signals,
+      dependency_signal_count);
+  if (status != (int32_t)HSA_STATUS_SUCCESS)
+    return status;
+  uint64_t first_id = 0;
+  uint64_t packet_count = 0;
+  status = reserve_packet_range(queue_size, read_index, write_index,
+                                observed_write_index, dependency_signal_count,
+                                &first_id, &packet_count);
+  if (status != (int32_t)HSA_STATUS_SUCCESS)
+    return status;
+  const uint64_t id = publish_reserved_packets(
+      ring, queue_size, first_id, packet_count, grid, workgroup,
+      private_segment_size, group_segment_size, kernel_object, kernarg,
+      completion_signal, dependency_signals, dependency_signal_count);
+  *new_write_index = write_index + packet_count;
+  *packet_id = id;
+  return (int32_t)HSA_STATUS_SUCCESS;
+}
+#endif
+
+int32_t fe2o3_hsa_publish_kernel_dispatch(
+    const Fe2o3HsaQueueRecord *queue_record, const uint32_t grid[3],
+    const uint32_t workgroup[3], uint32_t private_segment_size,
+    uint32_t group_segment_size, uint64_t kernel_object, void *kernarg,
+    uint64_t completion_signal, const uint64_t *dependency_signals,
+    size_t dependency_signal_count, uint64_t *packet_id) {
+  if (queue_record == NULL || queue_record->pointer == 0 || packet_id == NULL)
+    return (int32_t)HSA_STATUS_ERROR_INVALID_ARGUMENT;
+  int32_t status = validate_dispatch_arguments(
+      grid, workgroup, kernarg, completion_signal, dependency_signals,
+      dependency_signal_count);
+  if (status != (int32_t)HSA_STATUS_SUCCESS)
+    return status;
+
+  hsa_queue_t *queue = (hsa_queue_t *)queue_record->pointer;
+  const uint64_t read_index = hsa_queue_load_read_index_scacquire(queue);
+  const uint64_t write_index = hsa_queue_load_write_index_relaxed(queue);
+  uint64_t first_id = 0;
+  uint64_t packet_count = 0;
+  status = reserve_packet_range(queue->size, read_index, write_index,
+                                write_index, dependency_signal_count,
+                                &first_id, &packet_count);
+  if (status != (int32_t)HSA_STATUS_SUCCESS)
+    return status;
+  const uint64_t observed = hsa_queue_cas_write_index_relaxed(
+      queue, write_index, write_index + packet_count);
+  if (observed != write_index)
+    return (int32_t)HSA_STATUS_ERROR_OUT_OF_RESOURCES;
+  const uint64_t id = publish_reserved_packets(
+      queue->base_address, queue->size, first_id, packet_count, grid, workgroup,
+      private_segment_size, group_segment_size, kernel_object, kernarg,
+      completion_signal, dependency_signals, dependency_signal_count);
   hsa_signal_store_screlease(queue->doorbell_signal, (hsa_signal_value_t)id);
   *packet_id = id;
   return (int32_t)HSA_STATUS_SUCCESS;

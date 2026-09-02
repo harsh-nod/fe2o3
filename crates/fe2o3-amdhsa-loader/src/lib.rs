@@ -4,13 +4,17 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+
 mod kernel_closure;
 mod vecadd_cov6;
 
 pub use kernel_closure::{
     CLOSED_RELOCATION_POLICY_ID, ClosedRelocationEvidenceV1, KernelClosureError,
     KernelDispatchAbiErrorV1, KernelGlobalBufferAbiV1, KernelIdentityInputsV1,
-    SelectedKernelResourceBindingV1, UnsupportedKernelSemantic, ValidatedKernelEnvelope,
+    OwnedValidatedKernelEnvelope, SelectedKernelResourceBindingV1, UnsupportedKernelSemantic,
+    ValidatedKernelEnvelope,
 };
 pub use vecadd_cov6::{
     LoadedImageAddressPlanV1, UnboundGpuF32SliceV1, VECADD_COV6_ARTIFACT_SHA256,
@@ -522,6 +526,53 @@ pub struct ValidatedEnvelope<'a> {
     materialization: MaterializationPlan<'a>,
 }
 
+/// Owned, shareable result of one complete load-envelope validation pass.
+///
+/// The immutable object bytes and canonical plan remain associated inside this
+/// type. Borrowed envelopes can therefore be reconstructed for materialization
+/// or kernel binding without copying or reparsing the ELF load envelope. Like
+/// [`ValidatedEnvelope`], this is descriptive and grants no GPU authority.
+#[derive(Clone)]
+pub struct OwnedValidatedEnvelope {
+    bytes: Arc<Vec<u8>>,
+    plan: LoadPlan,
+}
+
+impl OwnedValidatedEnvelope {
+    /// Exact immutable object bytes covered by the cached validation result.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Inert canonical plan cached by the one validation pass.
+    pub const fn plan(&self) -> &LoadPlan {
+        &self.plan
+    }
+
+    /// Number of full load-envelope validation passes represented by this cache.
+    pub const fn validation_passes(&self) -> u64 {
+        1
+    }
+
+    /// Reconstructs a borrowed envelope from cached checked offsets.
+    ///
+    /// This performs no ELF parsing and allocates or copies no object bytes.
+    pub fn validated(&self) -> ValidatedEnvelope<'_> {
+        let metadata = self.plan.metadata_note;
+        let metadata_descriptor =
+            validated_slice(&self.bytes, metadata.file_offset, metadata.byte_len)
+                .expect("owned validated metadata range remains in immutable bytes");
+        let materialization = build_materialization(&self.bytes, self.plan)
+            .expect("owned validated materialization plan remains internally valid");
+        ValidatedEnvelope {
+            bytes: &self.bytes,
+            plan: self.plan,
+            metadata_descriptor,
+            materialization,
+        }
+    }
+}
+
 impl<'a> ValidatedEnvelope<'a> {
     /// Length of the exact input borrow retained by this envelope.
     pub const fn input_len(&self) -> u64 {
@@ -806,6 +857,22 @@ pub fn validate<'a>(
         plan,
         metadata_descriptor,
         materialization,
+    })
+}
+
+/// Validates an owned object once and retains its immutable bytes and plan.
+///
+/// The input is already uniquely owned, so successful construction performs no
+/// second object-byte copy. Cheap clones of the result share the same bytes.
+pub fn validate_owned(
+    bytes: Vec<u8>,
+    profile: AdmittedProfile,
+) -> Result<OwnedValidatedEnvelope, PlanError> {
+    let validated = validate(&bytes, profile)?;
+    let plan = *validated.plan();
+    Ok(OwnedValidatedEnvelope {
+        bytes: Arc::new(bytes),
+        plan,
     })
 }
 

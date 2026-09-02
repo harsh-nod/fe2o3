@@ -130,10 +130,21 @@ int32_t fe2o3_hsa_dispatch_time(uint64_t agent, uint64_t signal,
 int32_t
 fe2o3_hsa_test_malformed_queue_destroy_failure(Fe2o3HsaQueueRecord *record);
 void fe2o3_hsa_test_release_malformed_queue_record(Fe2o3HsaQueueRecord *record);
+#ifdef FE2O3_HSA_NATIVE_TEST_HOOKS
+int32_t fe2o3_hsa_test_publish_kernel_dispatch(
+    void *ring, uint32_t queue_size, uint64_t read_index,
+    uint64_t write_index, uint64_t observed_write_index,
+    const uint32_t grid[3], const uint32_t workgroup[3],
+    uint32_t private_segment_size, uint32_t group_segment_size,
+    uint64_t kernel_object, void *kernarg, uint64_t completion_signal,
+    const uint64_t *dependency_signals, size_t dependency_signal_count,
+    uint64_t *new_write_index, uint64_t *packet_id);
+#endif
 int32_t fe2o3_hsa_publish_kernel_dispatch(
     const Fe2o3HsaQueueRecord *queue, const uint32_t grid[3],
     const uint32_t workgroup[3], uint32_t private_segment_size,
     uint32_t group_segment_size, uint64_t kernel_object, void *kernarg,
-    uint64_t completion_signal, uint64_t *packet_id);
+    uint64_t completion_signal, const uint64_t *dependency_signals,
+    size_t dependency_signal_count, uint64_t *packet_id);
 
 #endif

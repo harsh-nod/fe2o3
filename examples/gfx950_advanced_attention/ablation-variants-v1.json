@@ -4,32 +4,33 @@
   "invariants": {
     "same_export_per_workload": true,
     "same_abi_inputs_and_cpu_oracle": true,
-    "workgroup": [64, 1, 1],
+    "workgroup": "KDA uses the authenticated 256-thread launch; other attention kernels use 64 threads",
     "grid": [1, 1, 1]
   },
   "admitted": [
     {
-      "feature": "kernel-kda-decode-wave-tiled-v1",
-      "kernel_export": "gfx950_kda_gdn_decode",
-      "baseline_feature": "kernel-kda-decode",
-      "isolated_change": "repeat the 16-channel mapping in four wave16 groups and restrict writes to the first group",
-      "shape": "three history taps by 16 channels; one recurrent token",
-      "unique_compulsory_global_bytes": 460,
+      "feature": "kernel-kda-decode-baseline-v1",
+      "kernel_export": "gfx950_kda_decode",
+      "production_feature": "kernel-kda-decode",
+      "role": "pre-promotion 256-thread baseline",
+      "isolated_change": "retain the original duplicate key read before explicit per-lane key reuse",
+      "shape": "one FP32 head; K=V=16; T=1; initial and final matrix state",
+      "workgroup": [256, 1, 1],
+      "unique_compulsory_global_bytes": 3332,
       "lds_bytes": 0,
-      "lds_stages": 0,
-      "pipeline_assessment": "the recurrent state, two exponentials, wave16 square reduction, and square root form one serial decode chain"
+      "pipeline_assessment": "the full state and output are resident in one workgroup; there is no streamed tile sequence for LDS multibuffering"
     },
     {
-      "feature": "kernel-kda-prefill-channel-mask-v1",
-      "kernel_export": "gfx950_kda_gdn_prefill",
-      "baseline_feature": "kernel-kda-prefill",
-      "isolated_change": "replace channel = linear % 16 with channel = linear & 15",
-      "shape": "eight ordered recurrent tokens by 16 channels in two four-token output chunks",
-      "unique_compulsory_global_bytes": 1676,
+      "feature": "kernel-kda-prefill-baseline-v1",
+      "kernel_export": "gfx950_kda_chunkwise_prefill",
+      "production_feature": "kernel-kda-prefill",
+      "role": "independent exact sequential-recurrence baseline",
+      "isolated_change": "unroll all eight recurrence steps directly instead of applying the production kernel's two exact C=4 WY/UT chunk transforms",
+      "shape": "one FP32 head; K=V=16; T=8 as two C=4 chunks; initial and final matrix state",
+      "workgroup": [256, 1, 1],
+      "unique_compulsory_global_bytes": 6176,
       "lds_bytes": 0,
-      "lds_stages": 0,
-      "pipeline_assessment": "each token consumes the preceding state, so only the lane-index strength reduction is independent",
-      "preliminary_result": "baseline and variant produced byte-identical gfx950 HSACO 58536eb9abf290821b3d85d39c262ed5b49ac8d835ee959b2c36fa9446998bfa"
+      "pipeline_assessment": "the state stays in registers, but every token depends on the preceding updated state; the production WY/UT transform exposes independent within-chunk reductions"
     },
     {
       "feature": "kernel-content-sparse-attention-reciprocal-reuse-v1",
@@ -92,6 +93,27 @@
   ],
   "rejected": [
     {
+      "variant": "kda-wg64-four-value-column-coarsening-v1",
+      "kernel_export": "gfx950_kda_decode and gfx950_kda_chunkwise_prefill",
+      "status": "correctness-passed-performance-rejected",
+      "reason": "Blocked<Index1D,64,4> ownership compiled and passed the same CPU oracle, but extra per-lane live state and serial Wave16 reductions increased measured latency",
+      "retained_conclusion": "keep four Wave64s and one state element per lane; the measured campaign retains the slower 64-lane result as a negative ablation"
+    },
+    {
+      "variant": "kda-active-128-value-pair-tile-v1",
+      "kernel_export": "gfx950_kda_decode and gfx950_kda_chunkwise_prefill",
+      "status": "compiler-rejected",
+      "reason": "the general typed surface admits 64- or 256-thread launches, and the 256-thread fallback could not prove subgroup convergence across a two-wave early exit or race freedom for the checked tiled output witness",
+      "retained_conclusion": "keep the authenticated 256-lane state ownership until the compiler proves this layout and convergence contract"
+    },
+    {
+      "variant": "kda-subgroup-load-coalescing-v1",
+      "kernel_export": "gfx950_kda_decode and gfx950_kda_chunkwise_prefill",
+      "status": "compiler-rejected",
+      "reason": "conditional producer lanes before Wave16/Wave64 broadcasts are not currently proven convergent by the production lowering",
+      "retained_conclusion": "do not bypass the proof surface to claim a memory-load optimization"
+    },
+    {
       "variant": "content-sparse-selected-score-scalar-v1",
       "kernel_export": "gfx950_content_sparse_attention",
       "status": "compiler-rejected",
@@ -111,13 +133,6 @@
       "status": "structurally-inapplicable",
       "reason": "the fixed reduction depth is one native K=128 MFMA tile, so no future tile exists to prefetch while the current tile executes",
       "retained_conclusion": "a second 2048-byte LDS copy would be duplicate staging rather than software pipelining and would change no dependency overlap"
-    },
-    {
-      "variant": "kda-prefill-ping-pong-v1",
-      "kernel_export": "gfx950_kda_gdn_prefill",
-      "status": "structurally-inapplicable",
-      "reason": "each token consumes the preceding recurrent state and normalization result",
-      "retained_conclusion": "multi-buffering cannot overlap the serial token recurrence without changing semantics"
     },
     {
       "variant": "mixing-lds-staging-v1",

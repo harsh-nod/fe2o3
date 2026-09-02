@@ -4,26 +4,31 @@ The ordinary attributed Rust kernels in [`src/kernel.rs`](src/kernel.rs) are
 the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
 contains independent safe CPU references, and `cargo test --offline` checks
 their fixed-shape numerical and selection contracts. The HIP program remains
-a separate compiler, ISA, and MI350 hardware-validation companion.
+a separate compiler, ISA, and MI350 hardware-validation companion for the
+older non-KDA profiles; the matrix-state KDA evidence is production Rust only.
 
 Each `run-*-gfx950.sh` entry point selects exactly one kernel feature, invokes
 the production fe2o3 extractor, checks the compiler-published crate binding,
 links an exact gfx950:xnack- COV6 HSACO, validates its single-kernel metadata
 and symbol-scoped ISA, and runs a digest-pinned numerical HSA test. This is an
 explicit verification path; it does not grant protected artifact publication
-authority. The HIP ISA and runtime results below remain independent evidence.
+authority. The HIP ISA and runtime results below remain independent evidence
+only for the symbols that the HIP program implements with the same semantics.
 
 This directory is a bounded educational validation suite for AMD CDNA 4
 (`gfx950`). It is not a production implementation, performance claim, model
 reproduction, or general-purpose operator library.
 
-The fixed shapes are 16 channels, eight recurrence tokens, 16 attention
-tokens, and attention head dimension 128. The suite contains:
+The fixed shapes include a one-head KDA teaching profile with key dimension 16,
+value dimension 16, an FP32 16-by-16 matrix state, one decode token, and eight
+prefill tokens split into two four-token chunks. The other profiles use 16
+channels, 16 attention tokens, and attention head dimension 128. The suite
+contains:
 
-- single-token KDA/GDN-style decode with a three-tap causal convolution,
-  gated recurrent state update, and RMS normalization;
-- two-chunk KDA/GDN-style prefill with four tokens per chunk and state carried
-  across the chunk boundary;
+- exact single-token Kimi Delta Attention decode with per-key decay, a
+  rank-one delta update, and matrix-state output projection;
+- exact two-chunk KDA prefill using the four-token WY/UT formulation, with the
+  updated matrix state carried from the first chunk into the second;
 - content-indexed sparse attention with top-two block selection, top-three
   token selection, and sparse normalization/value reduction over those tokens;
 - DeepSeek sparse attention whose explicit top-k token list is produced at the
@@ -35,7 +40,9 @@ tokens, and attention head dimension 128. The suite contains:
   and a four-stream mHC mixer with three Sinkhorn iterations.
 
 Every output and sparse index is compared against an independently written CPU
-oracle using deterministic inputs. The dense-tile attention profiles use
+oracle using deterministic inputs. The KDA oracle is an f64 scalar,
+token-by-token implementation of the matrix recurrence; it does not reuse the
+kernel's WY/UT equations. The dense-tile attention profiles use
 non-uniform, exactly representable E4M3 values; the DeepSeek sparse teaching
 profile uses finite FP32 values. The executable rejects non-gfx950 devices.
 The content-selected and compressed-hybrid kernels use a gfx950 FP8
@@ -51,6 +58,20 @@ the selected score reductions in four Wave16 subgroups and gives subgroup zero
 exclusive ownership of the 16 output stores. It does not reproduce the learned
 indexer or claim a production FlashMLA scheduling strategy.
 
+For KDA, the public inputs begin after the surrounding model projections and
+short convolution: `q` and `k` are L2-normalized, `alpha` is already in
+`(0,1]`, and `beta` is already in `[0,1]`. The kernel applies the fixed
+`1/sqrt(16)` query scale. The logical recurrence stores `S[K,V]`; production
+device memory stores its transpose `H[V,K]`, allowing each 16-lane Wave16 group
+to reduce one value column. The current checked `Index1D` ownership model makes
+decode output physical length 256, with each logical value replicated across
+its 16 key lanes. Prefill similarly uses four lanes per logical token in each
+256-element chunk-output buffer. The runtime verifier compares every replica
+and canary, while tutorials identify how to recover the logical outputs. This
+fixed profile excludes learned projections, the width-four convolution, gate
+parameterization, RMS/output gating, and the output projection used by a full
+Kimi Linear layer.
+
 Run the Rust source and independent CPU-reference checks:
 
 ```bash
@@ -61,7 +82,7 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 
 ```bash
 ./run-kda-decode-gfx950.sh
-./run-kda-prefill-gfx950.sh
+./run-kda-chunkwise-prefill-gfx950.sh
 ./run-content-sparse-attention-gfx950.sh
 ./run-deepseek-sparse-attention-gfx950.sh
 ./run-compressed-hybrid-attention-gfx950.sh
@@ -69,6 +90,36 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 ./run-four-branch-residual-gfx950.sh
 ./run-mhc-sinkhorn-mix-gfx950.sh
 ```
+
+## KDA MI350 performance evidence
+
+[`kda-mi350-performance-v1.json`](kda-mi350-performance-v1.json) records the
+replicated fixed-shape KDA campaign, raw-file SHA-256 manifests, exact source
+and HSACO identities, ISA resource counts, correctness results, rejected
+variants, and the optimistic HBM-only resource floor. Recreate that aggregate
+from retained JSONL results with:
+
+```bash
+python3 summarize_kda_mi350.py \
+  --fe2o3-directory /absolute/path/to/fe2o3-jsonl \
+  --fla-directory /absolute/path/to/fla-jsonl \
+  --output /absolute/path/to/new-kda-summary.json
+```
+
+The official Flash Linear Attention comparator is
+`fla.ops.kda.fused_recurrent_kda` at commit
+`8e84ed4a6727be082c34a3855c60623fd11411e9`. Run one T=1 or T=8 process from
+an environment containing that checkout, PyTorch ROCm, Triton, and FLA with
+`benchmark_fla_kda_mi350.py`. Both implementations were checked against an
+independent sequential matrix-state recurrence before timing.
+
+For FP32 B=H=1, K=V=16, the median of five process medians was 4,720 ns for
+fe2o3 decode versus 39,345 ns for FLA (8.336x), and 11,400 ns for fe2o3
+two-chunk prefill versus 39,113 ns for FLA (3.431x). These are the fastest
+measured eligible implementations for this exact shape and semantics, not a
+universal KDA state-of-the-art claim. The fe2o3 and FLA device-side timers use
+different sampling granularities, which is retained as a protocol caveat in
+the evidence file.
 
 The sparse and hybrid runners additionally require exactly four
 `ds_read_b64_tr_b8` instructions before one FP8
@@ -80,13 +131,22 @@ target-directory environment variables when validating a copied checkout.
 
 ## Production Rust validation evidence
 
-On 2026-08-27, the original seven production Rust wrappers passed on SSH host `mi350`
-(`smci350-rck-g03-b19-03`) with ROCm 7.2.1 and eight visible MI350X devices.
-The largest observed absolute errors were `4.172325134e-7` for KDA decode,
-`1.072883606e-6` for KDA prefill, `0` for both attention kernels and AttnRes,
-`0` for four-branch residual, and `4.470348358e-8` for mHC. The harness
-tolerances are `3e-3` for the recurrent and mixing kernels and `5e-3` for the
-FP8 attention kernels. Sparse token IDs were checked exactly.
+On 2026-09-01, the exact matrix-state KDA wrappers passed production Rust
+lowering, COV6 linking, symbol-scoped ISA inspection, and real HSA execution on
+SSH host `mi350` (`smci350-rck-g03-b19-03`) with ROCm 7.2.1, using physical GPU
+6 (`ROCR_VISIBLE_DEVICES=6`, `HIP_VISIBLE_DEVICES` unset). Decode maximum
+absolute errors were `1.490116119e-8` for the 256-element final state and
+`3.725290298e-9` for every replicated output. Chunkwise prefill errors were
+`2.980232239e-8` for the final state and `7.450580597e-9` for both replicated
+four-token output buffers. The checked symbols use Wave16
+`ds_bpermute_b32` reductions and intentionally contain no MFMA or LDS transpose
+instructions. Final source and artifact identities are pinned by the advanced
+tutorial evidence records.
+
+On 2026-08-27, the remaining production Rust wrappers passed on the same host.
+The largest observed absolute errors were `0` for both dense-tile attention
+kernels and AttnRes, `0` for four-branch residual, and `4.470348358e-8` for
+mHC. Sparse token IDs were checked exactly.
 
 On 2026-08-31, the eighth wrapper,
 `run-deepseek-sparse-attention-gfx950.sh`, passed on the same host and ROCm
@@ -132,10 +192,10 @@ K=`64+g*16..64+g*16+15` in v4-v7; transpose-source staging produces that same
 layout after the four B8 transpose reads.
 
 The sparse IDs were exactly `[7,1,4]`. Maximum errors were `2.98023e-08` for
-decode state, `4.76837e-07` for decode normalization, `1.49012e-08` for prefill
-state, `3.57628e-07` for prefill normalization, `2.98023e-08` for sparse attention,
-`1.67638e-07` for compressed hybrid attention, `0` for AttnRes, `0` for the
-four-branch residual, and `2.98023e-08` for mHC/Sinkhorn mixing.
+sparse attention, `1.67638e-07` for compressed hybrid attention, `0` for
+AttnRes, `0` for the four-branch residual, and `2.98023e-08` for mHC/Sinkhorn
+mixing. The HIP file's historical vector-recurrence symbols are not evidence
+for the matrix-state KDA Rust kernels.
 
 Both attention symbols contained exactly four `ds_read_b64_tr_b8` followed by
 one `v_mfma_f32_16x16x128_f8f6f4`. The tested HIP source SHA-256 was

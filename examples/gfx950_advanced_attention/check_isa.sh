@@ -69,8 +69,8 @@ for kernel in gfx950_content_sparse_attention gfx950_compressed_hybrid_attention
     require_before "$kernel" "ds_read_b64_tr_b8" "v_mfma_f32_16x16x128_f8f6f4"
 done
 
-require_in_kernel gfx950_kda_gdn_decode "v_rsq_f32"
-require_in_kernel gfx950_kda_gdn_prefill "v_rsq_f32"
+require_in_kernel gfx950_kda_decode "ds_bpermute_b32"
+require_in_kernel gfx950_kda_chunkwise_prefill "ds_bpermute_b32"
 require_in_kernel gfx950_attnres_aggregate "v_exp_f32"
 require_in_kernel gfx950_four_branch_residual "v_exp_f32"
 require_in_kernel gfx950_mhc_sinkhorn_mix "v_exp_f32"

@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::c_char;
+#[cfg(feature = "native-hsa")]
+use core::ffi::{c_int, c_void};
 
 pub(crate) const AGENT_CAPACITY: usize = 64;
 pub(crate) const POOL_CAPACITY: usize = 256;
@@ -89,7 +91,7 @@ const _: () = {
     assert!(core::mem::align_of::<DispatchTimeRecord>() == 8);
 };
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 unsafe extern "C" {
     pub fn fe2o3_hsa_init() -> c_int;
     pub fn fe2o3_hsa_shut_down() -> c_int;
@@ -145,6 +147,25 @@ unsafe extern "C" {
     pub fn fe2o3_hsa_test_malformed_queue_destroy_failure(record: *mut QueueRecord) -> c_int;
     #[cfg(test)]
     pub fn fe2o3_hsa_test_release_malformed_queue_record(record: *mut QueueRecord);
+    #[cfg(all(test, feature = "hardware-test-hooks"))]
+    pub fn fe2o3_hsa_test_publish_kernel_dispatch(
+        ring: *mut c_void,
+        queue_size: u32,
+        read_index: u64,
+        write_index: u64,
+        observed_write_index: u64,
+        grid: *const u32,
+        workgroup: *const u32,
+        private_segment_size: u32,
+        group_segment_size: u32,
+        kernel_object: u64,
+        kernarg: *mut c_void,
+        completion_signal: u64,
+        dependency_signals: *const u64,
+        dependency_signal_count: usize,
+        new_write_index: *mut u64,
+        packet_id: *mut u64,
+    ) -> c_int;
     pub fn fe2o3_hsa_publish_kernel_dispatch(
         queue: *const QueueRecord,
         grid: *const u32,
@@ -154,6 +175,8 @@ unsafe extern "C" {
         kernel_object: u64,
         kernarg: *mut c_void,
         completion_signal: u64,
+        dependency_signals: *const u64,
+        dependency_signal_count: usize,
         packet_id: *mut u64,
     ) -> c_int;
 }

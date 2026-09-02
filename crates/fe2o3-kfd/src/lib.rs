@@ -27,6 +27,9 @@ mod memory;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod shared_memory;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod wait;
+
 #[cfg(target_os = "linux")]
 mod queue_resources;
 
@@ -95,10 +98,10 @@ pub use queue::{
     Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
     Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
-    Gfx942RecycledDispatchResourcesV1, Gfx942RepeatedByteContentV1,
-    Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
-    KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
-    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    Gfx942RecycledDispatchResourcesV1, Gfx942RecycledDispatchWriteRequestV1,
+    Gfx942RepeatedByteContentV1, Gfx942TimeoutExecutionObservationV1,
+    Gfx942TimeoutSignalObservationV1, KfdTargetRuntimeDebugQueueTeardownV1,
+    KfdTargetRuntimeDebugQueueV1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,

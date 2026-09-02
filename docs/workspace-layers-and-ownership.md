@@ -246,15 +246,23 @@ completion, recycle, detach, rebind, destruction, and storage release. It does
 not establish executable memory effects, current output content, numerical
 correctness, or hardware qualification.
 
-`fe2o3-runtime` is the sole pure-Rust gfx942 composition boundary over the
-canonical AMDHSA loader and `fe2o3-kfd`. Its safe API prepares a complete
-address-free request and has one consuming execution transition. That transition
-requires an unsafe Worker V3 authority implementation and independently matches
-the final object, kernel, complete invocation contract, and checked KFD device.
-The exact-artifact hardware diagnostic exercises it with a manually asserted
-unsafe authority; no production implementation exists yet. Production
-execution must consume verifier authority in this crate rather than adding
-another host-runtime route.
+`fe2o3-runtime` is the sole public runtime composition boundary. Its
+backend-neutral context owns devices, streams, allocations, modules, typed
+kernels, events, asynchronous submissions, and peer copies behind stable
+context-local handles. Backend capabilities and failure classes are explicit;
+native handles and addresses do not cross the boundary. Native adapters may be
+hosted behind the bounded `RuntimeWorkerBackendV1` transport so a terminal KFD
+or HSA failure destroys the worker instead of the application process.
+
+The earlier pure-Rust `gfx942:xnack-` composition remains a protected legacy
+path in the same crate. Its safe API prepares a complete address-free request
+and has one consuming execution transition. That transition requires an unsafe
+Worker V3 authority implementation and independently matches the final object,
+kernel, complete invocation contract, and checked KFD device. The exact-artifact
+hardware diagnostic exercises it with a manually asserted unsafe authority; no
+reviewed production verifier implementation exists yet. Production execution
+must consume verifier authority in this crate rather than adding another
+general-purpose host-runtime route.
 
 ### Integration
 

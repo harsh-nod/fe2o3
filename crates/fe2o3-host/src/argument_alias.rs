@@ -9,7 +9,8 @@ use fe2o3_core::{
     DeviceBuffer, DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
     DeviceCopy, DevicePtr,
 };
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -18,7 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 ///
 /// This is a symbolic comparison key. It exposes neither the allocation's raw
 /// address nor a constructor that could assign two identities to one address.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AllocationIdentity {
     context: usize,
     allocation: usize,
@@ -929,25 +930,526 @@ impl AccessDescriptor {
     }
 }
 
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+struct IndexedAccessKey {
+    byte_offset: usize,
+    registration_id: u64,
+    argument_index: usize,
+}
+
+#[derive(Clone, Copy)]
+struct IndexedAccess {
+    key: IndexedAccessKey,
+    descriptor: AccessDescriptor,
+}
+
+struct IntervalNode {
+    access: IndexedAccess,
+    height: usize,
+    max_end: usize,
+    max_exclusive_end: usize,
+    left: Option<Box<Self>>,
+    right: Option<Box<Self>>,
+}
+
+impl IntervalNode {
+    fn new(access: IndexedAccess) -> Box<Self> {
+        let max_exclusive_end = if access.descriptor.mode == ArgumentAccessMode::SharedRead {
+            0
+        } else {
+            access.descriptor.byte_end
+        };
+        Box::new(Self {
+            access,
+            height: 1,
+            max_end: access.descriptor.byte_end,
+            max_exclusive_end,
+            left: None,
+            right: None,
+        })
+    }
+
+    fn refresh(&mut self) {
+        self.height = 1 + node_height(&self.left).max(node_height(&self.right));
+        self.max_end = self
+            .access
+            .descriptor
+            .byte_end
+            .max(node_max_end(&self.left, false))
+            .max(node_max_end(&self.right, false));
+        let own_exclusive_end = if self.access.descriptor.mode == ArgumentAccessMode::SharedRead {
+            0
+        } else {
+            self.access.descriptor.byte_end
+        };
+        self.max_exclusive_end = own_exclusive_end
+            .max(node_max_end(&self.left, true))
+            .max(node_max_end(&self.right, true));
+    }
+}
+
+/// Per-allocation AVL interval tree augmented with subtree end bounds.
+///
+/// Shared-read queries use the exclusive-only bound, so a large population of
+/// overlapping readers does not degrade another reader's admission scan.
+#[derive(Default)]
+struct AllocationIntervalIndex {
+    root: Option<Box<IntervalNode>>,
+    len: usize,
+}
+
+impl AllocationIntervalIndex {
+    fn insert(&mut self, access: IndexedAccess) {
+        self.root = Some(insert_interval_node(self.root.take(), access));
+        self.len += 1;
+    }
+
+    fn remove(&mut self, key: IndexedAccessKey) {
+        let (root, removed) = remove_interval_node(self.root.take(), key);
+        debug_assert!(removed);
+        self.root = root;
+        if removed {
+            self.len -= 1;
+        }
+    }
+
+    fn find_conflict(&self, candidate: AccessDescriptor) -> Option<IndexedAccess> {
+        if candidate.is_empty() {
+            return None;
+        }
+        find_interval_conflict(self.root.as_deref(), candidate)
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[cfg(test)]
+    fn height(&self) -> usize {
+        node_height(&self.root)
+    }
+}
+
+fn node_height(node: &Option<Box<IntervalNode>>) -> usize {
+    node.as_deref().map_or(0, |node| node.height)
+}
+
+fn node_max_end(node: &Option<Box<IntervalNode>>, exclusive_only: bool) -> usize {
+    node.as_deref().map_or(0, |node| {
+        if exclusive_only {
+            node.max_exclusive_end
+        } else {
+            node.max_end
+        }
+    })
+}
+
+fn balance_factor(node: &IntervalNode) -> isize {
+    node_height(&node.left) as isize - node_height(&node.right) as isize
+}
+
+fn rotate_interval_right(mut root: Box<IntervalNode>) -> Box<IntervalNode> {
+    let mut pivot = root
+        .left
+        .take()
+        .expect("right rotation requires a left child");
+    root.left = pivot.right.take();
+    root.refresh();
+    pivot.right = Some(root);
+    pivot.refresh();
+    pivot
+}
+
+fn rotate_interval_left(mut root: Box<IntervalNode>) -> Box<IntervalNode> {
+    let mut pivot = root
+        .right
+        .take()
+        .expect("left rotation requires a right child");
+    root.right = pivot.left.take();
+    root.refresh();
+    pivot.left = Some(root);
+    pivot.refresh();
+    pivot
+}
+
+fn rebalance_interval_node(mut node: Box<IntervalNode>) -> Box<IntervalNode> {
+    node.refresh();
+    let balance = balance_factor(&node);
+    if balance > 1 {
+        if node
+            .left
+            .as_deref()
+            .is_some_and(|left| balance_factor(left) < 0)
+        {
+            node.left = node.left.take().map(rotate_interval_left);
+        }
+        return rotate_interval_right(node);
+    }
+    if balance < -1 {
+        if node
+            .right
+            .as_deref()
+            .is_some_and(|right| balance_factor(right) > 0)
+        {
+            node.right = node.right.take().map(rotate_interval_right);
+        }
+        return rotate_interval_left(node);
+    }
+    node
+}
+
+fn insert_interval_node(
+    node: Option<Box<IntervalNode>>,
+    access: IndexedAccess,
+) -> Box<IntervalNode> {
+    let Some(mut node) = node else {
+        return IntervalNode::new(access);
+    };
+    match access.key.cmp(&node.access.key) {
+        Ordering::Less => node.left = Some(insert_interval_node(node.left.take(), access)),
+        Ordering::Greater => node.right = Some(insert_interval_node(node.right.take(), access)),
+        Ordering::Equal => {
+            debug_assert!(false, "duplicate interval index key");
+            node.access = access;
+        }
+    }
+    rebalance_interval_node(node)
+}
+
+fn remove_interval_node(
+    node: Option<Box<IntervalNode>>,
+    key: IndexedAccessKey,
+) -> (Option<Box<IntervalNode>>, bool) {
+    let Some(mut node) = node else {
+        return (None, false);
+    };
+    let removed = match key.cmp(&node.access.key) {
+        Ordering::Less => {
+            let (left, removed) = remove_interval_node(node.left.take(), key);
+            node.left = left;
+            removed
+        }
+        Ordering::Greater => {
+            let (right, removed) = remove_interval_node(node.right.take(), key);
+            node.right = right;
+            removed
+        }
+        Ordering::Equal => {
+            return match (node.left.take(), node.right.take()) {
+                (None, right) => (right, true),
+                (left, None) => (left, true),
+                (left, Some(right)) => {
+                    let (new_right, mut successor) = take_min_interval_node(right);
+                    successor.left = left;
+                    successor.right = new_right;
+                    (Some(rebalance_interval_node(successor)), true)
+                }
+            };
+        }
+    };
+    (Some(rebalance_interval_node(node)), removed)
+}
+
+fn take_min_interval_node(
+    mut node: Box<IntervalNode>,
+) -> (Option<Box<IntervalNode>>, Box<IntervalNode>) {
+    let Some(left) = node.left.take() else {
+        let right = node.right.take();
+        node.refresh();
+        return (right, node);
+    };
+    let (new_left, minimum) = take_min_interval_node(left);
+    node.left = new_left;
+    (Some(rebalance_interval_node(node)), minimum)
+}
+
+fn find_interval_conflict(
+    node: Option<&IntervalNode>,
+    candidate: AccessDescriptor,
+) -> Option<IndexedAccess> {
+    let node = node?;
+    let exclusive_only = candidate.mode == ArgumentAccessMode::SharedRead;
+    let relevant_max = |node: Option<&IntervalNode>| {
+        node.map_or(0, |node| {
+            if exclusive_only {
+                node.max_exclusive_end
+            } else {
+                node.max_end
+            }
+        })
+    };
+
+    if relevant_max(Some(node)) <= candidate.byte_offset {
+        return None;
+    }
+    if relevant_max(node.left.as_deref()) > candidate.byte_offset
+        && let Some(conflict) = find_interval_conflict(node.left.as_deref(), candidate)
+    {
+        return Some(conflict);
+    }
+    if node.access.key.byte_offset < candidate.byte_end
+        && descriptors_conflict(candidate, node.access.descriptor)
+    {
+        return Some(node.access);
+    }
+    if node.access.key.byte_offset >= candidate.byte_end {
+        return None;
+    }
+    find_interval_conflict(node.right.as_deref(), candidate)
+}
+
 struct RegisteredLaunch {
-    seal: Arc<()>,
-    accesses: Vec<AccessDescriptor>,
+    indexed_accesses: Vec<(AllocationIdentity, IndexedAccessKey)>,
+}
+
+struct RegistrationNode {
+    registration_id: u64,
+    launch: RegisteredLaunch,
+    height: usize,
+    subtree_len: usize,
+    left: Option<Box<Self>>,
+    right: Option<Box<Self>>,
+}
+
+impl RegistrationNode {
+    fn new(registration_id: u64, launch: RegisteredLaunch) -> Box<Self> {
+        Box::new(Self {
+            registration_id,
+            launch,
+            height: 1,
+            subtree_len: 1,
+            left: None,
+            right: None,
+        })
+    }
+
+    fn refresh(&mut self) {
+        self.height = 1 + registration_height(&self.left).max(registration_height(&self.right));
+        self.subtree_len =
+            1 + registration_subtree_len(&self.left) + registration_subtree_len(&self.right);
+    }
+}
+
+/// AVL map keyed by monotonic registration identity and augmented with subtree
+/// cardinality for exact active-registration rank queries.
+#[derive(Default)]
+struct RegistrationOrderMap {
+    root: Option<Box<RegistrationNode>>,
+}
+
+impl RegistrationOrderMap {
+    fn insert(
+        &mut self,
+        registration_id: u64,
+        launch: RegisteredLaunch,
+    ) -> Option<RegisteredLaunch> {
+        let (root, replaced) = insert_registration_node(self.root.take(), registration_id, launch);
+        self.root = Some(root);
+        replaced
+    }
+
+    fn remove(&mut self, registration_id: u64) -> Option<RegisteredLaunch> {
+        let (root, removed) = remove_registration_node(self.root.take(), registration_id);
+        self.root = root;
+        removed
+    }
+
+    fn rank_with_steps(&self, registration_id: u64) -> (Option<usize>, usize) {
+        let mut node = self.root.as_deref();
+        let mut rank = 0usize;
+        let mut steps = 0usize;
+        while let Some(current) = node {
+            steps += 1;
+            match registration_id.cmp(&current.registration_id) {
+                Ordering::Less => node = current.left.as_deref(),
+                Ordering::Equal => {
+                    rank += registration_subtree_len(&current.left);
+                    return (Some(rank), steps);
+                }
+                Ordering::Greater => {
+                    rank += registration_subtree_len(&current.left) + 1;
+                    node = current.right.as_deref();
+                }
+            }
+        }
+        (None, steps)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        registration_subtree_len(&self.root)
+    }
+
+    #[cfg(test)]
+    fn height(&self) -> usize {
+        registration_height(&self.root)
+    }
+}
+
+fn registration_height(node: &Option<Box<RegistrationNode>>) -> usize {
+    node.as_deref().map_or(0, |node| node.height)
+}
+
+fn registration_subtree_len(node: &Option<Box<RegistrationNode>>) -> usize {
+    node.as_deref().map_or(0, |node| node.subtree_len)
+}
+
+fn registration_balance_factor(node: &RegistrationNode) -> isize {
+    registration_height(&node.left) as isize - registration_height(&node.right) as isize
+}
+
+fn rotate_registration_right(mut root: Box<RegistrationNode>) -> Box<RegistrationNode> {
+    let mut pivot = root
+        .left
+        .take()
+        .expect("right registration rotation requires a left child");
+    root.left = pivot.right.take();
+    root.refresh();
+    pivot.right = Some(root);
+    pivot.refresh();
+    pivot
+}
+
+fn rotate_registration_left(mut root: Box<RegistrationNode>) -> Box<RegistrationNode> {
+    let mut pivot = root
+        .right
+        .take()
+        .expect("left registration rotation requires a right child");
+    root.right = pivot.left.take();
+    root.refresh();
+    pivot.left = Some(root);
+    pivot.refresh();
+    pivot
+}
+
+fn rebalance_registration_node(mut node: Box<RegistrationNode>) -> Box<RegistrationNode> {
+    node.refresh();
+    let balance = registration_balance_factor(&node);
+    if balance > 1 {
+        if node
+            .left
+            .as_deref()
+            .is_some_and(|left| registration_balance_factor(left) < 0)
+        {
+            node.left = node.left.take().map(rotate_registration_left);
+        }
+        return rotate_registration_right(node);
+    }
+    if balance < -1 {
+        if node
+            .right
+            .as_deref()
+            .is_some_and(|right| registration_balance_factor(right) > 0)
+        {
+            node.right = node.right.take().map(rotate_registration_right);
+        }
+        return rotate_registration_left(node);
+    }
+    node
+}
+
+fn insert_registration_node(
+    node: Option<Box<RegistrationNode>>,
+    registration_id: u64,
+    launch: RegisteredLaunch,
+) -> (Box<RegistrationNode>, Option<RegisteredLaunch>) {
+    let Some(mut node) = node else {
+        return (RegistrationNode::new(registration_id, launch), None);
+    };
+    let replaced = match registration_id.cmp(&node.registration_id) {
+        Ordering::Less => {
+            let (left, replaced) =
+                insert_registration_node(node.left.take(), registration_id, launch);
+            node.left = Some(left);
+            replaced
+        }
+        Ordering::Greater => {
+            let (right, replaced) =
+                insert_registration_node(node.right.take(), registration_id, launch);
+            node.right = Some(right);
+            replaced
+        }
+        Ordering::Equal => Some(std::mem::replace(&mut node.launch, launch)),
+    };
+    (rebalance_registration_node(node), replaced)
+}
+
+fn remove_registration_node(
+    node: Option<Box<RegistrationNode>>,
+    registration_id: u64,
+) -> (Option<Box<RegistrationNode>>, Option<RegisteredLaunch>) {
+    let Some(mut node) = node else {
+        return (None, None);
+    };
+    match registration_id.cmp(&node.registration_id) {
+        Ordering::Less => {
+            let (left, removed) = remove_registration_node(node.left.take(), registration_id);
+            node.left = left;
+            (Some(rebalance_registration_node(node)), removed)
+        }
+        Ordering::Greater => {
+            let (right, removed) = remove_registration_node(node.right.take(), registration_id);
+            node.right = right;
+            (Some(rebalance_registration_node(node)), removed)
+        }
+        Ordering::Equal => {
+            let removed = node.launch;
+            match (node.left.take(), node.right.take()) {
+                (None, right) => (right, Some(removed)),
+                (left, None) => (left, Some(removed)),
+                (left, Some(right)) => {
+                    let (new_right, mut successor) = take_min_registration_node(right);
+                    successor.left = left;
+                    successor.right = new_right;
+                    (Some(rebalance_registration_node(successor)), Some(removed))
+                }
+            }
+        }
+    }
+}
+
+fn take_min_registration_node(
+    mut node: Box<RegistrationNode>,
+) -> (Option<Box<RegistrationNode>>, Box<RegistrationNode>) {
+    let Some(left) = node.left.take() else {
+        let right = node.right.take();
+        node.refresh();
+        return (right, node);
+    };
+    let (new_left, minimum) = take_min_registration_node(left);
+    node.left = new_left;
+    (Some(rebalance_registration_node(node)), minimum)
 }
 
 #[derive(Default)]
 struct AliasAdmissionRegistryState {
-    launches: Vec<RegisteredLaunch>,
+    next_registration_id: u64,
+    launches: RegistrationOrderMap,
+    allocations: BTreeMap<AllocationIdentity, AllocationIntervalIndex>,
+    #[cfg(test)]
+    last_rank_lookup_steps: usize,
 }
 
 pub(crate) struct AliasAdmissionRegistry {
     context: usize,
+    registered_globally: bool,
     state: Mutex<AliasAdmissionRegistryState>,
 }
 
 impl AliasAdmissionRegistry {
+    #[cfg(any(test, feature = "hardware-test-hooks"))]
     fn new(context: usize) -> Self {
         Self {
             context,
+            registered_globally: false,
+            state: Mutex::new(AliasAdmissionRegistryState::default()),
+        }
+    }
+
+    fn new_shared(context: usize) -> Self {
+        Self {
+            context,
+            registered_globally: true,
             state: Mutex::new(AliasAdmissionRegistryState::default()),
         }
     }
@@ -961,41 +1463,91 @@ impl AliasAdmissionRegistry {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         for (argument_index, candidate) in admission.accesses.iter().enumerate() {
             let candidate = AccessDescriptor::from_admitted(candidate);
-            for (launch_index, launch) in state.launches.iter().enumerate() {
-                for (in_flight_argument, existing) in launch.accesses.iter().enumerate() {
-                    if descriptors_conflict(candidate, *existing) {
-                        return Err(AliasAdmissionError::Conflict {
-                            argument_index,
-                            conflicting_with: ConflictSource::InFlight {
-                                launch_index,
-                                argument_index: in_flight_argument,
-                            },
-                        });
-                    }
+            if let Some(existing) = state
+                .allocations
+                .get(&candidate.identity)
+                .and_then(|index| index.find_conflict(candidate))
+            {
+                let (launch_index, rank_lookup_steps) =
+                    state.launches.rank_with_steps(existing.key.registration_id);
+                #[cfg(test)]
+                {
+                    state.last_rank_lookup_steps = rank_lookup_steps;
                 }
+                #[cfg(not(test))]
+                let _ = rank_lookup_steps;
+                let launch_index = launch_index.expect("indexed access must name an active launch");
+                return Err(AliasAdmissionError::Conflict {
+                    argument_index,
+                    conflicting_with: ConflictSource::InFlight {
+                        launch_index,
+                        argument_index: existing.key.argument_index,
+                    },
+                });
             }
         }
 
-        let seal = Arc::new(());
-        state.launches.push(RegisteredLaunch {
-            seal: seal.clone(),
-            accesses: admission
-                .accesses
-                .iter()
-                .map(AccessDescriptor::from_admitted)
-                .collect(),
-        });
+        let registration_id = state.next_registration_id;
+        state.next_registration_id = state
+            .next_registration_id
+            .checked_add(1)
+            .ok_or(AliasAdmissionError::RegistryIdentityExhausted)?;
+        let mut indexed_accesses = Vec::with_capacity(admission.accesses.len());
+        for (argument_index, access) in admission.accesses.iter().enumerate() {
+            let descriptor = AccessDescriptor::from_admitted(access);
+            if descriptor.is_empty() {
+                continue;
+            }
+            let key = IndexedAccessKey {
+                byte_offset: descriptor.byte_offset,
+                registration_id,
+                argument_index,
+            };
+            state
+                .allocations
+                .entry(descriptor.identity)
+                .or_default()
+                .insert(IndexedAccess { key, descriptor });
+            indexed_accesses.push((descriptor.identity, key));
+        }
+        let replaced = state
+            .launches
+            .insert(registration_id, RegisteredLaunch { indexed_accesses });
+        debug_assert!(replaced.is_none());
         Ok(InFlightRegionRegistration {
             registry: self.clone(),
-            seal,
+            registration_id,
             marker: PhantomData,
         })
+    }
+
+    #[cfg(test)]
+    fn statistics(&self) -> AliasRegistryStatistics {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        AliasRegistryStatistics {
+            active_launches: state.launches.len(),
+            indexed_accesses: state.allocations.values().map(|index| index.len).sum(),
+            maximum_tree_height: state
+                .allocations
+                .values()
+                .map(AllocationIntervalIndex::height)
+                .max()
+                .unwrap_or(0),
+        }
+    }
+
+    #[cfg(test)]
+    fn last_rank_lookup_steps(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .last_rank_lookup_steps
     }
 }
 
 pub(crate) struct InFlightRegionRegistration<'allocation> {
     registry: Arc<AliasAdmissionRegistry>,
-    seal: Arc<()>,
+    registration_id: u64,
     marker: PhantomData<&'allocation ()>,
 }
 
@@ -1006,24 +1558,76 @@ impl Drop for InFlightRegionRegistration<'_> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        state
-            .launches
-            .retain(|launch| !Arc::ptr_eq(&launch.seal, &self.seal));
+        let Some(launch) = state.launches.remove(self.registration_id) else {
+            debug_assert!(false, "in-flight alias registration removed twice");
+            return;
+        };
+        for (identity, key) in launch.indexed_accesses {
+            let remove_allocation = if let Some(index) = state.allocations.get_mut(&identity) {
+                index.remove(key);
+                index.is_empty()
+            } else {
+                debug_assert!(false, "registered allocation index is missing");
+                false
+            };
+            if remove_allocation {
+                state.allocations.remove(&identity);
+            }
+        }
     }
 }
 
+type SharedAliasRegistries = Mutex<BTreeMap<usize, Weak<AliasAdmissionRegistry>>>;
+
+fn shared_alias_registries() -> &'static SharedAliasRegistries {
+    static REGISTRIES: OnceLock<SharedAliasRegistries> = OnceLock::new();
+    REGISTRIES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
 pub(crate) fn shared_alias_registry(context: usize) -> Arc<AliasAdmissionRegistry> {
-    static REGISTRIES: OnceLock<Mutex<HashMap<usize, Weak<AliasAdmissionRegistry>>>> =
-        OnceLock::new();
-    let registries = REGISTRIES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut registries = registries.lock().unwrap_or_else(|error| error.into_inner());
+    let mut registries = shared_alias_registries()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     if let Some(registry) = registries.get(&context).and_then(Weak::upgrade) {
         return registry;
     }
 
-    let registry = Arc::new(AliasAdmissionRegistry::new(context));
+    let registry = Arc::new(AliasAdmissionRegistry::new_shared(context));
     registries.insert(context, Arc::downgrade(&registry));
     registry
+}
+
+impl Drop for AliasAdmissionRegistry {
+    fn drop(&mut self) {
+        if !self.registered_globally {
+            return;
+        }
+        let mut registries = shared_alias_registries()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if registries
+            .get(&self.context)
+            .is_some_and(|registry| std::ptr::eq(registry.as_ptr(), self))
+        {
+            registries.remove(&self.context);
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AliasRegistryStatistics {
+    active_launches: usize,
+    indexed_accesses: usize,
+    maximum_tree_height: usize,
+}
+
+#[cfg(test)]
+fn shared_alias_registry_contains(context: usize) -> bool {
+    shared_alias_registries()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .contains_key(&context)
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
@@ -1159,6 +1763,7 @@ pub enum ConflictSource {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AliasAdmissionError {
+    RegistryIdentityExhausted,
     UnknownProvenance {
         argument_index: usize,
     },
@@ -1177,6 +1782,9 @@ pub enum AliasAdmissionError {
 impl fmt::Display for AliasAdmissionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RegistryIdentityExhausted => {
+                formatter.write_str("alias registration identity space is exhausted")
+            }
             Self::UnknownProvenance { argument_index } => write!(
                 formatter,
                 "argument {argument_index} has unknown allocation provenance"
@@ -1775,5 +2383,369 @@ mod tests {
                 .unwrap_err(),
             AliasAdmissionError::InFlightContextMismatch { launch_index: 0 }
         );
+    }
+
+    #[test]
+    fn interval_registry_scales_and_removes_exact_registrations() {
+        const REGISTRATIONS: usize = 4_096;
+        const REGION_BYTES: usize = 8;
+
+        let context = context(4_096);
+        let registry = context.alias_registry().clone();
+        let owner = ();
+        // SAFETY: see `allocation`; this is an inert range used only by the
+        // symbolic interval index.
+        let allocation =
+            unsafe { allocation(&context, &owner, 0x10_0000, REGISTRATIONS * REGION_BYTES) };
+        let mut guards = Vec::with_capacity(REGISTRATIONS);
+        for index in 0..REGISTRATIONS {
+            let (_, guard) = admit_and_register(
+                &registry,
+                &context,
+                [write(
+                    allocation
+                        .region(index * REGION_BYTES, REGION_BYTES)
+                        .unwrap(),
+                )],
+            )
+            .unwrap();
+            guards.push(guard);
+        }
+
+        let stats = registry.statistics();
+        assert_eq!(stats.active_launches, REGISTRATIONS);
+        assert_eq!(stats.indexed_accesses, REGISTRATIONS);
+        let ceiling_log2 =
+            usize::BITS as usize - REGISTRATIONS.saturating_sub(1).leading_zeros() as usize;
+        let logarithmic_height_bound = 2 * ceiling_log2;
+        assert!(stats.maximum_tree_height <= logarithmic_height_bound);
+        assert!(matches!(
+            admit_and_register(
+                &registry,
+                &context,
+                [read(allocation.region(0, REGION_BYTES).unwrap())],
+            ),
+            Err(AliasAdmissionError::Conflict { .. })
+        ));
+
+        drop(guards);
+        assert_eq!(
+            registry.statistics(),
+            AliasRegistryStatistics {
+                active_launches: 0,
+                indexed_accesses: 0,
+                maximum_tree_height: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn concurrent_registration_serializes_overlapping_writers() {
+        use std::sync::{
+            Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        const THREADS: usize = 8;
+        let context = context(8_192);
+        let registry = context.alias_registry().clone();
+        let ready = Arc::new(Barrier::new(THREADS));
+        let registered = Arc::new(Barrier::new(THREADS));
+        let successes = Arc::new(AtomicUsize::new(0));
+
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let context = context.clone();
+                let registry = registry.clone();
+                let ready = ready.clone();
+                let registered = registered.clone();
+                let successes = successes.clone();
+                scope.spawn(move || {
+                    let owner = ();
+                    // SAFETY: see `allocation`; threads only compare this
+                    // symbolic range and never dereference the address.
+                    let allocation = unsafe { allocation(&context, &owner, 0x20_0000, 64) };
+                    ready.wait();
+                    let result = admit_and_register(
+                        &registry,
+                        &context,
+                        [write(allocation.region(0, 64).unwrap())],
+                    );
+                    if result.is_ok() {
+                        successes.fetch_add(1, Ordering::Relaxed);
+                    }
+                    registered.wait();
+                    drop(result);
+                });
+            }
+        });
+
+        assert_eq!(successes.load(Ordering::Relaxed), 1);
+        assert_eq!(registry.statistics().active_launches, 0);
+    }
+
+    #[test]
+    fn shared_registry_entry_is_removed_with_its_context_registry() {
+        let token = 0_u8;
+        let context_key = std::ptr::from_ref(&token).addr();
+        assert!(!shared_alias_registry_contains(context_key));
+
+        let first = shared_alias_registry(context_key);
+        let second = shared_alias_registry(context_key);
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(shared_alias_registry_contains(context_key));
+
+        drop(first);
+        assert!(shared_alias_registry_contains(context_key));
+        drop(second);
+        assert!(!shared_alias_registry_contains(context_key));
+    }
+
+    #[test]
+    fn interval_index_matches_linear_conflict_search_through_removal() {
+        const ACCESS_COUNT: usize = 1_024;
+        const QUERY_COUNT: usize = 4_096;
+
+        fn next_random(state: &mut u64) -> u64 {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            *state
+        }
+
+        fn descriptor(seed: &mut u64, identity: AllocationIdentity) -> AccessDescriptor {
+            let byte_offset = next_random(seed) as usize % 16_384;
+            let byte_length = next_random(seed) as usize % 257;
+            AccessDescriptor {
+                identity,
+                byte_offset,
+                byte_end: byte_offset + byte_length,
+                mode: if next_random(seed).is_multiple_of(3) {
+                    ArgumentAccessMode::SharedRead
+                } else {
+                    ArgumentAccessMode::ExclusiveWrite
+                },
+            }
+        }
+
+        let identity = AllocationIdentity {
+            context: 99,
+            allocation: 0x30_0000,
+        };
+        let mut random = 0x5eed_cafe_f00d_u64;
+        let mut index = AllocationIntervalIndex::default();
+        let mut indexed = Vec::with_capacity(ACCESS_COUNT);
+        for registration_id in 0..ACCESS_COUNT as u64 {
+            let descriptor = descriptor(&mut random, identity);
+            if descriptor.is_empty() {
+                continue;
+            }
+            let access = IndexedAccess {
+                key: IndexedAccessKey {
+                    byte_offset: descriptor.byte_offset,
+                    registration_id,
+                    argument_index: 0,
+                },
+                descriptor,
+            };
+            index.insert(access);
+            indexed.push(access);
+        }
+
+        for _ in 0..QUERY_COUNT {
+            let candidate = descriptor(&mut random, identity);
+            assert_eq!(
+                index.find_conflict(candidate).is_some(),
+                indexed
+                    .iter()
+                    .any(|existing| descriptors_conflict(candidate, existing.descriptor))
+            );
+        }
+
+        for removed in indexed.drain(..).rev() {
+            index.remove(removed.key);
+        }
+        assert!(index.is_empty());
+        assert_eq!(index.height(), 0);
+    }
+
+    #[test]
+    fn registration_order_index_matches_btree_ranks_through_shuffled_removal() {
+        const REGISTRATIONS: usize = 4_096;
+
+        fn next_random(state: &mut u64) -> u64 {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            *state
+        }
+
+        let mut order = (0..REGISTRATIONS as u64).collect::<Vec<_>>();
+        let mut random = 0xfeed_5eed_cafe_f00d_u64;
+        for upper in (1..order.len()).rev() {
+            let selected = next_random(&mut random) as usize % (upper + 1);
+            order.swap(upper, selected);
+        }
+
+        let mut index = RegistrationOrderMap::default();
+        let mut oracle = BTreeMap::<u64, ()>::new();
+        for registration_id in &order {
+            assert!(
+                index
+                    .insert(
+                        *registration_id,
+                        RegisteredLaunch {
+                            indexed_accesses: Vec::new(),
+                        },
+                    )
+                    .is_none()
+            );
+            assert!(oracle.insert(*registration_id, ()).is_none());
+        }
+        assert_eq!(index.len(), oracle.len());
+        let ceiling_log2 =
+            usize::BITS as usize - REGISTRATIONS.saturating_sub(1).leading_zeros() as usize;
+        assert!(index.height() <= 2 * ceiling_log2);
+
+        for (removal_index, registration_id) in order.iter().copied().enumerate() {
+            if removal_index.is_multiple_of(2) {
+                assert!(index.remove(registration_id).is_some());
+                assert_eq!(oracle.remove(&registration_id), Some(()));
+            }
+        }
+        for (expected_rank, registration_id) in oracle.keys().copied().enumerate() {
+            let (actual_rank, steps) = index.rank_with_steps(registration_id);
+            assert_eq!(actual_rank, Some(expected_rank));
+            assert!(steps <= index.height());
+        }
+        for registration_id in oracle.keys().copied().collect::<Vec<_>>() {
+            assert!(index.remove(registration_id).is_some());
+        }
+        assert_eq!(index.len(), 0);
+        assert_eq!(index.height(), 0);
+    }
+
+    #[test]
+    fn conflict_rank_lookup_stays_logarithmic_and_exact_after_scale_removal() {
+        const REGISTRATIONS: usize = 4_096;
+        const REGION_BYTES: usize = 8;
+
+        let context = context(16_384);
+        let registry = context.alias_registry().clone();
+        let owner = ();
+        // SAFETY: see `allocation`; the fixture is symbolic and never dereferenced.
+        let allocation =
+            unsafe { allocation(&context, &owner, 0x50_0000, REGISTRATIONS * REGION_BYTES) };
+        let mut guards = Vec::with_capacity(REGISTRATIONS);
+        for registration_id in 0..REGISTRATIONS {
+            let (_, guard) = admit_and_register(
+                &registry,
+                &context,
+                [write(
+                    allocation
+                        .region(registration_id * REGION_BYTES, REGION_BYTES)
+                        .unwrap(),
+                )],
+            )
+            .unwrap();
+            guards.push(Some(guard));
+        }
+
+        let target = REGISTRATIONS - 2;
+        let conflict = admit_and_register(
+            &registry,
+            &context,
+            [read(
+                allocation
+                    .region(target * REGION_BYTES, REGION_BYTES)
+                    .unwrap(),
+            )],
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            conflict,
+            AliasAdmissionError::Conflict {
+                argument_index: 0,
+                conflicting_with: ConflictSource::InFlight {
+                    launch_index: target,
+                    argument_index: 0,
+                },
+            }
+        );
+        let ceiling_log2 =
+            usize::BITS as usize - REGISTRATIONS.saturating_sub(1).leading_zeros() as usize;
+        assert!(registry.last_rank_lookup_steps() <= 2 * ceiling_log2);
+
+        for removed in (0..target).step_by(3) {
+            drop(guards[removed].take());
+        }
+        let removed_before_target = target.div_ceil(3);
+        let expected_rank = target - removed_before_target;
+        let conflict = admit_and_register(
+            &registry,
+            &context,
+            [read(
+                allocation
+                    .region(target * REGION_BYTES, REGION_BYTES)
+                    .unwrap(),
+            )],
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            conflict,
+            AliasAdmissionError::Conflict {
+                argument_index: 0,
+                conflicting_with: ConflictSource::InFlight {
+                    launch_index: expected_rank,
+                    argument_index: 0,
+                },
+            }
+        );
+        assert!(registry.last_rank_lookup_steps() <= 2 * ceiling_log2);
+        drop(guards);
+        assert_eq!(registry.statistics().active_launches, 0);
+    }
+
+    #[test]
+    fn conflict_launch_index_tracks_active_registration_order() {
+        let context = context(12_288);
+        let registry = context.alias_registry().clone();
+        let owner = ();
+        // SAFETY: see `allocation`; no address is dereferenced.
+        let allocation = unsafe { allocation(&context, &owner, 0x40_0000, 64) };
+        let (_, first) = admit_and_register(
+            &registry,
+            &context,
+            [write(allocation.region(0, 16).unwrap())],
+        )
+        .unwrap();
+        let (_, second) = admit_and_register(
+            &registry,
+            &context,
+            [write(allocation.region(32, 16).unwrap())],
+        )
+        .unwrap();
+        drop(first);
+
+        let error = admit_and_register(
+            &registry,
+            &context,
+            [read(allocation.region(32, 16).unwrap())],
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            error,
+            AliasAdmissionError::Conflict {
+                argument_index: 0,
+                conflicting_with: ConflictSource::InFlight {
+                    launch_index: 0,
+                    argument_index: 0,
+                },
+            }
+        );
+        drop(second);
     }
 }
