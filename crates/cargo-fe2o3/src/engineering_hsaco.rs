@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, EngineeringHsacoObservationV1, MAX_WORKER_EXECUTABLE_BYTES,
-    MAX_WORKER_OUTPUT_BYTES, MAX_WORKER_RESPONSE_BYTES, PinnedWorkerV1,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, observe_engineering_hsaco_v1,
+    MAX_WORKER_OUTPUT_BYTES, MAX_WORKER_RESPONSE_BYTES, PinnedWorkerV1, WorkerExecutionLimitsV1,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    observe_engineering_hsaco_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -83,8 +83,7 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
     let scratch = ScratchDirectory::new()?;
     let cargo_bytes = read_claimed_file("Cargo", &options.cargo, MAX_TOOL_BYTES, true)?;
     let rustc_bytes = read_claimed_file("rustc", &options.rustc, MAX_TOOL_BYTES, true)?;
-    let extractor_bytes =
-        read_claimed_file("extractor", &options.extractor, MAX_TOOL_BYTES, true)?;
+    let extractor_bytes = read_claimed_file("extractor", &options.extractor, MAX_TOOL_BYTES, true)?;
     let worker_bytes = read_claimed_file(
         "native worker",
         &options.worker,
@@ -129,14 +128,9 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
     .map_err(|error| format!("invalid native worker limits: {error}"))?;
     let output_bound = WorkerOutputConstraintsV1::new(options.max_output_bytes)
         .map_err(|error| format!("invalid native worker output bound: {error}"))?;
-    let observation = observe_engineering_hsaco_v1(
-        &handoff,
-        &worker,
-        providers,
-        output_bound,
-        limits,
-    )
-    .map_err(|error| error.to_string())?;
+    let observation =
+        observe_engineering_hsaco_v1(&handoff, &worker, providers, output_bound, limits)
+            .map_err(|error| error.to_string())?;
 
     let manifest = canonical_manifest(
         &options,
@@ -189,33 +183,26 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--crate" => set_once_string(&mut crate_name, value, argument)?,
             "--output-root" => set_once_path(&mut output_root, value, argument)?,
             "--extractor" => set_once_path(&mut extractor, value, argument)?,
-            "--extractor-sha256" => {
-                set_once_digest(&mut extractor_sha256, value, argument)?
-            }
+            "--extractor-sha256" => set_once_digest(&mut extractor_sha256, value, argument)?,
             "--worker" => set_once_path(&mut worker, value, argument)?,
             "--worker-sha256" => set_once_digest(&mut worker_sha256, value, argument)?,
             "--cargo" => set_once_path(&mut cargo, value, argument)?,
             "--cargo-sha256" => set_once_digest(&mut cargo_sha256, value, argument)?,
             "--rustc" => set_once_path(&mut rustc, value, argument)?,
             "--rustc-sha256" => set_once_digest(&mut rustc_sha256, value, argument)?,
-            "--worker-build-id" => {
-                set_once_string(&mut worker_build_identity, value, argument)?
-            }
-            "--llvm-build-id" => {
-                set_once_string(&mut llvm_build_identity, value, argument)?
-            }
+            "--worker-build-id" => set_once_string(&mut worker_build_identity, value, argument)?,
+            "--llvm-build-id" => set_once_string(&mut llvm_build_identity, value, argument)?,
             "--target" => set_once_string(&mut target, value, argument)?,
-            "--code-object-version" => {
-                set_once_string(&mut code_object_version, value, argument)?
-            }
-            "--timeout-seconds" => {
-                set_once_u64(&mut timeout_seconds, value, argument)?
-            }
-            "--max-output-bytes" => {
-                set_once_u64(&mut max_output_bytes, value, argument)?
-            }
+            "--code-object-version" => set_once_string(&mut code_object_version, value, argument)?,
+            "--timeout-seconds" => set_once_u64(&mut timeout_seconds, value, argument)?,
+            "--max-output-bytes" => set_once_u64(&mut max_output_bytes, value, argument)?,
             "--provider" => providers.push(parse_provider(value, current_dir)?),
-            _ => return Err(format!("unknown engineering hsaco option {argument:?}\n{}", usage())),
+            _ => {
+                return Err(format!(
+                    "unknown engineering hsaco option {argument:?}\n{}",
+                    usage()
+                ));
+            }
         }
     }
 
@@ -226,20 +213,21 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         output_root.ok_or_else(|| "missing required --output-root".to_owned())?,
     );
     if output_root.file_name() != Some(OsStr::new(NAMESPACE)) {
-        return Err(format!("--output-root basename must be exactly {NAMESPACE}"));
+        return Err(format!(
+            "--output-root basename must be exactly {NAMESPACE}"
+        ));
     }
     let target = target.ok_or_else(|| "missing required --target".to_owned())?;
     if target != TARGET {
         return Err(format!("--target must be exactly {TARGET}"));
     }
-    let code_object_version = code_object_version
-        .ok_or_else(|| "missing required --code-object-version".to_owned())?;
+    let code_object_version =
+        code_object_version.ok_or_else(|| "missing required --code-object-version".to_owned())?;
     if code_object_version != CODE_OBJECT_VERSION.to_string() {
         return Err("--code-object-version must be exactly 6".to_owned());
     }
     let timeout_seconds = timeout_seconds.unwrap_or(120);
-    if timeout_seconds == 0
-        || timeout_seconds > fe2o3_hsaco_finalize::MAX_WORKER_TIMEOUT.as_secs()
+    if timeout_seconds == 0 || timeout_seconds > fe2o3_hsaco_finalize::MAX_WORKER_TIMEOUT.as_secs()
     {
         return Err("--timeout-seconds must be in 1..=600".to_owned());
     }
@@ -351,11 +339,7 @@ fn parse_provider(value: &OsStr, current_dir: &Path) -> Result<ProviderClaim, St
     })
 }
 
-fn set_once_string(
-    slot: &mut Option<String>,
-    value: &OsStr,
-    option: &str,
-) -> Result<(), String> {
+fn set_once_string(slot: &mut Option<String>, value: &OsStr, option: &str) -> Result<(), String> {
     let value = value
         .to_str()
         .ok_or_else(|| format!("{option} must be valid UTF-8"))?
@@ -366,22 +350,14 @@ fn set_once_string(
     Ok(())
 }
 
-fn set_once_path(
-    slot: &mut Option<PathBuf>,
-    value: &OsStr,
-    option: &str,
-) -> Result<(), String> {
+fn set_once_path(slot: &mut Option<PathBuf>, value: &OsStr, option: &str) -> Result<(), String> {
     if slot.replace(PathBuf::from(value)).is_some() {
         return Err(format!("{option} may be specified only once"));
     }
     Ok(())
 }
 
-fn set_once_digest(
-    slot: &mut Option<[u8; 32]>,
-    value: &OsStr,
-    option: &str,
-) -> Result<(), String> {
+fn set_once_digest(slot: &mut Option<[u8; 32]>, value: &OsStr, option: &str) -> Result<(), String> {
     let value = value
         .to_str()
         .ok_or_else(|| format!("{option} must be valid UTF-8"))?;
@@ -391,11 +367,7 @@ fn set_once_digest(
     Ok(())
 }
 
-fn set_once_u64(
-    slot: &mut Option<u64>,
-    value: &OsStr,
-    option: &str,
-) -> Result<(), String> {
+fn set_once_u64(slot: &mut Option<u64>, value: &OsStr, option: &str) -> Result<(), String> {
     let value = value
         .to_str()
         .ok_or_else(|| format!("{option} must be valid UTF-8"))?
@@ -440,7 +412,9 @@ fn validate_build_identity(value: &str, option: &str) -> Result<(), String> {
         || !value.is_ascii()
         || value.bytes().any(|byte| byte.is_ascii_control())
     {
-        return Err(format!("{option} is empty, oversized, or contains control bytes"));
+        return Err(format!(
+            "{option} is empty, oversized, or contains control bytes"
+        ));
     }
     Ok(())
 }
@@ -534,10 +508,7 @@ fn run_extraction(
         )
         .stdin(Stdio::null());
     for (name, _) in env::vars_os() {
-        if name
-            .to_str()
-            .is_some_and(|name| name.starts_with("FE2O3_"))
-        {
+        if name.to_str().is_some_and(|name| name.starts_with("FE2O3_")) {
             command.env_remove(name);
         }
     }
@@ -577,7 +548,8 @@ fn rustc_sysroot_lib_dir(rustc: &Path) -> Result<PathBuf, String> {
     let status = child
         .wait()
         .map_err(|error| format!("cannot wait for rustc sysroot query: {error}"))?;
-    if !status.success() || bytes.is_empty() || bytes.len() as u64 > MAX_RUSTC_SYSROOT_OUTPUT_BYTES {
+    if !status.success() || bytes.is_empty() || bytes.len() as u64 > MAX_RUSTC_SYSROOT_OUTPUT_BYTES
+    {
         return Err("rustc sysroot query failed or returned an invalid path".to_owned());
     }
     let sysroot = std::str::from_utf8(&bytes)
@@ -588,7 +560,10 @@ fn rustc_sysroot_lib_dir(rustc: &Path) -> Result<PathBuf, String> {
     }
     let lib = Path::new(sysroot).join("lib");
     if !lib.is_dir() {
-        return Err(format!("rustc sysroot library directory `{}` is absent", lib.display()));
+        return Err(format!(
+            "rustc sysroot library directory `{}` is absent",
+            lib.display()
+        ));
     }
     Ok(lib)
 }
@@ -615,7 +590,9 @@ fn read_claimed_file(
     let bytes = read_bounded_regular_file(&claim.path, max_bytes, executable)?;
     let actual: [u8; 32] = Sha256::digest(&bytes).into();
     if actual != claim.sha256 {
-        return Err(format!("{label} SHA-256 does not match the declared identity"));
+        return Err(format!(
+            "{label} SHA-256 does not match the declared identity"
+        ));
     }
     Ok(bytes)
 }
@@ -626,15 +603,23 @@ fn read_bounded_regular_file(
     executable: bool,
 ) -> Result<Vec<u8>, String> {
     let mut options = OpenOptions::new();
-    options.read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let mut file = options
-        .open(path)
-        .map_err(|error| format!("cannot open `{}` without following a symlink: {error}", path.display()))?;
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(path).map_err(|error| {
+        format!(
+            "cannot open `{}` without following a symlink: {error}",
+            path.display()
+        )
+    })?;
     let before = file
         .metadata()
         .map_err(|error| format!("cannot inspect `{}`: {error}", path.display()))?;
     if !before.is_file() || before.len() == 0 || before.len() > max_bytes {
-        return Err(format!("`{}` is empty, oversized, or not a regular file", path.display()));
+        return Err(format!(
+            "`{}` is empty, oversized, or not a regular file",
+            path.display()
+        ));
     }
     if executable && before.permissions().mode() & 0o111 == 0 {
         return Err(format!("`{}` is not executable", path.display()));
@@ -645,13 +630,19 @@ fn read_bounded_regular_file(
         .read_to_end(&mut bytes)
         .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
     if bytes.len() as u64 != before.len() || bytes.len() as u64 > max_bytes {
-        return Err(format!("`{}` changed length or exceeded its bound", path.display()));
+        return Err(format!(
+            "`{}` changed length or exceeded its bound",
+            path.display()
+        ));
     }
     let after = file
         .metadata()
         .map_err(|error| format!("cannot re-inspect `{}`: {error}", path.display()))?;
     if metadata_identity(&before) != metadata_identity(&after) {
-        return Err(format!("`{}` changed while it was captured", path.display()));
+        return Err(format!(
+            "`{}` changed while it was captured",
+            path.display()
+        ));
     }
     Ok(bytes)
 }
@@ -672,10 +663,16 @@ fn require_canonical_absolute_path(path: &Path, label: &str) -> Result<(), Strin
     if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
         return Err(format!("{label} path must be absolute and contain no `..`"));
     }
-    let canonical = fs::canonicalize(path)
-        .map_err(|error| format!("cannot canonicalize {label} path `{}`: {error}", path.display()))?;
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "cannot canonicalize {label} path `{}`: {error}",
+            path.display()
+        )
+    })?;
     if canonical != path {
-        return Err(format!("{label} path must already be canonical and contain no symlinks"));
+        return Err(format!(
+            "{label} path must already be canonical and contain no symlinks"
+        ));
     }
     Ok(())
 }
@@ -685,7 +682,10 @@ fn validate_fresh_output_root(root: &Path) -> Result<(), String> {
         return Err("--output-root must be absolute and contain no `..`".to_owned());
     }
     if root.exists() || fs::symlink_metadata(root).is_ok() {
-        return Err(format!("engineering output root `{}` already exists", root.display()));
+        return Err(format!(
+            "engineering output root `{}` already exists",
+            root.display()
+        ));
     }
     let parent = root
         .parent()
@@ -952,7 +952,11 @@ impl ScratchDirectory {
             match fs::DirBuilder::new().mode(0o700).create(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(format!("cannot create private engineering scratch: {error}")),
+                Err(error) => {
+                    return Err(format!(
+                        "cannot create private engineering scratch: {error}"
+                    ));
+                }
             }
         }
         Err("cannot allocate a fresh engineering scratch directory".to_owned())
@@ -1020,9 +1024,17 @@ mod tests {
         assert_eq!(options.max_output_bytes, MAX_WORKER_OUTPUT_BYTES as u64);
 
         let mut wrong_target = base_args(&root);
-        let index = wrong_target.iter().position(|value| value == "--target").unwrap() + 1;
+        let index = wrong_target
+            .iter()
+            .position(|value| value == "--target")
+            .unwrap()
+            + 1;
         wrong_target[index] = "gfx950:xnack-".into();
-        assert!(parse(&wrong_target, &root).unwrap_err().contains("gfx942:xnack-"));
+        assert!(
+            parse(&wrong_target, &root)
+                .unwrap_err()
+                .contains("gfx942:xnack-")
+        );
 
         let mut wrong_cov = base_args(&root);
         let index = wrong_cov
@@ -1040,7 +1052,11 @@ mod tests {
             .unwrap()
             + 1;
         wrong_namespace[index] = root.join("fe2o3").into_os_string();
-        assert!(parse(&wrong_namespace, &root).unwrap_err().contains(NAMESPACE));
+        assert!(
+            parse(&wrong_namespace, &root)
+                .unwrap_err()
+                .contains(NAMESPACE)
+        );
     }
 
     #[test]
@@ -1093,8 +1109,14 @@ mod tests {
         let hsaco = b"inert-test-hsaco";
         let manifest = b"{\"authority\":\"none\"}\n";
         let published = publish_observation(&root, manifest, hsaco).unwrap();
-        assert_eq!(fs::read(published.join("observation.hsaco")).unwrap(), hsaco);
-        assert_eq!(fs::read(published.join("observation.json")).unwrap(), manifest);
+        assert_eq!(
+            fs::read(published.join("observation.hsaco")).unwrap(),
+            hsaco
+        );
+        assert_eq!(
+            fs::read(published.join("observation.json")).unwrap(),
+            manifest
+        );
         assert!(!root.join("CURRENT").exists());
         assert!(!root.join(".fe2o3-owned-v1").exists());
         assert!(publish_observation(&root, manifest, hsaco).is_err());
@@ -1110,7 +1132,10 @@ mod tests {
             concat!("PublishedProtected", "WorkerV3HsacoV1"),
             concat!("/run/fe2o3/", "compiler-execution-supervisor.sock"),
         ] {
-            assert!(!source.contains(forbidden), "forbidden production surface: {forbidden}");
+            assert!(
+                !source.contains(forbidden),
+                "forbidden production surface: {forbidden}"
+            );
         }
         assert!(source.contains("authority: observation.authority()"));
         assert!(source.contains("publication: observation.grants_publication_authority()"));

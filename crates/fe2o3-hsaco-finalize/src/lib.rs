@@ -65,8 +65,8 @@ pub use compiler_ffi_observation::{
     stage_compiler_ffi_envelope_v1,
 };
 pub use engineering_hsaco::{
-    EngineeringHsacoErrorV1, EngineeringHsacoObservationV1,
-    EngineeringProviderObservationV1, observe_engineering_hsaco_v1,
+    EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
+    observe_engineering_hsaco_v1,
 };
 pub use fe2o3_build_authority::CompilerClosureV2;
 pub use fe2o3_compiler_ffi::{
