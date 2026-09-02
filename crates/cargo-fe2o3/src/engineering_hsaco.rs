@@ -4,9 +4,10 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{ExitCode, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fe2o3_hsaco_finalize::{
@@ -25,7 +26,7 @@ const CARGO_TARGET: &str = "amdgcn-amd-amdhsa";
 const CODE_OBJECT_VERSION: u8 = 6;
 const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
-const MAX_RUSTC_SYSROOT_OUTPUT_BYTES: u64 = 4096;
+const EXTRACTOR_CHILD_FD: std::os::fd::RawFd = 205;
 const CONTENT_ID_DOMAIN: &[u8] = b"FE2O3/ENGINEERING-HSACO-OBSERVATION-CONTENT/V1\0";
 
 pub(crate) fn command(args: &[OsString]) -> ExitCode {
@@ -82,8 +83,16 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
     validate_fresh_output_root(&options.output_root)?;
 
     let scratch = ScratchDirectory::new()?;
-    let cargo_bytes = read_claimed_file("Cargo", &options.cargo, MAX_TOOL_BYTES, true)?;
-    let rustc_bytes = read_claimed_file("rustc", &options.rustc, MAX_TOOL_BYTES, true)?;
+    let pinned_cargo = pin_claimed_executable("Cargo", &options.cargo)?;
+    let pinned_rustc_source = pin_claimed_executable("rustc", &options.rustc)?;
+    let rustc_lib_tree = crate::rustc_lib_tree::PinnedRustcLibTree::pin(
+        crate::rustc_lib_tree_directory(&options.rustc.path)?,
+    )?;
+    let rustc_lib_tree_sha256 = *rustc_lib_tree.sha256();
+    let pinned_rustc = crate::PinnedRustc {
+        executable: pinned_rustc_source,
+        lib_tree: crate::RustcLibTree::Authority(rustc_lib_tree),
+    };
     let extractor_bytes = read_claimed_file("extractor", &options.extractor, MAX_TOOL_BYTES, true)?;
     let extractor_backend_bytes = read_claimed_file(
         "extractor backend",
@@ -98,12 +107,38 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         true,
     )?;
 
-    let pinned_extractor = scratch.path.join("fe2o3-rustc-extract");
-    write_new_file(&pinned_extractor, &extractor_bytes, 0o500)?;
-    let pinned_extractor_backend = scratch.path.join("librustc_codegen_fe2o3.so");
+    let tool_directory = scratch.path.join("tool-images");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&tool_directory)
+        .map_err(|error| format!("cannot create private tool-image directory: {error}"))?;
+    let pinned_extractor_path = tool_directory.join("fe2o3-rustc-extract");
+    write_new_file(&pinned_extractor_path, &extractor_bytes, 0o500)?;
+    let pinned_extractor_backend = tool_directory.join("librustc_codegen_fe2o3.so");
     write_new_file(&pinned_extractor_backend, &extractor_backend_bytes, 0o400)?;
+    let pinned_extractor = crate::pinned_executable::PinnedExecutable::open(&pinned_extractor_path)
+        .map_err(|error| format!("cannot pin captured extractor: {error}"))?
+        .seal_executable_image()
+        .map_err(|error| format!("cannot seal captured extractor: {error}"))?;
+    if pinned_extractor.sha256() != &options.extractor.sha256 {
+        return Err("sealed extractor differs from its declared identity".to_owned());
+    }
+    let captured_tool_tree = crate::rustc_lib_tree::PinnedRustcLibTree::pin(
+        crate::project::PinnedDirectory::open_existing(
+            tool_directory,
+            "engineering captured tool-image directory",
+        )?,
+    )?;
     let handoff_path = scratch.path.join("compiler-handoff-v2");
-    run_extraction(&options, &pinned_extractor, &handoff_path, &scratch.path)?;
+    run_extraction(
+        &options,
+        &pinned_cargo,
+        &pinned_rustc,
+        &pinned_extractor,
+        &handoff_path,
+        &scratch.path,
+    )?;
+    captured_tool_tree.revalidate()?;
     let handoff = read_bounded_regular_file(&handoff_path, MAX_HANDOFF_BYTES, false)?;
 
     let mut providers = Vec::new();
@@ -144,8 +179,12 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
     let manifest = canonical_manifest(
         &options,
         &observation,
-        &cargo_bytes,
-        &rustc_bytes,
+        ContentIdentityV1::from_parts(*pinned_cargo.sha256(), pinned_cargo.size()),
+        ContentIdentityV1::from_parts(
+            *pinned_rustc.executable.sha256(),
+            pinned_rustc.executable.size(),
+        ),
+        rustc_lib_tree_sha256,
         &extractor_bytes,
         &extractor_backend_bytes,
     )?;
@@ -443,83 +482,157 @@ fn validate_build_identity(value: &str, option: &str) -> Result<(), String> {
 }
 
 fn reject_cargo_override_args(args: &[OsString]) -> Result<(), String> {
-    for argument in args {
-        let Some(argument) = argument.to_str() else {
+    let mut index = 0;
+    let mut manifests = 0;
+    while index < args.len() {
+        let argument = args[index]
+            .to_str()
+            .ok_or_else(|| "Cargo selection arguments must be valid UTF-8".to_owned())?;
+        let takes_value = matches!(
+            argument,
+            "--manifest-path" | "--package" | "-p" | "--features" | "-F"
+        );
+        if takes_value {
+            if argument == "--manifest-path" {
+                manifests += 1;
+            }
+            let value = args
+                .get(index + 1)
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                .ok_or_else(|| format!("Cargo argument {argument:?} requires one plain value"))?;
+            if argument == "--manifest-path" {
+                validate_manifest_path(Path::new(value))?;
+            }
+            index += 2;
             continue;
-        };
-        if argument == "--target"
-            || argument.starts_with("--target=")
-            || argument == "--target-dir"
-            || argument.starts_with("--target-dir=")
-            || argument == "--config"
-            || argument.starts_with("--config=")
-            || argument == "--release"
-            || argument.starts_with("--release=")
-            || argument == "-r"
-            || argument == "--profile"
-            || argument.starts_with("--profile=")
+        }
+        if let Some(value) = argument.strip_prefix("--manifest-path=") {
+            manifests += 1;
+            validate_manifest_path(Path::new(value))?;
+        } else if argument.starts_with("--package=")
+            || argument.starts_with("--features=")
+            || matches!(
+                argument,
+                "--all-features" | "--no-default-features" | "--lib"
+            )
         {
+            if argument.ends_with('=') {
+                return Err(format!("Cargo argument {argument:?} has an empty value"));
+            }
+        } else {
             return Err(format!(
-                "Cargo argument {argument:?} conflicts with the fixed engineering extraction profile"
+                "Cargo argument {argument:?} is outside the fixed engineering package/feature selection grammar"
             ));
         }
+        index += 1;
+    }
+    if manifests != 1 {
+        return Err("engineering extraction requires exactly one --manifest-path".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_manifest_path(path: &Path) -> Result<(), String> {
+    require_canonical_absolute_path(path, "Cargo manifest")?;
+    if path.file_name() != Some(OsStr::new("Cargo.toml")) || !path.is_file() {
+        return Err("--manifest-path must name an existing canonical Cargo.toml".to_owned());
     }
     Ok(())
 }
 
 fn reject_conflicting_environment() -> Result<(), String> {
     for (name, value) in env::vars_os() {
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if name.starts_with("FE2O3_EXTRACT_")
-            || matches!(
-                name,
-                "RUSTC_WRAPPER"
-                    | "CARGO_BUILD_RUSTC_WRAPPER"
-                    | "RUSTC_WORKSPACE_WRAPPER"
-                    | "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
-                    | "RUSTFLAGS"
-                    | "CARGO_ENCODED_RUSTFLAGS"
-            )
-        {
+        if conflicting_environment_name(&name) {
             return Err(format!(
-                "caller environment {name}={value:?} conflicts with explicit engineering extraction"
+                "caller environment {name:?}={value:?} conflicts with explicit engineering extraction"
             ));
         }
     }
     Ok(())
 }
 
+fn conflicting_environment_name(name: &OsStr) -> bool {
+    if crate::is_dynamic_loader_injection_environment_name(name) {
+        return true;
+    }
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    name.starts_with("FE2O3_EXTRACT_")
+        || name.starts_with("CARGO_TARGET_")
+        || name.starts_with("CARGO_PROFILE_")
+        || matches!(
+            name,
+            "RUSTC"
+                | "CARGO_BUILD_RUSTC"
+                | "RUSTC_WRAPPER"
+                | "CARGO_BUILD_RUSTC_WRAPPER"
+                | "RUSTC_WORKSPACE_WRAPPER"
+                | "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
+                | "RUSTDOC"
+                | "CARGO_BUILD_RUSTDOC"
+                | "RUSTFLAGS"
+                | "CARGO_ENCODED_RUSTFLAGS"
+                | "RUSTDOCFLAGS"
+                | "CARGO_ENCODED_RUSTDOCFLAGS"
+                | "CARGO_BUILD_TARGET"
+                | "CARGO_TARGET_DIR"
+                | "CARGO_INCREMENTAL"
+                | "RUSTC_BOOTSTRAP"
+                | "RUSTUP_TOOLCHAIN"
+                | "RUSTUP_HOME"
+        )
+}
+
 fn run_extraction(
     options: &Options,
-    extractor: &Path,
+    cargo: &crate::pinned_executable::PinnedExecutable,
+    rustc: &crate::PinnedRustc,
+    extractor: &crate::pinned_executable::PinnedExecutable,
     handoff: &Path,
     scratch: &Path,
 ) -> Result<(), String> {
-    let rustc_lib = rustc_sysroot_lib_dir(&options.rustc.path)?;
-    let loader_path = env::join_paths([
-        extractor
-            .parent()
-            .ok_or_else(|| "pinned extractor has no parent directory".to_owned())?,
-        rustc_lib.as_path(),
-    ])
-    .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
-    let mut command = Command::new(&options.cargo.path);
+    rustc.revalidate_lib_tree()?;
+    let cargo_home = scratch.join("cargo-home");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&cargo_home)
+        .map_err(|error| format!("cannot create isolated Cargo home: {error}"))?;
+    let tool_directory = scratch.join("tool-images");
+    let loader_path =
+        env::join_paths([tool_directory.as_path(), Path::new("/proc/self/fd/193")])
+            .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
+    let mut command = cargo
+        .command()
+        .map_err(|error| format!("cannot prepare pinned Cargo executable: {error}"))?;
+    let extractor_path = extractor
+        .fixed_child_path(EXTRACTOR_CHILD_FD)
+        .map_err(|error| format!("cannot allocate extractor child descriptor: {error}"))?;
+    extractor
+        .inherit_for_child_at(command.as_command_mut(), EXTRACTOR_CHILD_FD)
+        .map_err(|error| format!("cannot inherit sealed extractor: {error}"))?;
     command
+        .as_command_mut()
+        .env_clear()
+        .current_dir(scratch)
         .arg("check")
-        .arg("--locked")
+        .arg("--frozen")
         .arg("-Zbuild-std=core")
         .arg("--target")
         .arg(CARGO_TARGET)
         .arg("--target-dir")
         .arg(scratch.join("cargo-target"))
         .args(&options.cargo_args)
-        .env("RUSTC", &options.rustc.path)
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("HOME", scratch)
+        .env("CARGO_HOME", &cargo_home)
+        .env("PATH", "/__fe2o3_engineering_no_ambient_tools__")
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
-        .env("RUSTC_WORKSPACE_WRAPPER", extractor)
-        .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", extractor)
+        .env("RUSTC_WORKSPACE_WRAPPER", &extractor_path)
+        .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &extractor_path)
         .env("LD_LIBRARY_PATH", loader_path)
         .env("FE2O3_HIP_SYS_DISABLE", "1")
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
@@ -530,16 +643,15 @@ fn run_extraction(
             "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
         )
         .stdin(Stdio::null());
-    for (name, _) in env::vars_os() {
-        if name.to_str().is_some_and(|name| name.starts_with("FE2O3_")) {
-            command.env_remove(name);
-        }
-    }
     command
+        .as_command_mut()
         .env("FE2O3_HIP_SYS_DISABLE", "1")
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
         .env("FE2O3_EXTRACT_CRATE_V1", &options.crate_name)
         .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", handoff);
+    crate::configure_pinned_rustc_child(command.as_command_mut(), rustc)?;
+    crate::remove_dynamic_loader_environment(command.as_command_mut());
+    command.as_command_mut().env("LD_LIBRARY_PATH", loader_path);
     let status = command
         .status()
         .map_err(|error| format!("failed to execute Cargo engineering extraction: {error}"))?;
@@ -549,46 +661,25 @@ fn run_extraction(
     if !handoff.is_file() {
         return Err("Cargo succeeded without producing the compiler handoff".to_owned());
     }
+    rustc.revalidate_lib_tree()?;
     Ok(())
 }
 
-fn rustc_sysroot_lib_dir(rustc: &Path) -> Result<PathBuf, String> {
-    let mut child = Command::new(rustc)
-        .args(["--print", "sysroot"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot query rustc sysroot: {error}"))?;
-    let mut bytes = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("piped rustc stdout")
-        .take(MAX_RUSTC_SYSROOT_OUTPUT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read rustc sysroot: {error}"))?;
-    let status = child
-        .wait()
-        .map_err(|error| format!("cannot wait for rustc sysroot query: {error}"))?;
-    if !status.success() || bytes.is_empty() || bytes.len() as u64 > MAX_RUSTC_SYSROOT_OUTPUT_BYTES
-    {
-        return Err("rustc sysroot query failed or returned an invalid path".to_owned());
-    }
-    let sysroot = std::str::from_utf8(&bytes)
-        .map_err(|_| "rustc sysroot must be valid UTF-8".to_owned())?
-        .trim_end_matches(['\r', '\n']);
-    if sysroot.is_empty() || sysroot.contains('\r') || sysroot.contains('\n') {
-        return Err("rustc sysroot query returned a malformed path".to_owned());
-    }
-    let lib = Path::new(sysroot).join("lib");
-    if !lib.is_dir() {
+fn pin_claimed_executable(
+    label: &str,
+    claim: &FileClaim,
+) -> Result<crate::pinned_executable::PinnedExecutable, String> {
+    require_canonical_absolute_path(&claim.path, label)?;
+    let source = crate::pinned_executable::PinnedExecutable::open(&claim.path)
+        .map_err(|error| format!("cannot pin {label}: {error}"))?;
+    if source.sha256() != &claim.sha256 {
         return Err(format!(
-            "rustc sysroot library directory `{}` is absent",
-            lib.display()
+            "{label} SHA-256 does not match the declared identity"
         ));
     }
-    Ok(lib)
+    source
+        .seal_executable_image()
+        .map_err(|error| format!("cannot seal {label}: {error}"))
 }
 
 fn read_claimed_provider(claim: &ProviderClaim) -> Result<Vec<u8>, String> {
@@ -749,6 +840,7 @@ struct Identity {
 struct Tools<'a> {
     cargo: Identity,
     rustc: Identity,
+    rustc_lib_tree_sha256: String,
     extractor: Identity,
     extractor_backend: Identity,
     worker: Worker<'a>,
@@ -802,8 +894,9 @@ struct Grants {
 fn canonical_manifest(
     options: &Options,
     observation: &EngineeringHsacoObservationV1,
-    cargo: &[u8],
-    rustc: &[u8],
+    cargo: ContentIdentityV1,
+    rustc: ContentIdentityV1,
+    rustc_lib_tree_sha256: [u8; 32],
     extractor: &[u8],
     extractor_backend: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -826,8 +919,9 @@ fn canonical_manifest(
         code_object_version: CODE_OBJECT_VERSION,
         compiler_handoff: identity(observation.handoff_identity()),
         tools: Tools {
-            cargo: identity(ContentIdentityV1::calculate(cargo)),
-            rustc: identity(ContentIdentityV1::calculate(rustc)),
+            cargo: identity(cargo),
+            rustc: identity(rustc),
+            rustc_lib_tree_sha256: hex(&rustc_lib_tree_sha256),
             extractor: identity(ContentIdentityV1::calculate(extractor)),
             extractor_backend: identity(ContentIdentityV1::calculate(extractor_backend)),
             worker: Worker {
@@ -887,29 +981,83 @@ fn publish_observation(root: &Path, manifest: &[u8], hsaco: &[u8]) -> Result<Pat
     validate_fresh_output_root(root)?;
     let content_id = observation_content_id(manifest, hsaco);
     let content_dir = root.join(&content_id);
+    let parent_path = root
+        .parent()
+        .ok_or_else(|| "engineering namespace has no parent directory".to_owned())?;
+    let root_name = root
+        .file_name()
+        .ok_or_else(|| "engineering namespace has no basename".to_owned())?;
+    let parent = crate::project::PinnedDirectory::open_existing(
+        parent_path.to_path_buf(),
+        "engineering output parent",
+    )?;
+    rustix::fs::mkdirat(
+        parent.file(),
+        root_name,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
+    )
+    .map_err(|error| format!("cannot create engineering namespace: {error}"))?;
+    let namespace = parent
+        .open_child(NAMESPACE, "engineering namespace")?
+        .ok_or_else(|| "created engineering namespace disappeared".to_owned())?;
     let result = (|| {
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(root)
-            .map_err(|error| format!("cannot create engineering namespace: {error}"))?;
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&content_dir)
-            .map_err(|error| format!("cannot create engineering content directory: {error}"))?;
-        write_new_file(&content_dir.join("observation.hsaco"), hsaco, 0o600)?;
-        write_new_file(&content_dir.join("observation.json"), manifest, 0o600)?;
-        File::open(&content_dir)
-            .and_then(|directory| directory.sync_all())
+        rustix::fs::mkdirat(
+            namespace.file(),
+            content_id.as_str(),
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
+        )
+        .map_err(|error| format!("cannot create engineering content directory: {error}"))?;
+        let content = namespace
+            .open_child(&content_id, "engineering content directory")?
+            .ok_or_else(|| "created engineering content directory disappeared".to_owned())?;
+        write_new_file_at(content.file(), "observation.hsaco", hsaco, 0o600)?;
+        write_new_file_at(content.file(), "observation.json", manifest, 0o600)?;
+        content
+            .file()
+            .sync_all()
             .map_err(|error| format!("cannot sync engineering content directory: {error}"))?;
-        File::open(root)
-            .and_then(|directory| directory.sync_all())
+        namespace
+            .file()
+            .sync_all()
             .map_err(|error| format!("cannot sync engineering namespace: {error}"))?;
+        namespace.validate_path("engineering namespace")?;
+        content.validate_path("engineering content directory")?;
         Ok(content_dir.clone())
     })();
     if result.is_err() {
-        let _ = fs::remove_dir_all(root);
+        rollback_observation(&parent, &namespace, &content_id);
     }
     result
+}
+
+fn rollback_observation(
+    parent: &crate::project::PinnedDirectory,
+    namespace: &crate::project::PinnedDirectory,
+    content_id: &str,
+) {
+    if let Ok(Some(content)) = namespace.open_child(content_id, "engineering rollback content") {
+        for entry in ["observation.hsaco", "observation.json"] {
+            let _ = rustix::fs::unlinkat(content.file(), entry, rustix::fs::AtFlags::empty());
+        }
+        let _ = unlink_matching_directory(namespace, content_id, &content);
+    }
+    let _ = unlink_matching_directory(parent, NAMESPACE, namespace);
+}
+
+fn unlink_matching_directory(
+    parent: &crate::project::PinnedDirectory,
+    name: &str,
+    child: &crate::project::PinnedDirectory,
+) -> Result<(), String> {
+    let stat = rustix::fs::statat(parent.file(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| format!("cannot inspect rollback entry {name}: {error}"))?;
+    if !child.matches_identity(stat.st_dev, stat.st_ino) {
+        return Err(format!(
+            "rollback entry {name} was substituted; it remains untouched"
+        ));
+    }
+    rustix::fs::unlinkat(parent.file(), name, rustix::fs::AtFlags::REMOVEDIR)
+        .map_err(|error| format!("cannot remove rollback directory {name}: {error}"))
 }
 
 fn observation_content_id(manifest: &[u8], hsaco: &[u8]) -> String {
@@ -941,6 +1089,24 @@ fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
     Ok(())
 }
 
+fn write_new_file_at(parent: &File, name: &str, bytes: &[u8], mode: u32) -> Result<(), String> {
+    let descriptor = rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::from_bits_retain(mode),
+    )
+    .map_err(|error| format!("cannot create fresh `{name}`: {error}"))?;
+    let mut file = File::from(descriptor);
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("cannot publish `{name}`: {error}"))
+}
+
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -961,23 +1127,46 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 
 struct ScratchDirectory {
     path: PathBuf,
+    parent: crate::project::PinnedDirectory,
+    directory: crate::project::PinnedDirectory,
+    name: String,
 }
 
 impl ScratchDirectory {
     fn new() -> Result<Self, String> {
-        let base = env::temp_dir();
+        let base = fs::canonicalize(env::temp_dir())
+            .map_err(|error| format!("cannot canonicalize temporary directory: {error}"))?;
+        let parent = crate::project::PinnedDirectory::open_existing(
+            base.clone(),
+            "engineering scratch parent",
+        )?;
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| "system clock is before the Unix epoch".to_owned())?
             .as_nanos();
         for attempt in 0_u32..32 {
-            let path = base.join(format!(
+            let name = format!(
                 "fe2o3-engineering-hsaco-{}-{nonce}-{attempt}",
                 std::process::id()
-            ));
-            match fs::DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            );
+            let path = base.join(&name);
+            match rustix::fs::mkdirat(
+                parent.file(),
+                name.as_str(),
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
+            ) {
+                Ok(()) => {
+                    let directory = parent
+                        .open_child(&name, "engineering scratch")?
+                        .ok_or_else(|| "created engineering scratch disappeared".to_owned())?;
+                    return Ok(Self {
+                        path,
+                        parent,
+                        directory,
+                        name,
+                    });
+                }
+                Err(error) if error == rustix::io::Errno::EXIST => continue,
                 Err(error) => {
                     return Err(format!(
                         "cannot create private engineering scratch: {error}"
@@ -991,8 +1180,73 @@ impl ScratchDirectory {
 
 impl Drop for ScratchDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        let _ = remove_retained_directory_contents(self.directory.file());
+        let _ = unlink_matching_directory(&self.parent, &self.name, &self.directory);
     }
+}
+
+fn remove_retained_directory_contents(directory: &File) -> Result<(), String> {
+    let scan = rustix::fs::openat(
+        directory,
+        ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| format!("cannot open retained cleanup directory: {error}"))?;
+    let mut entries = rustix::fs::Dir::read_from(&scan)
+        .map_err(|error| format!("cannot enumerate retained cleanup directory: {error}"))?;
+    let mut names = Vec::new();
+    for entry in &mut entries {
+        let entry = entry.map_err(|error| format!("cannot enumerate cleanup entry: {error}"))?;
+        let bytes = entry.file_name().to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        names.push(std::ffi::OsString::from_vec(bytes.to_vec()));
+    }
+    for name in names {
+        let stat = rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| format!("cannot inspect cleanup entry {name:?}: {error}"))?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Directory {
+            let child = rustix::fs::openat(
+                directory,
+                &name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(File::from)
+            .map_err(|error| format!("cannot retain cleanup directory {name:?}: {error}"))?;
+            let opened = rustix::fs::fstat(&child)
+                .map_err(|error| format!("cannot inspect retained cleanup entry: {error}"))?;
+            if (stat.st_dev, stat.st_ino, stat.st_mode)
+                != (opened.st_dev, opened.st_ino, opened.st_mode)
+            {
+                return Err(format!(
+                    "cleanup directory {name:?} changed before retention"
+                ));
+            }
+            remove_retained_directory_contents(&child)?;
+            let current =
+                rustix::fs::statat(directory, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(|error| {
+                        format!("cannot re-inspect cleanup directory {name:?}: {error}")
+                    })?;
+            if (current.st_dev, current.st_ino, current.st_mode)
+                != (opened.st_dev, opened.st_ino, opened.st_mode)
+            {
+                return Err(format!("cleanup directory {name:?} was substituted"));
+            }
+            rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::REMOVEDIR)
+                .map_err(|error| format!("cannot remove cleanup directory {name:?}: {error}"))?;
+        } else {
+            rustix::fs::unlinkat(directory, &name, rustix::fs::AtFlags::empty())
+                .map_err(|error| format!("cannot remove cleanup entry {name:?}: {error}"))?;
+        }
+    }
+    Ok(())
 }
 
 const fn usage() -> &'static str {
@@ -1005,6 +1259,7 @@ mod tests {
 
     fn base_args(root: &Path) -> Vec<OsString> {
         let digest = "11".repeat(32);
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         [
             "--crate".into(),
             "aggregate_device".into(),
@@ -1040,7 +1295,7 @@ mod tests {
             digest.into(),
             "--".into(),
             "--manifest-path".into(),
-            "/source/Cargo.toml".into(),
+            manifest.into_os_string(),
             "--lib".into(),
         ]
         .to_vec()
