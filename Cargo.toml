@@ -128,6 +128,7 @@ fe2o3-mir-model = { path = "crates/fe2o3-mir-model" }
 fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
+fe2o3-profiler-protocol = { path = "crates/fe2o3-profiler-protocol" }
 fe2o3-protected-static-executable = { path = "crates/fe2o3-protected-static-executable" }
 fe2o3-protected-service-profile = { path = "crates/fe2o3-protected-service-profile" }
 fe2o3-protected-service-spawn = { path = "crates/fe2o3-protected-service-spawn" }

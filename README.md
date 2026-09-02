@@ -144,7 +144,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | CPU simulation | Deterministic execution of admitted canonical KIR V7, including supported helpers, barriers, workgroup memory, atomics, fences, floating point, and seeded schedule exploration |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
-| Profiling | Bounded rocprofv3 dispatch import with strict JSON/CSV admission and agent-facing observation queries; real-dispatch and ATT coverage remains incomplete |
+| Profiling | Bounded rocprofv3 dispatch import plus opt-in direct-KFD runtime lifecycle, host-staging, AQL publication/completion observations, and agent queries; rocprof real-dispatch correlation, counters, PC samples, and ATT remain incomplete |
 | Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
 | Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
 
@@ -167,7 +167,9 @@ milestones are retained in the [project status archive](docs/project-status.md).
 - ROCgdb integration is bounded by what the installed debugger exposes and is
   not a source of fe2o3 compiler or runtime authority.
 - Profiler import has not completed a protected real GPU-dispatch rocprofv3
-  round trip. ATT decoding is unavailable without a mutation-proof decoder.
+  round trip. Direct-KFD runtime observations do not imply rocprof correlation,
+  device timing, counters, PC samples, or copy-engine events. ATT decoding is
+  unavailable without a mutation-proof decoder.
 - Multi-GPU distributed kernels and communication/computation overlap are not
   a supported execution surface.
 - The compiler and protocols are evolving. Do not treat crate APIs, KIR, bundle,

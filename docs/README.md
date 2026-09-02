@@ -51,6 +51,7 @@ documentation.
 - [Debugger and profiler architecture](debugger-profiler-architecture-v1.md)
 - [Debugger and profiler task matrix](debugger-profiler-task-matrix-v1.md)
 - [Debugger and profiler qualification](debugger-profiler-qualification-v1.md)
+- [Direct-KFD runtime profiler](kfd-native-profiler-v1.md)
 - [Debugger and profiler reference archive](debugger-profiler-reference-archive-v1.md)
 - [Observed GPU target profile](observed-gpu-target-profile-v1.md)
 

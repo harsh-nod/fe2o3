@@ -104,8 +104,9 @@ authority.
 | --- | --- | --- |
 | rocprofv3 dispatch JSON/CSV import | Experimental, bounded implementation | Strict reviewed dialects, KFD identity join, bounded collector custody |
 | Dry-run collection planning | Experimental | Produces no fabricated collection recipe when prerequisites are unavailable |
+| Direct-KFD runtime observation | Experimental, MI300X-qualified slice | Opt-in bounded lifecycle, host staging, queue, AQL publication/completion, and host-monotonic timing; no device-clock or rocprof correlation claim |
 | Real GPU-dispatch round trip | Unavailable as protected qualification | Current tests use deterministic/fake collector inputs plus real KFD observation where gated |
-| Runtime/copy attribution | Incomplete | Full semantic treatment lineage remains open |
+| Runtime/copy attribution | Incomplete | Direct-KFD logical runtime and host staging are observed; device copy-engine events and full semantic treatment lineage remain unavailable |
 | ATT/thread trace import | Unavailable | Requires a mutation-proof sealed decoder route |
 | Source/IR/ISA causal localization | Incomplete | Exact artifact and source-map associations remain open |
 | Performance prediction | Out of scope | CPU simulation and profiler import make no prediction claim |
