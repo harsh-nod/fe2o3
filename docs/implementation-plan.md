@@ -100,16 +100,19 @@ runtime kernarg alignment 16 even though the COV6 descriptor records alignment
 Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open.
 
-The general initial runtime uses HIP's module API:
+Historical MVP runtime note: the original general runtime used HIP's module
+API:
 
 - `hipModuleLoad` or `hipModuleLoadData`
 - `hipModuleGetFunction`
 - `hipModuleLaunchKernel`
 - `hipMalloc`, `hipMemcpyAsync`, streams, synchronization
 
-The bounded scalar closure additionally uses a dedicated sealed HSA/ROCr
-consumer. It reuses reviewed low-level adapters but does not make that
-profile-specific join a general replacement for the HIP runtime.
+The original bounded scalar closure additionally used a dedicated sealed
+HSA/ROCr consumer. Those HIP/HSA paths are retained only behind explicit
+qualification features; they are not production fallbacks. The current
+production/default runtime direction is the pure-Rust direct-KFD and AMDGPU DRM
+UAPI composition with authenticated COV6 loading and AQL dispatch.
 
 ## IR Strategy
 

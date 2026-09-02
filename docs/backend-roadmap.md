@@ -181,8 +181,14 @@ compiler enters one unselected production transaction inside
 6. Broaden the repeatable protected hardware gates beyond the current exact
    target and kernel profiles.
 
-## Runtime ABI Assumption
+## Historical Runtime ABI Assumption
 
-The launch macro currently packs slice-like values as two HIP kernel arguments:
-device pointer then `usize` length. The compiler backend should generate matching
+The original HIP launch macro packed slice-like values as two kernel arguments:
+device pointer then `usize` length. The compiler backend generated matching
 kernel entry signatures.
+
+Current generated bindings implement the address-free
+`CompilerGeneratedKfdArguments` contract. They retain borrowed host allocations
+until the authenticated Worker V3 and direct-KFD runtime boundary materializes
+the admitted device allocation and kernarg projection. HIP/HSA argument routes
+remain qualification-only and cannot substitute for that production path.

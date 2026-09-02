@@ -1348,13 +1348,16 @@ removes the project's full target directory. External-project build and run
 orchestration are now supported, but local-clean parity remains partial because
 fe2o3 deliberately removes only its guarded `target/fe2o3` output.
 
-If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
-`rocminfo` and falls back to `gfx1100`.
+Historical command behavior tried to infer an unset `FE2O3_TARGET` from
+`rocminfo` and fell back to `gfx1100`. Current production commands instead
+require exact `FE2O3_TARGET=gfx942` or `FE2O3_TARGET=gfx950` and fail closed when
+the variable is absent or names any other profile.
 
-Each external build uses a generation identity that binds the selected target,
-backend, Worker V2 configuration, and effective Cargo configuration. A changed
-or failed generation receives fresh Cargo fingerprint state; successful
-incremental builds republish the exact generated snapshot.
+Historical external builds used a generation identity that bound the selected
+target, backend, Worker V2 configuration, and effective Cargo configuration.
+The current production composition uses only Worker V3; V1/V2 names that remain
+in the tree identify frozen records or explicit qualification surfaces rather
+than a selectable production worker.
 
 Validate the authoritative example manifest and list a lane:
 
