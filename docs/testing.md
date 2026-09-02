@@ -1,9 +1,20 @@
 # Testing fe2o3
 
 The test matrix separates target-independent checks, Verus proofs, code-object
-compilation, and hardware execution. Every pull request should run the generic
-lane. Proof, compiler, and runtime changes should also run their applicable
-lanes.
+compilation, and hardware execution. Every pull request should run the bounded
+fork-safe preflight:
+
+```text
+cargo fmt --all -- --check
+bash scripts/tests/quickstart.sh
+bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
+```
+
+Proof, compiler, runtime, and trust-policy changes should also run their
+applicable broader lanes. GitHub reports the bounded preflight first, then runs
+the full generic core and codegen shards before merge and again on protected
+push. The full matrix is intentionally hour-scale; the preflight provides the
+fast feedback path without weakening the required generic qualification.
 
 ## Generic validation
 
@@ -193,17 +204,42 @@ hardware harness, and optional parity shard have since been deleted. Those
 observations remain historical evidence and their commands are intentionally
 not current test instructions.
 
-Current host coverage uses the generic Worker V3 contract:
+Current feature-free host coverage uses the generic Worker V3 contract and the
+direct-KFD composition boundary:
 
 ```text
-cargo test --locked -p fe2o3-host --all-targets --all-features
+cargo test --locked -p fe2o3-host
 cargo test --locked -p fe2o3-host --test generated_spi_ui
-cargo test --locked -p fe2o3-host --test hsa_executable_lifecycle_ui
 cargo test --locked -p fe2o3-host --test worker_v3_verification_admission_ui
 cargo test --locked -p fe2o3-host --test production_application_handoff_ui
 cargo test --locked -p fe2o3-macros --test typed_kernel_fixtures
-cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-hooks --no-run
 ```
+
+The deprecated HIP-buffer/HSA-lifecycle surface is retained only for explicit
+qualification and differential coverage. It is absent from the default host
+dependency graph and must be selected by name:
+
+```text
+FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+  cargo test --locked -p fe2o3-host \
+    --features qualification-legacy-hip-hsa
+FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+  cargo test --locked -p fe2o3-host \
+    --features qualification-legacy-hip-hsa \
+    --test hsa_executable_lifecycle_ui
+```
+
+With a configured ROCm development installation, compile the deprecated native
+HSA/HIP qualification API and every feature-gated hardware test target without
+executing them:
+
+```text
+cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-qualification --no-run
+```
+
+This checks only that the legacy qualification surface and its test harnesses
+compile and link. It does not initialize HSA/HIP, admit a code object, or execute
+a kernel, and it is not production direct-KFD qualification.
 
 The macro fixture suite also checks the generated pure-KFD argument boundary:
 safe code cannot implement its unsafe generated trait, mutable host outputs
@@ -231,14 +267,19 @@ use KFD rather than the historical HSA harness.
 
 ## Verus proof coverage
 
-Run the two positive vecadd and fill proof harnesses plus all twelve
-expected-rejection mutations with an explicit Verus installation:
+Run the proof harnesses and expected-rejection mutations with the two exact
+Verus installations pinned by the runtime-model and MIR/PLIRON suites:
 
 ```text
-VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
+FE2O3_RUNTIME_MODEL_VERUS=/absolute/path/to/runtime-model/verus \
+VERUS=/absolute/path/to/mir-pliron/verus \
+  scripts/ci-local.sh verus
 ```
 
-This lane requires Verus; an unavailable binary is a failure rather than a
+`FE2O3_RUNTIME_MODEL_VERUS` defaults to `VERUS` for snapshots whose pin-owning
+harnesses use one release. The runtime-model and MIR/PLIRON harnesses verify
+their executable digest and version; the fixture harnesses reuse the latter
+installation. An unavailable or substituted binary is a failure rather than a
 skip. The production `f32` vecadd and Verus expand the exact same control,
 index, guarded memory-access, and write body. The three real-body mutations
 require exactly one primary Verus error, one verification result reporting one
@@ -316,11 +357,14 @@ authority closure. A retained hardware claim now requires the ordinary generic
 Worker V3 inherited application and KFD route.
 
 The host crate enforces the same split. Its feature-free build exposes the
-Worker V3 application, admission, verification, private joined KFD invocation,
-and HSA-backed generated migration route. Worker V2 application recovery,
-embedded-artifact loading,
-direct HIP module/function loading, raw parameter packing, cooperative launch,
-and workload-specific host adapters are deleted in every feature configuration.
+Worker V3 application, admission, verification, and private joined KFD
+invocation. The HSA-backed generated migration route is available only through
+the explicitly named deprecated qualification feature and cannot provide
+production launch authority. Worker V2 application recovery, embedded-artifact
+loading, direct HIP module/function loading, raw parameter packing, cooperative
+launch, and workload-specific host adapters are absent from the feature-free
+production host surface. `fe2o3-core` retains a separately named deprecated
+unsafe-launch feature strictly for qualification.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
 and runtime imports, including the retired embedded artifact contract, raw HIP
 surface, and generated vecadd `Kernel`, to guard that public API boundary. The macro fixture also

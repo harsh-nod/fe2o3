@@ -1,8 +1,9 @@
 # GPT-OSS-120B batch-1 layer-tile megakernel
 
-This tutorial is a production safe-Rust-to-gfx950 example for a bounded piece
-of one GPT-OSS-120B decode layer. It is not a whole-model megakernel and does
-not claim to run an entire transformer layer in one workgroup.
+This tutorial is a production-compiler-generated safe-Rust-to-gfx950
+qualification example for a bounded piece of one GPT-OSS-120B decode layer. It
+is not a whole-model megakernel and does not claim to run an entire transformer
+layer in one workgroup.
 
 The architecture contract is pinned to OpenAI's official `gpt-oss` repository
 at commit
@@ -59,7 +60,7 @@ attention, and one selected expert tile in the same dispatch:
 4. Attention output, expert output, and four packed seven-bit expert IDs are
    committed through disjoint output capabilities.
 
-The production runner requires exactly four
+The compiler-qualification runner requires exactly four
 `v_mfma_f32_16x16x16_bf16` sites and four
 `v_mfma_f32_16x16x128_f8f6f4` sites with the FP4 selectors. K is supplied in
 the depth-major layout consumed by the BF16 B fragment, so an LDS transpose is
@@ -80,20 +81,22 @@ Run source and CPU-oracle tests:
 cargo test --manifest-path examples/gfx950_gpt_oss_decode/Cargo.toml
 ```
 
-Build the ordinary Rust kernel through the production extractor, semantic MIR,
-Kernel IR, LLVM, COV6 HSACO, symbol-scoped ISA checks, and the HSA numerical
-test on physical GPU 6:
+Build the ordinary Rust kernel through the production compiler extractor,
+semantic MIR, Kernel IR, LLVM, COV6 HSACO, and symbol-scoped ISA checks, then
+run the deprecated HSA qualification-oracle numerical test on physical GPU 6:
 
 ```bash
 unset HIP_VISIBLE_DEVICES
 ROCR_VISIBLE_DEVICES=6 examples/gfx950_gpt_oss_decode/run-gfx950.sh
 ```
 
-The validated MI350X run checked all outputs, immutable inputs, output
+The MI350X HSA qualification run checked all outputs, immutable inputs, output
 canaries, ABI size, artifact digests, and exact `gfx950:xnack-` metadata. Its
 maximum absolute attention error was `8.940696716e-8`; expert output and packed
 top-4 IDs matched exactly. The retained fused HSACO SHA-256 is
 `1e7d249dc0c11c412d2bf2d5c4755cc16e145fedea72046b26dc09a3d1656ad2`.
+This historical oracle establishes neither a qualified direct-KFD gfx950 launch
+path nor public-runtime gfx950 execution.
 
 ## Exact admitted comparator
 
@@ -122,7 +125,7 @@ artifact.
 | Candidate | Change | VGPRs | Median dispatch | Contribution |
 | --- | --- | ---: | ---: | ---: |
 | Fused baseline | Retain all four MXFP4 accumulator fragments until the final scale-and-sum | 352 | `1.240483 ms` | Reference |
-| Fused production | Scale and consume each MXFP4 block before constructing the next fragment | 308 | `1.065242 ms` | `14.1%` lower smoke median |
+| Fused qualification candidate | Scale and consume each MXFP4 block before constructing the next fragment | 308 | `1.065242 ms` | `14.1%` lower smoke median |
 | Rejected router experiment | Replace the scalar router with padded `16x16` BF16 MFMA tiles | not retained | `2.174 ms` | `104.1%` slower than the optimized smoke result |
 
 Sequential fragment consumption removes 44 VGPRs and shortens the lifetime of
@@ -148,7 +151,7 @@ On 2026-08-29, ROCr HSA dispatch timestamps on physical GPU 6 of
 
 | Exact artifact | Samples | Median | Hierarchical bootstrap 95% CI | p5 / p95 |
 | --- | ---: | ---: | ---: | ---: |
-| Production Rust fused | 15,000 | `1.064644 ms` | `[1.064483, 1.064844] ms` | `1.059803 / 1.069283 ms` |
+| Rust fused qualification candidate | 15,000 | `1.064644 ms` | `[1.064483, 1.064844] ms` | `1.059803 / 1.069283 ms` |
 | Exact HIP router + attention + expert sum | 15,000 triplets | `0.780362 ms` | `[0.780243, 0.780482] ms` | `0.778162 / 0.783123 ms` |
 
 The exact unfused sequence is `0.7330x` the fused duration, or the fused
@@ -198,8 +201,8 @@ T_resource  = max(above)             = 188.7465 ns
 ```
 
 The bound file does not provide a BF16 peak, so omitting that term makes the
-reported floor more optimistic. The production median is about `5,641x` this
-resource floor; the comparator is about `4,134x`. These ratios do not mean
+reported floor more optimistic. The qualification median is about `5,641x`
+this resource floor; the comparator is about `4,134x`. These ratios do not mean
 either kernel can approach the bound: `T_resource` assumes full-device
 occupancy, while this tutorial launches one dependent Wave64 workgroup and has
 unmodeled scalar, transcendental, instruction-latency, and dispatch costs. No

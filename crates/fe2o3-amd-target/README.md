@@ -4,6 +4,11 @@
 an AMD target ID, such as `gfx942:sramecc+:xnack-`. It has no runtime or FFI
 dependencies and is usable without `std`.
 
+The crate also adapts reviewed AMD production profiles into
+`fe2o3-target-spec`'s target-neutral `TargetProfileSpecV1`. Generic compiler,
+proof, and host layers can commit to that portable target profile while this
+crate continues to own AMD target-ID parsing and AMD capability facts.
+
 The accepted grammar is deliberately narrow:
 
 - the processor must be a known, canonical, lowercase, concrete `gfx` name;

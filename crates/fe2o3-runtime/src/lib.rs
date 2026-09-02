@@ -6,7 +6,6 @@ mod authorized_execution;
 mod context;
 #[allow(unsafe_code)]
 mod kfd_backend;
-mod machine_structure_application;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_vecadd_v1;
 mod worker;
@@ -22,7 +21,6 @@ pub use authorized_execution::{
 pub use context::*;
 pub use fe2o3_host_api as contract;
 pub use kfd_backend::*;
-pub use machine_structure_application::*;
 pub use worker::*;
 
 use core::fmt;

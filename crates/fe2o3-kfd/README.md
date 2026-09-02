@@ -705,10 +705,11 @@ move-only receipt binds exact payload, descriptor, entry, reachable machine
 sites, encodings, widths, and memory classes, then matches those coordinates
 to a loader-prepared dispatch. The reviewed collective structure roster covers
 exact LDS read/write/permutation and workgroup-barrier spellings; all `_DPP`
-spellings are rejected. The safe structure-required runtime wrapper consumes
-the applied receipt, independent Worker V3 authority, and a checked device,
-delegates to the sole authorized dispatch transition, and returns the retained
-structure with the normal result. This is Checked machine-structure evidence.
+spellings are rejected. The safe structure-required wrapper lives in the
+integration-only `fe2o3-runtime-machine-adapter` crate. It consumes the applied
+receipt, independent Worker V3 authority, and a checked device, delegates to
+the sole authorized dispatch transition, and returns the retained structure
+with the normal result. This is Checked machine-structure evidence.
 It does not prove opcode semantics, ordering, scope, convergence, compiler
 refinement, coherence, or hardware behavior and itself grants no load or
 launch authority. KFD atomics and collectives remain code-object behavior
@@ -753,9 +754,10 @@ queue or launch implementation.
 The serial live validation ptrace-attaches a child, acknowledges target runtime
 enable, observes the real 4 KiB KFD queue through the bounded debugger snapshot,
 observes its removal after queue/event destruction, acknowledges runtime
-disable, and completes bounded detach/reap. It does not qualify wave/register
-state, source debugging, target-memory access, kernel execution under the
-debugger, timing, or performance.
+disable, and completes bounded detach/reap of that direct child leader. The
+test does not establish descendant containment. It does not qualify
+wave/register state, source debugging, target-memory access, kernel execution
+under the debugger, timing, or performance.
 
 The cooperative target-telemetry channel is a separate authority-free
 observation aid for `fe2o3-debug live-kfd`. It uses a private Unix

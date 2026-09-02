@@ -3,8 +3,9 @@
 ## Status
 
 This document defines the community-facing runtime ownership boundaries. The
-legacy protected Worker V3 dispatch remains supported, but it is no longer the
-shape applications or backend adapters should extend.
+bounded protected Worker V3 dispatch remains an internal production direction,
+but it is not yet a supported public application path. New backend work extends
+the direct-KFD boundary; HIP/HSA paths are deprecated qualification-only code.
 
 ## Dependency Direction
 
@@ -12,11 +13,17 @@ The runtime stack has one inward dependency direction:
 
 1. `fe2o3-runtime-model` owns pure executable specifications, invariant
    vocabulary, and model-only identities. It owns no native authority.
-2. `fe2o3-kfd-uapi`, `fe2o3-aql`, and native HSA bindings own wire mechanisms.
-3. KFD and HSA adapters own native resources and refine model transitions.
+2. `fe2o3-kfd-uapi` and `fe2o3-aql` own production wire mechanisms. Native HSA
+   bindings are retained only for deprecated qualification.
+3. The KFD adapter owns production native resources and implements corresponding
+   transitions that are checked separately against the model. The HSA adapter
+   exercises the same SPI only in explicit legacy qualification builds.
 4. `fe2o3-runtime` owns the public context, capability, handle, stream, memory,
    module, typed launch, event, completion, peer-copy, and backend-error API.
-5. `fe2o3-service-host` composes persistent services above the public runtime
+5. `fe2o3-runtime-machine-adapter` is an integration-only join between the
+   move-only authenticated analyzer receipt and an exact runtime prepared
+   dispatch. The host runtime does not depend on compiler-analysis objects.
+6. `fe2o3-service-host` composes persistent services above the public runtime
    boundary; it must not create a competing general-purpose runtime API.
 
 `fe2o3-host-api` remains the canonical runtime-neutral orchestration schema and
@@ -48,8 +55,10 @@ An error is classified as one of:
 - `Terminal`: native state or quiescence is ambiguous; resources remain retained
   and the backend context cannot be used again.
 
-Community applications should host KFD/HSA backends in
-`RuntimeWorkerBackendV1`. Its public handshake verifies protocol compatibility;
+Community applications should host native KFD backends in
+`RuntimeWorkerBackendV1`. The same isolation can contain deprecated HSA
+qualification code, but that is not a public runtime route. Its public
+handshake verifies protocol compatibility;
 it does not authenticate the executable, module, or host. The caller must
 select a trusted worker and provide any required artifact authority, sandbox,
 or operating-system isolation. The worker may abort for terminal ambiguity
@@ -60,16 +69,16 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The base backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, multiple serialized logical streams, and one pending compute launch. `KfdMultiDeviceRuntimeBackendV1` admits all devices before queue creation and routes one independent child per device. The lower-level gfx942 SDMA layer owns either one generic copy queue, an exact H2D/D2H targeted pair, or one exact directional native XGMI BY_ENG_ID queue. Ordinary queues admit at most 63 in-flight copies; the bounded XGMI profile admits at most 32. | Persistent compute storage is unchanged. The SDMA profile adds move-only host-coherent and HBM buffers plus per-device best-fit pools with explicit recycle and trim. Native XGMI adds PUBLIC HBM owners mapped to one canonical two-GPU roster. The routed facade still has bounded cooperative host-staged same-device and peer copies. | Same-device concurrent compute dispatches, persistent facade allocations shared with runtime-SPI SDMA/XGMI, native XGMI routing through `RuntimeContextV1`, semantically refined atomic/collective launch authority |
-| HSA | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Device-local allocation, peer copy, multi-device, atomics, collectives |
+| KFD | The direct backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, directional SDMA queues, serialized logical compute streams, and allocation-disjoint compute/copy overlap. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend uses PUBLIC HBM mapped to the exact two-GPU roster. | Concurrent compute on one device, unified compute plus native XGMI, device profiling timestamps, general atomic/collective facade operations |
+| HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
-The V1 facade's multi-device KFD router advertises peer copy only because it
-implements the complete facade contract through host staging. A single-device
-KFD child and the HSA adapter do not advertise it. Atomics and collectives are
-capability vocabulary only; V1 defines no general atomic or collective
-operation. The separate native XGMI queue is a callable low-level KFD API, not
-an implementation of the facade peer-copy SPI. These rows are not HIP/HSA
-parity.
+The V1 facade's multi-device KFD router advertises peer copy through host
+staging. The separate `KfdNativeXgmiRuntimeBackendV1` implements the same public
+peer-copy SPI with native XGMI for one exact pair, but exposes no compute or
+same-device copy operations. A single-device KFD child and the deprecated HSA
+adapter do not advertise peer copy. Atomics and collectives are capability
+vocabulary only; V1 defines no general atomic or collective operation. These
+rows are not HIP/HSA parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
 kernel metadata at resolution, and shares those immutable bytes and descriptors
@@ -80,21 +89,32 @@ native-dirty extents remain authoritative until facade readback or a later
 host-authority requirement. Staging-budget or host-allocation exhaustion is a
 pre-publication `Capacity` rejection.
 
+The direct adapter's same-device copies are native SDMA submissions. Direct
+dependency chains are capped at 256 before ledger mutation, cancellation can
+withdraw only work still waiting before publication, and a published copy is
+reported as `TooLate` until it is drained. Compute and copy can overlap only
+when their allocation sets are disjoint. The separate XGMI facade currently
+maps and unmaps both peer buffers for every copy and publishes one packet per
+submission; its low-level KFD diagnostic can retain mappings and batch one
+doorbell, but that mechanism is not yet exposed by the facade.
+
 The feature-gated gfx942 qualification lane is intentionally outside production
 authority. It re-hashes and loader-validates one repository-owned COV6 object,
 then a private KFD gate accepts only that artifact's fixed typed ABI,
-metadata-declared effects, deterministic buffer images, and geometry. The gate does not implement
-`KfdRuntimeLaunchAuthorityV1` and supplies no compiler-lineage or Worker V3
-authentication. Its HSA lane relies separately on the reviewed backend's unsafe
-construction contract after admitting the same fixture.
+metadata-declared effects, deterministic buffer images, and geometry. The gate
+does not implement `KfdRuntimeLaunchAuthorityV1` and supplies no
+compiler-lineage or Worker V3 authentication. Its deprecated HSA oracle relies
+separately on the legacy backend's unsafe construction contract after admitting
+the same fixture.
 
 ## Asynchronous Operations
 
 Typed launches associate a Rust argument type with an application-supplied,
 nonzero 32-byte signature. This creates a stable identity; it does not prove the
 native kernarg ABI or the completeness of declared memory effects. Assurance
-comes from the KFD launch authority or the HSA backend's unsafe-construction
-contract. The argument value produces an address-free kernarg image and
+comes from the KFD launch authority. Deprecated HSA qualification separately
+relies on that adapter's unsafe-construction contract. The argument value
+produces an address-free kernarg image and
 allocation-relative memory effects. Launch dependencies name exact events from
 the same device. Submissions are nonblocking and may be polled or waited against
 a monotonic deadline.
@@ -104,9 +124,9 @@ AQL grid-size fields. `workgroup` is the per-group extent. For COV6 implicit
 arguments, each block count is `grid / workgroup` and the corresponding
 remainder is `grid % workgroup`; resource admission still uses the ceiling
 number of workgroups when accounting for a partial final group. The pure
-`fe2o3-aql` geometry value derives these implicit dispatch values once; KFD,
-the legacy runtime transition, and the HSA adapter only encode that shared
-result into their owned kernarg storage.
+`fe2o3-aql` geometry value derives these implicit dispatch values once. The KFD
+adapter, protected KFD transition, and deprecated HSA qualification adapter
+only encode that shared result into their owned kernarg storage.
 
 Peer copies require two distinct peer-capable devices, an exact destination
 stream, equal nonempty source/destination ranges, and explicit event
@@ -169,9 +189,10 @@ ambiguity.
   owner pre/post fence scopes rather than recursively rescanning host topology.
 - `fe2o3-host` alias admission uses allocation-aware interval indexes. It must
   not scan all arguments of all in-flight launches for every new argument.
-- `fe2o3-hsa-runtime` indexes pending accesses by allocation, stream, and byte
-  interval and carries sparse causal frontiers. Admission must not scan every
-  pending submission or walk transitive event ancestry.
+- The deprecated `fe2o3-hsa-runtime` qualification adapter indexes pending
+  accesses by allocation, stream, and byte interval and carries sparse causal
+  frontiers. Qualification admission must not scan every pending submission or
+  walk transitive event ancestry.
 - Worker request writes and response reads share one parent-process deadline. A
   dedicated writer owns child stdin so a worker that stops reading cannot block
   the runtime thread past that deadline. Worker-backed completion waits encode
@@ -182,18 +203,20 @@ Scale benchmarks cover the maximum completion graph and large lifecycle
 journals. Regressions in asymptotic behavior are release blockers.
 
 The gfx942 runtime qualification runner compares only like-named measurement
-scopes. KFD persistent execution, HSA host-visible execution, HIP staging,
-synchronized launch/wait, and HIP device-event intervals are reported
-separately. Results from unlike scopes must not be converted into parity
+scopes. KFD persistent execution, deprecated HSA host-visible qualification,
+deprecated HIP staging oracles, synchronized launch/wait, and HIP device-event
+intervals are reported separately. Results from unlike scopes must not be converted into parity
 ratios; even the KFD/HSA/HIP synchronized rows retain different currentness,
 allocation, signal, and readback policies.
 
-## Backend Selection
+## Deprecated Qualification Backend
 
-Native HSA support is selected explicitly by Cargo feature. A stub build is
-deterministic and has no ROCm link dependency. Enabling the native feature
-requires a configured ROCm development installation and fails the build when
-the required headers or libraries are absent.
+The default `fe2o3-hsa-runtime` crate is an inert compatibility marker with no
+ROCm link dependency. Its API is restored only by the explicit
+`qualification-legacy-hsa-runtime` feature; `native-hsa` additionally enables
+the native legacy implementation. That implementation requires a configured
+ROCm development installation and fails the build when required headers or
+libraries are absent. Neither feature creates a production runtime fallback.
 
 ## Verification Boundary
 
@@ -246,12 +269,22 @@ of global/LDS integer RMW atomics and collective primitives. It binds the exact
 payload, descriptor, entry, reachable instruction bytes, opcode classes, and a
 loader-prepared dispatch. Its current collective roster covers exact LDS
 read/write/permutation and workgroup-barrier spellings; every `_DPP` spelling
-is rejected. The safe structure-required wrapper consumes the applied receipt,
-independent Worker V3 authority, and a checked device before delegating to the
-sole authorized runtime dispatch, and retains the structure in the successful
+is rejected. The safe structure-required wrapper in
+`fe2o3-runtime-machine-adapter` consumes the applied receipt, independent
+Worker V3 authority, and a checked device before delegating to the sole
+authorized runtime dispatch, and retains the structure in the successful
 result. The receipt is Checked structural evidence, not a proof of instruction
 semantics, ordering, scope, convergence, compiler preservation, or hardware
 behavior, and it grants no load or launch authority. Worker V3 remains the
 semantic and launch authority.
 The exact claim matrix is in
 [`crates/fe2o3-kfd/docs/r9-native-xgmi-machine-structure-v1.md`](../crates/fe2o3-kfd/docs/r9-native-xgmi-machine-structure-v1.md).
+
+R10 adds a closed executable model for simultaneous compute/copy state,
+dependencies, atomic batch publication, cancellation, quarantine, pool
+generation reuse, peer ownership, the bounded integer atomic vocabulary, and
+Wave64 barrier/reduction/scan collectives. Twenty additional Verus obligations
+and eleven expected-negative mutations bring the pinned totals to 101 and 71.
+Six deterministic public-runtime traces compare the executable facade against
+the closed model. These are model and differential checks, not a Rust-to-Verus,
+compiler-to-ISA, firmware, or hardware proof.

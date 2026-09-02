@@ -1,6 +1,7 @@
 [package]
 name = "reserved-fe2o3-symbols"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

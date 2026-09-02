@@ -70,6 +70,25 @@ struct CompletionSlotRecordV1 {
     phase: CompletionSlotPhaseV1,
 }
 
+fn allocate_completion_slot_records_v1()
+-> Result<Box<[CompletionSlotRecordV1; COMPLETION_SIGNAL_CAPACITY_V1]>, Gfx942CompletionErrorV1> {
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(COMPLETION_SIGNAL_CAPACITY_V1)
+        .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("completion state allocation"))?;
+    slots.resize(
+        COMPLETION_SIGNAL_CAPACITY_V1,
+        CompletionSlotRecordV1 {
+            generation: 1,
+            phase: CompletionSlotPhaseV1::Available,
+        },
+    );
+    slots
+        .into_boxed_slice()
+        .try_into()
+        .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("completion state cardinality"))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CompletionDispatchGenerationBindingV1 {
     queue: QueueKeyV1,
@@ -645,7 +664,7 @@ pub(super) struct CompletionSignalArenaOwnerV1 {
     signal_mapping: MemoryMappingKeyV1,
     gpu_base: u64,
     next_batch_id: u64,
-    slots: [CompletionSlotRecordV1; COMPLETION_SIGNAL_CAPACITY_V1],
+    slots: Box<[CompletionSlotRecordV1; COMPLETION_SIGNAL_CAPACITY_V1]>,
     phase: CompletionOwnerPhaseV1,
 }
 
@@ -674,10 +693,7 @@ impl CompletionSignalArenaOwnerV1 {
             signal_mapping: facts.mapping(),
             gpu_base: facts.gpu_va(),
             next_batch_id: 1,
-            slots: [CompletionSlotRecordV1 {
-                generation: 1,
-                phase: CompletionSlotPhaseV1::Available,
-            }; COMPLETION_SIGNAL_CAPACITY_V1],
+            slots: allocate_completion_slot_records_v1()?,
             phase: CompletionOwnerPhaseV1::Ready,
         })
     }
@@ -1568,12 +1584,16 @@ mod tests {
             signal_mapping: mapping(queue().vm, 23, 7),
             gpu_base: 0x20_0000,
             next_batch_id: 1,
-            slots: [CompletionSlotRecordV1 {
-                generation: 1,
-                phase: CompletionSlotPhaseV1::Available,
-            }; COMPLETION_SIGNAL_CAPACITY_V1],
+            slots: allocate_completion_slot_records_v1().unwrap(),
             phase: CompletionOwnerPhaseV1::Ready,
         }
+    }
+
+    #[test]
+    fn completion_owner_retains_exact_heap_cardinality_with_bounded_inline_state() {
+        let owner = owner();
+        assert_eq!(owner.slots.len(), COMPLETION_SIGNAL_CAPACITY_V1);
+        assert!(core::mem::size_of::<CompletionSignalArenaOwnerV1>() <= 128);
     }
 
     fn template(index: u64) -> CompletionPacketTemplateV1 {

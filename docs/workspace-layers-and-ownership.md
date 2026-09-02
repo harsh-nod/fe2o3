@@ -139,12 +139,12 @@ Canonical contracts own versioned records, stable identities, wire encodings,
 public compiler/host interfaces, target descriptions, and Pliron-independent
 models. The current boundaries include `fe2o3-mir-model`,
 `fe2o3-compiler-api`, `fe2o3-proof-contracts`, `fe2o3-service-model`,
-`fe2o3-host-api`, `fe2o3-amd-target`, and the existing artifact, descriptor,
-completion, invocation, compiler-lineage, and authority contracts listed in
-the machine-readable policy. A type in this layer may be canonical
-representation without being a durable wire format or an authenticated
-statement; each owning crate states which of those stronger contracts, if any,
-it provides.
+`fe2o3-host-api`, `fe2o3-target-spec`, `fe2o3-amd-target`, and the existing
+artifact, descriptor, completion, invocation, compiler-lineage, and authority
+contracts listed in the machine-readable policy. A type in this layer may be
+canonical representation without being a durable wire format or an
+authenticated statement; each owning crate states which of those stronger
+contracts, if any, it provides.
 
 This layer MUST remain independent of rustc implementation objects, Pliron
 handles or text, LLVM objects, Verus executors, HSA/HIP handles, process-local
@@ -232,10 +232,11 @@ runtime, integration drivers, or fixtures.
 
 ### Host runtime
 
-Host runtime owns allocation, launch, completion, HSA/HIP adaptation, artifact
-loading, service host typestates, and persistent-worker runtime mechanics. It
-may consume canonical, frontend, backend, and verification contracts. It MUST
-NOT depend on Pliron implementation objects, compiler drivers, or fixtures.
+Host runtime owns direct-KFD allocation, launch, completion, artifact loading,
+service host typestates, and persistent-worker runtime mechanics. Deprecated
+HSA/HIP adaptation is retained only behind explicit qualification features. The
+layer may consume canonical, frontend, backend, and verification contracts. It
+MUST NOT depend on Pliron implementation objects, compiler drivers, or fixtures.
 
 `fe2o3-service-host` is classified here because it owns the host-side service
 typestate boundary. Its target-neutral lifecycle path consumes canonical
@@ -250,13 +251,14 @@ correctness, or hardware qualification.
 backend-neutral context owns devices, streams, allocations, modules, typed
 kernels, events, asynchronous submissions, and peer copies behind stable
 context-local handles. Backend capabilities and failure classes are explicit;
-native handles and addresses do not cross the boundary. Native adapters may be
-hosted behind the bounded `RuntimeWorkerBackendV1` transport so a terminal KFD
-or HSA failure destroys the worker instead of the application process.
+native handles and addresses do not cross the boundary. Native KFD adapters may
+be hosted behind the bounded `RuntimeWorkerBackendV1` transport so a terminal
+failure destroys the worker instead of the application process. Deprecated HSA
+qualification code may use the same isolation without becoming a public route.
 
-The earlier pure-Rust `gfx942:xnack-` composition remains a protected legacy
-path in the same crate. Its safe API prepares a complete address-free request
-and has one consuming execution transition. That transition requires an unsafe
+The bounded pure-Rust `gfx942:xnack-` composition is the protected production
+direction in the same crate. Its safe API prepares a complete address-free
+request and has one consuming execution transition. That transition requires an unsafe
 Worker V3 authority implementation and independently matches the final object,
 kernel, complete invocation contract, and checked KFD device. The exact-artifact
 hardware diagnostic exercises it with a manually asserted unsafe authority; no

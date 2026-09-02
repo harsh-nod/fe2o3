@@ -75,8 +75,8 @@ refinement. Opcode names and MC load/store flags do not prove an instruction's
 mathematical effect, atomic ordering or scope, barrier convergence, high-level
 collective algorithm, compiler preservation, or hardware coherence. Accordingly the
 receipt and its prepared-dispatch binding explicitly grant neither load nor
-launch authority. `execute_machine_structure_applied_gfx942_runtime_dispatch_v1`
-consumes the result of
+launch authority. The integration-only `fe2o3-runtime-machine-adapter` owns
+`execute_machine_structure_applied_gfx942_runtime_dispatch_v1`, which consumes the result of
 `apply_gfx942_atomic_collective_machine_structure_v1`, an independently
 authorized Worker V3 value, and the checked device. It delegates to the sole
 authorized runtime dispatch transition and returns the retained structure with
@@ -95,7 +95,7 @@ require source-to-machine correspondence rather than broader string matching.
 | Abstract mapping prefixes, compensation, route currentness, copy custody, exact evidence equality, and dispatch publication predicates | **Proved** | Fourteen Verus obligations, with fifteen R9 expected-negative mutations. These are mathematical abstractions. |
 | Rust topology, mapping, queue, analyzer receipt, prepared-dispatch binding, and model rejection tests | **Checked** | Executable tests cover exact identity, range, prefix, classification, custody, and stale/substitution failures. There is no Rust-to-Verus refinement theorem. |
 | KFD ioctls, packet consumption, reset events, firmware, XGMI routing, and CPU/GPU/system coherence | **Contracted** | Frozen layouts, primary-source contracts, retained observations, and fail-closed state transitions constrain but do not prove the external system. |
-| Native correctness and performance on MI300X | **Measured** | Claimed only by a clean-commit, load-gated result produced by `benchmarks/runtime_gfx942/run-xgmi-peer-mi300x.sh`. |
+| Native correctness and performance on MI300X | **Unsupported** | No retained clean-commit, load-gated result from `benchmarks/runtime_gfx942/run-xgmi-peer-mi300x.sh` exists yet. |
 
 The cumulative Verus runner reports 81 proved obligations and 60
 expected-negative mutations. The machine checker is deliberately excluded from
@@ -114,6 +114,7 @@ formal decoder or ISA semantics proof.
    mutation tests, and source-to-machine correspondence.
 5. Retain idle, clean-commit MI300X correctness and performance measurements
    before making parity claims.
-6. Add a prepared multi-packet single-doorbell publication primitive and
-   topology-safe striping across multiple recommended XGMI engines; the current
-   bounded batch is one directional queue with one doorbell store per packet.
+6. Expose retained-mapping, multi-packet single-doorbell publication through the
+   public facade and add topology-safe striping across multiple recommended XGMI
+   engines; the current bounded batch uses one directional queue and one final
+   doorbell store per batch.

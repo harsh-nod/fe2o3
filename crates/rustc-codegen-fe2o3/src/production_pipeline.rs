@@ -50,6 +50,7 @@ pub(crate) enum ProductionPipelineError {
     SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
     SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
+    SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
     SemanticDebugMap(fe2o3_kernel_ir::SemanticDebugMapErrorV1),
     SemanticDebugFragment(fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1),
@@ -121,6 +122,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
                 "production compilation simulation debug map V2 failed: {error}"
+            ),
+            Self::SimulationDebugSourceCaptureUnavailable(gap) => write!(
+                formatter,
+                "production compilation simulation bundle V2 source-variable names and observations are incomplete ({gap:?}); explicit V2 export fails closed"
             ),
             Self::SimulationDebugMapCorrespondence(detail) => write!(
                 formatter,
@@ -242,6 +247,7 @@ impl std::error::Error for ProductionPipelineError {
             | Self::MissingMirPlironTranslationValidation
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
+            | Self::SimulationDebugSourceCaptureUnavailable(_)
             | Self::SimulationDebugMapCorrespondence(_)
             | Self::ExtractionCannotPublish
             | Self::CompilerExecutionReceiptTransportBindingMismatch
@@ -565,6 +571,7 @@ impl TargetNeutralProductionCompilation {
     ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV2, ProductionPipelineError> {
         let (lowered, bindings, prepared) =
             self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
         let debug_map = compiler_debug_source_map_v2(
             &lowered,
             &bindings.debug_source_files,
@@ -1143,6 +1150,15 @@ impl TargetLoweredProductionCompilation {
             return Err(ProductionPipelineError::CompilerExecutionReceiptTransportBindingMismatch);
         }
         Ok(subject)
+    }
+}
+
+fn require_complete_simulation_debug_source_capture_v2(
+    gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
+) -> Result<(), ProductionPipelineError> {
+    match gap {
+        None => Ok(()),
+        Some(gap) => Err(ProductionPipelineError::SimulationDebugSourceCaptureUnavailable(gap)),
     }
 }
 
@@ -2235,6 +2251,35 @@ mod tests {
             Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "V1 correspondence does not distinguish multiple KIR function bodies"
             ))
+        ));
+    }
+
+    #[test]
+    fn explicit_v2_simulation_export_requires_complete_source_capture() {
+        assert!(require_complete_simulation_debug_source_capture_v2(None).is_ok());
+
+        let error = require_complete_simulation_debug_source_capture_v2(Some(
+            fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionPipelineError::SimulationDebugSourceCaptureUnavailable(
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::
+                    SourceObservationUnrepresentable
+            )
+        ));
+        assert!(error.to_string().contains("source-variable name"));
+
+        assert!(matches!(
+            require_complete_simulation_debug_source_capture_v2(Some(
+                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit,
+            )),
+            Err(
+                ProductionPipelineError::SimulationDebugSourceCaptureUnavailable(
+                    fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit
+                )
+            )
         ));
     }
 

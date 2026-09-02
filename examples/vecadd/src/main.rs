@@ -21,21 +21,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use fe2o3_core::DeviceBuffer;
-
     const KERNEL_SOURCE: &str = include_str!("main.rs");
     const SHARED_BODY: &str = include_str!("vecadd_body.rs");
 
     #[allow(dead_code)]
     fn generated_v3_arguments_typecheck<'allocation>(
-        observed: &fe2o3_host::ObservedContext,
-        a: &'allocation DeviceBuffer<f32>,
-        b: &'allocation DeviceBuffer<f32>,
-        c: &'allocation mut DeviceBuffer<f32>,
+        a: &'allocation [f32],
+        b: &'allocation [f32],
+        c: &'allocation mut [f32],
     ) {
-        let a = fe2o3_host::__generated::GeneratedReadDeviceSlice::new(observed, a).unwrap();
-        let b = fe2o3_host::__generated::GeneratedReadDeviceSlice::new(observed, b).unwrap();
-        let c = fe2o3_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, c).unwrap();
+        let a = fe2o3_host::__generated::GeneratedKfdReadSlice::new(a);
+        let b = fe2o3_host::__generated::GeneratedKfdReadSlice::new(b);
+        let c = fe2o3_host::__generated::GeneratedKfdReadWriteSlice::new(c);
         let _arguments: super::vecadd_gpu::Arguments<'allocation> =
             super::vecadd_gpu::Arguments::new(a, b, c);
     }

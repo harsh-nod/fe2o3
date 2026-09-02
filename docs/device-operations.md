@@ -1,10 +1,15 @@
-# Device operations
+# Device operations (deprecated HIP qualification)
 
-`fe2o3-core` keeps raw pointer APIs unsafe and exposes no raw HIP module or
-launch authority to downstream builds. Kernel execution belongs to the single
-Worker V3 host/HSA pipeline. The device operation API adds a narrow safe layer
-for whole-buffer asynchronous copies. It does not schedule tasks, cancel work,
-infer kernel aliases, or authorize kernel dispatch.
+> This document describes a deprecated qualification-only surface. These APIs
+> are absent from default `fe2o3-core` builds and require the explicit
+> `qualification-legacy-hip-runtime` feature. New application and runtime work
+> uses generated host borrows and the direct-KFD path.
+
+With that legacy feature enabled, `fe2o3-core` keeps raw pointer APIs unsafe and
+exposes no raw HIP module or launch authority to downstream production builds.
+The device operation API adds a narrow qualification layer for whole-buffer
+asynchronous copies. It does not schedule tasks, cancel work, infer kernel
+aliases, or authorize Worker V3 kernel dispatch.
 
 ## Owned operations
 
@@ -83,9 +88,9 @@ which preserves stream ordering without passing null pointers to a copy call.
 
 ## Limits
 
-This layer currently covers whole-buffer H2D, D2H, and D2D copies involving
-`DeviceBuffer` and, for host transfers, `PinnedHostBuffer`. It does not yet
-retain modules and typed kernel arguments for safe asynchronous launches. It
-also cannot detect unsafe raw work submitted concurrently on another stream;
-callers of raw APIs retain their documented synchronization and aliasing
-obligations.
+This deprecated qualification layer covers whole-buffer H2D, D2H, and D2D
+copies involving `DeviceBuffer` and, for host transfers, `PinnedHostBuffer`. It
+does not retain modules and typed kernel arguments for safe asynchronous
+launches. It also cannot detect unsafe raw work submitted concurrently on
+another stream; callers of raw APIs retain their documented synchronization
+and aliasing obligations.

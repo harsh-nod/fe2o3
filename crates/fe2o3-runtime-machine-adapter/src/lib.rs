@@ -1,3 +1,6 @@
+#![deny(unsafe_code)]
+#![doc = include_str!("../README.md")]
+
 //! Exact application of a checked machine-structure receipt to a prepared dispatch.
 
 use core::fmt;
@@ -5,7 +8,7 @@ use core::fmt;
 use fe2o3_kernel_analysis::CheckedGfx942AtomicCollectiveMachineStructureV1;
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 
-use crate::{
+use fe2o3_runtime::{
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
     PreparedGfx942RuntimeDispatchV1, WorkerV3Gfx942ExecutionAuthorityV1,
     execute_authorized_gfx942_runtime_dispatch_v1,

@@ -287,9 +287,12 @@ mode for this process-isolated workflow; it is not an MCP adapter.
 `fe2o3-debug hardware -- PROGRAM [ARG...]` launches that exact argument vector
 as a ptraced child and exposes a separate bounded
 `fe2o3-hardware-debug-request-v2` JSONL protocol on standard input. The
-coordinator retains the target pidfd, owns the KFD debug-trap session on its
-spawning task, and kills and boundedly reaps the launch-owned target on EOF,
-protocol/output failure, or `terminate`. It invokes no shell, HIP, or HSA.
+coordinator retains a pidfd for the directly launched process leader, owns the
+KFD debug-trap session on its spawning task, installs leader-only
+`PTRACE_O_EXITKILL`, and on EOF, protocol/output failure, or `terminate`
+finishes KFD state before sending `SIGKILL` to and boundedly reaping that
+direct child. It does not create or contain a process group or session, adopt
+descendants, or claim descendant cleanup. It invokes no shell, HIP, or HSA.
 
 V2 provides redacted device and queue snapshots, bounded exception events,
 and queue suspend/resume after the target enables its KFD debug runtime.
@@ -315,7 +318,9 @@ classes. Admission captures and revalidates four distinct regular files,
 rejects symlinks, hard links, role aliases, changing inputs, invalid HSACO, and
 an unexecutable host. The coordinator launches through the retained executable
 descriptor and upgrades that content binding only after its owned exec stop.
-It never claims that declared HSACO bytes were loaded or executed.
+It never claims that declared HSACO bytes were loaded or executed. Its process
+ownership is likewise limited to the directly launched leader; V3 does not
+contain or clean up target descendants.
 
 The target may call
 `admit_inherited_kfd_target_debug_telemetry_v1` and send fixed-size cooperative
@@ -362,8 +367,11 @@ and memory remain separately typed unavailable with exact KFD reasons.
 The generic stopped anchor remains `session_not_stopped`, and stopped
 dispatch/workgroup/wave/lane queries remain `unsupported`. The MI300X
 live-validation test creates a real target KFD queue, observes it, suspends it,
-captures the bounded envelope, explicitly resumes it, and terminates cleanly;
-it deliberately does not load or execute its declared fixture HSACO.
+captures the bounded envelope, explicitly resumes it, then finishes
+debugger-side KFD state and sends `SIGKILL` to and reaps the directly launched
+leader. This is forced leader teardown, not graceful target queue/runtime
+shutdown or descendant containment; the test deliberately does not load or
+execute its declared fixture HSACO.
 
 ## Structured live ROCgdb protocol V3
 

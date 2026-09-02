@@ -1,6 +1,7 @@
 # Formally Verified Pure-Rust Runtime V1
 
-Status: accepted R0 architecture and trust-boundary contract for issue #137.
+Status: accepted R0 architecture and trust-boundary contract for issue #137,
+with the original migration state retained below as historical context.
 
 This document freezes the first production profile for replacing the HIP-backed
 `fe2o3-core` and reviewed ROCr/HSA adapter with a Rust implementation over the
@@ -8,9 +9,13 @@ Linux KFD and AMDGPU DRM UAPIs. It is a child workstream of #134. Persistent
 execution in #135 may use this runtime only after the applicable lifecycle,
 queue, reset, and quiescence proof gates close.
 
-This decision does not claim that the runtime exists yet. R0 fixes the boundary,
-vocabulary, crate ownership, failure rules, oracle role, and staged gates so
-later implementations cannot gain authority by weakening an assumption.
+At acceptance, this decision did not claim that the runtime existed. R0 fixed
+the boundary, vocabulary, crate ownership, failure rules, oracle role, and
+staged gates so later implementations could not gain authority by weakening an
+assumption. The current default production dependency surface now implements
+the pure-Rust direct-KFD, AMDGPU DRM, authenticated COV6, and AQL foundations.
+General Worker V3 application verification and public dispatch remain
+incomplete.
 
 ## Decision
 
@@ -44,21 +49,20 @@ fe2o3.runtime.pure-rust.gfx942.v1
 Any semantic change to this document, its proof model, or the dependency policy
 requires a new identity. Existing evidence must not be silently reinterpreted.
 
-## Current Paths and Their Limits
+## Historical Paths at R0 Acceptance
 
-`fe2o3-core` currently depends on `fe2o3-hip-sys`. Its build selects
-`libamdhip64`, and native probes compile against HIP headers. HIP owns context,
-allocation, copy, module, stream, event, and launch behavior.
+At R0 acceptance, `fe2o3-core` depended on `fe2o3-hip-sys`. Its build selected
+`libamdhip64`, and native probes compiled against HIP headers. HIP owned
+context, allocation, copy, module, stream, event, and launch behavior.
 
-`fe2o3-hsa-runtime` is a narrower reviewed path, but it is not independent of
-ROCm. Its build compiles `native/runtime.c`, includes HIP and HSA headers, and
-links both `libhsa-runtime64` and `libamdhip64`. Its direct AQL submission is
-valuable implementation evidence, but its resource creation, executable
-loading, device correlation, and ABI boundary are still delegated to native
-ROCr/HIP code.
+`fe2o3-hsa-runtime` was a narrower reviewed path, but it was not independent of
+ROCm. Its native build compiled `native/runtime.c`, included HIP and HSA
+headers, and linked both `libhsa-runtime64` and `libamdhip64`. Its direct AQL
+submission was valuable implementation evidence, but its resource creation,
+executable loading, device correlation, and ABI boundary were delegated to
+native ROCr/HIP code.
 
-Those paths remain useful during migration. They do not satisfy the new trust
-boundary because:
+Those historical paths did not satisfy the new trust boundary because:
 
 1. Their large native implementations and transitive dependencies are outside
    the Verus model.
@@ -70,6 +74,12 @@ boundary because:
    cannot prove exactly when ownership may be returned after ambiguity.
 5. Deployment and generic CI inherit ROCm installation, header, loader, and DSO
    variation even when no GPU is needed.
+
+Today, `fe2o3-core` has no default HIP dependency; its deprecated HIP surface is
+available only through `qualification-legacy-hip-runtime`. The default
+`fe2o3-hsa-runtime` crate is an inert compatibility marker, and its deprecated
+native adapter requires explicit qualification features. Neither path defines
+or can silently replace the production direct-KFD runtime.
 
 The Rust path is better for fe2o3 because it makes the proof boundary small and
 owned, not because HIP or ROCr are generally poor runtimes. HIP and ROCr retain
@@ -282,7 +292,7 @@ use these statuses without aliases:
 
 | Status | Meaning | Examples |
 |---|---|---|
-| `Proved` | Verus accepted the named theorem for the exact model and executable Rust unit, with only its recorded allowlist | allocator transition preserves unique ownership; two reservations cannot own one slot |
+| `Proved` | Verus accepted the named abstract theorem for the exact proof model, with only its recorded allowlist; this does not establish refinement to executable Rust | allocator transition preserves unique ownership; two reservations cannot own one slot |
 | `Checked` | a deterministic parser, validator, or dynamic admission check accepted exact bytes/observations | UAPI layout fixture, ELF structure, target match, descriptor bounds |
 | `ProvedUnderContract` | a Verus theorem is valid if every named external contract behaves as specified | observed terminal signal implies quiescence under the AQL completion contract |
 | `Contracted` | behavior is supplied by a versioned external component and is not proved by fe2o3 | KFD ioctl semantics, firmware packet consumption, MFMA hardware behavior |

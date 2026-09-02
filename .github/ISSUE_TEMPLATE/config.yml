@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/harsh-nod/fe2o3/security/advisories/new
+    about: Report suspected vulnerabilities privately; do not open a public issue.
+  - name: Tutorials
+    url: https://harsh-nod.github.io/fe2o3-kernels/
+    about: Read worked kernel, simulator, debugger, and profiler tutorials.

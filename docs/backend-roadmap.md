@@ -34,6 +34,10 @@ compiler enters one unselected production transaction inside
   service. Detached KIR-envelope and kernel-to-GPU lowering services were
   removed; the production compiler owns canonical KIR custody and target
   lowering without an alternate selector or fallback.
+- `fe2o3-target-spec` defines vendor-neutral target profile metadata, canonical
+  profile text, and validation for compiler, proof, and host contracts. It does
+  not parse vendor target IDs, lower target IR, detect runtime devices, or derive
+  hardware capabilities.
 - `fe2o3-amdgcn-model` now owns the existing strict AMDGPU target vocabulary
   and lowering implementation. `dialect-amdgcn` is its historical compatibility
   facade, not an implemented AMD Pliron dialect.
@@ -46,7 +50,9 @@ compiler enters one unselected production transaction inside
 - `#[kernel]` emits strict V1 registration metadata with a direct function
   pointer. The collector rejects malformed, duplicate, inconsistent, or
   unregistered prefix-only candidates transactionally.
-- `cargo-fe2o3 doctor` validates ROCm/HIP toolchain discovery.
+- Historical scaffold note: `cargo-fe2o3 doctor` originally validated
+  ROCm/HIP discovery. The current command is KFD-first, keeps compiler tools
+  separate, and treats ROCgdb/rocprofv3 as optional observation tools.
 - `cargo-fe2o3 build` builds and loads `librustc_codegen_fe2o3.so`.
 - `rustc-codegen-fe2o3` wraps `rustc_codegen_llvm` for host codegen and detects
   kernel candidates in rustc codegen units.
@@ -179,11 +185,17 @@ compiler enters one unselected production transaction inside
 6. Broaden the repeatable protected hardware gates beyond the current exact
    target and kernel profiles.
 
-## Runtime ABI Assumption
+## Historical Runtime ABI Assumption
 
-The launch macro currently packs slice-like values as two HIP kernel arguments:
-device pointer then `usize` length. The compiler backend should generate matching
+The original HIP launch macro packed slice-like values as two kernel arguments:
+device pointer then `usize` length. The compiler backend generated matching
 kernel entry signatures.
+
+Current generated bindings implement the address-free
+`CompilerGeneratedKfdArguments` contract. They retain borrowed host allocations
+until the authenticated Worker V3 and direct-KFD runtime boundary materializes
+the admitted device allocation and kernarg projection. HIP/HSA argument routes
+remain qualification-only and cannot substitute for that production path.
 
 ## Runtime R8 Status
 
@@ -252,13 +264,14 @@ rejected pending an exact reviewed roster and fixtures.
 
 The receipt binds exact payload, descriptor, entry, reachable instruction
 bytes, and primitive classifications to a loader-prepared dispatch. The safe
-structure-required execution wrapper then consumes that application together
-with independent Worker V3 authority and a checked device, delegates to the
-sole authorized runtime dispatch, and returns the retained structure with the
-completion result. The receipt remains Checked structural evidence and grants
-no load or launch authority: instruction semantics, compiler preservation,
-ordering/scope, convergence, and coherence are not proved by opcode
-classification. Worker V3 remains the semantic and launch authority.
+structure-required execution wrapper in `fe2o3-runtime-machine-adapter` then
+consumes that application together with independent Worker V3 authority and a
+checked device, delegates to the sole authorized runtime dispatch, and returns
+the retained structure with the completion result. The receipt remains Checked
+structural evidence and grants no load or launch authority: instruction
+semantics, compiler preservation, ordering/scope, convergence, and coherence
+are not proved by opcode classification. Worker V3 remains the semantic and
+launch authority.
 
 The additive R9 Verus model proves fourteen abstract mapping, compensation,
 route/copy currentness, custody, exact-evidence, and dispatch-publication
@@ -269,10 +282,39 @@ hardware correctness/performance become Measured only through the clean-commit
 idle-MI300X runner. See the
 [R9 claim boundary](../crates/fe2o3-kfd/docs/r9-native-xgmi-machine-structure-v1.md).
 
-Still open: multiple simultaneous compute dispatches on one KFD device,
+Still open at the R9 checkpoint: multiple simultaneous compute dispatches on one KFD device,
 checked multi-queue SDMA striping and same-device bidirectional overlap,
 persistent facade compute allocations shared with SDMA/XGMI, routing
 `RuntimeContextV1` peer copies through the native owners, true authenticated
 source-to-machine semantic refinement, native system-coherence evidence,
 atomic load/store machine correspondence, and broader closed
 atomic/collective language support.
+
+## Runtime R10 Status
+
+R10 adds explicit execution-detail capability discovery plus cancellation and
+drain to the public facade without changing the Worker V3 wire protocol. The
+direct KFD backend now retains pooled native host/HBM SDMA allocations, fully
+zero-initializes new HBM allocations, scrubs them before recycle, trims the
+pool at shutdown, and admits allocation-disjoint compute/copy overlap. Native
+SDMA dependency chains are bounded to 256 before publication-state mutation.
+The exact two-device XGMI backend now has a public-facade benchmark alongside
+the lower-level retained-mapping, single-doorbell diagnostic.
+
+The closed executable model covers concurrent compute/copy state, event
+dependencies, all-or-nothing batch publication, cancellation, quarantine, pool
+generations, peer ownership, exact atomic ordering/scope/fence/value records,
+and Wave64 barriers, reductions, and scans. Twenty R10 Verus obligations and
+eleven expected-negative mutations bring the pinned totals to 101 obligations
+and 71 mutations. Six deterministic public-runtime traces differentially check
+the executable facade against that model. A fail-closed report checker compares
+matched KFD rows against both HSA and HIP using caller-supplied p50/p95 latency
+and p50 bandwidth thresholds.
+
+Still open for the parity profile: concurrent compute queues on one device;
+one persistent allocation shared by compute and SDMA/XGMI; native XGMI routing
+inside the compute-capable multi-device context; persistent facade peer
+mappings and batched publication; device-clock profiling; public general
+atomic/collective operations backed by authenticated source-to-ISA refinement;
+native system-scope litmus evidence; and current clean-machine correctness and
+performance evidence. R10 does not claim HIP/HSA parity.

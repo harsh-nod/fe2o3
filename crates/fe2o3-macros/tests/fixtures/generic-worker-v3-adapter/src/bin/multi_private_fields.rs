@@ -1,9 +1,9 @@
 use generic_worker_v3_adapter_fixture::multi_argument_kernel_gpu;
 
 fn forge_arguments<'allocation>(
-    first: gpu_host::__generated::GeneratedReadDeviceSlice<'allocation, f32>,
-    second: gpu_host::__generated::GeneratedReadDeviceSlice<'allocation, f32>,
-    destination: gpu_host::__generated::GeneratedReadWriteDeviceSlice<'allocation, f32>,
+    first: gpu_host::__generated::GeneratedKfdReadSlice<'allocation, f32>,
+    second: gpu_host::__generated::GeneratedKfdReadSlice<'allocation, f32>,
+    destination: gpu_host::__generated::GeneratedKfdReadWriteSlice<'allocation, f32>,
 ) -> multi_argument_kernel_gpu::Arguments<'allocation> {
     multi_argument_kernel_gpu::Arguments {
         first,

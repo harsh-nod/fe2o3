@@ -1,25 +1,24 @@
 use fe2o3_host::{
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentLayoutError,
-    GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
-    GeneratedWorkerV3ArgumentBindingV1,
+    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKfdArguments,
+    CompilerGeneratedKernelExpectationV1, GeneratedArgumentLayoutError,
+    GeneratedArgumentPackingPlanV1, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
 };
 
 struct SafeArguments;
 
-impl<'allocation, K> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K> for SafeArguments
+impl<'allocation, K> CompilerGeneratedKfdArguments<'allocation, K> for SafeArguments
 where
     K: CompilerGeneratedKernelExpectationV1,
 {
-    fn generated_argument_layout_v1(
+    fn generated_argument_layout(
     ) -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError> {
         unimplemented!()
     }
 
-    fn bind_arguments_v1(
-        &self,
+    fn bind_kfd_arguments(
+        self,
         _plan: &GeneratedArgumentPackingPlanV1,
-    ) -> Result<GeneratedWorkerV3ArgumentBindingV1<'allocation>, GeneratedArgumentPackError> {
+    ) -> Result<GeneratedKfdArgumentBinding<'allocation>, GeneratedKfdArgumentError> {
         unimplemented!()
     }
 }

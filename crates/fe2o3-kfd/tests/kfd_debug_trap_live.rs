@@ -317,10 +317,7 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
     command
         .args(["--exact", "live_target_helper", "--nocapture"])
         .env(HELPER_ENV, "1")
-        // Queue composition initializes the full gfx942 CWSR geometry. Give
-        // the isolated libtest worker a fixed stack instead of inheriting the
-        // platform's smaller test-thread default.
-        .env("RUST_MIN_STACK", "16777216")
+        .env_remove("RUST_MIN_STACK")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
@@ -344,8 +341,7 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
     }
     let child = command.spawn().unwrap();
     let mut child = ChildGuard(Some(child));
-    let deadline = Instant::now() + WAIT_BOUND;
-    wait_for_stop(child.child(), deadline);
+    wait_for_stop(child.child(), Instant::now() + WAIT_BOUND);
 
     let runtime_mask =
         KfdDebugExceptionMaskV1::from_code(KfdDebugTrapExceptionCodeV1::ProcessRuntime);
@@ -382,9 +378,13 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
     let subscribed = KfdDebugExceptionMaskV1::new(runtime_mask.bits() | queue_new.bits()).unwrap();
     session.set_exceptions(subscribed).unwrap();
     continue_tracee(child.child());
-    acknowledge_runtime_state(&mut session, KfdDebugRuntimeStateV1::Enabled, deadline);
-    wait_for_stop(child.child(), deadline);
-    let queue = wait_for_one_queue(&mut session, queue_new, deadline);
+    acknowledge_runtime_state(
+        &mut session,
+        KfdDebugRuntimeStateV1::Enabled,
+        Instant::now() + WAIT_BOUND,
+    );
+    wait_for_stop(child.child(), Instant::now() + WAIT_BOUND);
+    let queue = wait_for_one_queue(&mut session, queue_new, Instant::now() + WAIT_BOUND);
     assert_eq!(queue.queue_id(), 0);
     assert_eq!(queue.ring_size(), 4096);
     // Depending on whether QueueNew publication raced the snapshot's clear,
@@ -443,7 +443,7 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
 
     continue_group_stopped_tracee(child.child());
     release_helper(child.child());
-    wait_for_stop(child.child(), deadline);
+    wait_for_stop(child.child(), Instant::now() + WAIT_BOUND);
     assert!(
         session
             .queue_snapshot(KfdDebugExceptionMaskV1::NONE)
@@ -453,8 +453,12 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
 
     continue_group_stopped_tracee(child.child());
     release_helper(child.child());
-    acknowledge_runtime_state(&mut session, KfdDebugRuntimeStateV1::Disabled, deadline);
-    wait_for_stop(child.child(), deadline);
+    acknowledge_runtime_state(
+        &mut session,
+        KfdDebugRuntimeStateV1::Disabled,
+        Instant::now() + WAIT_BOUND,
+    );
+    wait_for_stop(child.child(), Instant::now() + WAIT_BOUND);
     session.finish().unwrap();
     detach_tracee(child.child());
     release_helper(child.child());

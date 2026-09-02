@@ -1,12 +1,22 @@
-#![doc = include_str!("../README.md")]
+//! Deprecated HSA/HIP qualification adapter.
+//!
+//! Production fe2o3 applications use the direct-KFD runtime. Enable
+//! `qualification-legacy-hsa-runtime` only to exercise the compatibility
+//! surface during its deprecation window.
 
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 mod api;
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 mod backend;
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 mod dispatch;
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 mod environment;
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 mod lifecycle;
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 mod sys;
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-legacy-hsa-runtime"))]
 mod test_process_execution {
     use std::io;
     use std::process::{Command, ExitStatus};
@@ -16,21 +26,28 @@ mod test_process_execution {
             .and_then(|mut child| child.wait())
     }
 }
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 pub use backend::{ReviewedHsaRuntimeBackendErrorV1, ReviewedHsaRuntimeBackendV1};
 #[cfg(feature = "hardware-test-hooks")]
 pub use dispatch::{
     ReviewedHsaHardwareTestBufferV1, ReviewedHsaProfiledDispatchObservationV1,
     ReviewedHsaProfiledDispatchSessionV1,
 };
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 pub use environment::{HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};
+#[cfg(feature = "qualification-legacy-hsa-runtime")]
 pub use lifecycle::{ReviewedHsaExecutableV1, ReviewedHsaKernelSetV1, ReviewedHsaKernelV1};
 
 /// Whether the explicitly selected native HSA backend is compiled into this build.
 ///
 /// Enabling `native-hsa` validates the required headers and libraries during the
-/// build, so a successful native build always reports `true`. The default stub
-/// build reports `false` without inspecting the build host.
-pub const HSA_RUNTIME_AVAILABLE: bool = cfg!(feature = "native-hsa");
+/// build, so a successful native qualification build always reports `true`.
+/// The default inert compatibility marker reports `false` without inspecting
+/// the build host.
+pub const HSA_RUNTIME_AVAILABLE: bool = cfg!(all(
+    feature = "qualification-legacy-hsa-runtime",
+    feature = "native-hsa"
+));
 
 #[cfg(test)]
 mod backend_selection_tests {

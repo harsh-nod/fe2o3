@@ -2429,6 +2429,7 @@ fn is_kernel_meta(meta: &Meta) -> bool {
     };
     let mut typed = false;
     let mut namespace = false;
+    let mut launch = false;
     for argument in arguments {
         match argument {
             Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
@@ -2443,6 +2444,11 @@ fn is_kernel_meta(meta: &Meta) -> bool {
                     return false;
                 }
                 namespace = true;
+            }
+            Meta::List(value)
+                if value.path.is_ident("launch") && !launch && !value.tokens.is_empty() =>
+            {
+                launch = true;
             }
             _ => return false,
         }
@@ -3508,6 +3514,12 @@ pub fn invalid_namespace() {}
 #[kernel(typed, other = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")]
 pub fn unknown_option() {}
 
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+pub fn launched() {}
+
 #[kernel]
 pub fn ordinary() {}
 
@@ -3543,6 +3555,7 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
                 "alpha.hsaco",
                 "beta.hsaco",
                 "configured.hsaco",
+                "launched.hsaco",
                 "namespaced.hsaco",
                 "nested.hsaco",
                 "ordinary.hsaco",

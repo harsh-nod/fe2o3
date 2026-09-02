@@ -1,28 +1,41 @@
 [package]
 name = "fe2o3-hsa-runtime"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Reviewed direct-HSA runtime adapter for the fe2o3 production Worker V3 pipeline."
+description = "Deprecated HSA/HIP runtime adapter retained for explicit fe2o3 qualification."
 
 [features]
-# Default builds are deterministic stubs and never inspect the build host for ROCm.
 default = []
-native-hsa = []
+# The default crate is an inert compatibility marker. This explicit feature
+# restores the deprecated HSA/HIP API for qualification only.
+qualification-legacy-hsa-runtime = [
+    "dep:fe2o3-amd-target",
+    "dep:fe2o3-aql",
+    "dep:fe2o3-artifacts",
+    "dep:fe2o3-core",
+    "dep:fe2o3-host",
+    "dep:fe2o3-runtime",
+    "dep:sha2",
+    "fe2o3-core/qualification-legacy-hip-runtime",
+    "fe2o3-host/qualification-legacy-hip-hsa",
+]
+native-hsa = ["qualification-legacy-hsa-runtime"]
 hardware-test-hooks = ["native-hsa", "fe2o3-host/hardware-test-hooks"]
 # Exact repository-owned gfx942 runtime fixture and opt-in facade qualification.
 hardware-qualification = ["hardware-test-hooks", "fe2o3-runtime/hardware-qualification"]
 
 [dependencies]
-fe2o3-amd-target.workspace = true
-fe2o3-aql.workspace = true
-fe2o3-artifacts.workspace = true
-fe2o3-core.workspace = true
-fe2o3-host.workspace = true
-fe2o3-runtime.workspace = true
-sha2.workspace = true
+fe2o3-amd-target = { workspace = true, optional = true }
+fe2o3-aql = { workspace = true, optional = true }
+fe2o3-artifacts = { workspace = true, optional = true }
+fe2o3-core = { workspace = true, optional = true }
+fe2o3-host = { workspace = true, optional = true }
+fe2o3-runtime = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [build-dependencies]
 cc = "1"
@@ -45,3 +58,43 @@ trybuild = "1"
 
 [lib]
 name = "fe2o3_hsa_runtime"
+
+[[test]]
+name = "authority_ui"
+path = "tests/authority_ui.rs"
+required-features = ["qualification-legacy-hsa-runtime"]
+
+[[test]]
+name = "gfx942_runtime_context_hardware"
+path = "tests/gfx942_runtime_context_hardware.rs"
+required-features = ["hardware-qualification"]
+
+[[test]]
+name = "gfx942_scalar_gemm_hardware"
+path = "tests/gfx942_scalar_gemm_hardware.rs"
+required-features = ["hardware-qualification"]
+
+[[test]]
+name = "gfx950_advanced_hardware"
+path = "tests/gfx950_advanced_hardware.rs"
+required-features = ["hardware-qualification"]
+
+[[test]]
+name = "gfx950_attention_hardware"
+path = "tests/gfx950_attention_hardware.rs"
+required-features = ["hardware-qualification"]
+
+[[test]]
+name = "gfx950_fp4_gemm_hardware"
+path = "tests/gfx950_fp4_gemm_hardware.rs"
+required-features = ["hardware-qualification"]
+
+[[test]]
+name = "gfx950_fp8_gemm_hardware"
+path = "tests/gfx950_fp8_gemm_hardware.rs"
+required-features = ["hardware-qualification"]
+
+[[test]]
+name = "tiled_gemm_v1_hardware"
+path = "tests/tiled_gemm_v1_hardware.rs"
+required-features = ["hardware-qualification"]

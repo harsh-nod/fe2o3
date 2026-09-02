@@ -40,13 +40,28 @@ members = [
     "examples/vecadd_f64",
     "examples/verus_vecadd",
 ]
+default-members = [
+    "crates/cargo-fe2o3",
+    "crates/fe2o3-device",
+    "crates/fe2o3-host",
+    "crates/fe2o3-kir-sim-cli",
+    "examples/fill",
+    "examples/vecadd",
+]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/fe2o3-gpu/fe2o3"
+repository = "https://github.com/harsh-nod/fe2o3"
 rust-version = "1.94"
+
+[workspace.metadata.fe2o3-release]
+canonical-repository = "https://github.com/harsh-nod/fe2o3"
+mirror-repository = "https://github.com/powderluv/fe2o3"
+protected-parity-design-repository = "https://github.com/powderluv/fe2o3"
+distribution = "source-developer-preview"
+crates-io-publish = false
 
 [workspace.dependencies]
 dialect-amdgcn = { path = "crates/dialect-amdgcn" }
@@ -129,6 +144,7 @@ fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
 fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
 fe2o3-source-isa-observation = { path = "crates/fe2o3-source-isa-observation" }
+fe2o3-target-spec = { path = "crates/fe2o3-target-spec" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }
 reserved-fe2o3-symbols = { path = "crates/reserved-fe2o3-symbols" }
 rustc-codegen-fe2o3 = { path = "crates/rustc-codegen-fe2o3" }

@@ -1,6 +1,6 @@
 use std::fs::{self, File};
 use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -196,21 +196,25 @@ impl SealedCapabilityImage {
             ));
         }
 
-        let source_floor = child_fd
-            .checked_add(1)
-            .ok_or_else(|| format!("{} child descriptor is too large", self.role.name))?;
-        let source = rustix::io::fcntl_dupfd_cloexec(&self.image, source_floor)
+        let reserved = rustix::io::fcntl_dupfd_cloexec(&self.image, child_fd)
             .map_err(|error| format!("cannot retain {} for child: {error}", self.role.name))?;
+        if reserved.as_raw_fd() != child_fd {
+            return Err(format!(
+                "reserved {} descriptor {child_fd} was concurrently claimed",
+                self.role.name
+            ));
+        }
         let device = self.device;
         let inode = self.inode;
         let length = self.length as i64;
-        // SAFETY: `source` is owned by the registered callback, remains open through every spawn,
-        // and all callback operations are async-signal-safe descriptor syscalls.
+        // SAFETY: `reserved` occupies the exact target descriptor until the command is dropped,
+        // remains open through every spawn, and every callback operation is an async-signal-safe
+        // descriptor syscall.
         unsafe {
             command.pre_exec(move || {
-                if rustix::fs::fcntl_get_seals(&source).map_err(std::io::Error::from)?
+                if rustix::fs::fcntl_get_seals(&reserved).map_err(std::io::Error::from)?
                     != REQUIRED_SEALS
-                    || !rustix::io::fcntl_getfd(&source)
+                    || !rustix::io::fcntl_getfd(&reserved)
                         .map_err(std::io::Error::from)?
                         .contains(rustix::io::FdFlags::CLOEXEC)
                 {
@@ -218,7 +222,7 @@ impl SealedCapabilityImage {
                         rustix::io::Errno::PERM.raw_os_error(),
                     ));
                 }
-                let stat = rustix::fs::fstat(&source).map_err(std::io::Error::from)?;
+                let stat = rustix::fs::fstat(&reserved).map_err(std::io::Error::from)?;
                 if stat.st_mode != libc::S_IFREG | 0o400
                     || stat.st_size != length
                     || stat.st_dev != device
@@ -228,16 +232,8 @@ impl SealedCapabilityImage {
                         rustix::io::Errno::STALE.raw_os_error(),
                     ));
                 }
-                let installed = rustix::io::fcntl_dupfd_cloexec(&source, child_fd)
+                rustix::io::fcntl_setfd(&reserved, rustix::io::FdFlags::empty())
                     .map_err(std::io::Error::from)?;
-                if installed.as_raw_fd() != child_fd {
-                    return Err(std::io::Error::from_raw_os_error(
-                        rustix::io::Errno::BUSY.raw_os_error(),
-                    ));
-                }
-                rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
-                    .map_err(std::io::Error::from)?;
-                let _ = installed.into_raw_fd();
                 Ok(())
             });
         }

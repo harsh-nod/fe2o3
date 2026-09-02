@@ -1,6 +1,7 @@
 [package]
 name = "cargo-fe2o3"
 version = "0.1.0"
+publish = false
 default-run = "cargo-fe2o3"
 edition.workspace = true
 license.workspace = true
@@ -17,6 +18,8 @@ worker-v3-envelope-integration-test-only = [
     "application-handoff-fault-injection-test-only",
     "dep:fe2o3-core",
     "dep:fe2o3-hsa-runtime",
+    "fe2o3-core/qualification-legacy-hip-runtime",
+    "fe2o3-hsa-runtime/qualification-legacy-hsa-runtime",
     "fe2o3-host/worker-v3-verifier-test-support",
     "worker-v3-host-consumer-fixture",
 ]
@@ -37,6 +40,7 @@ fe2o3-hsa-runtime = { workspace = true, optional = true }
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-host = { workspace = true, optional = true }
+fe2o3-kfd.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-process-identity.workspace = true

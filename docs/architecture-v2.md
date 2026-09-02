@@ -7,10 +7,11 @@ the current implementation. Sections that describe an incomplete general form
 are explicit about that status. Historical commit-specific checkpoints belong
 in milestone documents and receipts, not in this living overview.
 
-The v2 architecture preserves the working AMD runtime and artifact path while
-replacing the expression recognizer with a general compiler pipeline. It also
+The v2 architecture converges the AMD artifact and direct-KFD runtime path with
+a general compiler pipeline that replaces the expression recognizer. It also
 adds a source-level verification path without placing the compiler inside the
-Verus trust claim.
+Verus trust claim. Deprecated HIP/HSA code is retained only for explicit
+qualification and is not a production fallback.
 
 Related documents:
 
@@ -286,7 +287,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   execution evidence, live cgroup teardown evidence, and distinct-UID service
   qualification, so it is not yet
   production-qualified.
-- Versioned artifact, descriptor, durable-publication, and HSA records exist.
+- Versioned artifact, descriptor, durable-publication, and deprecated HSA
+  qualification records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
   authorization, or dispatch authority.
@@ -305,7 +307,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact compiler stages, reimports the nested signed aggregate
   MIR-to-live-PLIRON receipt under its embedded key, checks its PLIRON identity
   against middle-end V5, and retains that move-only owner beside signed
-  compiler-currentness evidence throughout the HSA lifecycle. Host admission
+  compiler-currentness evidence throughout the protected KFD invocation
+  lifecycle. Host admission
   and the protected verifier also independently reconstruct the exact compact
   finalizer derivation; the accepted decision retains the verifier-owned result
   and rejects a foreign derivation even when the finalized HSACO bytes match.
@@ -395,8 +398,7 @@ infrastructure has landed and which production stages remain reserved.
 - Hiding target-specific operations behind misleadingly portable names.
 - Requiring every kernel to be verified. Checked and explicitly unsafe kernels
   remain supported and are visibly distinguished.
-- Replacing the working HIP runtime before the v2 compiler can run existing
-  examples.
+- Preserving HIP or HSA as a production fallback for the direct-KFD runtime.
 
 ## One Source, Three Consumers
 
@@ -469,14 +471,15 @@ proof binding for each entry.
 
 Host admission can select either compiler-generated kernel marker while
 retaining the exact artifact, executable, target, physical layout, effects,
-and launch identities. The HSA adapter can resolve a fixed set of distinct
-symbols and returns a non-clone set that borrows the executable, preventing
-safe unload while any selected native kernel is retained.
+and launch identities. At this historical checkpoint, the now-deprecated HSA
+qualification adapter resolved a fixed set of distinct symbols and returned a
+non-clone set that borrowed the executable, preventing safe unload while any
+selected native kernel was retained.
 
 The boundary is intentionally incomplete. The second host selection is inert,
-the HSA set establishes native identity rather than typed ABI authority, and
-dispatch still uses the exact vecadd physical layout and hidden-argument
-initializer. The checkpoint therefore demonstrates a multi-kernel compiler,
+the historical HSA set establishes native identity rather than typed ABI
+authority, and dispatch still uses the exact vecadd physical layout and
+hidden-argument initializer. The checkpoint therefore demonstrates a multi-kernel compiler,
 artifact, selection, and lifecycle spine, not general safe multi-kernel
 execution or cuda-oxide parity.
 
@@ -496,22 +499,24 @@ continue to point downward according to the machine-checked
 | `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`, `dialect-proof`, `dialect-dispatch`, `dialect-autotune` | Bounded target-neutral Pliron representation shells | Target legalization, compiler selection, proof or runtime authority |
 | Production KIR custody | Canonical KIR remains owned by the sole compiler transaction | Accepting detached raw Pliron modules, reconstructing KIR from text, target or artifact authority |
 | `fe2o3-lower-mir-kernel` | Narrow deterministic MIR-to-kernel conformance service with context-bound results and terminal unsupported errors | In-tree Pliron pass semantics, production selection, AMD lowering, artifact production, fallback |
+| `fe2o3-target-spec` | Vendor-neutral target profile metadata, canonical profile text, and validation shared by compiler, proof, and host contracts | Vendor target-ID parsing, target lowering, runtime detection, or capability derivation |
 | `fe2o3-amd-target` | Canonical AMD target identities, features, and capability contracts | Compiler execution and runtime observation |
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
 | `fe2o3-compiler-api` | Target-neutral request, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-execution-protocol`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, inert execution-attestation records, sealed closure/invocation/policy/launch coordination, move-only sealed signing-key custody, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, signing operations, receipt issuance, or load/launch authority |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
-| `fe2o3-host` | Generated Worker V3 arguments, verifier admission, argument ownership, the private joined KFD invocation authority, and the HSA-backed migration implementation | MIR inspection, target lowering, verifier proof production, or raw launch authority |
+| `fe2o3-host` | Generated direct-KFD Worker V3 arguments, verifier admission, argument ownership, and the private joined KFD invocation authority; deprecated HIP-buffer/HSA-lifecycle code is explicit qualification only | MIR inspection, target lowering, verifier proof production, or raw launch authority |
 | `fe2o3-runtime` | Sole safe pure-KFD composition boundary, invocation identity, authority matching, effect-preserving completed buffers, and terminal execution policy | Constructing Worker V3 proof authority or accepting caller-asserted descriptive identities |
-| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, and capability observations; the default/production surface keeps raw module and launch mechanics private, while `qualification-unsafe-launch` is currently enabled only by the checked-in standalone external-HSACO numerical examples | Kernel type discovery, Worker V3 publication, protected execution, artifact-currentness, or downstream production raw-launch authority |
+| `fe2o3-core` | Device representation contracts on its default surface; deprecated HIP resource wrappers, streams, events, buffers, and observations only behind `qualification-legacy-hip-runtime`, with `qualification-unsafe-launch` retained for checked-in external-HSACO qualification examples | Kernel type discovery, Worker V3 publication, protected execution, artifact-currentness, or downstream production raw-launch authority |
 | `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
 | `fe2o3-service-model`, `fe2o3-service-host` | Executable-free service semantics and authority-free borrow-retaining host typestates | Persistent execution, runtime waits, progress proof, storage-release authority |
 | `fe2o3-contracts`, `fe2o3-proof-contracts` | Shared launch/spec vocabulary, erased proof markers, and solver-neutral property records | Solving proofs, code generation, proof promotion |
 | `fe2o3-verifier` | Verus invocation, policy checks, proof manifest creation | Claiming compiler correctness |
 | `cargo-fe2o3` | Build graph orchestration, tool discovery, cache keys, inspection commands | Semantic lowering logic |
 
-`fe2o3-hip-sys` remains the narrow raw FFI layer. The current
+`fe2o3-hip-sys` remains a narrow raw FFI layer for deprecated explicit
+qualification only. The current
 `rustc-codegen-fe2o3` can host adapters while the new layers are introduced,
 but it is not the permanent owner of host compilation. At this checkpoint it
 still owns the working production compiler composition; the new compiler
@@ -757,9 +762,9 @@ The concrete type names may evolve, but these ownership rules do not:
    handoff lineage before verification begins, but carries no physical device
    identity. Verification proves a theorem for the admitted target rather than
    one observed device. The KFD application transition consumes the exact
-   checked physical device only when invocation authority is created; the
-   temporary HSA migration route separately owns its HIP observation at HSA
-   authorization.
+   checked physical device only when invocation authority is created. The
+   deprecated HSA qualification route separately owns its HIP observation at
+   HSA authorization and cannot supply production authority.
 2. Authentication binds one generated expectation to the recovered compiler,
    proof, effect, and executable evidence. Invocation authorization consumes
    that exact decision; no intermediate authority is cloneable or
@@ -772,9 +777,9 @@ The concrete type names may evolve, but these ownership rules do not:
    explicitly little-endian, leaves pointer fields zero until KFD allocation,
    derives fixup offsets from the admitted physical components, and retains
    exclusive output borrows through validated completion. It cannot be
-   substituted for the HSA specialization and grants no execution authority by
-   itself; only the joined transition can construct the private runtime
-   authority.
+   substituted for the deprecated HSA qualification specialization and grants
+   no execution authority by itself; only the joined transition can construct
+   the private runtime authority.
 4. The runtime initializes only the loader-inspected implicit COV6 region and
    verifies the complete kernarg size/alignment, selected descriptor, and
    static-plus-dynamic resources. It knows no Rust signature; the generated
@@ -887,8 +892,9 @@ general memory-safety, or race-freedom claim.
 - every legacy raw or typed-prepared launch surface with generated Worker V3
   host-memory arguments admitted by the one application verifier and pure-KFD
   runtime graph;
-- the HSA-backed Worker V3 load/dispatch migration implementation with the
-  invocation-specific pure-KFD authority transition.
+- remaining deprecated HSA-backed Worker V3 load/dispatch qualification code;
+  the invocation-specific pure-KFD authority transition is the sole production
+  direction.
 
 ### Redesign
 

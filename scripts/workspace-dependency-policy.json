@@ -40,6 +40,7 @@
         "fe2o3-service-model",
         "fe2o3-source-isa-observation",
         "fe2o3-static-preexec-manifest",
+        "fe2o3-target-spec",
         "reserved-fe2o3-symbols"
       ]
     },
@@ -125,6 +126,7 @@
         "fe2o3-semantic-query",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
+        "fe2o3-runtime-machine-adapter",
         "rustc-codegen-fe2o3"
       ]
     },

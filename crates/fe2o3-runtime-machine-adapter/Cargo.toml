@@ -1,0 +1,17 @@
+[package]
+name = "fe2o3-runtime-machine-adapter"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Integration-only join between authenticated machine analysis and fe2o3 runtime dispatch."
+
+[lib]
+name = "fe2o3_runtime_machine_adapter"
+
+[dependencies]
+fe2o3-kernel-analysis = { workspace = true, features = ["authenticated-machine-effect"] }
+fe2o3-kfd.workspace = true
+fe2o3-runtime.workspace = true
