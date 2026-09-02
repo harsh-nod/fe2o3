@@ -34,6 +34,10 @@ compiler enters one unselected production transaction inside
   service. Detached KIR-envelope and kernel-to-GPU lowering services were
   removed; the production compiler owns canonical KIR custody and target
   lowering without an alternate selector or fallback.
+- `fe2o3-target-spec` defines vendor-neutral target profile metadata, canonical
+  profile text, and validation for compiler, proof, and host contracts. It does
+  not parse vendor target IDs, lower target IR, detect runtime devices, or derive
+  hardware capabilities.
 - `fe2o3-amdgcn-model` now owns the existing strict AMDGPU target vocabulary
   and lowering implementation. `dialect-amdgcn` is its historical compatibility
   facade, not an implemented AMD Pliron dialect.

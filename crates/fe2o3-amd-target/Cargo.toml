@@ -10,3 +10,6 @@ publish = false
 
 [lib]
 name = "fe2o3_amd_target"
+
+[dependencies]
+fe2o3-target-spec.workspace = true

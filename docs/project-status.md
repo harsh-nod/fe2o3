@@ -636,10 +636,13 @@ target lowering, and host execution into explicit ownership boundaries:
   The former detached KIR-envelope, kernel-to-GPU, and parallel
   AMDGPU-to-LLVM shells were removed because they were not production routes.
   No workload selector or alternate lowering fallback remains.
-- Target model and facades: `fe2o3-amd-target` owns canonical AMD target
-  contracts. The existing strict AMDGPU lowering implementation moved to
-  `fe2o3-amdgcn-model`; `dialect-amdgcn` now preserves the historical crate API
-  by re-exporting that model and is not yet an `amdgcn.*` Pliron dialect.
+- Target model and facades: `fe2o3-target-spec` owns vendor-neutral target
+  profile metadata and canonical profile text for compiler, proof, and host
+  contracts. `fe2o3-amd-target` owns canonical AMD target contracts and adapts
+  reviewed AMD production profiles into that neutral shape. The existing strict
+  AMDGPU lowering implementation moved to `fe2o3-amdgcn-model`;
+  `dialect-amdgcn` now preserves the historical crate API by re-exporting that
+  model and is not yet an `amdgcn.*` Pliron dialect.
 - Host and service boundaries: `fe2o3-core`, `fe2o3-host`,
   `fe2o3-hsa-runtime`, and `fe2o3-hip-sys` own the existing executable runtime.
   `fe2o3-service-host` is a `no_std` typestate adapter over

@@ -195,6 +195,8 @@ authority. The backend fixture is not Rust user source.
 - The detached KIR-envelope and kernel-to-GPU services are retired. Canonical
   KIR custody and generic lowering remain inside the sole production
   transaction.
+- `fe2o3-target-spec`: vendor-neutral target profile metadata, canonical text,
+  and validation shared by compiler, proof, and host contracts.
 - `fe2o3-amdgcn-model`: existing AMDGPU intrinsic and strict lowering model.
 - `dialect-amdgcn`: historical compatibility re-export; not yet an AMD Pliron
   dialect.

@@ -499,6 +499,7 @@ continue to point downward according to the machine-checked
 | `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`, `dialect-proof`, `dialect-dispatch`, `dialect-autotune` | Bounded target-neutral Pliron representation shells | Target legalization, compiler selection, proof or runtime authority |
 | Production KIR custody | Canonical KIR remains owned by the sole compiler transaction | Accepting detached raw Pliron modules, reconstructing KIR from text, target or artifact authority |
 | `fe2o3-lower-mir-kernel` | Narrow deterministic MIR-to-kernel conformance service with context-bound results and terminal unsupported errors | In-tree Pliron pass semantics, production selection, AMD lowering, artifact production, fallback |
+| `fe2o3-target-spec` | Vendor-neutral target profile metadata, canonical profile text, and validation shared by compiler, proof, and host contracts | Vendor target-ID parsing, target lowering, runtime detection, or capability derivation |
 | `fe2o3-amd-target` | Canonical AMD target identities, features, and capability contracts | Compiler execution and runtime observation |
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
