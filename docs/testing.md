@@ -30,6 +30,7 @@ The issue #216 virtual-runtime slice has focused no-GPU coverage:
 cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
 cargo test --locked -p fe2o3-sim-differential
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
+cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0
 cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --all-targets -- -D warnings
 cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --no-deps
 scripts/ci-local.sh workspace-policy
@@ -49,13 +50,21 @@ operation, terminator, profile, and scalar operation/type combination. The
 matrix marks these as declared tool-contract facts with `authority: none`; its
 newline-terminated compact JSON is fixed at 4,698,338 bytes.
 
-The generic lane also translates 256 deterministic wrapping-`i32` programs
-from the independent `fe2o3-differential` model into admitted KIR V7, executes
-them in the simulator, and compares every lane. Its stable JSON digest binds
-the generator configuration, exact cases, KIR identities, and observations.
-Failures retain a deterministic, class-preserving reduced reproducer. This is
-model agreement with `authority: none`, not physical-GPU parity or performance
-evidence. Encoded responses fail closed above the compiled 1 MiB limit.
+The generic lane translates 256 deterministic wrapping-`i32` programs from the
+independent `fe2o3-differential` model into admitted KIR V7, executes them in
+the simulator, and compares every lane. It then runs the fixed-size V2 semantic
+family corpus over every admitted fixed-width integer type, both admitted
+target `index` widths, `bool`, exact
+finite additions for all four admitted float storage types, multi-block CFG and
+internal-call execution, global memory, overlapping shared views, and typed
+bounds/initialization/undefined-operation rejections. Stable JSON digests bind
+the exact cases, KIR identities, expected bytes, observations, and rejection
+dispositions. Failure records retain deterministic reduction and exact replay
+metadata. The capability query lists the deliberately untested or typed
+unsupported families, and the suite digest binds that capability/exclusion
+contract. This is model agreement with `authority: none`, not
+physical-GPU parity or performance evidence. Encoded responses fail closed
+above the compiled 1 MiB limit.
 
 The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest

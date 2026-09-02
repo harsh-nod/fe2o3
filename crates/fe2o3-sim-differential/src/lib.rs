@@ -24,6 +24,17 @@ use fe2o3_kir_sim::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod semantic_v2;
+
+pub use semantic_v2::{
+    SEMANTIC_DIFFERENTIAL_CAPABILITIES_SCHEMA_V2, SEMANTIC_DIFFERENTIAL_FAILURE_SCHEMA_V2,
+    SEMANTIC_DIFFERENTIAL_REPLAY_SCHEMA_V2, SEMANTIC_DIFFERENTIAL_SCHEMA_V2,
+    SemanticDifferentialCapabilitiesV2, SemanticDifferentialErrorV2, SemanticDifferentialFailureV2,
+    SemanticDifferentialReplayV2, SemanticDifferentialSuccessV2,
+    replay_semantic_differential_case_v2, run_semantic_differential_v2,
+    semantic_differential_capabilities_v2,
+};
+
 pub const SCALAR_DIFFERENTIAL_SCHEMA_V1: &str = "fe2o3-sim-scalar-differential-v1";
 pub const SCALAR_DIFFERENTIAL_FAILURE_SCHEMA_V1: &str = "fe2o3-sim-scalar-differential-failure-v1";
 pub const MAX_DIFFERENTIAL_CASES_V1: u32 = 4_096;
@@ -757,7 +768,55 @@ struct CommandErrorV1<'a> {
 }
 
 pub fn main() -> ExitCode {
-    let config = match parse(std::env::args_os().skip(1)) {
+    let mut arguments = std::env::args_os().skip(1);
+    let first = arguments.next();
+    match first.as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("semantic-capabilities-v2") => {
+            if arguments.next().is_some() {
+                emit_command_error(
+                    "invalid_command_line",
+                    "usage: fe2o3-sim-differential semantic-capabilities-v2",
+                );
+                return ExitCode::FAILURE;
+            }
+            return write_json_stdout(&semantic_differential_capabilities_v2());
+        }
+        Some("semantic-run-v2") => {
+            let seed = match parse_semantic_seed(arguments) {
+                Ok(seed) => seed,
+                Err(error) => {
+                    emit_command_error("invalid_command_line", &error);
+                    return ExitCode::FAILURE;
+                }
+            };
+            return match run_semantic_differential_v2(seed) {
+                Ok(Ok(report)) => write_json_stdout(&report),
+                Ok(Err(report)) => write_json_stderr(&report),
+                Err(error) => {
+                    emit_command_error("harness_failed", &error.to_string());
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Some("semantic-replay-v2") => {
+            let (seed, case, kir_sha256) = match parse_semantic_replay(arguments) {
+                Ok(replay) => replay,
+                Err(error) => {
+                    emit_command_error("invalid_command_line", &error);
+                    return ExitCode::FAILURE;
+                }
+            };
+            return match replay_semantic_differential_case_v2(seed, &case, &kir_sha256) {
+                Ok(report) => write_json_stdout(&report),
+                Err(error) => {
+                    emit_command_error("replay_rejected", &error.to_string());
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        _ => {}
+    }
+    let config = match parse(first.into_iter().chain(arguments)) {
         Ok(config) => config,
         Err(error) => {
             emit_command_error("invalid_command_line", &error);
@@ -772,6 +831,54 @@ pub fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn parse_semantic_seed(mut arguments: impl Iterator<Item = OsString>) -> Result<u64, String> {
+    let Some(name) = arguments.next() else {
+        return Ok(0);
+    };
+    if name != "--seed" {
+        return Err("usage: fe2o3-sim-differential semantic-run-v2 [--seed U64]".to_owned());
+    }
+    let value = arguments
+        .next()
+        .ok_or_else(|| "usage: fe2o3-sim-differential semantic-run-v2 [--seed U64]".to_owned())?;
+    if arguments.next().is_some() {
+        return Err("usage: fe2o3-sim-differential semantic-run-v2 [--seed U64]".to_owned());
+    }
+    parse_number(
+        value
+            .to_str()
+            .ok_or_else(|| "--seed must be UTF-8".to_owned())?,
+        "--seed",
+    )
+}
+
+fn parse_semantic_replay(
+    arguments: impl Iterator<Item = OsString>,
+) -> Result<(u64, String, String), String> {
+    let usage =
+        "usage: fe2o3-sim-differential semantic-replay-v2 --seed U64 --case ID --kir-sha256 HEX";
+    let mut seed = None;
+    let mut case = None;
+    let mut kir_sha256 = None;
+    let mut arguments = arguments;
+    while let Some(name) = arguments.next() {
+        let value = arguments.next().ok_or_else(|| usage.to_owned())?;
+        let name = name.to_str().ok_or_else(|| usage.to_owned())?;
+        let value = value.to_str().ok_or_else(|| usage.to_owned())?;
+        match name {
+            "--seed" => assign(&mut seed, parse_number(value, name)?, name)?,
+            "--case" => assign(&mut case, value.to_owned(), name)?,
+            "--kir-sha256" => assign(&mut kir_sha256, value.to_owned(), name)?,
+            _ => return Err(usage.to_owned()),
+        }
+    }
+    Ok((
+        seed.ok_or_else(|| usage.to_owned())?,
+        case.ok_or_else(|| usage.to_owned())?,
+        kir_sha256.ok_or_else(|| usage.to_owned())?,
+    ))
 }
 
 fn write_json_stdout(value: &impl Serialize) -> ExitCode {

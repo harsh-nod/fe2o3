@@ -709,6 +709,7 @@ for core_step in \
   sim-differential-no-gpu-elf \
   kir-sim-capability-matrix \
   kir-sim-scalar-differential \
+  kir-sim-semantic-differential \
   ci-local-test-gate \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
@@ -794,6 +795,10 @@ assert_equals \
   'cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256' \
   "$(step_command kir-sim-scalar-differential)" \
   'generic core did not retain the exact independent scalar differential gate'
+assert_equals \
+  'cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0' \
+  "$(step_command kir-sim-semantic-differential)" \
+  'generic core did not retain the exact semantic family differential gate'
 assert_equals \
   "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} metadata --cargo --root fe2o3-virtual-runtime --root fe2o3-virtual-runtime-cli --root fe2o3-sim-differential" \
   "$(step_command virtual-runtime-no-gpu-metadata)" \

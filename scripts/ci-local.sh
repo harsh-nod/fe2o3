@@ -1113,6 +1113,9 @@ run_generic_core() {
   run_step kir-sim-scalar-differential \
     cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
       --seed-start 0 --cases 256
+  run_step kir-sim-semantic-differential \
+    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
+      semantic-run-v2 --seed 0
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_cpu_tests
   run_rustc_codegen_lib_tests

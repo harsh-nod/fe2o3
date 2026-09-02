@@ -213,7 +213,7 @@ profiler, simulator, verification, and evidence contracts.
 | `crates/cargo-fe2o3` | Cargo orchestration, inspection, debug, and profile commands |
 | `crates/fe2o3-kfd` | Direct Linux KFD boundary |
 | `crates/fe2o3-kir-sim*` | Deterministic CPU simulator and CLI |
-| `crates/fe2o3-sim-differential` | Generated scalar oracle-to-simulator differential harness and reducer |
+| `crates/fe2o3-sim-differential` | Generated scalar plus typed semantic-family oracle-to-simulator differential harness and reducer |
 | `crates/fe2o3-virtual-runtime*` | Authority-free virtual lifecycle and headless JSON CLI over admitted simulator inputs |
 | `crates/fe2o3-debug-*` | Debug protocol, simulator debugger, and live-tool adapters |
 | `examples/` | Kernel source, host-boundary, proof, and qualification examples |
