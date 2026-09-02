@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{IoSlice, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -25,8 +26,8 @@ use fe2o3_external_anchor_protocol::{
     PinnedAnchorKeyV1, UnsignedAnchorObservationV1,
 };
 use fe2o3_worker_v3_verification_client::{
-    WorkerV3VerificationBeginOutcomeV2 as ClientBeginOutcomeV2, WorkerV3VerificationClientV2,
-    WorkerV3VerificationPayloadSnapshotsV1,
+    WorkerV3VerificationBeginOutcomeV2 as ClientBeginOutcomeV2, WorkerV3VerificationClientErrorV2,
+    WorkerV3VerificationClientV2, WorkerV3VerificationPayloadSnapshotsV1,
 };
 use fe2o3_worker_v3_verification_protocol::{
     MAX_WORKER_V3_VERIFICATION_APPLICATION_RESPONSE_BYTES_V2,
@@ -58,6 +59,8 @@ const SUBJECT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/INERT-COMPILER-EXECUTION-SUBJECT/
 const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identity-v2\0";
 const ENVELOPE: &[u8] = b"canonical-v2-load-envelope";
 const HSACO: &[u8] = b"canonical-finalized-hsaco";
+const CROSS_PHASE_TIMEOUT: Duration = Duration::from_secs(1);
+const EXPIRED_PHASE_DELAY: Duration = Duration::from_millis(1_100);
 const SEALS: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
     .union(SealFlags::SHRINK)
@@ -537,8 +540,7 @@ fn packet_queued_while_reserving_challenge_is_rejected_before_challenge_release(
             entered: entered_tx,
             release: release_rx,
             reservation: Some(
-                WorkerV3VerificationChallengeReservationV2::new([0x91; 32], [0x92; 32])
-                    .unwrap(),
+                WorkerV3VerificationChallengeReservationV2::new([0x91; 32], [0x92; 32]).unwrap(),
             ),
         };
         let outcome = begin_worker_v3_verification_session_v2(
@@ -553,6 +555,8 @@ fn packet_queued_while_reserving_challenge_is_rejected_before_challenge_release(
         let WorkerV3VerificationBeginOutcomeV2::Rejected(rejected) = outcome else {
             panic!("packet queued during reservation received a challenge");
         };
+        assert!(rejected.frame().reservation().is_none());
+        assert!(rejected.frame().matches_request(rejected.request()));
         rejected.reason()
     });
 
@@ -564,9 +568,7 @@ fn packet_queued_while_reserving_challenge_is_rejected_before_challenge_release(
         service_thread.join().unwrap(),
         WorkerV3VerificationRejectionReasonV2::BeginPhaseOrder
     );
-    let response = receive_challenge(&peer);
-    assert!(response.reservation().is_none());
-    assert!(response.matches_request(&request));
+    // The unread out-of-order packet can make the peer observe ECONNRESET instead of the rejection.
 }
 
 #[test]
@@ -640,6 +642,98 @@ fn ancillary_and_session_substitution_retain_custody_for_generic_rejection() {
             WorkerV3VerificationTerminalDispositionV2::Rejected
         );
     }
+}
+
+#[test]
+fn phase_two_endpoint_transfer_to_another_process_is_rejected_with_custody_retained() {
+    let request = verification_request(31);
+    let envelope = sealed_read_only(ENVELOPE);
+    let hsaco = sealed_read_only(HSACO);
+    let (service, peer) = pair();
+    send_begin_raw(&peer, &request, &envelope, &hsaco);
+    let (mut policy, mut measurement, mut replay) = admission_state(&request);
+    let mut reservations = FixedReservations::available(0x93, 0x94);
+    let outcome = begin_worker_v3_verification_session_v2(
+        service,
+        Duration::from_secs(10),
+        &mut policy,
+        &mut measurement,
+        &mut replay,
+        &mut reservations,
+    )
+    .unwrap();
+    let WorkerV3VerificationBeginOutcomeV2::Reserved(pending) = outcome else {
+        panic!("valid Begin was rejected");
+    };
+    let original_caller = pending.caller();
+    let reservation = receive_challenge(&peer).into_reservation().unwrap();
+    assert_eq!(reservation.challenge_bytes(), &[0x93; 32]);
+    assert_eq!(reservation.reservation_identity(), &[0x94; 32]);
+
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("cross_process_phase_two_sender_helper")
+        .arg("--ignored")
+        .env("FE2O3_WORKER_V3_PHASE_TWO_CHILD", "1")
+        .stdin(Stdio::from(peer))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert_ne!(child.id(), original_caller.pid());
+
+    let outcome = pending.receive_current_record().unwrap();
+    let WorkerV3VerificationCurrentRecordOutcomeV2::Rejected(rejected) = outcome else {
+        panic!("current record from a different PID reached application state");
+    };
+    assert_eq!(
+        rejected.reason(),
+        WorkerV3VerificationRejectionReasonV2::CurrentRecordTransfer
+    );
+    assert_eq!(
+        rejected
+            .payload(WorkerV3VerificationFdPayloadKindV1::LoadEnvelopeV2)
+            .sha256(),
+        &sha256(ENVELOPE)
+    );
+    assert_eq!(
+        rejected
+            .payload(WorkerV3VerificationFdPayloadKindV1::FinalizedHsaco)
+            .sha256(),
+        &sha256(HSACO)
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "phase-two child failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "subprocess helper for the cross-process credential test"]
+fn cross_process_phase_two_sender_helper() {
+    if std::env::var_os("FE2O3_WORKER_V3_PHASE_TWO_CHILD").is_none() {
+        return;
+    }
+    let request = verification_request(31);
+    let fixture = CurrentRecordFixture::new();
+    let reservation =
+        WorkerV3VerificationChallengeReservationV2::new([0x93; 32], [0x94; 32]).unwrap();
+    let (verification, attestation) = fixture.records(*reservation.challenge_bytes());
+    let frame = WorkerV3VerificationCurrentRecordFrameV2::new(
+        &request,
+        &reservation,
+        verification.canonical_bytes(),
+        attestation.canonical_bytes(),
+    )
+    .unwrap();
+    let stdin = std::io::stdin();
+    assert_eq!(
+        send(&stdin, frame.encode_canonical(), SendFlags::NOSIGNAL).unwrap(),
+        frame.encode_canonical().len()
+    );
+    shutdown(&stdin, Shutdown::Write).unwrap();
 }
 
 #[test]
@@ -722,6 +816,165 @@ fn malformed_current_record_and_trailing_packet_or_missing_eof_fail_closed() {
             _ => unreachable!(),
         }
     }
+}
+
+#[test]
+fn service_deadline_expires_across_challenge_before_current_record() {
+    let request = verification_request(32);
+    let fixture = CurrentRecordFixture::new();
+    let envelope = sealed_read_only(ENVELOPE);
+    let hsaco = sealed_read_only(HSACO);
+    let (service, peer) = pair();
+    send_begin_raw(&peer, &request, &envelope, &hsaco);
+    let (mut policy, mut measurement, mut replay) = admission_state(&request);
+    let mut reservations = FixedReservations::available(0x95, 0x96);
+    let outcome = begin_worker_v3_verification_session_v2(
+        service,
+        CROSS_PHASE_TIMEOUT,
+        &mut policy,
+        &mut measurement,
+        &mut replay,
+        &mut reservations,
+    )
+    .unwrap();
+    let WorkerV3VerificationBeginOutcomeV2::Reserved(pending) = outcome else {
+        panic!("valid Begin was rejected");
+    };
+    let reservation = receive_challenge(&peer).into_reservation().unwrap();
+    let (verification, attestation) = fixture.records(*reservation.challenge_bytes());
+    let frame = WorkerV3VerificationCurrentRecordFrameV2::new(
+        &request,
+        &reservation,
+        verification.canonical_bytes(),
+        attestation.canonical_bytes(),
+    )
+    .unwrap();
+
+    thread::sleep(EXPIRED_PHASE_DELAY);
+    assert_eq!(
+        send(&peer, frame.encode_canonical(), SendFlags::NOSIGNAL).unwrap(),
+        frame.encode_canonical().len()
+    );
+    shutdown(&peer, Shutdown::Write).unwrap();
+    assert!(matches!(
+        pending.receive_current_record(),
+        Err(WorkerV3VerificationServiceErrorV2::V1(
+            WorkerV3VerificationServiceErrorV1::Timeout
+        ))
+    ));
+}
+
+#[test]
+fn service_deadline_expires_before_terminal_send_and_retains_custody() {
+    let (terminal, peer) = ready_terminal(verification_request(33), 0x97, 0x98);
+    thread::sleep(EXPIRED_PHASE_DELAY);
+    let failure = terminal
+        .send_application_response(b"too-late".to_vec())
+        .unwrap_err();
+    assert!(matches!(
+        failure.source_error(),
+        WorkerV3VerificationServiceErrorV2::V1(WorkerV3VerificationServiceErrorV1::Timeout)
+    ));
+    let terminal = failure.into_session();
+    assert_eq!(
+        terminal
+            .payload(WorkerV3VerificationFdPayloadKindV1::LoadEnvelopeV2)
+            .sha256(),
+        &sha256(ENVELOPE)
+    );
+    drop(peer);
+}
+
+#[test]
+fn client_deadline_expires_across_challenge_before_current_record() {
+    let request = verification_request(34);
+    let fixture = CurrentRecordFixture::new();
+    let (service, client) = pair();
+    let service_request = request.clone();
+    let service_thread = thread::spawn(move || {
+        let (mut policy, mut measurement, mut replay) = admission_state(&service_request);
+        let mut reservations = FixedReservations::available(0x99, 0x9a);
+        let outcome = begin_worker_v3_verification_session_v2(
+            service,
+            Duration::from_secs(3),
+            &mut policy,
+            &mut measurement,
+            &mut replay,
+            &mut reservations,
+        )
+        .unwrap();
+        let WorkerV3VerificationBeginOutcomeV2::Reserved(pending) = outcome else {
+            panic!("valid Begin was rejected");
+        };
+        let _ = pending.receive_current_record();
+    });
+
+    let outcome = WorkerV3VerificationClientV2::admit(client, CROSS_PHASE_TIMEOUT)
+        .unwrap()
+        .begin(request.clone(), snapshots(&request))
+        .unwrap();
+    let ClientBeginOutcomeV2::Reserved(begin) = outcome else {
+        panic!("valid Begin was rejected");
+    };
+    let (challenge, pending) = begin.into_parts();
+    let (verification, attestation) = fixture.records(*challenge.as_bytes());
+    thread::sleep(EXPIRED_PHASE_DELAY);
+    assert!(matches!(
+        pending.submit_current_record(
+            *verification.canonical_bytes(),
+            *attestation.canonical_bytes(),
+        ),
+        Err(WorkerV3VerificationClientErrorV2::Timeout)
+    ));
+    service_thread.join().unwrap();
+}
+
+#[test]
+fn client_deadline_expires_waiting_for_terminal_after_current_record() {
+    let request = verification_request(35);
+    let fixture = CurrentRecordFixture::new();
+    let (service, client) = pair();
+    let service_request = request.clone();
+    let service_thread = thread::spawn(move || {
+        let (mut policy, mut measurement, mut replay) = admission_state(&service_request);
+        let mut reservations = FixedReservations::available(0x9b, 0x9c);
+        let outcome = begin_worker_v3_verification_session_v2(
+            service,
+            Duration::from_secs(3),
+            &mut policy,
+            &mut measurement,
+            &mut replay,
+            &mut reservations,
+        )
+        .unwrap();
+        let WorkerV3VerificationBeginOutcomeV2::Reserved(pending) = outcome else {
+            panic!("valid Begin was rejected");
+        };
+        let outcome = pending.receive_current_record().unwrap();
+        let WorkerV3VerificationCurrentRecordOutcomeV2::Ready(terminal) = outcome else {
+            panic!("valid current record was rejected");
+        };
+        thread::sleep(EXPIRED_PHASE_DELAY);
+        let _ = terminal.send_application_response(b"too-late-for-client".to_vec());
+    });
+
+    let outcome = WorkerV3VerificationClientV2::admit(client, CROSS_PHASE_TIMEOUT)
+        .unwrap()
+        .begin(request.clone(), snapshots(&request))
+        .unwrap();
+    let ClientBeginOutcomeV2::Reserved(begin) = outcome else {
+        panic!("valid Begin was rejected");
+    };
+    let (challenge, pending) = begin.into_parts();
+    let (verification, attestation) = fixture.records(*challenge.as_bytes());
+    assert!(matches!(
+        pending.submit_current_record(
+            *verification.canonical_bytes(),
+            *attestation.canonical_bytes(),
+        ),
+        Err(WorkerV3VerificationClientErrorV2::Timeout)
+    ));
+    service_thread.join().unwrap();
 }
 
 #[test]
