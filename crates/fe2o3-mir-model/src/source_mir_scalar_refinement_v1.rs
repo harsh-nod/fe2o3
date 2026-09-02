@@ -422,6 +422,10 @@ impl InertSourceMirScalarRefinementEvidenceV1 {
     pub const fn semantic_mir_sha256(&self) -> &[u8; 32] {
         &self.semantic_mir_sha256
     }
+    /// Returns the exact source provenance shared by HIR, raw MIR, and semantic MIR.
+    pub const fn source(&self) -> SemanticSourceProvenanceV1 {
+        self.source
+    }
     /// Returns every independently validated expression certificate.
     pub fn certificates(&self) -> &[SourceMirScalarStepCertificateV1] {
         &self.certificates

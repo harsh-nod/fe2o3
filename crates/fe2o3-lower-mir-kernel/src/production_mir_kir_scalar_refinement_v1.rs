@@ -4,8 +4,9 @@ use std::{collections::BTreeMap, error::Error, fmt};
 
 use fe2o3_kernel_ir::{BinaryOp, Constant, Operation, OperationKind, ScalarType, Type, ValueId};
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBinaryOpV1, SemanticConstantValueV1, SemanticOperandV1, SemanticRvalueKindV1,
-    SemanticScalarTypeV1, SemanticStatementKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1,
+    SemanticBinaryOpV1, SemanticConstantValueV1, SemanticFunctionDeclV1, SemanticLocalRoleV1,
+    SemanticOperandV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticStatementKindV1,
+    SemanticTypeDeclV1, SemanticTypeShapeV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -14,16 +15,16 @@ use crate::{
     ProductionSemanticKirOwnerV1,
 };
 
-/// Wire and semantic-model version for the first scalar MIR-to-KIR theorem.
-pub const MIR_KIR_SCALAR_REFINEMENT_MODEL_VERSION_V1: u16 = 2;
+/// Wire and semantic-model version including exact parameter roots.
+pub const MIR_KIR_SCALAR_REFINEMENT_MODEL_VERSION_V1: u16 = 3;
 /// Closed policy version for live-owner certificate derivation.
-pub const MIR_KIR_SCALAR_REFINEMENT_POLICY_V1: u16 = 2;
+pub const MIR_KIR_SCALAR_REFINEMENT_POLICY_V1: u16 = 3;
 /// Stable name of the Verus theorem checked by the proof lane.
 pub const MIR_KIR_SCALAR_REFINEMENT_THEOREM_V1: &str = "fe2o3_mir_kir_u32_element_refines_v1";
 /// SHA-256 of the exact Verus theorem source accepted by the proof lane.
 pub const MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1: [u8; 32] = [
-    0x73, 0x5c, 0x4c, 0x77, 0xf7, 0x8a, 0x90, 0x38, 0x5d, 0x20, 0x0b, 0xb4, 0x3d, 0xb5, 0xe0, 0x71,
-    0xbc, 0x1a, 0x64, 0x1a, 0x5a, 0xe5, 0x61, 0x90, 0xa0, 0x90, 0x23, 0xbc, 0xb2, 0xf2, 0xfe, 0x8e,
+    0x86, 0xe9, 0xda, 0x98, 0xfb, 0xaa, 0x77, 0xcc, 0x24, 0x39, 0x95, 0x5f, 0x93, 0x51, 0xdf, 0x58,
+    0x72, 0x1a, 0xe2, 0x9b, 0x1f, 0xcd, 0xd2, 0x9e, 0x59, 0x22, 0x49, 0xc8, 0x12, 0x84, 0x32, 0xe9,
 ];
 /// SHA-256 of the pinned Verus executable accepted by the compiler proof lane.
 pub const MIR_KIR_SCALAR_REFINEMENT_VERUS_SHA256_V1: [u8; 32] = [
@@ -36,8 +37,8 @@ pub const MIR_KIR_SCALAR_REFINEMENT_VERUS_CLOSURE_SHA256_V1: [u8; 32] = [
     0x45, 0x57, 0x6d, 0xa9, 0xb9, 0x20, 0xd7, 0x55, 0xb4, 0xb7, 0xe9, 0x19, 0xe4, 0x7a, 0x60, 0x19,
 ];
 
-const MODEL_DOMAIN_V1: &[u8] = b"FE2O3/MIR-TO-KIR/U32-ELEMENT-REFINEMENT-MODEL/V1\0";
-const EVIDENCE_DOMAIN_V1: &[u8] = b"FE2O3/MIR-TO-KIR/U32-ELEMENT-REFINEMENT-EVIDENCE/V1\0";
+const MODEL_DOMAIN_V1: &[u8] = b"FE2O3/MIR-TO-KIR/U32-ELEMENT-REFINEMENT-MODEL/V3\0";
+const EVIDENCE_DOMAIN_V1: &[u8] = b"FE2O3/MIR-TO-KIR/U32-ELEMENT-REFINEMENT-EVIDENCE/V3\0";
 
 /// Closed `u32` arithmetic subset covered by the first refinement theorem.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -62,6 +63,8 @@ pub enum MirKirScalarOperatorV1 {
 pub enum MirKirScalarSemanticOperandV1 {
     /// A source `u32` constant checked against its exact KIR constant definition.
     Constant(u32),
+    /// An unprojected `u32` argument local checked against its positional KIR parameter.
+    Parameter(u32),
     /// An unprojected source local mapped by an earlier certificate in the same block.
     Local(u32),
 }
@@ -322,6 +325,7 @@ impl InertMirKirScalarRefinementEvidenceV1 {
         let mut candidates = 0_u32;
         let mut certificates = Vec::new();
         let mut scalar_locals = BTreeMap::<(u32, u32, u32), ValueId>::new();
+        seed_exact_u32_parameters_v2(owner, &mut scalar_locals)?;
         for span in owner.correspondence().statement_operation_spans() {
             let Some(function) = semantic
                 .functions()
@@ -411,8 +415,8 @@ impl InertMirKirScalarRefinementEvidenceV1 {
             }
             let destination_local =
                 destination_local.ok_or(MirKirScalarRefinementErrorV1::UnsupportedInputRelation)?;
-            let semantic_left = semantic_u32_operand_v1(semantic.types(), left)?;
-            let semantic_right = semantic_u32_operand_v1(semantic.types(), right)?;
+            let semantic_left = semantic_u32_operand_v1(semantic.types(), function, left)?;
+            let semantic_right = semantic_u32_operand_v1(semantic.types(), function, right)?;
             let function_binding = owner
                 .correspondence()
                 .lowered_functions()
@@ -621,7 +625,7 @@ impl fmt::Display for MirKirScalarRefinementErrorV1 {
                 formatter.write_str("supported MIR scalar step lacks its exact KIR operation")
             }
             Self::UnsupportedInputRelation => formatter.write_str(
-                "MIR-to-KIR scalar step is outside the straight-line constant-rooted input relation",
+                "MIR-to-KIR scalar step is outside the straight-line parameter-or-constant-rooted input relation",
             ),
             Self::InputRelationMismatch => formatter.write_str(
                 "MIR-to-KIR scalar step does not preserve the exact operand/result relation",
@@ -657,8 +661,76 @@ struct CheckedKirScalarStepV1 {
     result: ValueId,
 }
 
+fn seed_exact_u32_parameters_v2(
+    owner: &ProductionSemanticKirOwnerV1,
+    scalar_locals: &mut BTreeMap<(u32, u32, u32), ValueId>,
+) -> Result<(), MirKirScalarRefinementErrorV1> {
+    let semantic = owner.semantic().semantic();
+    for binding in owner.correspondence().parameter_bindings() {
+        let correspondence_owner = binding.correspondence_owner().index();
+        let semantic_function = binding.semantic_function().index();
+        let semantic_local = binding.semantic_local().index();
+        let function = semantic
+            .functions()
+            .get(semantic_function as usize)
+            .ok_or(MirKirScalarRefinementErrorV1::InvalidCorrespondenceSpan)?;
+        let declaration = function
+            .locals()
+            .get(semantic_local as usize)
+            .ok_or(MirKirScalarRefinementErrorV1::InvalidCorrespondenceSpan)?;
+        let SemanticLocalRoleV1::Argument(argument) = declaration.role() else {
+            return Err(MirKirScalarRefinementErrorV1::InputRelationMismatch);
+        };
+        if !matches!(
+            semantic
+                .types()
+                .get(declaration.ty().index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            }))
+        ) {
+            continue;
+        }
+        let function_binding = owner
+            .correspondence()
+            .lowered_functions()
+            .iter()
+            .find(|candidate| {
+                candidate.correspondence_owner().index() == correspondence_owner
+                    && candidate.semantic_function().index() == semantic_function
+            })
+            .ok_or(MirKirScalarRefinementErrorV1::InvalidCorrespondenceSpan)?;
+        let kir_function = owner
+            .module()
+            .function(function_binding.kernel_ir_function())
+            .ok_or(MirKirScalarRefinementErrorV1::InvalidCorrespondenceSpan)?;
+        let parameter = usize::try_from(argument)
+            .map_err(|_| MirKirScalarRefinementErrorV1::UnsupportedInputRelation)?;
+        let body = kir_function
+            .body
+            .as_ref()
+            .ok_or(MirKirScalarRefinementErrorV1::InvalidCorrespondenceSpan)?;
+        if body.parameters.get(parameter) != Some(&binding.kernel_ir_value())
+            || kir_function.signature.parameters.get(parameter)
+                != Some(&Type::Scalar(ScalarType::U32))
+            || scalar_locals
+                .insert(
+                    (correspondence_owner, semantic_function, semantic_local),
+                    binding.kernel_ir_value(),
+                )
+                .is_some()
+        {
+            return Err(MirKirScalarRefinementErrorV1::InputRelationMismatch);
+        }
+    }
+    Ok(())
+}
+
 fn semantic_u32_operand_v1(
     types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
     operand: &SemanticOperandV1,
 ) -> Result<MirKirScalarSemanticOperandV1, MirKirScalarRefinementErrorV1> {
     let ty = match operand {
@@ -681,7 +753,21 @@ fn semantic_u32_operand_v1(
     }
     match operand {
         SemanticOperandV1::Copy(place) => {
-            Ok(MirKirScalarSemanticOperandV1::Local(place.local().index()))
+            let local = function
+                .locals()
+                .get(place.local().index() as usize)
+                .ok_or(MirKirScalarRefinementErrorV1::UnsupportedInputRelation)?;
+            if local.ty() != place.ty() {
+                return Err(MirKirScalarRefinementErrorV1::UnsupportedInputRelation);
+            }
+            Ok(match local.role() {
+                SemanticLocalRoleV1::Argument(_) => {
+                    MirKirScalarSemanticOperandV1::Parameter(place.local().index())
+                }
+                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => {
+                    MirKirScalarSemanticOperandV1::Local(place.local().index())
+                }
+            })
         }
         SemanticOperandV1::Constant(constant) => {
             let SemanticConstantValueV1::Scalar(value) = constant.value() else {
@@ -726,7 +812,8 @@ fn check_exact_kir_step_v1(
                 .ok_or(MirKirScalarRefinementErrorV1::Overflow)?;
             Ok(result.id)
         }
-        MirKirScalarSemanticOperandV1::Local(local) => scalar_locals
+        MirKirScalarSemanticOperandV1::Parameter(local)
+        | MirKirScalarSemanticOperandV1::Local(local) => scalar_locals
             .get(&(relation_key.0, relation_key.1, local))
             .copied()
             .ok_or(MirKirScalarRefinementErrorV1::UnsupportedInputRelation),
@@ -788,7 +875,7 @@ fn encode_evidence_v1(
     certificates: &[MirKirScalarStepCertificateV1],
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(160 + certificates.len() * 56);
-    bytes.extend_from_slice(b"F2MKS2\0\0");
+    bytes.extend_from_slice(b"F2MKS3\0\0");
     bytes.extend_from_slice(&MIR_KIR_SCALAR_REFINEMENT_MODEL_VERSION_V1.to_le_bytes());
     bytes.extend_from_slice(&MIR_KIR_SCALAR_REFINEMENT_POLICY_V1.to_le_bytes());
     bytes.extend_from_slice(&model_identity);
@@ -834,8 +921,12 @@ fn encode_semantic_operand_v1(bytes: &mut Vec<u8>, operand: MirKirScalarSemantic
             bytes.push(0);
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        MirKirScalarSemanticOperandV1::Local(local) => {
+        MirKirScalarSemanticOperandV1::Parameter(local) => {
             bytes.push(1);
+            bytes.extend_from_slice(&local.to_le_bytes());
+        }
+        MirKirScalarSemanticOperandV1::Local(local) => {
+            bytes.push(2);
             bytes.extend_from_slice(&local.to_le_bytes());
         }
     }
@@ -1011,6 +1102,64 @@ mod tests {
     }
 
     #[test]
+    fn exact_parameter_rooted_step_uses_ordered_positional_ssa_values() {
+        let key = (3, 5);
+        let locals = BTreeMap::from([
+            ((key.0, key.1, 1), ValueId(10)),
+            ((key.0, key.1, 2), ValueId(11)),
+        ]);
+        let checked = check_exact_kir_step_v1(
+            MirKirScalarOperatorV1::Subtract,
+            MirKirScalarSemanticOperandV1::Parameter(1),
+            MirKirScalarSemanticOperandV1::Parameter(2),
+            key,
+            &locals,
+            &[u32_binary(12, BinaryOp::Subtract, 10, 11)],
+        )
+        .unwrap();
+        assert_eq!(
+            (checked.left, checked.right, checked.result),
+            (ValueId(10), ValueId(11), ValueId(12))
+        );
+    }
+
+    #[test]
+    fn hostile_parameter_ordinal_ssa_and_order_substitutions_are_rejected() {
+        let key = (3, 5);
+        let locals = BTreeMap::from([
+            ((key.0, key.1, 1), ValueId(10)),
+            ((key.0, key.1, 2), ValueId(11)),
+        ]);
+        for operations in [
+            vec![u32_binary(12, BinaryOp::Subtract, 11, 10)],
+            vec![u32_binary(12, BinaryOp::Subtract, 99, 11)],
+        ] {
+            assert_eq!(
+                check_exact_kir_step_v1(
+                    MirKirScalarOperatorV1::Subtract,
+                    MirKirScalarSemanticOperandV1::Parameter(1),
+                    MirKirScalarSemanticOperandV1::Parameter(2),
+                    key,
+                    &locals,
+                    &operations,
+                ),
+                Err(MirKirScalarRefinementErrorV1::InputRelationMismatch)
+            );
+        }
+        assert_eq!(
+            check_exact_kir_step_v1(
+                MirKirScalarOperatorV1::Subtract,
+                MirKirScalarSemanticOperandV1::Parameter(0),
+                MirKirScalarSemanticOperandV1::Parameter(2),
+                key,
+                &locals,
+                &[u32_binary(12, BinaryOp::Subtract, 10, 11)],
+            ),
+            Err(MirKirScalarRefinementErrorV1::UnsupportedInputRelation)
+        );
+    }
+
+    #[test]
     fn hostile_swapped_noncommutative_operands_are_rejected() {
         let error = check_exact_kir_step_v1(
             MirKirScalarOperatorV1::Subtract,
@@ -1110,6 +1259,12 @@ mod tests {
             Err(MirKirScalarRefinementErrorV1::NonCanonicalEvidence)
         );
         evidence.certificates[0].operator = MirKirScalarOperatorV1::Add;
+        evidence.certificates[0].semantic_left = MirKirScalarSemanticOperandV1::Parameter(1);
+        assert_eq!(
+            evidence.revalidate(),
+            Err(MirKirScalarRefinementErrorV1::NonCanonicalEvidence)
+        );
+        evidence.certificates[0].semantic_left = MirKirScalarSemanticOperandV1::Constant(1);
         evidence.certificates[0].semantic_destination = 4;
         assert_eq!(
             evidence.revalidate(),

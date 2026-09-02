@@ -46,10 +46,12 @@ detached bundle from the service result.
 `production_mir_kir_scalar_refinement_v1` is the first operationally checked
 semantic slice. It gives distinct executable MIR and KIR semantics for one
 selected `u32` element and the closed operations wrapping add, wrapping
-subtract, wrapping multiply, bit-and, bit-or, and bit-xor. The V2 production
+subtract, wrapping multiply, bit-and, bit-or, and bit-xor. The V3 production
 certificate checker discharges the theorem's operand and destination relation
-for a deliberately narrow straight-line, constant-rooted SSA fragment. A
-source constant must match its exact effect-free KIR constant definition. A
+for a deliberately narrow straight-line, parameter-or-constant-rooted SSA
+fragment. A source constant must match its exact effect-free KIR constant
+definition. A copied, unprojected `u32` argument local must match its positional
+KIR function parameter in the replayed production correspondence. Any other
 copied, unprojected source local must map to an earlier certified KIR result in
 the same one-block function. The unprojected source destination is then mapped
 to the exact KIR binary result. Under that checked relation, the Verus theorem
@@ -59,18 +61,34 @@ live semantic owner, requires the statement span to contain exactly the
 constant definitions and binary operation prescribed by the source operands,
 and binds the certificate to the semantic MIR and canonical KIR identities.
 Existing V4 correspondence evidence can compose this semantic evidence without
-changing the V4 wire format.
+changing the V4 wire format. V3 assigns separate canonical tags to constants,
+parameters, and earlier-result locals; V2 evidence cannot be reinterpreted as
+V3.
 
-This claim does not cover parameter-rooted values, moved or projected operands,
-projected destinations, multi-block functions, pointer/address equivalence,
-bounds, aliasing, whole-function control-flow refinement, concurrent invocation
-behavior, floating-point behavior, LLVM lowering, machine code, runtime
-behavior, or launch correctness. Unsupported input relations fail closed and
-produce no evidence. The trusted computing base is the Rust live-owner and
-canonicalization, the independent statement-recipe and local-to-SSA checker,
-SHA-256 identity binding, the pinned Verus/vstd/Z3 closure, and the small
-executable/spec semantics. The proof contains no axioms, admits, or external
-bodies and grants no artifact or execution authority.
+`production_source_mir_kir_composition_v2` independently joins authority-free
+source-to-MIR evidence to a replayed live semantic/KIR owner. For every source
+certificate it requires the same semantic module, statement, operator, exact
+left/right parameter-local identities, and destination local, then retains the
+same-session HIR owner/expression and raw-MIR body identities together with the
+exact canonical KIR and ordered operand/result SSA identities. Its Verus
+theorem is universal over source, MIR, and KIR values related by that explicit
+parameter environment; it composes distinct source, MIR, and KIR opcode spaces
+for the effect-free operation. The public inert constructor does not
+authenticate rustc provenance. Only `rustc-codegen-fe2o3` can construct the
+private authenticated wrapper from its same-session source custody, and that
+wrapper remains authority-free through the production stages.
+
+This claim does not cover moved or projected operands, projected destinations,
+multi-block covered functions, calls as scalar operations, pointer/address
+equivalence, bounds, aliasing, whole-function control-flow refinement,
+concurrent invocation behavior, floating-point behavior, LLVM lowering,
+machine code, runtime behavior, or launch correctness. Unsupported input
+relations fail closed and produce no evidence. The trusted computing base is
+the rustc observation/extraction code, Rust live-owner and canonicalization,
+the independent statement-recipe, parameter, composition, and local-to-SSA
+checkers, SHA-256 identity binding, the pinned Verus/vstd/Z3 closure, and the
+small executable/spec semantics. The proofs contain no axioms, admits, or
+external bodies and grant no artifact or execution authority.
 
 ## MIR-to-KIR call/CFG refinement V2
 

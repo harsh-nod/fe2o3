@@ -44,6 +44,9 @@ pub(crate) enum ProductionPipelineError {
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    SourceMirKirComposition(
+        crate::production_source_mir_scalar_v1::ProductionSourceMirKirCompositionErrorV2,
+    ),
     MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
@@ -100,6 +103,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
+            Self::SourceMirKirComposition(error) => write!(
+                formatter,
+                "production compilation source-to-KIR scalar composition failed: {error}"
+            ),
             Self::MissingMirPlironTranslationValidation => formatter.write_str(
                 "production compilation reached target-neutral custody without independent MIR-to-PLIRON translation validation",
             ),
@@ -239,6 +246,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CompilerExecutionReceiptTransport(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
+            | Self::SourceMirKirComposition(_)
             | Self::MissingMirPlironTranslationValidation
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
@@ -382,6 +390,8 @@ pub(crate) struct RankedVerifiedProductionCompilation {
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
 pub(crate) struct TargetNeutralProductionCompilation {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    source_mir_kir:
+        crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
@@ -391,6 +401,8 @@ pub(crate) struct TargetNeutralProductionCompilation {
 /// Kernel IR, composed formal/ranked memory evidence, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    source_mir_kir:
+        crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
@@ -400,6 +412,8 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilation {
 /// Kernel IR, deterministic exact-target LLVM text, and transaction bindings.
 pub(crate) struct TargetLoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    source_mir_kir:
+        crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     target_module: fe2o3_kernel_ir::Module,
@@ -489,12 +503,16 @@ impl TargetNeutralProductionCompilation {
     > {
         let Self {
             lowered,
+            source_mir_kir,
             ranked_verification: _,
             bindings,
         } = self;
         lowered
             .verify_equivalence()
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        source_mir_kir
+            .revalidate()
+            .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         if bindings
             .rustc_preflight_plan
             .rustc_identity_inventory_sha256()
@@ -586,6 +604,7 @@ impl TargetNeutralProductionCompilation {
     ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
         let Self {
             lowered,
+            source_mir_kir,
             ranked_verification,
             bindings,
         } = self;
@@ -593,6 +612,7 @@ impl TargetNeutralProductionCompilation {
             .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
+            source_mir_kir,
             ranked_verification,
             bindings,
         })
@@ -605,9 +625,13 @@ impl FormalMemoryAdmittedProductionCompilation {
     ) -> Result<TargetLoweredProductionCompilation, ProductionPipelineError> {
         let Self {
             admitted,
+            source_mir_kir,
             ranked_verification,
             bindings,
         } = self;
+        source_mir_kir
+            .revalidate()
+            .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         let target_profile = bindings.rustc_target.profile();
         let semantic = admitted.semantic_kir().semantic().semantic();
         if semantic.roots().is_empty()
@@ -719,6 +743,7 @@ impl FormalMemoryAdmittedProductionCompilation {
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
         Ok(TargetLoweredProductionCompilation {
             admitted,
+            source_mir_kir,
             ranked_verification,
             target_module,
             workgroups,
@@ -853,12 +878,15 @@ impl TargetLoweredProductionCompilation {
             &self.bindings.source_mir_scalar,
             self.bindings.source_mir_scalar.records().len(),
             self.bindings.source_mir_scalar.grants_authority(),
+            &self.source_mir_kir,
+            self.source_mir_kir.records().len(),
+            self.source_mir_kir.grants_authority(),
             &self.bindings.typed_descriptor_roots,
             &self.bindings.transaction.producer,
             &self.bindings.transaction.output_dir,
             &self.bindings.transaction.compiler_ffi_envelope,
         );
-        7 + self
+        8 + self
             .bindings
             .transaction
             .compiler_custody
@@ -874,6 +902,7 @@ impl TargetLoweredProductionCompilation {
     ) -> Result<fe2o3_compiler_ffi::CompilerModuleHandoffV2, ProductionPipelineError> {
         let Self {
             admitted,
+            source_mir_kir,
             ranked_verification: _,
             target_module,
             workgroups: _,
@@ -903,6 +932,9 @@ impl TargetLoweredProductionCompilation {
                 crate::collector::ProductionSemanticImportErrorV1::SourceMirScalar(error),
             )
         })?;
+        source_mir_kir
+            .revalidate()
+            .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         if !transaction.compiler_custody.is_extraction_only() {
             return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
         }
@@ -930,6 +962,7 @@ impl TargetLoweredProductionCompilation {
     {
         let Self {
             admitted,
+            source_mir_kir,
             ranked_verification,
             target_module,
             workgroups: _,
@@ -959,6 +992,9 @@ impl TargetLoweredProductionCompilation {
                 crate::collector::ProductionSemanticImportErrorV1::SourceMirScalar(error),
             )
         })?;
+        source_mir_kir
+            .revalidate()
+            .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         if !transaction.compiler_custody.is_extraction_only() {
             return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
         }
@@ -1027,6 +1063,7 @@ impl TargetLoweredProductionCompilation {
         );
         let Self {
             admitted,
+            source_mir_kir,
             ranked_verification,
             target_module,
             workgroups: _,
@@ -1062,6 +1099,9 @@ impl TargetLoweredProductionCompilation {
                 crate::collector::ProductionSemanticImportErrorV1::SourceMirScalar(error),
             )
         })?;
+        source_mir_kir
+            .revalidate()
+            .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         let semantic_debug_inputs = prepare_production_semantic_debug_inputs_v1(
             admitted.semantic_kir(),
             &rustc_identity_inventory,
@@ -2222,8 +2262,14 @@ impl RankedVerifiedProductionCompilation {
         if !exact_translation_roster {
             return Err(ProductionPipelineError::MissingMirPlironTranslationValidation);
         }
+        let source_mir_kir = crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2::from_authenticated_source_and_live_owner(
+            &bindings.source_mir_scalar,
+            &lowered,
+        )
+        .map_err(ProductionPipelineError::SourceMirKirComposition)?;
         Ok(TargetNeutralProductionCompilation {
             lowered,
+            source_mir_kir,
             ranked_verification,
             bindings,
         })

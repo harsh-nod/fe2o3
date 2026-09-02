@@ -66,9 +66,10 @@ pub open spec fn kir_effects_v1(
     seq![left, right, destination, kir_u32_eval_v1(operator, left, right)]
 }
 
-/// Input relation discharged by the V2 production certificate checker. The
+/// Input relation discharged by the V3 production certificate checker. The
 /// checker accepts constants only after matching their exact KIR definitions,
-/// and accepts locals only through an earlier certified local-to-SSA result map.
+/// parameters only after matching the positional production KIR parameter,
+/// and other locals only through an earlier certified local-to-SSA result map.
 pub open spec fn exact_scalar_operand_relation_v2(mir_value: int, kir_value: int) -> bool {
     mir_value == kir_value
 }

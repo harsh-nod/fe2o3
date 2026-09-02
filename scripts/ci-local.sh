@@ -949,6 +949,9 @@ run_verus() {
   run_step mir-kir-scalar-refinement-verus \
     env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/scripts/test-mir-kir-scalar-refinement-verus-v1.sh"
+  run_step source-mir-kir-scalar-composition-verus \
+    env VERUS="${compiler_verus}" \
+    "${REPO_ROOT}/scripts/test-source-mir-kir-scalar-composition-verus-v2.sh"
   run_step affine-bounds-soundness-verus \
     env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/scripts/test-affine-bounds-soundness-verus.sh"

@@ -31,6 +31,83 @@ pub(crate) struct AuthenticatedSourceMirScalarEvidenceV1 {
     records: Box<[InertSourceMirScalarRefinementEvidenceV1]>,
 }
 
+/// Private production custody for independently joined source-to-KIR scalar evidence.
+pub(crate) struct AuthenticatedSourceMirKirScalarCompositionV2 {
+    records: Box<[fe2o3_lower_mir_kernel::InertSourceMirKirScalarCompositionEvidenceV2]>,
+}
+
+impl AuthenticatedSourceMirKirScalarCompositionV2 {
+    pub(crate) fn from_authenticated_source_and_live_owner(
+        source: &AuthenticatedSourceMirScalarEvidenceV1,
+        owner: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    ) -> Result<Self, ProductionSourceMirKirCompositionErrorV2> {
+        source
+            .revalidate()
+            .map_err(ProductionSourceMirKirCompositionErrorV2::Source)?;
+        let records = source
+            .records()
+            .iter()
+            .map(|record| {
+                fe2o3_lower_mir_kernel::InertSourceMirKirScalarCompositionEvidenceV2::from_live_production(
+                    record, owner,
+                )
+                .map_err(ProductionSourceMirKirCompositionErrorV2::Composition)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence = Self {
+            records: records.into_boxed_slice(),
+        };
+        evidence.revalidate()?;
+        Ok(evidence)
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), ProductionSourceMirKirCompositionErrorV2> {
+        for record in &self.records {
+            record
+                .revalidate()
+                .map_err(ProductionSourceMirKirCompositionErrorV2::Composition)?;
+            if record.grants_authority() {
+                return Err(ProductionSourceMirKirCompositionErrorV2::AuthorityEscalation);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn records(
+        &self,
+    ) -> &[fe2o3_lower_mir_kernel::InertSourceMirKirScalarCompositionEvidenceV2] {
+        &self.records
+    }
+
+    pub(crate) const fn grants_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ProductionSourceMirKirCompositionErrorV2 {
+    Source(ProductionSourceMirScalarErrorV1),
+    Composition(fe2o3_lower_mir_kernel::SourceMirKirScalarCompositionErrorV2),
+    AuthorityEscalation,
+}
+
+impl fmt::Display for ProductionSourceMirKirCompositionErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source(error) => write!(
+                formatter,
+                "source evidence failed before composition: {error}"
+            ),
+            Self::Composition(error) => {
+                write!(formatter, "source-to-KIR composition failed: {error}")
+            }
+            Self::AuthorityEscalation => {
+                formatter.write_str("source-to-KIR composition attempted to grant authority")
+            }
+        }
+    }
+}
+
 impl AuthenticatedSourceMirScalarEvidenceV1 {
     pub(crate) fn records(&self) -> &[InertSourceMirScalarRefinementEvidenceV1] {
         &self.records
@@ -427,6 +504,26 @@ mod tests {
                 bits: 32,
             }),
         );
+        let unit = SemanticTypeIdV1::from_index(1);
+        let unit_decl = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(39)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(40)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                None,
+                false,
+                None,
+                1,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Unit,
+        );
         let function_source = source_for_span(tcx, tcx.def_span(instance.def_id()));
         let locals = raw
             .local_decls
@@ -519,7 +616,7 @@ mod tests {
         .unwrap();
         let function = SemanticFunctionDeclV1::new(
             SemanticFunctionIdentityV1::from_sha256(bytes(32)),
-            SemanticFunctionRoleV1::KernelRoot,
+            SemanticFunctionRoleV1::InternalHelper,
             SemanticItemDefinitionIdentityV1::from_sha256(bytes(33)),
             SemanticMonomorphizationIdentityV1::from_sha256(bytes(34)),
             SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(35)),
@@ -531,14 +628,101 @@ mod tests {
             semantic_blocks,
         )
         .unwrap();
+        let helper_call = SemanticDirectCallV1::new(
+            SemanticFunctionIdV1::from_index(0),
+            vec![
+                SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    ty,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(7, 4).unwrap()),
+                )),
+                SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    ty,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(3, 4).unwrap()),
+                )),
+            ],
+            Some(SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], ty).unwrap(),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let root_block = |identity, terminator| {
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256(bytes(identity)),
+                function_source,
+                vec![],
+                SemanticTerminatorV1::new(function_source, terminator),
+            )
+            .unwrap()
+        };
+        let root = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(41)),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(42)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(43)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(44)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(45)),
+            function_source,
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256(bytes(46)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(47)),
+                SemanticCanonAbiV1::GpuKernel,
+                false,
+                false,
+                vec![],
+                SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+            )
+            .unwrap(),
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256(bytes(48)),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    function_source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256(bytes(49)),
+                    ty,
+                    SemanticLocalRoleV1::Temporary,
+                    function_source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![
+                root_block(50, SemanticTerminatorKindV1::Call(helper_call)),
+                root_block(51, SemanticTerminatorKindV1::Return),
+            ],
+        )
+        .unwrap()
+        .with_kernel_entry(SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(b"source_composition_root".to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256(bytes(52)),
+            SemanticKernelSourceContractV1::new(
+                Some(
+                    SemanticKernelLaunchBoundsV1::new(
+                        Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                        Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                None,
+                None,
+            )
+            .unwrap(),
+        ));
         let semantic = InertSemanticMirRequestV1::new(
             SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(37))),
-            vec![type_decl],
+            vec![type_decl, unit_decl],
             vec![],
             vec![],
             vec![],
-            vec![function],
-            vec![SemanticFunctionIdV1::from_index(0)],
+            vec![function, root],
+            vec![SemanticFunctionIdV1::from_index(1)],
         )
         .unwrap()
         .admit(SemanticMirLimitsV1::default())
@@ -566,7 +750,7 @@ mod tests {
 
     #[derive(Default)]
     struct SourceMirCallbacksV1 {
-        result: Option<Result<usize, String>>,
+        result: Option<Result<(usize, usize), String>>,
     }
 
     impl Callbacks for SourceMirCallbacksV1 {
@@ -587,7 +771,33 @@ mod tests {
                 for record in &records {
                     record.revalidate().map_err(|error| error.to_string())?;
                 }
-                Ok(records.len())
+                let semantic_owner = fe2o3_pliron::ProductionSemanticMirOwnerV1::try_new(
+                    semantic,
+                    fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+                )
+                .map_err(|error| error.to_string())?;
+                let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower(
+                    semantic_owner,
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                )
+                .map_err(|error| error.to_string())?;
+                let source_count = records.len();
+                let authenticated_source = AuthenticatedSourceMirScalarEvidenceV1 {
+                    records: records.into_boxed_slice(),
+                };
+                let compositions = AuthenticatedSourceMirKirScalarCompositionV2::from_authenticated_source_and_live_owner(
+                    &authenticated_source,
+                    &lowered,
+                )
+                .map_err(|error| error.to_string())?;
+                if compositions
+                    .records()
+                    .iter()
+                    .any(|evidence| evidence.steps().is_empty() || evidence.grants_authority())
+                {
+                    return Err("composition was vacuous or granted authority".to_owned());
+                }
+                Ok((source_count, compositions.records().len()))
             })();
             self.result = Some(result);
             Compilation::Stop
@@ -612,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn real_rustc_bitxor_expression_produces_one_authenticated_record() {
+    fn real_rustc_helper_bitxor_produces_one_authenticated_source_to_kir_composition() {
         let directory = TestTempDir::create("fe2o3-source-mir-scalar-v1");
         let source: PathBuf = directory.path().join("fixture.rs");
         let output = directory.path().join("fixture.rmeta");
@@ -645,6 +855,6 @@ mod tests {
         ];
         let mut callbacks = SourceMirCallbacksV1::default();
         rustc_driver::run_compiler(&args, &mut callbacks);
-        assert_eq!(callbacks.result.unwrap().unwrap(), 1);
+        assert_eq!(callbacks.result.unwrap().unwrap(), (1, 1));
     }
 }

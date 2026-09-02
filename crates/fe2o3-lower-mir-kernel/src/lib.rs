@@ -9,6 +9,7 @@ mod production_lineage_evidence_v3;
 mod production_mir_kir_cfg_refinement_v2;
 mod production_mir_kir_scalar_refinement_v1;
 mod production_semantic_kir_v1;
+mod production_source_mir_kir_composition_v2;
 pub use production_semantic_kir_v1::ProductionMemoryDischargeFailureV1;
 
 pub use production_correspondence_evidence_v4::*;
@@ -18,6 +19,7 @@ pub use production_lineage_evidence_v3::*;
 pub use production_mir_kir_cfg_refinement_v2::*;
 pub use production_mir_kir_scalar_refinement_v1::*;
 pub use production_semantic_kir_v1::*;
+pub use production_source_mir_kir_composition_v2::*;
 
 use std::{
     error::Error,
