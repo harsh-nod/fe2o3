@@ -443,7 +443,7 @@ mod tests {
         for forbidden in [
             concat!("compiler_execution", "_client"),
             concat!("CompilerModuleHandoff", "ReceiptV3"),
-            concat!("PublishedProtectedWorker", "V3HsacoV1 {"),
+            concat!("worker_v3_hsaco_", "publication::"),
             concat!("CUR", "RENT"),
             concat!("/run/fe2o3/", "compiler-execution-supervisor.sock"),
         ] {
