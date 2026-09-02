@@ -71,3 +71,29 @@ canonicalization, the independent statement-recipe and local-to-SSA checker,
 SHA-256 identity binding, the pinned Verus/vstd/Z3 closure, and the small
 executable/spec semantics. The proof contains no axioms, admits, or external
 bodies and grants no artifact or execution authority.
+
+## MIR-to-KIR call/CFG refinement V2
+
+`production_mir_kir_cfg_refinement_v2` closes one multi-function control-flow
+shape. A unit-returning kernel entry passes its sole `u32` argument to one
+non-recursive internal helper. The helper implements exactly
+`if x == 0 { x } else { C }` as a four-block diamond; both arms flow into one
+join parameter and the helper returns that parameter. Separate executable MIR
+and KIR machines consume six steps and expose the internal helper/call result
+plus the ordered call, selected arm, join, and return trace. Insufficient fuel
+fails closed.
+
+Production evidence replays the live owner and binds the admitted semantic-MIR
+and canonical-KIR identities. It checks the caller argument and call-destination
+locals, exact terminator operation span, direct callee and call result, all six
+source/KIR blocks, switch direction, fallback constant definition, both edge
+arguments, join parameter, and helper return. The Verus proof establishes the
+observation relation for every `u32` input and fallback constant; hostile
+branch, callee, phi, and return substitutions fail verification.
+
+This is not general CFG or call refinement. It excludes loops, recursion,
+multiple cases/helpers/calls, arithmetic in either arm, caller-visible return
+values (the kernel returns unit), memory and pointers, effects, panics/unwind,
+floats, atomics, barriers, tensors, MFMA, LLVM, runtime, and hardware. The Rust
+shape checker and executable-model correspondence, canonical owner machinery,
+SHA-256, and pinned Verus/vstd/Z3 closure remain in the trusted computing base.

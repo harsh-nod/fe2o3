@@ -10,11 +10,12 @@ use fe2o3_kernel_ir::{
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
-    ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
-    ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
-    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
-    SemanticKirSyntheticOperationRuleV1, validate_borrowed_ranked_semantic_projection_candidate_v1,
+    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertMirKirCfgRefinementEvidenceV2,
+    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionFormalMemoryOwnerV1,
+    ProductionRankedAccessSourceV1, ProductionRankedSemanticProjectionReceiptV1,
+    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    ProductionSemanticKirResourceV1, SemanticKirSyntheticOperationRuleV1,
+    validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -2322,6 +2323,7 @@ fn emitted_operations_are_charged_before_storage() {
 enum DefinedHelperFixtureV1 {
     Valid,
     BranchReturn,
+    BranchReturnU32,
     Impure,
     Recursive,
     TailCall,
@@ -2341,10 +2343,12 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
             SemanticBlockIdV1::from_index(target),
         )
     };
+    let branch_u32 = matches!(mode, DefinedHelperFixtureV1::BranchReturnU32);
+    let helper_value_ty = u64_ty;
     let root_argument_ty = if matches!(mode, DefinedHelperFixtureV1::MismatchedArgument) {
         u32_ty
     } else {
-        u64_ty
+        helper_value_ty
     };
     let callable = if matches!(mode, DefinedHelperFixtureV1::MissingCallable) {
         SemanticCallableIdV1::from_index(7)
@@ -2355,7 +2359,7 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
         callable,
         vec![SemanticOperandV1::Copy(local_place(1, root_argument_ty))],
         Some(SemanticCallDestinationV1::new(
-            local_place(2, u64_ty),
+            local_place(2, helper_value_ty),
             edge(1),
         )),
         SemanticUnwindActionV1::Unreachable,
@@ -2406,7 +2410,7 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
             ),
             SemanticLocalDeclV1::new(
                 SemanticLocalIdentityV1::from_sha256(bytes(208)),
-                u64_ty,
+                helper_value_ty,
                 SemanticLocalRoleV1::Temporary,
                 source,
             ),
@@ -2432,23 +2436,31 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
         false,
         false,
         1,
-        vec![SemanticAbiArgumentV1::source(direct_abi_value(u64_ty))],
-        direct_abi_value(u64_ty),
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(
+            helper_value_ty,
+        ))],
+        direct_abi_value(helper_value_ty),
     )
     .unwrap();
     let return_assignment = || {
         SemanticStatementV1::new(
             source,
             SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                local_place(0, u64_ty),
+                local_place(0, helper_value_ty),
                 SemanticRvalueV1::new(
-                    u64_ty,
-                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u64_ty))),
+                    helper_value_ty,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(
+                        1,
+                        helper_value_ty,
+                    ))),
                 ),
             )),
         )
     };
-    let helper_blocks = if matches!(mode, DefinedHelperFixtureV1::BranchReturn) {
+    let helper_blocks = if matches!(
+        mode,
+        DefinedHelperFixtureV1::BranchReturn | DefinedHelperFixtureV1::BranchReturnU32
+    ) {
         let branch = |role, target| {
             SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
         };
@@ -2464,10 +2476,14 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
         let assign_constant = SemanticStatementV1::new(
             source,
             SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                local_place(0, u64_ty),
+                local_place(0, helper_value_ty),
                 SemanticRvalueV1::new(
-                    u64_ty,
-                    SemanticRvalueKindV1::Use(scalar_constant(u64_ty, 7, 8)),
+                    helper_value_ty,
+                    SemanticRvalueKindV1::Use(scalar_constant(
+                        helper_value_ty,
+                        7,
+                        if branch_u32 { 4 } else { 8 },
+                    )),
                 ),
             )),
         );
@@ -2476,7 +2492,7 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
                 212,
                 vec![],
                 SemanticTerminatorKindV1::SwitchInt {
-                    discriminant: SemanticOperandV1::Copy(local_place(1, u64_ty)),
+                    discriminant: SemanticOperandV1::Copy(local_place(1, helper_value_ty)),
                     targets: switch,
                 },
             ),
@@ -2544,13 +2560,13 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
     let mut helper_locals = vec![
         SemanticLocalDeclV1::new(
             SemanticLocalIdentityV1::from_sha256(bytes(221)),
-            u64_ty,
+            helper_value_ty,
             SemanticLocalRoleV1::Return,
             source,
         ),
         SemanticLocalDeclV1::new(
             SemanticLocalIdentityV1::from_sha256(bytes(222)),
-            u64_ty,
+            helper_value_ty,
             SemanticLocalRoleV1::Argument(0),
             source,
         ),
@@ -2608,7 +2624,7 @@ fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRe
             223,
             SemanticScalarTypeV1::Integer {
                 signed: false,
-                bits: 64,
+                bits: if branch_u32 { 32 } else { 64 },
             },
         ),
     ];
@@ -2737,6 +2753,35 @@ fn branched_helper_return_is_a_live_block_parameter() {
     assert!(matches!(
         return_block.terminator,
         Some(Terminator::Return { ref values }) if values == &[parameter.id]
+    ));
+}
+
+#[test]
+fn live_u32_diamond_call_derives_nonzero_formal_cfg_evidence() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::BranchReturnU32),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let evidence = InertMirKirCfgRefinementEvidenceV2::from_live_owner(&lowered).unwrap();
+    evidence.revalidate().unwrap();
+    assert_eq!(evidence.fallback(), 7);
+    assert_ne!(evidence.identity(), &[0; 32]);
+    assert_ne!(evidence.semantic_sha256(), &[0; 32]);
+    assert_ne!(evidence.bindings().kir_join_parameter.0, 0);
+    assert!(!evidence.grants_authority());
+}
+
+#[test]
+fn cfg_refinement_fails_closed_for_the_neighboring_u64_shape() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::BranchReturn),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        InertMirKirCfgRefinementEvidenceV2::from_live_owner(&lowered),
+        Err(fe2o3_lower_mir_kernel::MirKirCfgRefinementErrorV2::UnsupportedShape)
     ));
 }
 
