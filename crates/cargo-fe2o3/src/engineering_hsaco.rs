@@ -1097,6 +1097,15 @@ const fn provider_kind(kind: WorkerInputKindV1) -> &'static str {
 }
 
 fn publish_observation(root: &Path, manifest: &[u8], hsaco: &[u8]) -> Result<PathBuf, String> {
+    publish_observation_inner(root, manifest, hsaco, false)
+}
+
+fn publish_observation_inner(
+    root: &Path,
+    manifest: &[u8],
+    hsaco: &[u8],
+    fail_after_first_write: bool,
+) -> Result<PathBuf, String> {
     validate_fresh_output_root(root)?;
     let content_id = observation_content_id(manifest, hsaco);
     let content_dir = root.join(&content_id);
@@ -1119,30 +1128,33 @@ fn publish_observation(root: &Path, manifest: &[u8], hsaco: &[u8]) -> Result<Pat
     let namespace = parent
         .open_child(NAMESPACE, "engineering namespace")?
         .ok_or_else(|| "created engineering namespace disappeared".to_owned())?;
-    let result = (|| {
-        rustix::fs::mkdirat(
-            namespace.file(),
-            content_id.as_str(),
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
-        )
-        .map_err(|error| format!("cannot create engineering content directory: {error}"))?;
-        let content = namespace
-            .open_child(&content_id, "engineering content directory")?
-            .ok_or_else(|| "created engineering content directory disappeared".to_owned())?;
-        write_new_file_at(content.file(), "observation.hsaco", hsaco, 0o600)?;
-        write_new_file_at(content.file(), "observation.json", manifest, 0o600)?;
-        sync_directory(content.file())
-            .map_err(|error| format!("cannot sync engineering content directory: {error}"))?;
-        sync_directory(namespace.file())
-            .map_err(|error| format!("cannot sync engineering namespace: {error}"))?;
-        namespace.validate_path("engineering namespace")?;
-        content.validate_path("engineering content directory")?;
-        Ok(content_dir.clone())
-    })();
-    if result.is_err() {
-        rollback_observation(&parent, &namespace, &content_id);
+    namespace.validate_path("engineering namespace")?;
+    rustix::fs::mkdirat(
+        namespace.file(),
+        content_id.as_str(),
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
+    )
+    .map_err(|error| format!("cannot create engineering content directory: {error}"))?;
+    let content = namespace
+        .open_child(&content_id, "engineering content directory")?
+        .ok_or_else(|| "created engineering content directory disappeared".to_owned())?;
+    content.validate_path("engineering content directory")?;
+    let retained_hsaco = write_new_file_at(content.file(), "observation.hsaco", hsaco, 0o600)?;
+    if fail_after_first_write {
+        return Err(
+            "injected engineering publication failure; partial output was retained".to_owned(),
+        );
     }
-    result
+    let retained_manifest = write_new_file_at(content.file(), "observation.json", manifest, 0o600)?;
+    sync_directory(content.file())
+        .map_err(|error| format!("cannot sync engineering content directory: {error}"))?;
+    sync_directory(namespace.file())
+        .map_err(|error| format!("cannot sync engineering namespace: {error}"))?;
+    namespace.validate_path("engineering namespace")?;
+    content.validate_path("engineering content directory")?;
+    retained_hsaco.validate_name(content.file(), "observation.hsaco")?;
+    retained_manifest.validate_name(content.file(), "observation.json")?;
+    Ok(content_dir)
 }
 
 fn sync_directory(directory: &File) -> std::io::Result<()> {
@@ -1155,34 +1167,18 @@ fn sync_directory(directory: &File) -> std::io::Result<()> {
     File::from(descriptor).sync_all()
 }
 
-fn rollback_observation(
-    parent: &crate::project::PinnedDirectory,
-    namespace: &crate::project::PinnedDirectory,
-    content_id: &str,
-) {
-    if let Ok(Some(content)) = namespace.open_child(content_id, "engineering rollback content") {
-        for entry in ["observation.hsaco", "observation.json"] {
-            let _ = rustix::fs::unlinkat(content.file(), entry, rustix::fs::AtFlags::empty());
-        }
-        let _ = unlink_matching_directory(namespace, content_id, &content);
-    }
-    let _ = unlink_matching_directory(parent, NAMESPACE, namespace);
-}
-
 fn unlink_matching_directory(
     parent: &crate::project::PinnedDirectory,
     name: &str,
     child: &crate::project::PinnedDirectory,
 ) -> Result<(), String> {
     let stat = rustix::fs::statat(parent.file(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(|error| format!("cannot inspect rollback entry {name}: {error}"))?;
+        .map_err(|error| format!("cannot inspect cleanup entry {name}: {error}"))?;
     if !child.matches_identity(stat.st_dev, stat.st_ino) {
-        return Err(format!(
-            "rollback entry {name} was substituted; it remains untouched"
-        ));
+        return Err(format!("cleanup entry {name} was substituted"));
     }
     rustix::fs::unlinkat(parent.file(), name, rustix::fs::AtFlags::REMOVEDIR)
-        .map_err(|error| format!("cannot remove rollback directory {name}: {error}"))
+        .map_err(|error| format!("cannot remove cleanup directory {name}: {error}"))
 }
 
 fn observation_content_id(manifest: &[u8], hsaco: &[u8]) -> String {
@@ -1214,7 +1210,40 @@ fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn write_new_file_at(parent: &File, name: &str, bytes: &[u8], mode: u32) -> Result<(), String> {
+struct RetainedOutputFile {
+    file: File,
+    device: u64,
+    inode: u64,
+}
+
+impl RetainedOutputFile {
+    fn from_file(file: File) -> Result<Self, String> {
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("cannot inspect retained output file: {error}"))?;
+        Ok(Self {
+            file,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    fn validate_name(&self, parent: &File, name: &str) -> Result<(), String> {
+        let stat = rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| format!("cannot inspect retained output `{name}`: {error}"))?;
+        if stat.st_dev != self.device || stat.st_ino != self.inode {
+            return Err(format!("retained output `{name}` was substituted"));
+        }
+        Ok(())
+    }
+}
+
+fn write_new_file_at(
+    parent: &File,
+    name: &str,
+    bytes: &[u8],
+    mode: u32,
+) -> Result<RetainedOutputFile, String> {
     let descriptor = rustix::fs::openat(
         parent,
         name,
@@ -1226,10 +1255,17 @@ fn write_new_file_at(parent: &File, name: &str, bytes: &[u8], mode: u32) -> Resu
         rustix::fs::Mode::from_bits_retain(mode),
     )
     .map_err(|error| format!("cannot create fresh `{name}`: {error}"))?;
-    let mut file = File::from(descriptor);
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| format!("cannot publish `{name}`: {error}"))
+    let mut retained = RetainedOutputFile::from_file(File::from(descriptor))?;
+    if let Err(error) = retained
+        .file
+        .write_all(bytes)
+        .and_then(|()| retained.file.sync_all())
+    {
+        return Err(format!(
+            "cannot publish `{name}`: {error}; partial output was retained"
+        ));
+    }
+    Ok(retained)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1634,6 +1670,26 @@ mod tests {
         assert!(!root.join(".fe2o3-owned-v1").exists());
         assert!(publish_observation(&root, manifest, hsaco).is_err());
         fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
+    fn publication_failure_retains_partial_output_without_cleanup() {
+        let parent_path = env::temp_dir().join(format!(
+            "fe2o3-engineering-failure-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&parent_path);
+        fs::create_dir(&parent_path).unwrap();
+        let root = parent_path.join(NAMESPACE);
+        let manifest = b"{\"authority\":\"none\"}\n";
+        let hsaco = b"inert-test-hsaco";
+        let content_id = observation_content_id(manifest, hsaco);
+        let error = publish_observation_inner(&root, manifest, hsaco, true).unwrap_err();
+        assert!(error.contains("partial output was retained"));
+        let content = root.join(content_id);
+        assert_eq!(fs::read(content.join("observation.hsaco")).unwrap(), hsaco);
+        assert!(!content.join("observation.json").exists());
+        fs::remove_dir_all(parent_path).unwrap();
     }
 
     #[test]
