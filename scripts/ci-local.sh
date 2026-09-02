@@ -928,6 +928,10 @@ run_verus() {
       'verus requires VERUS, or both VERUS_COMPILER and VERUS_RUNTIME, to name pinned executables' >&2
     return 2
   fi
+  run_step formal-compiler-v3-spec-tests \
+    python3 "${REPO_ROOT}/scripts/tests/formal_compiler_v3_spec.py"
+  run_step formal-compiler-v3-spec-freshness \
+    "${REPO_ROOT}/scripts/generate-formal-compiler-v3-spec.py" --check
   run_step runtime-model-verus \
     env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/crates/fe2o3-runtime-model/verus/verify-verus.sh"

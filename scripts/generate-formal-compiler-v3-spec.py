@@ -33,8 +33,8 @@ EXPECTED_KEYS = {
 }
 
 
-def load_spec() -> dict[str, object]:
-    value = json.loads(SPEC.read_text(encoding="utf-8"))
+def load_spec(path: Path = SPEC) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or set(value) != EXPECTED_KEYS:
         raise ValueError("V3 spec must contain the exact closed key set")
     integers = (
