@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt};
 use fe2o3_mir_model::{
     InertSourceMirScalarRefinementEvidenceV1, MAX_SOURCE_MIR_SCALAR_CERTIFICATES_V1,
     RustcSourceMirScalarObservationV1, SourceMirLocalBindingV1, SourceMirScalarOperatorV1,
-    semantic_mir_v1::AdmittedInertSemanticMirV1,
+    semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticSourceProvenanceV1},
 };
 use rustc_ast::ast::BinOpKind;
 use rustc_hir::intravisit::Visitor;
@@ -28,12 +28,21 @@ const MAX_MACRO_EXPANSION_DEPTH_V1: usize = 64;
 
 /// Authenticated, authority-free evidence retained by the production transaction.
 pub(crate) struct AuthenticatedSourceMirScalarEvidenceV1 {
+    eligible_candidates: usize,
     records: Box<[InertSourceMirScalarRefinementEvidenceV1]>,
 }
 
 /// Private production custody for independently joined source-to-KIR scalar evidence.
 pub(crate) struct AuthenticatedSourceMirKirScalarCompositionV2 {
+    eligible_candidates: usize,
     records: Box<[fe2o3_lower_mir_kernel::InertSourceMirKirScalarCompositionEvidenceV2]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceMirKirScalarCompositionStatusV2 {
+    NotApplicable,
+    Incomplete,
+    Proved,
 }
 
 impl AuthenticatedSourceMirKirScalarCompositionV2 {
@@ -44,6 +53,7 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
         source
             .revalidate()
             .map_err(ProductionSourceMirKirCompositionErrorV2::Source)?;
+        let eligible_candidates = source.eligible_candidates();
         let records = source
             .records()
             .iter()
@@ -55,6 +65,7 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let evidence = Self {
+            eligible_candidates,
             records: records.into_boxed_slice(),
         };
         evidence.revalidate()?;
@@ -62,6 +73,18 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), ProductionSourceMirKirCompositionErrorV2> {
+        let covered_candidates = self
+            .records
+            .iter()
+            .try_fold(0_usize, |covered, record| {
+                covered.checked_add(record.steps().len())
+            })
+            .ok_or(ProductionSourceMirKirCompositionErrorV2::RosterMismatch)?;
+        if covered_candidates > self.eligible_candidates
+            || (self.eligible_candidates == 0 && !self.records.is_empty())
+        {
+            return Err(ProductionSourceMirKirCompositionErrorV2::RosterMismatch);
+        }
         for record in &self.records {
             record
                 .revalidate()
@@ -79,6 +102,24 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
         &self.records
     }
 
+    pub(crate) const fn eligible_candidates(&self) -> usize {
+        self.eligible_candidates
+    }
+
+    pub(crate) fn covered_candidates(&self) -> usize {
+        self.records.iter().map(|record| record.steps().len()).sum()
+    }
+
+    pub(crate) fn status(&self) -> SourceMirKirScalarCompositionStatusV2 {
+        if self.eligible_candidates == 0 {
+            SourceMirKirScalarCompositionStatusV2::NotApplicable
+        } else if self.covered_candidates() == self.eligible_candidates {
+            SourceMirKirScalarCompositionStatusV2::Proved
+        } else {
+            SourceMirKirScalarCompositionStatusV2::Incomplete
+        }
+    }
+
     pub(crate) const fn grants_authority(&self) -> bool {
         false
     }
@@ -88,6 +129,7 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
 pub(crate) enum ProductionSourceMirKirCompositionErrorV2 {
     Source(ProductionSourceMirScalarErrorV1),
     Composition(fe2o3_lower_mir_kernel::SourceMirKirScalarCompositionErrorV2),
+    RosterMismatch,
     AuthorityEscalation,
 }
 
@@ -101,6 +143,9 @@ impl fmt::Display for ProductionSourceMirKirCompositionErrorV2 {
             Self::Composition(error) => {
                 write!(formatter, "source-to-KIR composition failed: {error}")
             }
+            Self::RosterMismatch => {
+                formatter.write_str("source-to-KIR composition roster exceeds eligible candidates")
+            }
             Self::AuthorityEscalation => {
                 formatter.write_str("source-to-KIR composition attempted to grant authority")
             }
@@ -113,7 +158,21 @@ impl AuthenticatedSourceMirScalarEvidenceV1 {
         &self.records
     }
 
+    pub(crate) const fn eligible_candidates(&self) -> usize {
+        self.eligible_candidates
+    }
+
     pub(crate) fn revalidate(&self) -> Result<(), ProductionSourceMirScalarErrorV1> {
+        let covered_candidates = self
+            .records
+            .iter()
+            .try_fold(0_usize, |covered, record| {
+                covered.checked_add(record.certificates().len())
+            })
+            .ok_or(ProductionSourceMirScalarErrorV1::CertificateLimit)?;
+        if covered_candidates > self.eligible_candidates {
+            return Err(ProductionSourceMirScalarErrorV1::IncompleteCandidateRoster);
+        }
         for record in &self.records {
             record.revalidate().map_err(|error| {
                 ProductionSourceMirScalarErrorV1::SemanticValidation(error.to_string())
@@ -137,6 +196,7 @@ pub(crate) enum ProductionSourceMirScalarErrorV1 {
     CertificateLimit,
     AmbiguousSourceExpression,
     SemanticMapping,
+    IncompleteCandidateRoster,
     SemanticValidation(String),
     AuthorityEscalation,
 }
@@ -159,6 +219,9 @@ impl fmt::Display for ProductionSourceMirScalarErrorV1 {
             Self::SemanticMapping => {
                 formatter.write_str("source/raw-MIR/semantic local mapping is inconsistent")
             }
+            Self::IncompleteCandidateRoster => formatter.write_str(
+                "authenticated source scalar roster exceeds the eligible-candidate count",
+            ),
             Self::SemanticValidation(error) => write!(
                 formatter,
                 "source-to-MIR semantic validation failed: {error}"
@@ -176,10 +239,19 @@ pub(crate) fn derive_production_source_mir_scalar_evidence_v1<'tcx>(
     semantic: &AdmittedInertSemanticMirV1,
 ) -> Result<AuthenticatedSourceMirScalarEvidenceV1, ProductionSourceMirScalarErrorV1> {
     let mut records = Vec::new();
+    let mut eligible_candidates = 0_usize;
     for (function, producer) in plan.function_producers().iter().zip(plan.body_producers()) {
-        derive_function_v1(tcx, function.instance, producer, semantic, &mut records)?;
+        derive_function_v1(
+            tcx,
+            function.instance,
+            producer,
+            semantic,
+            &mut eligible_candidates,
+            &mut records,
+        )?;
     }
     let evidence = AuthenticatedSourceMirScalarEvidenceV1 {
+        eligible_candidates,
         records: records.into_boxed_slice(),
     };
     evidence.revalidate()?;
@@ -191,6 +263,17 @@ struct HirCandidateV1<'tcx> {
     operator: SourceMirScalarOperatorV1,
     left: HirId,
     right: HirId,
+}
+
+struct EligibleHirCandidateV1<'tcx> {
+    expression: &'tcx Expr<'tcx>,
+    operator: SourceMirScalarOperatorV1,
+    left: HirId,
+    right: HirId,
+    left_raw: u32,
+    right_raw: u32,
+    source: SemanticSourceProvenanceV1,
+    matched: bool,
 }
 
 struct HirCandidateVisitorV1<'tcx> {
@@ -227,6 +310,7 @@ fn derive_function_v1<'tcx>(
     instance: Instance<'tcx>,
     producer: &RetainedSemanticBodyProducerV1,
     semantic: &AdmittedInertSemanticMirV1,
+    eligible_candidates: &mut usize,
     records: &mut Vec<InertSourceMirScalarRefinementEvidenceV1>,
 ) -> Result<(), ProductionSourceMirScalarErrorV1> {
     let Some(local) = instance.def_id().as_local() else {
@@ -257,6 +341,51 @@ fn derive_function_v1<'tcx>(
     let typeck = tcx.typeck(local);
     let raw_body = tcx.instance_mir(instance.def);
     let rustc_mir_body_sha256 = rustc_mir_body_sha256_v1(tcx, instance);
+    let mut eligible = Vec::new();
+    for candidate in visitor.values {
+        let Some(left_raw) = parameters.get(&candidate.left).copied() else {
+            continue;
+        };
+        let Some(right_raw) = parameters.get(&candidate.right).copied() else {
+            continue;
+        };
+        if !matches!(
+            typeck.expr_ty(candidate.expression).kind(),
+            TyKind::Uint(UintTy::U32)
+        ) || (tcx.sess.overflow_checks()
+            && matches!(
+                candidate.operator,
+                SourceMirScalarOperatorV1::Add
+                    | SourceMirScalarOperatorV1::Subtract
+                    | SourceMirScalarOperatorV1::Multiply
+            ))
+        {
+            continue;
+        }
+        let Ok(source) = canonical_source_provenance_v1(
+            tcx,
+            candidate.expression.span,
+            MAX_MACRO_EXPANSION_DEPTH_V1,
+        ) else {
+            continue;
+        };
+        eligible.push(EligibleHirCandidateV1 {
+            expression: candidate.expression,
+            operator: candidate.operator,
+            left: candidate.left,
+            right: candidate.right,
+            left_raw,
+            right_raw,
+            source: source.provenance(),
+            matched: false,
+        });
+    }
+    *eligible_candidates = eligible_candidates
+        .checked_add(eligible.len())
+        .ok_or(ProductionSourceMirScalarErrorV1::CertificateLimit)?;
+    if *eligible_candidates > MAX_SOURCE_MIR_SCALAR_CERTIFICATES_V1 {
+        return Err(ProductionSourceMirScalarErrorV1::CertificateLimit);
+    }
     for raw_block in raw_body.basic_blocks.indices() {
         let semantic_block = producer
             .raw_to_semantic_blocks
@@ -299,31 +428,27 @@ fn derive_function_v1<'tcx>(
                 .get(statement_index)
                 .ok_or(ProductionSourceMirScalarErrorV1::SemanticMapping)?
                 .provenance;
-            let matching = visitor
-                .values
+            let matching = eligible
                 .iter()
-                .filter(|candidate| {
-                    candidate.operator == operator
-                        && parameters.get(&candidate.left) == Some(&left_raw)
-                        && parameters.get(&candidate.right) == Some(&right_raw)
-                        && matches!(
-                            typeck.expr_ty(candidate.expression).kind(),
-                            TyKind::Uint(UintTy::U32)
-                        )
-                        && canonical_source_provenance_v1(
-                            tcx,
-                            candidate.expression.span,
-                            MAX_MACRO_EXPANSION_DEPTH_V1,
-                        )
-                        .is_ok_and(|candidate_source| candidate_source.provenance() == source)
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    (candidate.operator == operator
+                        && candidate.left_raw == left_raw
+                        && candidate.right_raw == right_raw
+                        && candidate.source == source)
+                        .then_some(index)
                 })
                 .collect::<Vec<_>>();
-            let [candidate] = matching.as_slice() else {
+            let [candidate_index] = matching.as_slice() else {
                 if matching.is_empty() {
                     continue;
                 }
                 return Err(ProductionSourceMirScalarErrorV1::AmbiguousSourceExpression);
             };
+            let candidate = &eligible[*candidate_index];
+            if candidate.matched {
+                return Err(ProductionSourceMirScalarErrorV1::AmbiguousSourceExpression);
+            }
             let destination_raw = u32::try_from(destination.local.index())
                 .map_err(|_| ProductionSourceMirScalarErrorV1::SemanticMapping)?;
             let semantic_statement = u32::try_from(statement_index)
@@ -360,6 +485,7 @@ fn derive_function_v1<'tcx>(
                     ProductionSourceMirScalarErrorV1::SemanticValidation(error.to_string())
                 })?,
             );
+            eligible[*candidate_index].matched = true;
         }
     }
     Ok(())
@@ -750,7 +876,9 @@ mod tests {
 
     #[derive(Default)]
     struct SourceMirCallbacksV1 {
-        result: Option<Result<(usize, usize), String>>,
+        force_unmatched_candidate: bool,
+        result:
+            Option<Result<(usize, usize, usize, SourceMirKirScalarCompositionStatusV2), String>>,
     }
 
     impl Callbacks for SourceMirCallbacksV1 {
@@ -764,10 +892,24 @@ mod tests {
                     })
                     .ok_or_else(|| "missing supported function".to_owned())?;
                 let instance = Instance::mono(tcx, definition.to_def_id());
-                let (semantic, producer) = test_semantic_and_producer(tcx, instance);
+                let (semantic, mut producer) = test_semantic_and_producer(tcx, instance);
+                if self.force_unmatched_candidate {
+                    producer.blocks[0].statements[0] =
+                        RetainedSemanticSourceProducerV1::from_test_provenance(
+                            SemanticSourceProvenanceV1::unavailable(),
+                        );
+                }
                 let mut records = Vec::new();
-                derive_function_v1(tcx, instance, &producer, &semantic, &mut records)
-                    .map_err(|error| error.to_string())?;
+                let mut eligible_candidates = 0;
+                derive_function_v1(
+                    tcx,
+                    instance,
+                    &producer,
+                    &semantic,
+                    &mut eligible_candidates,
+                    &mut records,
+                )
+                .map_err(|error| error.to_string())?;
                 for record in &records {
                     record.revalidate().map_err(|error| error.to_string())?;
                 }
@@ -783,6 +925,7 @@ mod tests {
                 .map_err(|error| error.to_string())?;
                 let source_count = records.len();
                 let authenticated_source = AuthenticatedSourceMirScalarEvidenceV1 {
+                    eligible_candidates,
                     records: records.into_boxed_slice(),
                 };
                 let compositions = AuthenticatedSourceMirKirScalarCompositionV2::from_authenticated_source_and_live_owner(
@@ -797,7 +940,18 @@ mod tests {
                 {
                     return Err("composition was vacuous or granted authority".to_owned());
                 }
-                Ok((source_count, compositions.records().len()))
+                if !self.force_unmatched_candidate
+                    && (compositions.eligible_candidates() != source_count
+                        || compositions.status() != SourceMirKirScalarCompositionStatusV2::Proved)
+                {
+                    return Err("composition did not retain exact proved roster status".to_owned());
+                }
+                Ok((
+                    eligible_candidates,
+                    source_count,
+                    compositions.records().len(),
+                    compositions.status(),
+                ))
             })();
             self.result = Some(result);
             Compilation::Stop
@@ -818,6 +972,40 @@ mod tests {
         assert_eq!(
             source_operator_v1(BinOpKind::BitXor),
             Some(SourceMirScalarOperatorV1::BitXor)
+        );
+    }
+
+    #[test]
+    fn authenticated_composition_status_never_labels_an_empty_eligible_roster_proved() {
+        let source = AuthenticatedSourceMirScalarEvidenceV1 {
+            eligible_candidates: 1,
+            records: Box::new([]),
+        };
+        source.revalidate().unwrap();
+        let composition = AuthenticatedSourceMirKirScalarCompositionV2 {
+            eligible_candidates: 1,
+            records: Box::new([]),
+        };
+        composition.revalidate().unwrap();
+        assert_eq!(composition.eligible_candidates(), 1);
+        assert_eq!(composition.covered_candidates(), 0);
+        assert_eq!(
+            composition.status(),
+            SourceMirKirScalarCompositionStatusV2::Incomplete
+        );
+        assert_ne!(
+            composition.status(),
+            SourceMirKirScalarCompositionStatusV2::Proved
+        );
+
+        let not_applicable = AuthenticatedSourceMirKirScalarCompositionV2 {
+            eligible_candidates: 0,
+            records: Box::new([]),
+        };
+        not_applicable.revalidate().unwrap();
+        assert_eq!(
+            not_applicable.status(),
+            SourceMirKirScalarCompositionStatusV2::NotApplicable
         );
     }
 
@@ -855,6 +1043,52 @@ mod tests {
         ];
         let mut callbacks = SourceMirCallbacksV1::default();
         rustc_driver::run_compiler(&args, &mut callbacks);
-        assert_eq!(callbacks.result.unwrap().unwrap(), (1, 1));
+        assert_eq!(
+            callbacks.result.unwrap().unwrap(),
+            (1, 1, 1, SourceMirKirScalarCompositionStatusV2::Proved)
+        );
+    }
+
+    #[test]
+    fn real_rustc_unmatched_eligible_candidate_is_retained_as_incomplete() {
+        let directory = TestTempDir::create("fe2o3-source-mir-scalar-incomplete-v2");
+        let source: PathBuf = directory.path().join("fixture.rs");
+        let output = directory.path().join("fixture.rmeta");
+        fs::write(
+            &source,
+            "#[inline(never)]\npub fn supported(left: u32, right: u32) -> u32 { left ^ right }\n",
+        )
+        .unwrap();
+        let sysroot = crate::process_execution::capture_output(
+            Command::new("rustc").args(["--print", "sysroot"]),
+        )
+        .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_owned(),
+            "--crate-name".to_owned(),
+            "fe2o3_source_mir_scalar_incomplete_fixture".to_owned(),
+            "--crate-type".to_owned(),
+            "lib".to_owned(),
+            "--edition".to_owned(),
+            "2024".to_owned(),
+            "--emit".to_owned(),
+            "metadata".to_owned(),
+            "--sysroot".to_owned(),
+            String::from_utf8(sysroot.stdout).unwrap().trim().to_owned(),
+            "-Coverflow-checks=on".to_owned(),
+            "-o".to_owned(),
+            output.display().to_string(),
+            source.display().to_string(),
+        ];
+        let mut callbacks = SourceMirCallbacksV1 {
+            force_unmatched_candidate: true,
+            result: None,
+        };
+        rustc_driver::run_compiler(&args, &mut callbacks);
+        assert_eq!(
+            callbacks.result.unwrap().unwrap(),
+            (1, 0, 0, SourceMirKirScalarCompositionStatusV2::Incomplete)
+        );
     }
 }

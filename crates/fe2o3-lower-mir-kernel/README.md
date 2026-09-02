@@ -65,18 +65,31 @@ changing the V4 wire format. V3 assigns separate canonical tags to constants,
 parameters, and earlier-result locals; V2 evidence cannot be reinterpreted as
 V3.
 
-`production_source_mir_kir_composition_v2` independently joins authority-free
+`production_source_mir_kir_composition_v2` V3 evidence independently joins authority-free
 source-to-MIR evidence to a replayed live semantic/KIR owner. For every source
 certificate it requires the same semantic module, statement, operator, exact
 left/right parameter-local identities, and destination local, then retains the
 same-session HIR owner/expression and raw-MIR body identities together with the
-exact canonical KIR and ordered operand/result SSA identities. Its Verus
-theorem is universal over source, MIR, and KIR values related by that explicit
-parameter environment; it composes distinct source, MIR, and KIR opcode spaces
-for the effect-free operation. The public inert constructor does not
-authenticate rustc provenance. Only `rustc-codegen-fe2o3` can construct the
-private authenticated wrapper from its same-session source custody, and that
-wrapper remains authority-free through the production stages.
+exact canonical KIR and ordered operand/result SSA identities. The live join
+rechecks the exact operation and its non-aliasing result in the canonical KIR.
+Its Verus theorem is universal over explicit source-local, semantic-local, and
+KIR-SSA valuation maps related by the exact retained local/parameter maps. It
+composes separate six-case source-to-MIR and MIR-to-KIR opcode relations and
+proves the destination-local and result-SSA state updates agree. Because the
+binary operations are effect-free, the observation is only the ordered
+operands and result, not a synthetic write or memory-effect trace.
+
+The private production wrapper counts syntactically eligible direct-parameter
+`u32` expressions and covered compositions. It reports `Proved` only for a
+nonempty exact roster, `Incomplete` when rustc eliminated or reshaped an
+eligible expression, and `NotApplicable` only for zero eligible expressions.
+The status and both counts remain retained through the production stages. The
+public inert constructor does not authenticate rustc provenance. Only
+`rustc-codegen-fe2o3` constructs the private wrapper from same-session source
+custody, and neither form grants authority. The Rust opcode conversion and
+candidate classification are executable checker premises and remain in the
+trusted computing base; the Verus theorem proves their explicit relation but
+does not cryptographically authenticate those integers.
 
 This claim does not cover moved or projected operands, projected destinations,
 multi-block covered functions, calls as scalar operations, pointer/address

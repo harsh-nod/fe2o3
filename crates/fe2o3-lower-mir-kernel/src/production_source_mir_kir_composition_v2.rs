@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt};
 
-use fe2o3_kernel_ir::ValueId;
+use fe2o3_kernel_ir::{BinaryOp, Operation, OperationKind, ScalarType, Type, ValueId};
 use fe2o3_mir_model::{
     InertSourceMirScalarRefinementEvidenceV1, SourceMirLocalBindingV1, SourceMirScalarOperatorV1,
     semantic_mir_v1::{
@@ -17,16 +17,16 @@ use crate::{
 };
 
 /// Model version for the first mechanically checked source-to-KIR composition.
-pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_MODEL_VERSION_V2: u16 = 2;
+pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_MODEL_VERSION_V2: u16 = 3;
 /// Closed independently checked production join policy.
-pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_POLICY_V2: u16 = 2;
+pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_POLICY_V2: u16 = 3;
 /// Stable name of the Verus composition theorem.
 pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_THEOREM_V2: &str =
     "fe2o3_source_mir_kir_u32_element_refines_v2";
 /// SHA-256 of the exact Verus composition source.
 pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_PROOF_SHA256_V2: [u8; 32] = [
-    0xa1, 0x40, 0xe6, 0x10, 0xd6, 0x79, 0x25, 0xcf, 0x32, 0x93, 0x1e, 0xc2, 0x2e, 0x7a, 0x7f, 0x58,
-    0xb0, 0xc4, 0x5a, 0xae, 0x33, 0x92, 0xd0, 0x4f, 0x38, 0x69, 0x7b, 0x9b, 0x76, 0x4e, 0xf2, 0x6b,
+    0x63, 0x98, 0xec, 0x11, 0x72, 0x25, 0x42, 0xe7, 0xbc, 0xdb, 0x4f, 0x7b, 0xa7, 0xcc, 0xf6, 0xc4,
+    0x75, 0xe2, 0x85, 0x9f, 0x46, 0xbd, 0x5f, 0x79, 0x12, 0x62, 0x69, 0x5f, 0x79, 0x9e, 0xe4, 0x8d,
 ];
 /// SHA-256 of the pinned Verus executable.
 pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_VERUS_SHA256_V2: [u8; 32] = [
@@ -39,8 +39,8 @@ pub const SOURCE_MIR_KIR_SCALAR_COMPOSITION_CLOSURE_SHA256_V2: [u8; 32] = [
     0x45, 0x57, 0x6d, 0xa9, 0xb9, 0x20, 0xd7, 0x55, 0xb4, 0xb7, 0xe9, 0x19, 0xe4, 0x7a, 0x60, 0x19,
 ];
 
-const MODEL_DOMAIN_V2: &[u8] = b"FE2O3/SOURCE-MIR-KIR/U32-COMPOSITION-MODEL/V2\0";
-const EVIDENCE_DOMAIN_V2: &[u8] = b"FE2O3/SOURCE-MIR-KIR/U32-COMPOSITION-EVIDENCE/V2\0";
+const MODEL_DOMAIN_V2: &[u8] = b"FE2O3/SOURCE-MIR-KIR/U32-COMPOSITION-MODEL/V3\0";
+const EVIDENCE_DOMAIN_V2: &[u8] = b"FE2O3/SOURCE-MIR-KIR/U32-COMPOSITION-EVIDENCE/V3\0";
 
 /// One exact source expression, semantic-MIR statement, and KIR operation joined by the checker.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -130,6 +130,7 @@ pub struct InertSourceMirKirScalarCompositionEvidenceV2 {
     canonical_kernel_ir: ProductionCanonicalKernelIrIdentityV1,
     source_expansion: SemanticSourceOriginV1,
     source_call_site: SemanticSourceOriginV1,
+    eligible_candidates: u32,
     steps: Box<[SourceMirKirScalarCompositionStepV2]>,
 }
 
@@ -146,14 +147,14 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             .verify_equivalence()
             .map_err(|error| SourceMirKirScalarCompositionErrorV2::LiveOwner(error.to_string()))?;
         let semantic = owner.semantic().semantic();
-        if source.semantic_mir_sha256() != semantic.semantic_sha256().as_bytes() {
-            return Err(SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch);
-        }
+        validate_semantic_identity_v2(
+            source.semantic_mir_sha256(),
+            semantic.semantic_sha256().as_bytes(),
+        )?;
         let mir_kir = InertMirKirScalarRefinementEvidenceV1::from_live_owner(owner)
             .map_err(|error| SourceMirKirScalarCompositionErrorV2::MirKir(error.to_string()))?;
-        if mir_kir.semantic_sha256() != source.semantic_mir_sha256()
-            || mir_kir.canonical_kernel_ir_identity() != owner.canonical_kernel_ir_identity()
-        {
+        validate_semantic_identity_v2(mir_kir.semantic_sha256(), source.semantic_mir_sha256())?;
+        if mir_kir.canonical_kernel_ir_identity() != owner.canonical_kernel_ir_identity() {
             return Err(SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch);
         }
 
@@ -205,7 +206,7 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
                     SourceMirKirScalarCompositionErrorV2::AmbiguousExactJoin
                 });
             };
-            steps.push(SourceMirKirScalarCompositionStepV2 {
+            let step = SourceMirKirScalarCompositionStepV2 {
                 source_expression_sha256: *certificate.source_expression_sha256(),
                 semantic_function: certificate.semantic_function(),
                 semantic_block: certificate.semantic_block(),
@@ -220,7 +221,9 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
                 kernel_ir_left: mapped.kernel_ir_left(),
                 kernel_ir_right: mapped.kernel_ir_right(),
                 kernel_ir_result: mapped.kernel_ir_result(),
-            });
+            };
+            validate_live_kir_step_v2(owner, &step)?;
+            steps.push(step);
         }
         steps.sort();
         if steps.is_empty() || steps.windows(2).any(|window| window[0] == window[1]) {
@@ -241,6 +244,11 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             .source()
             .call_site()
             .ok_or(SourceMirKirScalarCompositionErrorV2::InvalidStepRoster)?;
+        let eligible_candidates = u32::try_from(source.certificates().len())
+            .map_err(|_| SourceMirKirScalarCompositionErrorV2::Overflow)?;
+        if eligible_candidates == 0 || steps.len() != eligible_candidates as usize {
+            return Err(SourceMirKirScalarCompositionErrorV2::InvalidStepRoster);
+        }
         let canonical_bytes = encode_v2(
             model_identity,
             source_mir_evidence_identity,
@@ -251,6 +259,7 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             canonical_kernel_ir,
             Some(source_expansion),
             Some(source_call_site),
+            eligible_candidates,
             &steps,
         )?;
         let identity = evidence_identity_v2(&canonical_bytes);
@@ -266,6 +275,7 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             canonical_kernel_ir,
             source_expansion,
             source_call_site,
+            eligible_candidates,
             steps: steps.into_boxed_slice(),
         };
         evidence.revalidate()?;
@@ -283,7 +293,19 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             || self.canonical_kernel_ir.digest() == &[0; 32]
             || self.canonical_kernel_ir.canonical_length() == 0
             || self.steps.is_empty()
+            || self.eligible_candidates == 0
+            || self.steps.len() != self.eligible_candidates as usize
             || self.steps.windows(2).any(|window| window[0] >= window[1])
+            || self.steps.iter().any(|step| {
+                step.source_expression_sha256 == [0; 32]
+                    || step.left.source_binding_sha256() == &[0; 32]
+                    || step.right.source_binding_sha256() == &[0; 32]
+                    || step.destination.source_binding_sha256() == &[0; 32]
+                    || step.left.semantic_local() == step.destination.semantic_local()
+                    || step.right.semantic_local() == step.destination.semantic_local()
+                    || step.kernel_ir_left == step.kernel_ir_result
+                    || step.kernel_ir_right == step.kernel_ir_result
+            })
         {
             return Err(SourceMirKirScalarCompositionErrorV2::NonCanonical);
         }
@@ -298,6 +320,7 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             self.canonical_kernel_ir,
             Some(self.source_expansion),
             Some(self.source_call_site),
+            self.eligible_candidates,
             &self.steps,
         )?;
         if encoded.as_slice() != self.canonical_bytes.as_ref()
@@ -336,6 +359,10 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
     pub fn steps(&self) -> &[SourceMirKirScalarCompositionStepV2] {
         &self.steps
     }
+    /// Returns the exact nonzero source-candidate count covered by this record.
+    pub const fn eligible_candidates(&self) -> u32 {
+        self.eligible_candidates
+    }
     /// Composition evidence never grants compiler, artifact, LLVM, runtime, or launch authority.
     pub const fn grants_authority(&self) -> bool {
         false
@@ -372,6 +399,8 @@ pub enum SourceMirKirScalarCompositionErrorV2 {
     MissingExactJoin,
     /// A source expression maps to more than one KIR step.
     AmbiguousExactJoin,
+    /// A retained operand or result SSA does not name the live KIR operation.
+    LiveStepMismatch,
     /// The composed step roster is empty or duplicated.
     InvalidStepRoster,
     /// A bounded encoding coordinate overflowed.
@@ -399,6 +428,8 @@ impl fmt::Display for SourceMirKirScalarCompositionErrorV2 {
             Self::AmbiguousExactJoin => {
                 formatter.write_str("source scalar expression has an ambiguous KIR step")
             }
+            Self::LiveStepMismatch => formatter
+                .write_str("composed operand/result SSA does not match the live KIR operation"),
             Self::InvalidStepRoster => {
                 formatter.write_str("composed scalar step roster is empty or duplicated")
             }
@@ -419,6 +450,132 @@ fn joined_operator_v2(operator: SourceMirScalarOperatorV1) -> MirKirScalarOperat
         SourceMirScalarOperatorV1::BitOr => MirKirScalarOperatorV1::BitOr,
         SourceMirScalarOperatorV1::BitXor => MirKirScalarOperatorV1::BitXor,
     }
+}
+
+fn validate_semantic_identity_v2(
+    left: &[u8; 32],
+    right: &[u8; 32],
+) -> Result<(), SourceMirKirScalarCompositionErrorV2> {
+    if left == &[0; 32] || right == &[0; 32] || left != right {
+        return Err(SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch);
+    }
+    Ok(())
+}
+
+fn kernel_operator_v2(operator: MirKirScalarOperatorV1) -> BinaryOp {
+    match operator {
+        MirKirScalarOperatorV1::Add => BinaryOp::Add,
+        MirKirScalarOperatorV1::Subtract => BinaryOp::Subtract,
+        MirKirScalarOperatorV1::Multiply => BinaryOp::Multiply,
+        MirKirScalarOperatorV1::BitAnd => BinaryOp::BitAnd,
+        MirKirScalarOperatorV1::BitOr => BinaryOp::BitOr,
+        MirKirScalarOperatorV1::BitXor => BinaryOp::BitXor,
+    }
+}
+
+fn validate_joined_kir_operation_v2(
+    step: &SourceMirKirScalarCompositionStepV2,
+    operation: &Operation,
+) -> Result<(), SourceMirKirScalarCompositionErrorV2> {
+    let OperationKind::Binary { op, lhs, rhs } = operation.kind else {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    };
+    let [result] = operation.results.as_slice() else {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    };
+    if op != kernel_operator_v2(step.operator)
+        || lhs != step.kernel_ir_left
+        || rhs != step.kernel_ir_right
+        || result.id != step.kernel_ir_result
+        || result.id == lhs
+        || result.id == rhs
+        || result.ty != Type::Scalar(ScalarType::U32)
+        || !operation.memory_effects().is_empty()
+    {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    }
+    Ok(())
+}
+
+fn validate_live_kir_step_v2(
+    owner: &ProductionSemanticKirOwnerV1,
+    step: &SourceMirKirScalarCompositionStepV2,
+) -> Result<(), SourceMirKirScalarCompositionErrorV2> {
+    let functions = owner
+        .correspondence()
+        .lowered_functions()
+        .iter()
+        .filter(|binding| {
+            binding.correspondence_owner().index() == step.correspondence_owner
+                && binding.semantic_function().index() == step.semantic_function
+        })
+        .collect::<Vec<_>>();
+    let [function_binding] = functions.as_slice() else {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    };
+    let spans = owner
+        .correspondence()
+        .statement_operation_spans()
+        .iter()
+        .copied()
+        .filter(|span| {
+            span.correspondence_owner().index() == step.correspondence_owner
+                && span.semantic_function().index() == step.semantic_function
+                && span.semantic_block().index() == step.semantic_block
+                && span.statement_ordinal() == step.semantic_statement
+        })
+        .collect::<Vec<_>>();
+    let [span] = spans.as_slice() else {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    };
+    if span.kernel_ir_block().0 != step.kernel_ir_block
+        || span.operation_count() != 1
+        || span.first_operation_ordinal() != step.kernel_ir_operation
+    {
+        return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+    }
+    for (binding, local, value) in [
+        (
+            &step.left,
+            step.left.semantic_local().index(),
+            step.kernel_ir_left,
+        ),
+        (
+            &step.right,
+            step.right.semantic_local().index(),
+            step.kernel_ir_right,
+        ),
+    ] {
+        let parameter_bindings = owner
+            .correspondence()
+            .parameter_bindings()
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                candidate.correspondence_owner().index() == step.correspondence_owner
+                    && candidate.semantic_function().index() == step.semantic_function
+                    && candidate.semantic_local().index() == local
+            })
+            .collect::<Vec<_>>();
+        let [parameter] = parameter_bindings.as_slice() else {
+            return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+        };
+        if binding.semantic_local().index() != local || parameter.kernel_ir_value() != value {
+            return Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch);
+        }
+    }
+    let operation = owner
+        .module()
+        .function(function_binding.kernel_ir_function())
+        .and_then(|function| function.body.as_ref())
+        .and_then(|body| {
+            body.blocks
+                .iter()
+                .find(|block| block.id.0 == step.kernel_ir_block)
+        })
+        .and_then(|block| block.operations.get(step.kernel_ir_operation as usize))
+        .ok_or(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch)?;
+    validate_joined_kir_operation_v2(step, operation)
 }
 
 fn validate_source_local_v2(
@@ -466,12 +623,13 @@ fn encode_v2(
     canonical_kernel_ir: ProductionCanonicalKernelIrIdentityV1,
     expansion: Option<SemanticSourceOriginV1>,
     call_site: Option<SemanticSourceOriginV1>,
+    eligible_candidates: u32,
     steps: &[SourceMirKirScalarCompositionStepV2],
 ) -> Result<Vec<u8>, SourceMirKirScalarCompositionErrorV2> {
     let count =
         u32::try_from(steps.len()).map_err(|_| SourceMirKirScalarCompositionErrorV2::Overflow)?;
     let mut bytes = Vec::with_capacity(320 + steps.len() * 260);
-    bytes.extend_from_slice(b"F2SMKC2\0");
+    bytes.extend_from_slice(b"F2SMKC3\0");
     bytes.extend_from_slice(&SOURCE_MIR_KIR_SCALAR_COMPOSITION_MODEL_VERSION_V2.to_le_bytes());
     bytes.extend_from_slice(&SOURCE_MIR_KIR_SCALAR_COMPOSITION_POLICY_V2.to_le_bytes());
     for identity in [
@@ -492,6 +650,7 @@ fn encode_v2(
     });
     encode_origin_v2(&mut bytes, expansion);
     encode_origin_v2(&mut bytes, call_site);
+    bytes.extend_from_slice(&eligible_candidates.to_le_bytes());
     bytes.extend_from_slice(&count.to_le_bytes());
     for step in steps {
         bytes.extend_from_slice(&step.source_expression_sha256);
@@ -600,6 +759,7 @@ mod tests {
         )
         .unwrap();
         let source_call_site = source_expansion;
+        let eligible_candidates = 1;
         let canonical_bytes = encode_v2(
             model_identity,
             source_mir_evidence_identity,
@@ -610,6 +770,7 @@ mod tests {
             canonical_kernel_ir,
             Some(source_expansion),
             Some(source_call_site),
+            eligible_candidates,
             &steps,
         )
         .unwrap();
@@ -625,6 +786,7 @@ mod tests {
             canonical_kernel_ir,
             source_expansion,
             source_call_site,
+            eligible_candidates,
             steps: steps.into_boxed_slice(),
         }
     }
@@ -639,10 +801,15 @@ mod tests {
         let closure: [u8; 32] =
             Sha256::digest(include_bytes!("../verus/pins/VERUS_CLOSURE_MANIFEST")).into();
         assert_eq!(closure, SOURCE_MIR_KIR_SCALAR_COMPOSITION_CLOSURE_SHA256_V2);
-        assert_ne!(
+        assert_eq!(
             source_mir_kir_scalar_composition_model_identity_v2(),
-            [0; 32]
+            [
+                0x95, 0x9b, 0x79, 0x6a, 0x56, 0x73, 0xad, 0xb3, 0x41, 0x96, 0xf6, 0x77, 0x2c, 0x52,
+                0x5d, 0xca, 0x9c, 0xcf, 0xc9, 0xab, 0x5c, 0x0b, 0x1e, 0x4c, 0x3d, 0x57, 0x9d, 0x12,
+                0xc6, 0xcf, 0x7f, 0x7e,
+            ]
         );
+        assert_eq!(&inert_fixture_v2().canonical_bytes[..8], b"F2SMKC3\0");
     }
 
     #[test]
@@ -676,6 +843,47 @@ mod tests {
         assert_eq!(
             ssa.revalidate(),
             Err(SourceMirKirScalarCompositionErrorV2::NonCanonical)
+        );
+    }
+
+    #[test]
+    fn live_join_validator_rejects_swapped_parameters_result_and_semantic_identity() {
+        use fe2o3_kernel_ir::ValueDef;
+
+        let exact = inert_fixture_v2();
+        let operation = Operation::effect_free(
+            ValueDef::new(ValueId(12), Type::Scalar(ScalarType::U32)),
+            OperationKind::Binary {
+                op: BinaryOp::Subtract,
+                lhs: ValueId(10),
+                rhs: ValueId(11),
+            },
+        );
+        validate_joined_kir_operation_v2(&exact.steps[0], &operation).unwrap();
+
+        let mut swapped_parameters = exact.steps[0].clone();
+        (
+            swapped_parameters.kernel_ir_left,
+            swapped_parameters.kernel_ir_right,
+        ) = (
+            swapped_parameters.kernel_ir_right,
+            swapped_parameters.kernel_ir_left,
+        );
+        assert_eq!(
+            validate_joined_kir_operation_v2(&swapped_parameters, &operation),
+            Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch),
+        );
+
+        let mut wrong_result = exact.steps[0].clone();
+        wrong_result.kernel_ir_result = ValueId(13);
+        assert_eq!(
+            validate_joined_kir_operation_v2(&wrong_result, &operation),
+            Err(SourceMirKirScalarCompositionErrorV2::LiveStepMismatch),
+        );
+
+        assert_eq!(
+            validate_semantic_identity_v2(&[1; 32], &[2; 32]),
+            Err(SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch),
         );
     }
 }

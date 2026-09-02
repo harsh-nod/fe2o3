@@ -1,10 +1,15 @@
 use vstd::prelude::*;
 verus! {
-spec fn effects(left: int, right: int, destination: int) -> Seq<int> {
-    seq![left, right, destination, (left + right) % 4294967296]
-}
-proof fn wrong_destination_is_not_a_composition(left: int, right: int, destination: int)
-    ensures effects(left, right, destination) == effects(left, right, destination + 1),
+proof fn wrong_destination_is_not_a_composition(
+    values: Map<int, int>,
+    destination: int,
+    wrong_destination: int,
+    result: int,
+)
+    requires destination != wrong_destination,
+    ensures
+        values.insert(destination, result)[destination]
+            == values.insert(wrong_destination, result)[destination],
 {}
 }
 fn main() {}

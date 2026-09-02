@@ -23,11 +23,12 @@ printf '%s  %s\n' "$expected_verus_sha" "$verus" | sha256sum -c -
 "$closure_checker" "$(dirname -- "$(readlink -f -- "$verus")")" "$closure_manifest" >/dev/null
 printf '%s  %s\n' \
     d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019 "$closure_manifest" \
-    a140e610d67925cf32931ec22e7a7f58b0c45aae3392d04f38697b9b764ef26b "$proof" \
+    6398ec11722542e7bcdb4f7ba7ccf6c475e2859f46bd5f791262695f799ee48d "$proof" \
     fb22cdb029ba070990c63dc9b119c815b37bc09f02def377352b371362af6720 "$negative_dir/source_mir_kir_cross_owner_v2.rs" \
     6887b9a5d40bdea1190000cdb9f5b0fb9a6f05bc4d95eb6cae352ee7e4f09374 "$negative_dir/source_mir_kir_swapped_operands_v2.rs" \
-    302788b40802915eb10c59896bd394398b461b3721989d5e7d80ce1b47f5c9b2 "$negative_dir/source_mir_kir_wrong_destination_v2.rs" \
-    b4609f419781b0273f2946548280e9f5468266373e5b08b6b45682afee6202ee "$negative_dir/source_mir_kir_wrong_parameter_v2.rs" \
+    fc9209a2400a9da6afe14e1eba7e53c0cf9f93a7119c62c43f978ec75f934a3d "$negative_dir/source_mir_kir_wrong_destination_v2.rs" \
+    10cade04b36a1608f84cbe6470cf867371b763510474b5f7604ee0b514806500 "$negative_dir/source_mir_kir_wrong_parameter_v2.rs" \
+    88a678b1b7489e171bf39fec2dec02b51feec190a92c9dcb00a99a556c264596 "$negative_dir/source_mir_kir_wrong_result_ssa_v2.rs" \
     | sha256sum -c -
 
 for token in 'assume(' 'admit(' '#[verifier::external_body]' '#[verifier::external]'; do
@@ -46,7 +47,8 @@ for name in \
     source_mir_kir_cross_owner_v2 \
     source_mir_kir_swapped_operands_v2 \
     source_mir_kir_wrong_destination_v2 \
-    source_mir_kir_wrong_parameter_v2
+    source_mir_kir_wrong_parameter_v2 \
+    source_mir_kir_wrong_result_ssa_v2
 do
     file="$negative_dir/$name.rs"
     if timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$file" \
@@ -57,4 +59,4 @@ do
     grep -E 'postcondition not satisfied|assertion failed' "$tmp/$name.log" >/dev/null
 done
 
-printf 'Source-to-MIR-to-KIR u32 parameter composition: 5 obligations; 4 expected rejections\n'
+printf 'Source-to-MIR-to-KIR u32 parameter composition: 5 obligations; 5 expected rejections\n'
