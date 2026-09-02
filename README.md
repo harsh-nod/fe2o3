@@ -14,9 +14,14 @@ instead of being joined by filenames or convention.
 > fe2o3 is under active development. It is not ready for production workloads,
 > does not yet provide a supported source-to-GPU first-run experience, and makes
 > no API, wire-format, or compatibility stability promise before the first
-> preview release. Current production direct-KFD qualification is bounded to MI300X/
+> preview release. Current direct-KFD qualification is bounded to MI300X
 > `gfx942:xnack-` lanes. See [What works](#what-works) and
 > [Known limitations](#known-limitations) before evaluating it.
+
+The project currently ships only from a source checkout and makes no crates.io
+installation promise. The first developer-preview release remains blocked on
+the conditions in the [release process](docs/release-process.md) and
+[launch issue #267](https://github.com/harsh-nod/fe2o3/issues/267).
 
 ## Why fe2o3
 
@@ -34,7 +39,9 @@ instead of being joined by filenames or convention.
 - **Semantic debugging and profiling.** Agent-facing JSONL protocols preserve
   provenance and distinguish declared, observed, inferred, and unavailable
   facts. CPU replay supports reverse navigation and structured diagnosis;
-  bounded ROCgdb and rocprofv3 integrations cover live-tool workflows.
+  bounded ROCgdb control and rocprofv3 planning/import workflows are
+  implemented. Admitted stopped-GPU state, protected real-dispatch capture, and
+  ATT decoding remain incomplete.
 - **Evidence-aware verification.** Formal contracts and qualification evidence
   are kept separate from compiler, publication, load, and dispatch authority.
 
