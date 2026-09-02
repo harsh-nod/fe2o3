@@ -10,9 +10,10 @@ use fe2o3_kernel_descriptor::CodeObjectVersion;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, FinalizationError, PinnedWorkerV1, WorkerExecutionError,
+    CompilerModuleHandoffErrorV2, ContentIdentityV1, FinalizationError, PinnedWorkerV1,
+    WorkerExecutionError,
     WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError, WorkerResponseV2,
+    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     finalize_unfinalized,
     request_construction::{
         DecodedCompilerModuleHandoffV2, WorkerRequestConstructionError,
@@ -149,6 +150,14 @@ impl From<WorkerProtocolError> for EngineeringHsacoErrorV1 {
     fn from(error: WorkerProtocolError) -> Self {
         Self(format!(
             "engineering worker protocol rejected input: {error}"
+        ))
+    }
+}
+
+impl From<CompilerModuleHandoffErrorV2> for EngineeringHsacoErrorV1 {
+    fn from(error: CompilerModuleHandoffErrorV2) -> Self {
+        Self(format!(
+            "engineering compiler handoff rejected input: {error}"
         ))
     }
 }
