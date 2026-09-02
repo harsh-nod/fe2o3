@@ -49,6 +49,7 @@ use fe2o3_worker_v3_verification_service::{
     begin_worker_v3_verification_session_v2, prepare_worker_v3_verification_receiver_v1,
 };
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
+use rustix::io::Errno;
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
     SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType, recv, recvmsg, send,
@@ -560,10 +561,7 @@ fn unavailable_reservation_and_replayed_begin_fail_closed() {
         let response = receive_challenge(&peer);
         assert!(response.reservation().is_none());
         assert!(response.matches_request(&request));
-        assert_eq!(
-            recv(&peer, &mut [0_u8; 1], RecvFlags::empty()).unwrap().0,
-            0
-        );
+        expect_peer_eof(&peer);
     }
 }
 
@@ -1174,6 +1172,21 @@ fn receive_challenge(peer: &OwnedFd) -> WorkerV3VerificationChallengeFrameV2 {
         bytes.len()
     );
     WorkerV3VerificationChallengeFrameV2::decode_canonical(&bytes).unwrap()
+}
+
+fn expect_peer_eof(peer: &OwnedFd) {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(1))
+        .expect("bounded EOF deadline");
+    let mut byte = [0_u8; 1];
+    loop {
+        match recv(peer, &mut byte, RecvFlags::empty()) {
+            Ok((0, _)) => return,
+            Ok((received, _)) => panic!("unexpected {received}-byte packet before EOF"),
+            Err(Errno::AGAIN) if Instant::now() < deadline => thread::yield_now(),
+            Err(error) => panic!("expected peer EOF: {error}"),
+        }
+    }
 }
 
 fn receive_terminal(peer: &OwnedFd) -> WorkerV3VerificationTerminalFrameV2 {
