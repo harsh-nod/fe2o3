@@ -959,6 +959,9 @@ run_verus() {
   run_step mir-kir-cfg-refinement-verus-v2 \
     env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/scripts/test-mir-kir-cfg-refinement-verus-v2.sh"
+  run_step mir-kir-structured-cfg-verus-v3 \
+    env VERUS="${compiler_verus}" \
+    "${REPO_ROOT}/scripts/test-mir-kir-structured-cfg-verus-v3.sh"
   run_step affine-bounds-soundness-verus \
     env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/scripts/test-affine-bounds-soundness-verus.sh"
