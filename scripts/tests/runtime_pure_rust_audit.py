@@ -26,6 +26,16 @@ POLICY = CHECKER.load_policy(
 VIRTUAL_POLICY = CHECKER.load_policy(
     Path(__file__).resolve().parents[1] / "virtual-runtime-no-gpu-policy.json"
 )
+REVIEWED_BUILD_SCRIPTS = (
+    "libc@0.2.189",
+    "proc-macro2@1.0.107",
+    "quote@1.0.47",
+    "rustix@1.1.4",
+    "serde@1.0.229",
+    "serde_core@1.0.229",
+    "serde_json@1.0.151",
+    "zmij@1.0.23",
+)
 
 
 def target(kind: str = "lib") -> dict:
@@ -308,43 +318,37 @@ class MetadataAuditTests(unittest.TestCase):
         )
         self.assertEqual((), stats["allowed_build_scripts"])
 
-    def test_allows_and_reports_reviewed_rustix_and_libc_build_scripts(self) -> None:
+    def test_policy_contains_only_reviewed_exact_build_script_identities(self) -> None:
+        self.assertEqual(
+            REVIEWED_BUILD_SCRIPTS,
+            POLICY["allowed_cargo_build_script_packages"],
+        )
+
+    def test_allows_and_reports_reviewed_exact_build_script_identities(self) -> None:
         registry = CHECKER.CRATES_IO_SOURCE
+        identities = [identity.rsplit("@", 1) for identity in REVIEWED_BUILD_SCRIPTS]
         value = metadata(
-            [
-                package("runtime"),
+            [package("runtime")]
+            + [
                 package(
-                    "rustix",
+                    name,
                     source=registry,
                     targets=[target(), target("custom-build")],
-                    version="1.1.4",
-                ),
-                package(
-                    "libc",
-                    source=registry,
-                    targets=[target(), target("custom-build")],
-                    version="0.2.189",
-                ),
+                    version=version,
+                )
+                for name, version in identities
             ],
             [
                 node(
                     "runtime",
-                    [dependency("rustix", version="1.1.4")],
+                    [dependency(name, version=version) for name, version in identities],
                 ),
-                node(
-                    "rustix",
-                    [dependency("libc", version="0.2.189")],
-                    version="1.1.4",
-                ),
-                node("libc", version="0.2.189"),
-            ],
+            ]
+            + [node(name, version=version) for name, version in identities],
         )
         violations, stats = CHECKER.audit_metadata(value, ("runtime",), POLICY)
         self.assertEqual([], violations)
-        self.assertEqual(
-            ("libc@0.2.189", "rustix@1.1.4"),
-            stats["allowed_build_scripts"],
-        )
+        self.assertEqual(REVIEWED_BUILD_SCRIPTS, stats["allowed_build_scripts"])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metadata.json"
             path.write_text(json.dumps(value), encoding="utf-8")
@@ -355,8 +359,72 @@ class MetadataAuditTests(unittest.TestCase):
                 )
         self.assertEqual(0, status)
         self.assertIn(
-            "allowed_build_scripts=libc@0.2.189,rustix@1.1.4",
+            "allowed_build_scripts=" + ",".join(REVIEWED_BUILD_SCRIPTS),
             output.getvalue(),
+        )
+
+    def test_rejects_every_reviewed_build_script_identity_at_another_version(self) -> None:
+        registry = CHECKER.CRATES_IO_SOURCE
+        prior_versions = {
+            "libc": "0.2.188",
+            "proc-macro2": "1.0.106",
+            "quote": "1.0.46",
+            "rustix": "1.1.3",
+            "serde": "1.0.228",
+            "serde_core": "1.0.228",
+            "serde_json": "1.0.150",
+            "zmij": "1.0.22",
+        }
+        for name, version in prior_versions.items():
+            with self.subTest(identity=f"{name}@{version}"):
+                value = metadata(
+                    [
+                        package("runtime"),
+                        package(
+                            name,
+                            source=registry,
+                            targets=[target(), target("custom-build")],
+                            version=version,
+                        ),
+                    ],
+                    [
+                        node("runtime", [dependency(name, version=version)]),
+                        node(name, version=version),
+                    ],
+                )
+                violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
+                self.assertEqual(
+                    [
+                        "unapproved Cargo build script in production closure: "
+                        f"{name}@{version}"
+                    ],
+                    violations,
+                )
+
+    def test_rejects_a_name_impostor_at_a_reviewed_version(self) -> None:
+        registry = CHECKER.CRATES_IO_SOURCE
+        value = metadata(
+            [
+                package("runtime"),
+                package(
+                    "serde-json",
+                    source=registry,
+                    targets=[target(), target("custom-build")],
+                    version="1.0.151",
+                ),
+            ],
+            [
+                node("runtime", [dependency("serde-json", version="1.0.151")]),
+                node("serde-json", version="1.0.151"),
+            ],
+        )
+        violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
+        self.assertEqual(
+            [
+                "unapproved Cargo build script in production closure: "
+                "serde-json@1.0.151"
+            ],
+            violations,
         )
 
     def test_rejects_allowlisted_build_script_from_another_source(self) -> None:
