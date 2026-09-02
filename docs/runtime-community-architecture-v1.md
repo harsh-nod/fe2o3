@@ -185,4 +185,7 @@ transitions. The frozen SDMA manifest pins the reviewed ROCr revision and packet
 sources. KFD ioctl results, MMIO, coherence, kernel and firmware behavior,
 hardware completion, progress, liveness, and performance are not formally
 proved. Native claims require a retained result artifact from an identified
-MI300X run.
+MI300X run. The R7 copy qualification record names the exact measured commit,
+devices, software stack, validation policy, load boundaries, raw output, and
+limitations in
+[`benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-01.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-01.md).

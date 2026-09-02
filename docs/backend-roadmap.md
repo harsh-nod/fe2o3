@@ -208,7 +208,9 @@ quarantine, dependency-gated publication, and exact cross-device coordinates.
 It does not prove the Rust implementation or native hardware. Frozen UAPI and
 SDMA manifests plus executable tests provide separate checked evidence. Native
 correctness and performance require a retained, commit-identified MI300X result
-artifact before they are described as measured.
+artifact before they are described as measured. The current bounded result is
+[`async-copy-mi300x-2026-09-01.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-01.md);
+it reports a correctness pass but not KFD copy-performance parity.
 
 Still open: multiple simultaneous compute dispatches on one KFD device,
 compute/copy overlap through the public runtime SPI, native XGMI peer mapping and
