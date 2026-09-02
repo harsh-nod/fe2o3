@@ -24,6 +24,8 @@ mod kernel_ir_codegen;
 mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
+mod production_formal_compiler_v3;
+mod production_formal_compiler_v3_pin;
 mod production_geometry_v1;
 mod production_mir_kir_cfg_v2;
 mod production_mir_pliron_verus_join_v1;

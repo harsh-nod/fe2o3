@@ -54,16 +54,18 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
             .revalidate()
             .map_err(ProductionSourceMirKirCompositionErrorV2::Source)?;
         let eligible_candidates = source.eligible_candidates();
-        let records = source
-            .records()
-            .iter()
-            .map(|record| {
-                fe2o3_lower_mir_kernel::InertSourceMirKirScalarCompositionEvidenceV2::from_live_production(
-                    record, owner,
-                )
-                .map_err(ProductionSourceMirKirCompositionErrorV2::Composition)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut records = Vec::new();
+        for record in source.records() {
+            match fe2o3_lower_mir_kernel::InertSourceMirKirScalarCompositionEvidenceV2::from_live_production(
+                record, owner,
+            ) {
+                Ok(evidence) => records.push(evidence),
+                Err(error) if source_mir_kir_record_is_outside_model_v2(&error) => {}
+                Err(error) => {
+                    return Err(ProductionSourceMirKirCompositionErrorV2::Composition(error));
+                }
+            }
+        }
         let evidence = Self {
             eligible_candidates,
             records: records.into_boxed_slice(),
@@ -123,6 +125,17 @@ impl AuthenticatedSourceMirKirScalarCompositionV2 {
     pub(crate) const fn grants_authority(&self) -> bool {
         false
     }
+}
+
+fn source_mir_kir_record_is_outside_model_v2(
+    error: &fe2o3_lower_mir_kernel::SourceMirKirScalarCompositionErrorV2,
+) -> bool {
+    matches!(
+        error,
+        fe2o3_lower_mir_kernel::SourceMirKirScalarCompositionErrorV2::MirKir(
+            fe2o3_lower_mir_kernel::MirKirScalarRefinementErrorV1::UnsupportedInputRelation
+        )
+    )
 }
 
 #[derive(Debug)]
@@ -1007,6 +1020,30 @@ mod tests {
             not_applicable.status(),
             SourceMirKirScalarCompositionStatusV2::NotApplicable
         );
+    }
+
+    #[test]
+    fn only_the_explicit_scalar_input_relation_boundary_is_uncovered() {
+        use fe2o3_lower_mir_kernel::{
+            MirKirScalarRefinementErrorV1, SourceMirKirScalarCompositionErrorV2,
+        };
+
+        assert!(source_mir_kir_record_is_outside_model_v2(
+            &SourceMirKirScalarCompositionErrorV2::MirKir(
+                MirKirScalarRefinementErrorV1::UnsupportedInputRelation,
+            ),
+        ));
+        assert!(!source_mir_kir_record_is_outside_model_v2(
+            &SourceMirKirScalarCompositionErrorV2::MirKir(
+                MirKirScalarRefinementErrorV1::NoCoveredSteps,
+            ),
+        ));
+        assert!(!source_mir_kir_record_is_outside_model_v2(
+            &SourceMirKirScalarCompositionErrorV2::MissingExactJoin,
+        ));
+        assert!(!source_mir_kir_record_is_outside_model_v2(
+            &SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch,
+        ));
     }
 
     #[test]

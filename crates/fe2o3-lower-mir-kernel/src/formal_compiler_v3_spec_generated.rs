@@ -4,6 +4,11 @@
 pub const FORMAL_COMPILER_V3_SCHEMA_VERSION: u16 = 1;
 /// Formal Compiler claim generation.
 pub const FORMAL_COMPILER_V3_CLAIM_VERSION: u16 = 3;
+/// SHA-256 of the canonical complete declarative contract.
+pub const FORMAL_COMPILER_V3_CONTRACT_SHA256: [u8; 32] = [
+    0xdf, 0x3d, 0x86, 0x49, 0xe2, 0xbb, 0x27, 0x64, 0x2a, 0x45, 0xee, 0xae, 0xe4, 0xc5, 0x28, 0x87,
+    0xa4, 0xd3, 0x01, 0x23, 0xf4, 0xa2, 0x40, 0xaf, 0x97, 0x5e, 0x75, 0x95, 0xba, 0x91, 0x5d, 0xf1,
+];
 /// Stable name of the exact composed V3 fragment.
 pub const FORMAL_COMPILER_V3_CLAIM_NAME: &str = "guarded-u32-xor-helper-store-v1";
 /// Closed scalar word width.

@@ -14,8 +14,9 @@ use fe2o3_mir_model::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    InertMirKirScalarRefinementEvidenceV1, MirKirScalarOperatorV1, MirKirScalarSemanticOperandV1,
-    ProductionCanonicalKernelIrIdentityV1, ProductionSemanticKirOwnerV1,
+    InertMirKirScalarRefinementEvidenceV1, MirKirScalarOperatorV1, MirKirScalarRefinementErrorV1,
+    MirKirScalarSemanticOperandV1, ProductionCanonicalKernelIrIdentityV1,
+    ProductionSemanticKirOwnerV1,
 };
 
 /// Model version for the first mechanically checked source-to-KIR composition.
@@ -154,7 +155,7 @@ impl InertSourceMirKirScalarCompositionEvidenceV2 {
             semantic.semantic_sha256().as_bytes(),
         )?;
         let mir_kir = InertMirKirScalarRefinementEvidenceV1::from_live_owner(owner)
-            .map_err(|error| SourceMirKirScalarCompositionErrorV2::MirKir(error.to_string()))?;
+            .map_err(SourceMirKirScalarCompositionErrorV2::MirKir)?;
         validate_semantic_identity_v2(mir_kir.semantic_sha256(), source.semantic_mir_sha256())?;
         if mir_kir.canonical_kernel_ir_identity() != owner.canonical_kernel_ir_identity() {
             return Err(SourceMirKirScalarCompositionErrorV2::SemanticIdentityMismatch);
@@ -392,7 +393,7 @@ pub enum SourceMirKirScalarCompositionErrorV2 {
     /// The live semantic/KIR owner did not replay.
     LiveOwner(String),
     /// Parameter-rooted MIR-to-KIR evidence could not be derived.
-    MirKir(String),
+    MirKir(MirKirScalarRefinementErrorV1),
     /// The two evidence boundaries name different admitted semantic MIR.
     SemanticIdentityMismatch,
     /// A source/raw-MIR/semantic local axis differs from the live semantic owner.

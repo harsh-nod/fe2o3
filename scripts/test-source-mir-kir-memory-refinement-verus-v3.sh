@@ -10,6 +10,7 @@ esac
 readonly expected_version=0.2026.08.02.b677dd5
 readonly expected_verus_sha=ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
 readonly proof="$root/crates/fe2o3-lower-mir-kernel/verus/source_mir_kir_memory_refinement_v3.rs"
+readonly generated_contract="$root/crates/fe2o3-lower-mir-kernel/verus/formal_compiler_v3_spec_generated.rs"
 readonly negative_dir="$root/crates/fe2o3-lower-mir-kernel/verus/negative"
 readonly closure_manifest="$root/crates/fe2o3-lower-mir-kernel/verus/pins/VERUS_CLOSURE_MANIFEST"
 readonly closure_checker="$root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -23,6 +24,7 @@ printf '%s  %s\n' "$expected_verus_sha" "$verus" | sha256sum -c -
 "$closure_checker" "$(dirname -- "$(readlink -f -- "$verus")")" "$closure_manifest" >/dev/null
 printf '%s  %s\n' \
     d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019 "$closure_manifest" \
+    22472060be444e80c3afbb8d2d83925ec7aa246f40bfab3cd7b89747bdb543fd "$generated_contract" \
     a97ce140fbb8f6b4739c2abab5ceee8802fa0de10df5c8369fd3a77865e34281 "$proof" \
     6a4b25346e58c4025e77c49b2aea26cad8205d7a811841a3d80f14791a40d10f "$negative_dir/memory_trace_unguarded_effect_v3.rs" \
     3cab47b4002cf20dff8f755e580a3f1b1eee48ef376c565e6564e3c1d72d6b19 "$negative_dir/memory_trace_wrong_provenance_v3.rs" \

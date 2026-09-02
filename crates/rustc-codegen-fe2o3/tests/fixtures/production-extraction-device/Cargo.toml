@@ -39,6 +39,8 @@ reference-two-output-alias = []
 reference-two-output-schedule = []
 scalar-transmute = []
 formal-cfg-v2 = []
+formal-compiler-v3 = []
+formal-compiler-v3-mutated = []
 
 [dependencies]
 fe2o3-device.workspace = true

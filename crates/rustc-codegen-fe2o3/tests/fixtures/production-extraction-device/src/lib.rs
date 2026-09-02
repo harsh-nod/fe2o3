@@ -40,6 +40,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-two-output-schedule",
     feature = "scalar-transmute",
     feature = "formal-cfg-v2",
+    feature = "formal-compiler-v3",
+    feature = "formal-compiler-v3-mutated",
 )))]
 #[kernel(typed)]
 pub fn fill(mut output: DisjointSlice<u32>) {
@@ -77,6 +79,72 @@ pub fn formal_cfg_root_v2(input: u32, mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = value;
+    }
+}
+
+#[cfg(any(feature = "formal-compiler-v3", feature = "formal-compiler-v3-mutated"))]
+#[inline(never)]
+fn formal_compiler_helper_v3(left: u32, right: u32) -> u32 {
+    let combined = left ^ right;
+    match combined {
+        0 => combined,
+        _ => 17,
+    }
+}
+
+#[cfg(feature = "formal-compiler-v3-mutated")]
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        max_grid = [1024, 1, 1]
+    )
+)]
+pub fn formal_compiler_mutated_root_v3(
+    first: &[u32],
+    second: &[u32],
+    mut output: DisjointSlice<u32>,
+) {
+    let index = thread::index_1d();
+    let gid = index.get();
+    if gid < first.len() {
+        if gid < second.len() {
+            if gid < output.len() {
+                if let Some(element) = output.get_mut(index) {
+                    let left = first[gid];
+                    let right = second[gid];
+                    let _value = formal_compiler_helper_v3(left, right);
+                    *element = left;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "formal-compiler-v3")]
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        max_grid = [1024, 1, 1]
+    )
+)]
+pub fn formal_compiler_root_v3(first: &[u32], second: &[u32], mut output: DisjointSlice<u32>) {
+    let index = thread::index_1d();
+    let gid = index.get();
+    if gid < first.len() {
+        if gid < second.len() {
+            if gid < output.len() {
+                if let Some(element) = output.get_mut(index) {
+                    let left = first[gid];
+                    let right = second[gid];
+                    let value = formal_compiler_helper_v3(left, right);
+                    *element = value;
+                }
+            }
+        }
     }
 }
 

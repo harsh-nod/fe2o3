@@ -40,6 +40,19 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
             generator.VERUS.read_text(encoding="utf-8"), generator.render_verus(self.spec)
         )
 
+    def test_contract_identity_is_canonical_and_complete(self) -> None:
+        self.assertEqual(len(generator.contract_sha256(self.spec)), 32)
+        reformatted = self.write(self.spec)
+        self.assertEqual(
+            generator.contract_sha256(self.spec),
+            generator.contract_sha256(generator.load_spec(reformatted)),
+        )
+        changed = dict(self.spec)
+        changed["claim_name"] = "guarded-u32-xor-helper-store-v2"
+        self.assertNotEqual(
+            generator.contract_sha256(self.spec), generator.contract_sha256(changed)
+        )
+
     def test_unknown_and_missing_axes_are_rejected(self) -> None:
         unknown = dict(self.spec)
         unknown["unreviewed"] = True
@@ -100,6 +113,22 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
         overlap = dict(self.spec)
         overlap["modeled_only_scalar_operations"] = ["bitxor"]
         self.assert_rejected(overlap)
+
+    def test_every_fixed_fragment_axis_rejects_substitution(self) -> None:
+        substitutions = {
+            "claim_name": "guarded-u32-xor-helper-store-v2",
+            "helper_parameters": 3,
+            "branch_arms": 3,
+            "production_stack_frames": 3,
+            "readonly_accesses": 1,
+            "disjoint_writes": 2,
+            "production_scalar_operations": ["subtract"],
+            "modeled_only_scalar_operations": ["bitxor", "checked-add"],
+        }
+        for key, replacement in substitutions.items():
+            changed = dict(self.spec)
+            changed[key] = replacement
+            self.assert_rejected(changed)
 
 
 if __name__ == "__main__":

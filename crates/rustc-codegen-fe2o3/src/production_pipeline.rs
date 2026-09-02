@@ -60,6 +60,7 @@ pub(crate) enum ProductionPipelineError {
     SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
     SimulationProductionKirV9,
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    FormalCompilerV3(crate::production_formal_compiler_v3::ProductionFormalCompilerErrorV3),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
@@ -156,6 +157,9 @@ impl fmt::Display for ProductionPipelineError {
             Self::FormalMemoryAdmission(error) => {
                 write!(formatter, "production compilation formal memory admission failed: {error}")
             }
+            Self::FormalCompilerV3(error) => {
+                write!(formatter, "production compilation Formal Compiler V3 composition failed: {error}")
+            }
             Self::Geometry(error) => {
                 write!(formatter, "production compilation geometry validation failed: {error}")
             }
@@ -236,6 +240,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SemanticDebugFragment(error) => Some(error),
             Self::SimulationSourceLineage(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
+            Self::FormalCompilerV3(error) => Some(error),
             Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
@@ -408,6 +413,7 @@ pub(crate) struct TargetNeutralProductionCompilation {
 /// Kernel IR, composed formal/ranked memory evidence, and transaction bindings.
 pub(crate) struct FormalMemoryAdmittedProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    formal_compiler_v3: crate::production_formal_compiler_v3::ProductionFormalCompilerStatusV3,
     source_mir_kir:
         crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
     cfg_refinement: crate::production_mir_kir_cfg_v2::AuthenticatedMirKirCfgRefinementStatusV2,
@@ -420,6 +426,7 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilation {
 /// Kernel IR, deterministic exact-target LLVM text, and transaction bindings.
 pub(crate) struct TargetLoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    formal_compiler_v3_status: &'static str,
     source_mir_kir:
         crate::production_source_mir_scalar_v1::AuthenticatedSourceMirKirScalarCompositionV2,
     cfg_refinement: crate::production_mir_kir_cfg_v2::AuthenticatedMirKirCfgRefinementStatusV2,
@@ -633,8 +640,16 @@ impl TargetNeutralProductionCompilation {
         cfg_refinement
             .revalidate(admitted.semantic_kir())
             .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
+        let formal_compiler_v3 =
+            crate::production_formal_compiler_v3::ProductionFormalCompilerStatusV3::from_live_compilation(
+                &admitted,
+                &ranked_verification,
+                &bindings.typed_descriptor_roots,
+            )
+            .map_err(ProductionPipelineError::FormalCompilerV3)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
+            formal_compiler_v3,
             source_mir_kir,
             cfg_refinement,
             ranked_verification,
@@ -649,6 +664,7 @@ impl FormalMemoryAdmittedProductionCompilation {
     ) -> Result<TargetLoweredProductionCompilation, ProductionPipelineError> {
         let Self {
             admitted,
+            formal_compiler_v3,
             source_mir_kir,
             cfg_refinement,
             ranked_verification,
@@ -660,6 +676,16 @@ impl FormalMemoryAdmittedProductionCompilation {
         cfg_refinement
             .revalidate(admitted.semantic_kir())
             .map_err(ProductionPipelineError::MirKirCfgRefinement)?;
+        formal_compiler_v3
+            .revalidate_against(
+                &admitted,
+                &ranked_verification,
+                &bindings.typed_descriptor_roots,
+            )
+            .map_err(ProductionPipelineError::FormalCompilerV3)?;
+        let formal_compiler_v3_status = formal_compiler_v3.status_name();
+        debug_assert!(!formal_compiler_v3.grants_artifact_or_launch_authority());
+        drop(formal_compiler_v3);
         let target_profile = bindings.rustc_target.profile();
         let semantic = admitted.semantic_kir().semantic().semantic();
         if semantic.roots().is_empty()
@@ -771,6 +797,7 @@ impl FormalMemoryAdmittedProductionCompilation {
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
         Ok(TargetLoweredProductionCompilation {
             admitted,
+            formal_compiler_v3_status,
             source_mir_kir,
             cfg_refinement,
             ranked_verification,
@@ -937,11 +964,16 @@ impl TargetLoweredProductionCompilation {
         self.cfg_refinement.status_name()
     }
 
+    pub(crate) const fn formal_compiler_v3_status_name(&self) -> &'static str {
+        self.formal_compiler_v3_status
+    }
+
     pub(crate) fn into_inert_worker_handoff_for_extraction(
         self,
     ) -> Result<fe2o3_compiler_ffi::CompilerModuleHandoffV2, ProductionPipelineError> {
         let Self {
             admitted,
+            formal_compiler_v3_status: _,
             source_mir_kir,
             cfg_refinement,
             ranked_verification: _,
@@ -1006,6 +1038,7 @@ impl TargetLoweredProductionCompilation {
     {
         let Self {
             admitted,
+            formal_compiler_v3_status: _,
             source_mir_kir,
             cfg_refinement,
             ranked_verification,
@@ -1092,11 +1125,12 @@ impl TargetLoweredProductionCompilation {
         self,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s) and bounded MIR-to-KIR u32 internal-helper/call-result status {}, then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), bounded MIR-to-KIR u32 internal-helper/call-result status {}, and target-neutral Formal Compiler V3 composed status {}, then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
             self.mir_kir_cfg_refinement_status_name(),
+            self.formal_compiler_v3_status_name(),
             self.formal_witness_extent(),
             self.formal_allocation_count(),
             self.formal_access_count(),
@@ -1112,6 +1146,7 @@ impl TargetLoweredProductionCompilation {
         );
         let Self {
             admitted,
+            formal_compiler_v3_status: _,
             source_mir_kir,
             cfg_refinement,
             ranked_verification,

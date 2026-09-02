@@ -90,7 +90,7 @@ VERUS_RUNTIME=/path/to/verus-0.2026.08.09.92f466f \
 Every dedicated runner pins its Verus executable and proof sources, rejects
 `assume`, `admit`, and external-body shortcuts in the new proof files, and
 requires hostile mutations to fail verification. The superseding
-`formal-compiler-v2.yml` workflow downloads both releases and runs this lane on
+`formal-compiler-v3.yml` workflow downloads both releases and runs this lane on
 changes to the relevant proof, compiler, analysis, verifier, host, and runtime
 paths. This V1 ledger remains the historical statement of the earlier proof
 boundary.

@@ -5,6 +5,7 @@
 mod formal_compiler_v3_spec_generated;
 mod mir_kir_structured_cfg_v3;
 mod production_correspondence_evidence_v4;
+mod production_formal_compiler_v3;
 mod production_formal_memory_evidence_v4;
 mod production_formal_memory_v1;
 mod production_lineage_evidence_v3;
@@ -19,6 +20,7 @@ pub use production_semantic_kir_v1::ProductionMemoryDischargeFailureV1;
 pub use formal_compiler_v3_spec_generated::*;
 pub use mir_kir_structured_cfg_v3::*;
 pub use production_correspondence_evidence_v4::*;
+pub use production_formal_compiler_v3::*;
 pub use production_formal_memory_evidence_v4::*;
 pub use production_formal_memory_v1::*;
 pub use production_lineage_evidence_v3::*;

@@ -349,6 +349,159 @@ fn real_rustc_cfg_fixture_retains_verified_internal_helper_call_result_status() 
     );
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn real_rustc_guarded_xor_fixture_reaches_composed_formal_compiler_v3_proved_status() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("formal-compiler-v3.ll");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", &llvm_output)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "55".repeat(32),
+        )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "formal-compiler-v3",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("run real rustc/HIR/MIR Formal Compiler V3 fixture");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "real rustc Formal Compiler V3 production fixture failed:\n{stderr}",
+    );
+    assert_eq!(
+        stderr
+            .matches("Formal Compiler V3 composed status proved")
+            .count(),
+        1,
+        "real rustc production path did not retain revalidated composed V3 proof custody:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("Formal Compiler V3 composed status incomplete")
+            && !stderr.contains("Formal Compiler V3 composed status not-applicable")
+            && stderr.contains("artifact/launch authority false"),
+        "real rustc production path reported ambiguous proof custody or authority:\n{stderr}",
+    );
+    let llvm = std::fs::read_to_string(&llvm_output)
+        .expect("real rustc Formal Compiler V3 path emits deterministic LLVM");
+    assert!(
+        llvm.contains("define amdgpu_kernel void @formal_compiler_root_v3("),
+        "real rustc Formal Compiler V3 LLVM omitted the kernel root:\n{llvm}",
+    );
+    let call_result = llvm
+        .lines()
+        .find(|line| line.contains(" = call i32 @__fe2o3_internal_helper_v1_"))
+        .and_then(|line| line.split_whitespace().next())
+        .expect("real rustc Formal Compiler V3 LLVM has one internal-helper call result");
+    assert!(
+        llvm.contains(&format!("store i32 {call_result}, ptr addrspace(1)")),
+        "fixture did not store the exact helper call result:\n{llvm}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn real_rustc_wrong_store_fixture_cannot_claim_formal_compiler_v3_proved_status() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("formal-compiler-v3-mutated.ll");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", &llvm_output)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "56".repeat(32),
+        )
+        .env("FE2O3_CRATE_BINDING_ID_V1", "78".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "formal-compiler-v3-mutated",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("run hostile real rustc/HIR/MIR Formal Compiler V3 fixture");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "hostile real rustc Formal Compiler V3 fixture failed to compile:\n{stderr}",
+    );
+    assert_eq!(
+        stderr
+            .matches("Formal Compiler V3 composed status proved")
+            .count(),
+        0,
+        "wrong-store fixture acquired a Formal Compiler V3 proof claim:\n{stderr}",
+    );
+    let non_proof_statuses = stderr
+        .matches("Formal Compiler V3 composed status incomplete")
+        .count()
+        + stderr
+            .matches("Formal Compiler V3 composed status not-applicable")
+            .count();
+    assert_eq!(
+        non_proof_statuses, 1,
+        "wrong-store fixture did not retain one explicit non-proof V3 status:\n{stderr}",
+    );
+    assert!(
+        stderr.contains("artifact/launch authority false"),
+        "wrong-store fixture acquired artifact or launch authority:\n{stderr}",
+    );
+    let llvm = std::fs::read_to_string(&llvm_output)
+        .expect("hostile real rustc Formal Compiler V3 path emits deterministic LLVM");
+    assert!(
+        llvm.contains("define amdgpu_kernel void @formal_compiler_mutated_root_v3("),
+        "hostile real rustc Formal Compiler V3 LLVM omitted the kernel root:\n{llvm}",
+    );
+}
+
 fn assert_multi_root_extraction(
     features: &str,
     expected_symbols: &[&str],

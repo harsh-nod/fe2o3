@@ -148,6 +148,6 @@ VERUS_RUNTIME=/path/to/verus-0.2026.08.09.92f466f \
   scripts/ci-local.sh verus
 ```
 
-The `Formal Compiler V2` workflow authenticates those release archives before
-running the complete local proof lane. The V1 ledger remains available as the
-historical statement of the earlier noncompositional boundary.
+The `Formal Compiler V3` workflow authenticates those release archives before
+running the complete local proof lane, including these historical V2 claims.
+The V1 ledger remains available as the earlier noncompositional boundary.

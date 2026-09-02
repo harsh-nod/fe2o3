@@ -22,12 +22,14 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     FORMAL_COMPILER_V3_BRANCH_ARMS, FORMAL_COMPILER_V3_BYTE_WIDTH, FORMAL_COMPILER_V3_CLAIM_NAME,
-    FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS, FORMAL_COMPILER_V3_HELPER_PARAMETERS,
-    FORMAL_COMPILER_V3_PRODUCTION_LOOP_TRIP_COUNT, FORMAL_COMPILER_V3_PRODUCTION_SCALAR_OPERATIONS,
-    FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES, FORMAL_COMPILER_V3_WORD_BITS,
-    MIR_KIR_CFG_REFINEMENT_PROOF_SHA256_V2, MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1,
-    MIR_KIR_STRUCTURED_CFG_PROOF_SHA256_V3, ProductionCanonicalKernelIrIdentityV1,
-    ProductionSemanticKirOwnerV1, SemanticKirCorrespondenceV1,
+    FORMAL_COMPILER_V3_CONTRACT_SHA256, FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS,
+    FORMAL_COMPILER_V3_HELPER_PARAMETERS, FORMAL_COMPILER_V3_PRODUCTION_LOOP_TRIP_COUNT,
+    FORMAL_COMPILER_V3_PRODUCTION_SCALAR_OPERATIONS, FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES,
+    FORMAL_COMPILER_V3_WORD_BITS, MIR_KIR_CFG_REFINEMENT_PROOF_SHA256_V2,
+    MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1, MIR_KIR_STRUCTURED_CFG_CLOSURE_SHA256_V3,
+    MIR_KIR_STRUCTURED_CFG_PROOF_SHA256_V3, MIR_KIR_STRUCTURED_CFG_VERUS_SHA256_V3,
+    ProductionCanonicalKernelIrIdentityV1, ProductionSemanticKirOwnerV1,
+    SemanticKirCorrespondenceV1,
 };
 
 /// Exact production policy version.
@@ -132,7 +134,7 @@ impl InertMirKirXorCfgEvidenceV3 {
             .verify_equivalence()
             .map_err(|error| MirKirXorCfgErrorV3::LiveOwner(error.to_string()))?;
         let semantic = owner.semantic().semantic();
-        if semantic.functions().len() != 2 || owner.module().functions.len() != 2 {
+        if semantic.functions().len() != 2 {
             return Err(MirKirXorCfgErrorV3::UnsupportedShape);
         }
         let roots = semantic
@@ -511,6 +513,21 @@ impl InertMirKirXorCfgEvidenceV3 {
         self.bindings
     }
 
+    /// Returns the exact executable/proof model identity.
+    pub const fn model_identity(&self) -> &[u8; 32] {
+        &self.model_identity
+    }
+
+    /// Returns the exact semantic MIR identity replayed by the classifier.
+    pub const fn semantic_mir_sha256(&self) -> &[u8; 32] {
+        &self.semantic_sha256
+    }
+
+    /// Returns the exact versioned canonical KIR identity.
+    pub const fn canonical_kernel_ir_identity(&self) -> ProductionCanonicalKernelIrIdentityV1 {
+        self.canonical_kernel_ir
+    }
+
     /// Returns the constant selected on the nonzero edge.
     pub const fn fallback(&self) -> u32 {
         self.fallback
@@ -700,7 +717,7 @@ fn unique_load_definition(
                     };
                     (assignment.destination().projections().is_empty()
                         && assignment.destination().local().index() == destination
-                        && matches!(assignment.value().kind(), SemanticRvalueKindV1::Load(_)))
+                        && semantic_assignment_reads_memory_v3(assignment.value().kind()))
                     .then_some(SemanticLoadSiteV3 {
                         block: block as u32,
                         statement: statement as u32,
@@ -711,6 +728,27 @@ fn unique_load_definition(
     match loads.as_slice() {
         [load] => Ok(*load),
         _ => Err(MirKirXorCfgErrorV3::UnsupportedShape),
+    }
+}
+
+fn semantic_assignment_reads_memory_v3(value: &SemanticRvalueKindV1) -> bool {
+    match value {
+        SemanticRvalueKindV1::Load(_) => true,
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) => {
+            place.projections().iter().any(|projection| {
+                matches!(
+                    projection.kind(),
+                    fe2o3_mir_model::semantic_mir_v1::SemanticProjectionKindV1::Dereference
+                )
+            }) && place.projections().iter().any(|projection| {
+                matches!(
+                    projection.kind(),
+                    fe2o3_mir_model::semantic_mir_v1::SemanticProjectionKindV1::Index(_)
+                        | fe2o3_mir_model::semantic_mir_v1::SemanticProjectionKindV1::ConstantIndex { .. }
+                )
+            })
+        }
+        _ => false,
     }
 }
 
@@ -1039,6 +1077,7 @@ fn model_identity_v3() -> [u8; 32] {
     hash.update(MIR_KIR_XOR_CFG_POLICY_VERSION_V3.to_le_bytes());
     hash.update(MIR_KIR_XOR_CFG_THEOREM_V3.as_bytes());
     hash.update(FORMAL_COMPILER_V3_CLAIM_NAME.as_bytes());
+    hash.update(FORMAL_COMPILER_V3_CONTRACT_SHA256);
     hash.update(FORMAL_COMPILER_V3_WORD_BITS.to_le_bytes());
     hash.update(FORMAL_COMPILER_V3_BYTE_WIDTH.to_le_bytes());
     hash.update(FORMAL_COMPILER_V3_HELPER_PARAMETERS.to_le_bytes());
@@ -1051,6 +1090,8 @@ fn model_identity_v3() -> [u8; 32] {
         hash.update(tag.to_le_bytes());
     }
     hash.update(MIR_KIR_STRUCTURED_CFG_PROOF_SHA256_V3);
+    hash.update(MIR_KIR_STRUCTURED_CFG_VERUS_SHA256_V3);
+    hash.update(MIR_KIR_STRUCTURED_CFG_CLOSURE_SHA256_V3);
     hash.update(MIR_KIR_CFG_REFINEMENT_PROOF_SHA256_V2);
     hash.update(MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1);
     hash.finalize().into()

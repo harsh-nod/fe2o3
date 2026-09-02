@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -77,6 +78,25 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         raise ValueError("V3 claim name is not canonical")
     if value["word_bits"] != value["byte_width"] * 8:
         raise ValueError("word width must equal the byte width")
+    fixed_values = {
+        "claim_name": "guarded-u32-xor-helper-store-v1",
+        "word_bits": 32,
+        "byte_width": 4,
+        "helper_parameters": 2,
+        "branch_arms": 2,
+        "production_stack_frames": 2,
+        "production_loop_trip_count": 0,
+        "modeled_maximum_stack_frames": 2,
+        "modeled_minimum_loop_trip_count": 1,
+        "modeled_maximum_loop_trip_count": 4,
+        "readonly_accesses": 2,
+        "disjoint_writes": 1,
+        "guarded_allocations": 3,
+        "dynamic_extents": 3,
+        "guard_predicates": 3,
+    }
+    if any(value[key] != expected for key, expected in fixed_values.items()):
+        raise ValueError("V3 fixed fragment axes do not match the reviewed claim")
     if value["byte_order"] != "little" or value["dynamic_extent"] is not True:
         raise ValueError("V3 closes byte order and extent mode")
     closed_semantics = {
@@ -115,10 +135,27 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
             raise ValueError(f"V3 {label} scalar operation roster must be unique and sorted")
     if set(production_operations) & set(modeled_operations):
         raise ValueError("V3 production and modeled-only operation rosters overlap")
+    if production_operations != ["bitxor", "unsigned-equal", "unsigned-less-than"]:
+        raise ValueError("V3 production operation roster differs from the reviewed claim")
+    if modeled_operations != ["checked-add", "truncate", "wrapping-add", "zero-extend"]:
+        raise ValueError("V3 modeled-only operation roster differs from the reviewed claim")
     return value
 
 
+def contract_sha256(spec: dict[str, object]) -> bytes:
+    """Identity of the semantic contract, independent of JSON whitespace."""
+    canonical = json.dumps(
+        spec, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    return hashlib.sha256(canonical).digest()
+
+
 def render_rust(spec: dict[str, object]) -> str:
+    digest_bytes = [f"0x{byte:02x}" for byte in contract_sha256(spec)]
+    contract_digest = "\n    " + ",\n    ".join(
+        ", ".join(digest_bytes[offset : offset + 16])
+        for offset in range(0, len(digest_bytes), 16)
+    ) + ",\n"
     production_operations = "\n".join(
         f'    ("{item}", {tag}),'
         for tag, item in enumerate(spec["production_scalar_operations"], start=1)
@@ -134,6 +171,8 @@ def render_rust(spec: dict[str, object]) -> str:
 pub const FORMAL_COMPILER_V3_SCHEMA_VERSION: u16 = {spec["schema_version"]};
 /// Formal Compiler claim generation.
 pub const FORMAL_COMPILER_V3_CLAIM_VERSION: u16 = {spec["claim_version"]};
+/// SHA-256 of the canonical complete declarative contract.
+pub const FORMAL_COMPILER_V3_CONTRACT_SHA256: [u8; 32] = [{contract_digest}];
 /// Stable name of the exact composed V3 fragment.
 pub const FORMAL_COMPILER_V3_CLAIM_NAME: &str = "{spec["claim_name"]}";
 /// Closed scalar word width.

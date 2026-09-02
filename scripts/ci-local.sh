@@ -962,12 +962,21 @@ run_verus() {
   run_step mir-kir-structured-cfg-verus-v3 \
     env VERUS="${compiler_verus}" \
     "${REPO_ROOT}/scripts/test-mir-kir-structured-cfg-verus-v3.sh"
+  run_step source-mir-kir-memory-refinement-verus-v3 \
+    env VERUS="${compiler_verus}" \
+    "${REPO_ROOT}/scripts/test-source-mir-kir-memory-refinement-verus-v3.sh"
   run_step affine-bounds-soundness-verus \
     env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/scripts/test-affine-bounds-soundness-verus.sh"
   run_step constrained-affine-bounds-soundness-verus \
     env VERUS="${runtime_verus}" \
     "${REPO_ROOT}/scripts/test-constrained-affine-bounds-soundness-verus-v2.sh"
+  run_step dynamic-constrained-affine-bounds-soundness-verus-v3 \
+    env VERUS="${runtime_verus}" \
+    "${REPO_ROOT}/scripts/test-dynamic-constrained-affine-bounds-soundness-verus-v3.sh"
+  run_step formal-compiler-v3-composition-verus \
+    env VERUS="${runtime_verus}" \
+    "${REPO_ROOT}/scripts/test-formal-compiler-v3-composition-verus.sh"
 }
 
 run_authority_launcher_tests() {

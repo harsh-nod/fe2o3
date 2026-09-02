@@ -1,8 +1,9 @@
 //! Generic projection from admitted semantic MIR into safety-verifiable ranked PLIRON.
 //!
 //! Static proof facts come from indexed places and semantic array types.
-//! Dynamic slice facts come only from canonical Rust bounds asserts whose
-//! success edge uniquely controls an access to the same slice and index.
+//! Dynamic slice facts come only from canonical Rust bounds asserts or exact
+//! manual `index < length` guards whose accepted edge controls an access to
+//! the same slice and index.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -568,10 +569,19 @@ struct ProjectionLocalContractsV1 {
     checked_references: CheckedReferencesV1,
     allocations: Vec<Option<AllocationContractV1>>,
     allocation_provenance: Vec<Option<LocalAllocationProvenanceV1>>,
+    manual_bounds_guards: Vec<ProjectedManualBoundsGuardV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedManualBoundsGuardV1 {
+    guard_block: usize,
+    accepted_block: usize,
+    predicate: GuardPredicateV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedBoundsCheckV1 {
+    guard_block: usize,
     access_block: usize,
     slice_local: SemanticLocalIdV1,
     index_local: SemanticLocalIdV1,
@@ -2029,21 +2039,17 @@ fn authenticated_guards_with_sources_v3(
     guard_sources_v3: &[ProjectedRankedGuardSourceV3],
 ) -> Result<Box<[AuthenticatedRankedDynamicAffineGuardV3]>, ProductionRankedVerificationErrorV1> {
     let mut semantic_sites = BTreeSet::new();
-    let mut previous_site = None;
     record
         .guards()
         .iter()
         .map(|guard| {
             let source = exact_dynamic_affine_guard_source_v3(kernel, guard, guard_sources_v3)?;
             let semantic_site = (source.semantic_site.block, source.semantic_site.statement);
-            if !semantic_sites.insert(semantic_site)
-                || previous_site.is_some_and(|previous| previous >= semantic_site)
-            {
+            if !semantic_sites.insert(semantic_site) {
                 return Err(
                     ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
                 );
             }
-            previous_site = Some(semantic_site);
             Ok(AuthenticatedRankedDynamicAffineGuardV3 {
                 branch_block: guard.branch_block(),
                 branch_operation: guard.branch_operation(),
@@ -4656,11 +4662,12 @@ fn project_and_verify_ranked_root_v1(
         &mut entry_operations,
         &mut next_value,
     )?;
-    let switch_predicates = switch_predicates(
+    let mut switch_predicates = switch_predicates(
         function,
         &intrinsic.option_predicates,
         &intrinsic.direct_switch_predicates,
     )?;
+    canonicalize_manual_bounds_switch_predicates_v1(&bounds_checks.checks, &mut switch_predicates)?;
     let mut projected_blocks = Vec::new();
     let mut projected_effect_count = 0_usize;
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -4858,15 +4865,43 @@ fn project_and_verify_ranked_root_v1(
         }
         projected_blocks.push(projected);
     }
-    if bounds_checks.checks.iter().any(|check| {
-        check.must_authorize_access
-            && projected_blocks
-                .get(check.access_block)
-                .is_none_or(|block| !projected_block_uses_bounds_check(block, *check))
-    }) {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "a Rust bounds assertion does not authorize one matching projected access",
-        ));
+    for check in bounds_checks
+        .checks
+        .iter()
+        .copied()
+        .filter(|check| check.must_authorize_access)
+    {
+        if projected_blocks
+            .get(check.access_block)
+            .is_some_and(|block| projected_block_uses_bounds_check(block, check))
+        {
+            continue;
+        }
+        let mut superseding_manual_guard = false;
+        for manual in bounds_checks.checks.iter().copied().filter(|manual| {
+            !manual.must_authorize_access
+                && manual.slice_local == check.slice_local
+                && manual.index_local == check.index_local
+        }) {
+            if semantic_guard_edge_dominates_access_v1(
+                function,
+                manual.guard_block,
+                manual.access_block,
+                check.access_block,
+            )? {
+                if superseding_manual_guard {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "multiple manual Rust bounds guards supersede one compiler assertion",
+                    ));
+                }
+                superseding_manual_guard = true;
+            }
+        }
+        if !superseding_manual_guard {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a Rust bounds assertion does not authorize one matching projected access",
+            ));
+        }
     }
     if !projected_blocks
         .iter()
@@ -5962,7 +5997,9 @@ fn project_rust_bounds_checks(
                 "a Rust bounds-check message not backed by its exact index < length condition",
             ));
         }
-        if predecessors.get(access_block).map(Vec::as_slice) != Some(&[block_index]) {
+        if must_authorize_access
+            && predecessors.get(access_block).map(Vec::as_slice) != Some(&[block_index])
+        {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
@@ -5995,6 +6032,7 @@ fn project_rust_bounds_checks(
             )
         })?;
         checks.push(ProjectedBoundsCheckV1 {
+            guard_block: block_index,
             access_block,
             slice_local,
             index_local,
@@ -8409,10 +8447,9 @@ fn project_intrinsic_contracts(
         operations,
         next_value,
     )?;
-    // Workgroup geometry and the runtime grid domain are independent. The
-    // source launch contract authenticates the former; the latter remains
-    // dynamic until host launch evidence is joined.
-    let launch_extent = 0;
+    // This is an authenticated upper bound, not a claim that every launch has
+    // this exact extent. An unbounded source launch remains dynamic (zero).
+    let launch_extent = linear_launch_upper_bound.unwrap_or(0);
     let local_definitions = scalar_inventory.counts.clone();
 
     for (block_index, block) in function.blocks().iter().enumerate() {
@@ -9860,8 +9897,11 @@ fn project_intrinsic_contracts(
                 continue;
             }
             let semantic_operands = simple_operand_local(left).zip(simple_operand_local(right));
-            let Some(lhs) = project_uniform_switch_operand_v1(
+            let Some(lhs) = project_guard_switch_operand_v1(
                 left,
+                function,
+                callables,
+                &index_values,
                 constants,
                 &stable_argument_origins,
                 &mut runtime_index_arguments,
@@ -9872,8 +9912,11 @@ fn project_intrinsic_contracts(
             else {
                 continue;
             };
-            let Some(rhs) = project_uniform_switch_operand_v1(
+            let Some(rhs) = project_guard_switch_operand_v1(
                 right,
+                function,
+                callables,
+                &index_values,
                 constants,
                 &stable_argument_origins,
                 &mut runtime_index_arguments,
@@ -9973,6 +10016,10 @@ fn project_intrinsic_contracts(
         },
         allocations: local_allocations,
         allocation_provenance,
+        manual_bounds_guards: projected_manual_bounds_guards_v1(
+            function,
+            &direct_switch_predicates,
+        )?,
     };
     let generated_terminator_effects =
         project_generated_terminator_effects_v1(types, function, callables)?;
@@ -16580,6 +16627,38 @@ fn project_pure_uniform_index_operand_v1<'model>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn project_guard_switch_operand_v1(
+    operand: &SemanticOperandV1,
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    if let Some(local) = simple_operand_local(operand) {
+        if let Some(index) = index_values.get(local.index() as usize).copied().flatten() {
+            return Ok(Some(index.value));
+        }
+        if exact_disjoint_slice_len_result_v1(function, callables, local)? {
+            return Ok(Some(ProductionRankedValueV1::Argument(0)));
+        }
+    }
+    project_uniform_switch_operand_v1(
+        operand,
+        constants,
+        stable_argument_origins,
+        arguments,
+        next_argument,
+        operations,
+        next_value,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn project_uniform_switch_operand_v1(
     operand: &SemanticOperandV1,
     constants: &[Option<u64>],
@@ -16626,6 +16705,67 @@ fn project_uniform_switch_operand_v1(
         }
     };
     Ok(Some(ProductionRankedValueV1::Argument(argument)))
+}
+
+fn exact_disjoint_slice_len_result_v1(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    local: SemanticLocalIdV1,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let mut current = local;
+    let mut visited = HashSet::new();
+    while visited.len() < function.locals().len() && visited.insert(current) {
+        let mut definitions = 0_usize;
+        let mut alias = None;
+        let mut disjoint_length = false;
+        for block in function.blocks() {
+            for statement in block.statements() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty()
+                    || assignment.destination().local() != current
+                {
+                    continue;
+                }
+                definitions = definitions.saturating_add(1);
+                alias = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => simple_operand_local(operand),
+                    _ => None,
+                };
+            }
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                continue;
+            };
+            if call
+                .destination()
+                .filter(|destination| destination.place().projections().is_empty())
+                .map(|destination| destination.place().local())
+                != Some(current)
+            {
+                continue;
+            }
+            definitions = definitions.saturating_add(1);
+            disjoint_length = matches!(
+                callables.get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. },
+                    ..
+                })
+            );
+        }
+        if definitions != 1 {
+            return Ok(false);
+        }
+        if disjoint_length {
+            return Ok(true);
+        }
+        let Some(next) = alias else {
+            return Ok(false);
+        };
+        current = next;
+    }
+    Ok(false)
 }
 
 fn project_runtime_index_operand_v1(
@@ -17470,6 +17610,136 @@ fn switch_predicates(
     Ok(predicates)
 }
 
+fn projected_manual_bounds_guards_v1(
+    function: &SemanticFunctionDeclV1,
+    direct_switch_predicates: &[Option<GuardPredicateV1>],
+) -> Result<Vec<ProjectedManualBoundsGuardV1>, ProductionRankedProjectionErrorV1> {
+    if direct_switch_predicates.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "manual bounds predicates do not match the semantic local table",
+        ));
+    }
+    let mut guards = Vec::new();
+    for (guard_block, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        let Some(condition_local) = simple_operand_local(discriminant) else {
+            continue;
+        };
+        let Some(predicate) = direct_switch_predicates
+            .get(condition_local.index() as usize)
+            .and_then(Clone::clone)
+        else {
+            continue;
+        };
+        let ([comparison], [Some(source)]) = (
+            predicate.comparisons.as_slice(),
+            predicate.comparison_sources.as_slice(),
+        ) else {
+            continue;
+        };
+        if source.block != guard_block || source.condition_local != condition_local {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a manual bounds predicate lost its exact semantic switch site",
+            ));
+        }
+        let [explicit] = targets.values() else {
+            continue;
+        };
+        let accepted_block = match explicit.value() {
+            0 => targets.otherwise().target().index() as usize,
+            1 => explicit.edge().target().index() as usize,
+            _ => continue,
+        };
+        guards.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "manual bounds guard storage cannot be reserved",
+            )
+        })?;
+        guards.push(ProjectedManualBoundsGuardV1 {
+            guard_block,
+            accepted_block,
+            predicate: GuardPredicateV1 {
+                comparisons: vec![*comparison],
+                comparison_sources: vec![Some(*source)],
+            },
+        });
+    }
+    Ok(guards)
+}
+
+fn canonicalize_manual_bounds_switch_predicates_v1(
+    bounds_checks: &[ProjectedBoundsCheckV1],
+    switch_predicates: &mut [Option<GuardPredicateV1>],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    for check in bounds_checks
+        .iter()
+        .copied()
+        .filter(|check| !check.must_authorize_access)
+    {
+        let slot = switch_predicates
+            .get_mut(check.guard_site.condition_local.index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a manual Rust bounds guard condition is outside the local table",
+            ))?;
+        if slot.is_none() {
+            *slot = Some(GuardPredicateV1 {
+                comparisons: vec![(check.index, check.extent)],
+                comparison_sources: vec![Some(check.guard_site)],
+            });
+            continue;
+        }
+        let predicate = slot.as_mut().expect("checked present predicate");
+        let [source] = predicate.comparison_sources.as_slice() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a manual Rust bounds guard does not have one exact semantic source",
+            ));
+        };
+        if *source != Some(check.guard_site) || predicate.comparisons.len() != 1 {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a manual Rust bounds guard changed its semantic comparison source",
+            ));
+        }
+        predicate.comparisons[0] = (check.index, check.extent);
+    }
+    Ok(())
+}
+
+fn exact_dominating_manual_bounds_guard_v1(
+    function: &SemanticFunctionDeclV1,
+    manual_guards: &[ProjectedManualBoundsGuardV1],
+    block_index: usize,
+    predicate: &GuardPredicateV1,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let mut matched = false;
+    for guard in manual_guards
+        .iter()
+        .filter(|guard| guard.predicate.comparisons == predicate.comparisons)
+    {
+        let dominates = semantic_guard_edge_dominates_access_v1(
+            function,
+            guard.guard_block,
+            guard.accepted_block,
+            block_index,
+        )?;
+        if !dominates {
+            continue;
+        }
+        if matched {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple manual Rust bounds guards authorize one projected predicate",
+            ));
+        }
+        matched = true;
+    }
+    Ok(matched)
+}
+
 fn operation_defines_value(operation: &ProductionRankedOperationV1) -> bool {
     matches!(
         operation,
@@ -17595,6 +17865,7 @@ enum ProjectedCfgTerminatorV1 {
     Trap,
 }
 
+#[cfg(test)]
 fn projected_cfg_terminator(
     function: &SemanticFunctionDeclV1,
     block_index: usize,
@@ -17602,6 +17873,30 @@ fn projected_cfg_terminator(
     non_bounds_assert_proved: bool,
     constants: &[Option<u64>],
     switch_predicates: &[Option<GuardPredicateV1>],
+    deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
+) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
+    let manual_bounds_guards = projected_manual_bounds_guards_v1(function, switch_predicates)?;
+    projected_cfg_terminator_with_manual_bounds_v1(
+        function,
+        block_index,
+        callables,
+        non_bounds_assert_proved,
+        constants,
+        switch_predicates,
+        &manual_bounds_guards,
+        deterministic_switches,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn projected_cfg_terminator_with_manual_bounds_v1(
+    function: &SemanticFunctionDeclV1,
+    block_index: usize,
+    callables: &[SemanticCallableDeclV1],
+    non_bounds_assert_proved: bool,
+    constants: &[Option<u64>],
+    switch_predicates: &[Option<GuardPredicateV1>],
+    manual_bounds_guards: &[ProjectedManualBoundsGuardV1],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
     let block = function.blocks().get(block_index).ok_or(
@@ -17662,21 +17957,26 @@ fn projected_cfg_terminator(
                 let explicit = &targets.values()[0];
                 let explicit_block = target(explicit.edge().target())?;
                 let otherwise_block = target(targets.otherwise().target())?;
-                return match explicit.value() {
-                    0 => Ok(ProjectedCfgTerminatorV1::Predicate {
-                        predicate,
-                        true_block: otherwise_block,
-                        false_block: explicit_block,
-                    }),
-                    1 => Ok(ProjectedCfgTerminatorV1::Predicate {
-                        predicate,
-                        true_block: explicit_block,
-                        false_block: otherwise_block,
-                    }),
+                let (true_block, false_block) = match explicit.value() {
+                    0 => (otherwise_block, explicit_block),
+                    1 => (explicit_block, otherwise_block),
                     _ => Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a comparison predicate switch retained a non-boolean explicit value",
-                    )),
+                    ))?,
                 };
+                if exact_dominating_manual_bounds_guard_v1(
+                    function,
+                    manual_bounds_guards,
+                    block_index,
+                    &predicate,
+                )? {
+                    return Ok(ProjectedCfgTerminatorV1::Branch(true_block));
+                }
+                return Ok(ProjectedCfgTerminatorV1::Predicate {
+                    predicate,
+                    true_block,
+                    false_block,
+                });
             }
             let zero = targets.values().iter().find(|target| target.value() == 0);
             let one = targets.values().iter().find(|target| target.value() == 1);
@@ -17691,10 +17991,20 @@ fn projected_cfg_terminator(
                     "a comparison predicate switch with a reachable non-boolean successor",
                 ));
             }
+            let true_block = target(one.expect("checked exact variant").edge().target())?;
+            let false_block = target(zero.expect("checked exact variant").edge().target())?;
+            if exact_dominating_manual_bounds_guard_v1(
+                function,
+                &manual_bounds_guards,
+                block_index,
+                &predicate,
+            )? {
+                return Ok(ProjectedCfgTerminatorV1::Branch(true_block));
+            }
             Ok(ProjectedCfgTerminatorV1::Predicate {
                 predicate,
-                true_block: target(one.expect("checked exact variant").edge().target())?,
-                false_block: target(zero.expect("checked exact variant").edge().target())?,
+                true_block,
+                false_block,
             })
         }
         SemanticTerminatorKindV1::Call(call) => {
@@ -17902,15 +18212,17 @@ fn build_ranked_cfg(
         )?;
         *proved = true;
     }
+    let manual_bounds_guards = projected_manual_bounds_guards_v1(function, switch_predicates)?;
     let terminators = (0..function.blocks().len())
         .map(|index| {
-            projected_cfg_terminator(
+            projected_cfg_terminator_with_manual_bounds_v1(
                 function,
                 index,
                 callables,
                 proved_assertions[index],
                 &constants,
                 switch_predicates,
+                &manual_bounds_guards,
                 deterministic_switches,
             )
         })
@@ -21365,27 +21677,141 @@ enum ProjectedIndexV1 {
 }
 
 fn projected_bounds_check(
+    function: &SemanticFunctionDeclV1,
     checks: &[ProjectedBoundsCheckV1],
     block_index: usize,
     slice_local: SemanticLocalIdV1,
     index_local: SemanticLocalIdV1,
 ) -> Result<ProjectedBoundsCheckV1, ProductionRankedProjectionErrorV1> {
-    let mut matches = checks.iter().copied().filter(|check| {
-        check.access_block == block_index
-            && check.slice_local == slice_local
-            && check.index_local == index_local
-    });
-    let check = matches
-        .next()
+    let mut matched_manual = None;
+    let mut matched_assertion = None;
+    for check in checks
+        .iter()
+        .copied()
+        .filter(|check| check.slice_local == slice_local && check.index_local == index_local)
+    {
+        let authorizes = if check.must_authorize_access {
+            check.access_block == block_index
+        } else {
+            semantic_guard_edge_dominates_access_v1(
+                function,
+                check.guard_block,
+                check.access_block,
+                block_index,
+            )?
+        };
+        if !authorizes {
+            continue;
+        }
+        let matched = if check.must_authorize_access {
+            &mut matched_assertion
+        } else {
+            &mut matched_manual
+        };
+        if matched.replace(check).is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple Rust bounds checks authorize one dynamic slice access",
+            ));
+        }
+    }
+    matched_manual
+        .or(matched_assertion)
         .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "a dynamic slice access without its exact Rust bounds-check predecessor",
-        ))?;
-    if matches.next().is_some() {
+            "a dynamic slice access without an exact dominating Rust bounds-check edge",
+        ))
+}
+
+fn semantic_guard_edge_dominates_access_v1(
+    function: &SemanticFunctionDeclV1,
+    guard_block: usize,
+    accepted_block: usize,
+    access_block: usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let block_count = function.blocks().len();
+    if block_count == 0 || block_count > MAX_RANKED_BOUNDS_BLOCKS {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "multiple Rust bounds checks authorize one dynamic slice access",
+            "a manual Rust bounds guard outside the ranked CFG block limit",
         ));
     }
-    Ok(check)
+    let entry = function.entry().index() as usize;
+    if entry >= block_count
+        || guard_block >= block_count
+        || accepted_block >= block_count
+        || access_block >= block_count
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a manual Rust bounds guard names a block outside the semantic CFG",
+        ));
+    }
+
+    let mut successors = vec![Vec::new(); block_count];
+    let mut edge_count = 0_usize;
+    for (source, block) in function.blocks().iter().enumerate() {
+        block
+            .terminator()
+            .kind()
+            .try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+                let target = edge.target().index() as usize;
+                if target >= block_count {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a manual Rust bounds guard CFG edge leaves the semantic block table",
+                    ));
+                }
+                edge_count = edge_count.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a manual Rust bounds guard CFG edge count overflow",
+                    ),
+                )?;
+                if edge_count > MAX_RANKED_BOUNDS_EDGES {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a manual Rust bounds guard outside the ranked CFG edge limit",
+                    ));
+                }
+                successors[source].push(target);
+                Ok(())
+            })?;
+    }
+    if successors[guard_block]
+        .iter()
+        .filter(|target| **target == accepted_block)
+        .count()
+        != 1
+    {
+        return Ok(false);
+    }
+
+    let reachable = semantic_reachable_blocks_with_cut_v1(&successors, entry, None);
+    if !reachable[guard_block] || !reachable[access_block] {
+        return Ok(false);
+    }
+    let without_accepted_edge = semantic_reachable_blocks_with_cut_v1(
+        &successors,
+        entry,
+        Some((guard_block, accepted_block)),
+    );
+    Ok(!without_accepted_edge[access_block])
+}
+
+fn semantic_reachable_blocks_with_cut_v1(
+    successors: &[Vec<usize>],
+    entry: usize,
+    removed_edge: Option<(usize, usize)>,
+) -> Vec<bool> {
+    let mut reachable = vec![false; successors.len()];
+    let mut pending = VecDeque::from([entry]);
+    reachable[entry] = true;
+    while let Some(block) = pending.pop_front() {
+        for successor in successors[block].iter().copied() {
+            if removed_edge == Some((block, successor)) {
+                continue;
+            }
+            if !reachable[successor] {
+                reachable[successor] = true;
+                pending.push_back(successor);
+            }
+        }
+    }
+    reachable
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -21473,6 +21899,29 @@ fn project_place_access_with_atomic(
                 )?;
                 guarded.access = access;
                 guarded.source = source;
+                if exact_dominating_manual_bounds_guard_v1(
+                    function,
+                    &local_contracts.manual_bounds_guards,
+                    block_index,
+                    &GuardPredicateV1::for_access(&guarded),
+                )? {
+                    reserve_projected_access(operations, sources, 1)?;
+                    let operation = operations.len();
+                    operations.push(ProductionRankedOperationV1::Access {
+                        kind: access,
+                        view: ProductionRankedValueV1::Local(guarded.view),
+                        indices: guarded.indices.clone(),
+                    });
+                    sources.push(ProjectedAccessSourceV1 {
+                        block: 0,
+                        operation,
+                        access,
+                        memory_space: guarded.memory_space,
+                        source,
+                        semantic_site: None,
+                    });
+                    return Ok(());
+                }
                 guarded_sites.try_reserve(1).map_err(|_| {
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "checked disjoint access-site storage cannot be reserved",
@@ -21547,6 +21996,7 @@ fn project_place_access_with_atomic(
                     }
                     Some(SemanticTypeShapeV1::Slice { .. }) => {
                         let check = projected_bounds_check(
+                            function,
                             bounds_checks,
                             block_index,
                             place.local(),
@@ -21555,8 +22005,10 @@ fn project_place_access_with_atomic(
                         shape.push(DYNAMIC_EXTENT);
                         dynamic_extents.push(check.extent);
                         indices.push(ProjectedIndexV1::Dynamic(check.index));
-                        comparisons.push((check.index, check.extent));
-                        comparison_sources.push(Some(check.guard_site));
+                        if check.must_authorize_access {
+                            comparisons.push((check.index, check.extent));
+                            comparison_sources.push(Some(check.guard_site));
+                        }
                     }
                     _ => {
                         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -23653,6 +24105,7 @@ mod tests {
         swap_comparison_operands: bool,
         length_from_slice: bool,
         alternate_predecessor: bool,
+        later_access_block: bool,
         duplicate_condition: bool,
         duplicate_index: bool,
         duplicate_length: bool,
@@ -23666,6 +24119,7 @@ mod tests {
                 swap_comparison_operands: false,
                 length_from_slice: true,
                 alternate_predecessor: false,
+                later_access_block: false,
                 duplicate_condition: false,
                 duplicate_index: false,
                 duplicate_length: false,
@@ -23745,6 +24199,7 @@ mod tests {
         } else {
             2
         };
+        let access_block = if options.later_access_block { 3 } else { 1 };
         let mut blocks = vec![
             block(
                 88,
@@ -23758,17 +24213,28 @@ mod tests {
                     .unwrap(),
                 },
             ),
-            block(89, vec![], SemanticTerminatorKindV1::Return),
+            block(
+                89,
+                vec![],
+                if options.later_access_block {
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3))
+                } else {
+                    SemanticTerminatorKindV1::Return
+                },
+            ),
         ];
         blocks.push(if options.alternate_predecessor {
             block(
                 90,
                 vec![],
-                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, access_block)),
             )
         } else {
             block(90, vec![], SemanticTerminatorKindV1::Return)
         });
+        if options.later_access_block {
+            blocks.push(block(91, vec![], SemanticTerminatorKindV1::Return));
+        }
         projection_function_with_locals(
             blocks,
             vec![
@@ -23975,6 +24441,7 @@ mod tests {
             allocation_provenance: (0..function.locals().len())
                 .map(|_| Some(LocalAllocationProvenanceV1::Argument(0)))
                 .collect(),
+            manual_bounds_guards: Vec::new(),
         }
     }
 
@@ -24983,13 +25450,14 @@ mod tests {
         let projected = project_test_bounds_checks(&function, 0).unwrap();
         assert!(matches!(
             projected_bounds_check(
+                &function,
                 &projected.checks,
                 1,
                 SemanticLocalIdV1::from_index(3),
                 SemanticLocalIdV1::from_index(4),
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a dynamic slice access without its exact Rust bounds-check predecessor"
+                "a dynamic slice access without an exact dominating Rust bounds-check edge"
             ))
         ));
 
@@ -25033,6 +25501,51 @@ mod tests {
     }
 
     #[test]
+    fn manual_bounds_guard_authorizes_a_later_dominated_access_block() {
+        let function = branch_bounds_check_function(BranchBoundsCheckOptionsV1 {
+            later_access_block: true,
+            ..BranchBoundsCheckOptionsV1::default()
+        });
+        let projected = project_test_bounds_checks(&function, 0).unwrap();
+        assert_eq!(
+            projected_bounds_check(
+                &function,
+                &projected.checks,
+                3,
+                SemanticLocalIdV1::from_index(1),
+                SemanticLocalIdV1::from_index(4),
+            )
+            .unwrap(),
+            projected.checks[0],
+        );
+    }
+
+    #[test]
+    fn manual_bounds_guard_rejects_false_edge_bypasses_and_nondominating_joins() {
+        for later_access_block in [false, true] {
+            let function = branch_bounds_check_function(BranchBoundsCheckOptionsV1 {
+                alternate_predecessor: true,
+                later_access_block,
+                ..BranchBoundsCheckOptionsV1::default()
+            });
+            let projected = project_test_bounds_checks(&function, 0).unwrap();
+            let access_block = if later_access_block { 3 } else { 1 };
+            assert!(matches!(
+                projected_bounds_check(
+                    &function,
+                    &projected.checks,
+                    access_block,
+                    SemanticLocalIdV1::from_index(1),
+                    SemanticLocalIdV1::from_index(4),
+                ),
+                Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a dynamic slice access without an exact dominating Rust bounds-check edge"
+                ))
+            ));
+        }
+    }
+
+    #[test]
     fn unrelated_branch_comparisons_do_not_become_bounds_authority() {
         for options in [
             BranchBoundsCheckOptionsV1 {
@@ -25070,13 +25583,6 @@ mod tests {
                     ..BranchBoundsCheckOptionsV1::default()
                 },
                 "a branch-form Rust bounds check with a non-boolean switch value",
-            ),
-            (
-                BranchBoundsCheckOptionsV1 {
-                    alternate_predecessor: true,
-                    ..BranchBoundsCheckOptionsV1::default()
-                },
-                "a Rust bounds-check success block not uniquely controlled by that check",
             ),
             (
                 BranchBoundsCheckOptionsV1 {
@@ -26059,6 +26565,52 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn rank_one_launch_upper_bound_is_exact_and_dynamic_policy_remains_closed() {
+        let finite = LaunchContract::new(
+            1,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(1_024, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(bounded_linear_launch_extent_v1(&finite), Some(65_536));
+
+        let boundary = LaunchContract::new(
+            1,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(u32::MAX, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(u32::MAX - 1, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            bounded_linear_launch_extent_v1(&boundary),
+            Some(u64::from(u32::MAX) * u64::from(u32::MAX - 1))
+        );
+
+        let dynamic = LaunchContract::new(
+            1,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(u32::MAX, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(bounded_linear_launch_extent_v1(&dynamic), None);
+
+        let inexact = LaunchContract::new(
+            1,
+            BlockSize::AtMost(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(1_024, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(bounded_linear_launch_extent_v1(&inexact), None);
     }
 
     #[test]

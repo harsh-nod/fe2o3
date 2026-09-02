@@ -12,23 +12,28 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BinaryOp, BlockId, ByteExpression, ComparePredicate, Constant,
-    FormalAllocationParameter, FormalMemoryAccess, FormalMemoryAccessKind, FormalParameterKind,
-    Function, FunctionId, FunctionOperationLocation, FunctionRole, Module, Operation,
-    OperationKind, ScalarType, Terminator, Type, ValueId,
+    AccessMode, AddressSpace, BinaryOp, BlockId, ByteExpression, CastKind, ComparePredicate,
+    Constant, FormalAllocationParameter, FormalMemoryAccess, FormalMemoryAccessKind,
+    FormalParameterKind, Function, FunctionId, FunctionOperationLocation, FunctionRole, Module,
+    Operation, OperationKind, ScalarType, Terminator, Type, ValueId,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1, SemanticConstantValueV1,
-    SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
-    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticRvalueKindV1,
-    SemanticScalarTypeV1, SemanticStatementKindV1, SemanticSwitchTargetsV1,
-    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1, SemanticUnwindActionV1,
+    SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
+    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticEdgeRoleV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1, SemanticLocalIdV1,
+    SemanticLocalRoleV1, SemanticOperandV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
+    SemanticStatementKindV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeShapeV1, SemanticUnwindActionV1,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ProductionCanonicalKernelIrIdentityV1, ProductionFormalMemoryOwnerV1,
-    ProductionSemanticKirOwnerV1, SemanticKirCorrespondenceV1, SemanticKirStatementOperationSpanV1,
+    FORMAL_COMPILER_V3_BYTE_WIDTH, FORMAL_COMPILER_V3_CLAIM_NAME,
+    FORMAL_COMPILER_V3_CONTRACT_SHA256, FORMAL_COMPILER_V3_DISJOINT_WRITES,
+    FORMAL_COMPILER_V3_DYNAMIC_EXTENTS, FORMAL_COMPILER_V3_GUARD_PREDICATES,
+    FORMAL_COMPILER_V3_READONLY_ACCESSES, ProductionCanonicalKernelIrIdentityV1,
+    ProductionFormalMemoryOwnerV1, ProductionSemanticKirOwnerV1, SemanticKirCorrespondenceV1,
+    SemanticKirStatementOperationSpanV1,
 };
 
 /// Version of the bounded executable byte-memory model.
@@ -55,7 +60,7 @@ pub const MEMORY_TRACE_REFINEMENT_CLOSURE_SHA256_V3: [u8; 32] = [
 
 const MODEL_DOMAIN_V3: &[u8] = b"FE2O3/SOURCE-MIR-KIR/GUARDED-U32-MEMORY/MODEL/V3\0";
 const EVIDENCE_DOMAIN_V3: &[u8] = b"FE2O3/SOURCE-MIR-KIR/GUARDED-U32-MEMORY/EVIDENCE/V3\0";
-const U32_BYTES_V3: u64 = 4;
+const U32_BYTES_V3: u64 = FORMAL_COMPILER_V3_BYTE_WIDTH as u64;
 
 /// A runtime allocation in the bounded executable semantics.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -576,7 +581,7 @@ pub fn check_guarded_memory_refinement_v3(
 }
 
 /// Exact semantic sites selecting one supported production fragment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProductionMemoryTraceSelectorV3 {
     /// Kernel-root semantic function.
     pub root_function: u32,
@@ -900,7 +905,8 @@ fn discover_memory_trace_selectors_v3(
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment)
                     if assignment.destination().projections().is_empty()
-                        && matches!(assignment.value().kind(), SemanticRvalueKindV1::Load(_)) =>
+                        && semantic_assignment_load_place_v3(assignment.value().kind())
+                            .is_some() =>
                 {
                     loads.push((
                         block_index,
@@ -910,6 +916,15 @@ fn discover_memory_trace_selectors_v3(
                 }
                 SemanticStatementKindV1::Store(store) => {
                     if let Some(value) = operand_direct_local_v3(store.value()) {
+                        stores.push((block_index, statement_index, value));
+                    }
+                }
+                SemanticStatementKindV1::Assign(assignment)
+                    if !assignment.destination().projections().is_empty() =>
+                {
+                    if let SemanticRvalueKindV1::Use(value) = assignment.value().kind()
+                        && let Some(value) = operand_direct_local_v3(value)
+                    {
                         stores.push((block_index, statement_index, value));
                     }
                 }
@@ -945,8 +960,44 @@ fn discover_memory_trace_selectors_v3(
             _ => {}
         }
     }
-
-    let mut candidates = Vec::new();
+    let mut guard_chains = Vec::new();
+    for first_guard in boolean_edges.keys().copied() {
+        let Some(&(first_true, _)) = boolean_edges.get(&first_guard) else {
+            continue;
+        };
+        let Ok(second_guard) = semantic_next_boolean_guard_v3(
+            root.blocks(),
+            semantic.callables(),
+            first_true,
+            &boolean_edges,
+        ) else {
+            continue;
+        };
+        if first_guard == second_guard {
+            continue;
+        }
+        let Some(&(second_true, _)) = boolean_edges.get(&second_guard) else {
+            continue;
+        };
+        let Ok(third_guard) = semantic_next_boolean_guard_v3(
+            root.blocks(),
+            semantic.callables(),
+            second_true,
+            &boolean_edges,
+        ) else {
+            continue;
+        };
+        let Some(&(enabled_block, _)) = boolean_edges.get(&third_guard) else {
+            continue;
+        };
+        if [first_guard, second_guard].contains(&third_guard)
+            || [first_guard, second_guard, third_guard].contains(&enabled_block)
+        {
+            continue;
+        }
+        guard_chains.push(([first_guard, second_guard, third_guard], enabled_block));
+    }
+    let mut candidates = BTreeSet::new();
     for (call_block, arguments, destination) in calls {
         let first_loads = loads
             .iter()
@@ -967,26 +1018,10 @@ fn discover_memory_trace_selectors_v3(
         ) else {
             continue;
         };
-        let first_guard = root.entry().index();
-        if let Some(&(second_guard, _)) = boolean_edges.get(&first_guard) {
-            let Some(&(third_guard, _)) = boolean_edges.get(&second_guard) else {
-                continue;
-            };
-            let Some(&(enabled_block, _)) = boolean_edges.get(&third_guard) else {
-                continue;
-            };
-            if [first_guard, second_guard, third_guard]
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-                .len()
-                != 3
-                || [first_guard, second_guard, third_guard].contains(&enabled_block)
-            {
-                continue;
-            }
+        for (guard_blocks, enabled_block) in guard_chains.iter().copied() {
             let candidate = ProductionMemoryTraceSelectorV3 {
                 root_function,
-                guard_blocks: [first_guard, second_guard, third_guard],
+                guard_blocks,
                 enabled_block,
                 first_load: (first_load.0, first_load.1),
                 second_load: (second_load.0, second_load.1),
@@ -994,12 +1029,10 @@ fn discover_memory_trace_selectors_v3(
                 store: (store.0, store.1),
                 helper_function,
             };
-            if !candidates.contains(&candidate) {
-                candidates.push(candidate);
-            }
+            candidates.insert(candidate);
         }
     }
-    Ok(candidates)
+    Ok(candidates.into_iter().collect())
 }
 
 fn semantic_boolean_edges_v3(targets: &SemanticSwitchTargetsV1) -> Option<(u32, u32)> {
@@ -1021,6 +1054,109 @@ fn semantic_boolean_edges_v3(targets: &SemanticSwitchTargetsV1) -> Option<(u32, 
             targets.otherwise().target().index(),
         )),
         _ => None,
+    }
+}
+
+fn semantic_pure_setup_path_v3(
+    owner: &ProductionSemanticKirOwnerV1,
+    function: u32,
+    start: u32,
+    target: u32,
+) -> Result<BTreeSet<u32>, MemoryTraceRefinementErrorV3> {
+    let semantic = owner
+        .semantic()
+        .resolve_function(SemanticFunctionIdV1::from_index(function))
+        .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
+    semantic_pure_setup_path_in_function_v3(
+        semantic.blocks(),
+        owner.semantic().semantic().callables(),
+        start,
+        target,
+    )
+}
+
+fn semantic_next_boolean_guard_v3(
+    blocks: &[fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1],
+    callables: &[SemanticCallableDeclV1],
+    start: u32,
+    boolean_edges: &BTreeMap<u32, (u32, u32)>,
+) -> Result<u32, MemoryTraceRefinementErrorV3> {
+    let mut current = start;
+    let mut visited = BTreeSet::new();
+    loop {
+        if boolean_edges.contains_key(&current) {
+            return Ok(current);
+        }
+        if !visited.insert(current) || visited.len() > blocks.len() {
+            return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+        }
+        current = semantic_pure_setup_successor_v3(blocks, callables, current)?;
+    }
+}
+
+fn semantic_pure_setup_path_in_function_v3(
+    blocks: &[fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1],
+    callables: &[SemanticCallableDeclV1],
+    start: u32,
+    target: u32,
+) -> Result<BTreeSet<u32>, MemoryTraceRefinementErrorV3> {
+    let mut current = start;
+    let mut visited = BTreeSet::new();
+    while current != target {
+        if !visited.insert(current) || visited.len() > blocks.len() {
+            return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+        }
+        current = semantic_pure_setup_successor_v3(blocks, callables, current)?;
+    }
+    Ok(visited)
+}
+
+fn semantic_pure_setup_successor_v3(
+    blocks: &[fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1],
+    callables: &[SemanticCallableDeclV1],
+    current: u32,
+) -> Result<u32, MemoryTraceRefinementErrorV3> {
+    let block = blocks
+        .get(current as usize)
+        .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
+    if !block.statements().iter().all(|statement| {
+        source_available_v3(statement.source())
+            && matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment)
+                if assignment.destination().projections().is_empty()
+                    && matches!(assignment.value().kind(), SemanticRvalueKindV1::Borrow { .. }))
+    }) {
+        return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+    }
+    match block.terminator().kind() {
+        SemanticTerminatorKindV1::Goto(edge) if edge.role() == SemanticEdgeRoleV1::Goto => {
+            Ok(edge.target().index())
+        }
+        SemanticTerminatorKindV1::Call(call)
+            if call.unwind() == SemanticUnwindActionV1::Unreachable
+                && source_available_v3(block.terminator().source()) =>
+        {
+            let destination = call
+                .destination()
+                .filter(|destination| {
+                    destination.place().projections().is_empty()
+                        && destination.edge().role() == SemanticEdgeRoleV1::CallReturn
+                })
+                .ok_or(MemoryTraceRefinementErrorV3::GuardMismatch)?;
+            let callable = callables
+                .get(call.callee().index() as usize)
+                .ok_or(MemoryTraceRefinementErrorV3::GuardMismatch)?;
+            if !matches!(
+                callable,
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. },
+                    ..
+                }
+            ) {
+                return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+            }
+            Ok(destination.edge().target().index())
+        }
+        _ => Err(MemoryTraceRefinementErrorV3::GuardMismatch),
     }
 }
 
@@ -1088,15 +1224,21 @@ fn validate_live_shape_v3(
         let SemanticStatementKindV1::Assign(assignment) = site.kind() else {
             return Err(MemoryTraceRefinementErrorV3::SemanticShape);
         };
-        let SemanticRvalueKindV1::Load(load) = assignment.value().kind() else {
-            return Err(MemoryTraceRefinementErrorV3::SemanticShape);
+        let load_source = semantic_assignment_load_place_v3(assignment.value().kind())
+            .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
+        let explicit_load_is_plain = match assignment.value().kind() {
+            SemanticRvalueKindV1::Load(load) => {
+                load.atomic().is_none()
+                    && load.volatility()
+                        == fe2o3_mir_model::semantic_mir_v1::SemanticVolatilityV1::NonVolatile
+            }
+            SemanticRvalueKindV1::Use(_) => true,
+            _ => false,
         };
-        if load.atomic().is_some()
-            || load.volatility()
-                != fe2o3_mir_model::semantic_mir_v1::SemanticVolatilityV1::NonVolatile
+        if !explicit_load_is_plain
             || !assignment.destination().projections().is_empty()
             || !is_u32_type_v3(owner, assignment.value().result_type())
-            || !is_u32_type_v3(owner, load.source().ty())
+            || !is_u32_type_v3(owner, load_source.ty())
         {
             return Err(MemoryTraceRefinementErrorV3::SemanticShape);
         }
@@ -1222,17 +1364,6 @@ fn validate_live_shape_v3(
         call_span.kernel_ir_block(),
         call_span.first_operation_ordinal() as usize,
     );
-    if selector.first_load.0 != selector.second_load.0
-        || selector.first_load.0 != selector.helper_call_block
-        || selector.first_load.1 >= selector.second_load.1
-        || load_locations[0].block != root_call_location.block
-        || load_locations[1].block != root_call_location.block
-        || load_locations[0].operation_index >= load_locations[1].operation_index
-        || load_locations[1].operation_index >= root_call_location.operation_index
-    {
-        return Err(MemoryTraceRefinementErrorV3::CorrespondenceMismatch);
-    }
-
     let store_statement = owner
         .semantic()
         .resolve_statement(
@@ -1242,13 +1373,27 @@ fn validate_live_shape_v3(
         )
         .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
     source_site_sha256[6] = source_identity_v3(store_statement.source())?;
-    let SemanticStatementKindV1::Store(store) = store_statement.kind() else {
-        return Err(MemoryTraceRefinementErrorV3::SemanticShape);
+    let (store_destination, store_value, store_is_plain) = match store_statement.kind() {
+        SemanticStatementKindV1::Store(store) => (
+            store.destination(),
+            store.value(),
+            store.atomic().is_none()
+                && store.volatility()
+                    == fe2o3_mir_model::semantic_mir_v1::SemanticVolatilityV1::NonVolatile,
+        ),
+        SemanticStatementKindV1::Assign(assignment)
+            if !assignment.destination().projections().is_empty() =>
+        {
+            let SemanticRvalueKindV1::Use(value) = assignment.value().kind() else {
+                return Err(MemoryTraceRefinementErrorV3::SemanticShape);
+            };
+            (assignment.destination(), value, true)
+        }
+        _ => return Err(MemoryTraceRefinementErrorV3::SemanticShape),
     };
-    if store.atomic().is_some()
-        || store.volatility() != fe2o3_mir_model::semantic_mir_v1::SemanticVolatilityV1::NonVolatile
-        || operand_direct_local_v3(store.value()) != Some(call_destination)
-        || !is_u32_type_v3(owner, store.destination().ty())
+    if !store_is_plain
+        || operand_direct_local_v3(store_value) != Some(call_destination)
+        || !is_u32_type_v3(owner, store_destination.ty())
     {
         return Err(MemoryTraceRefinementErrorV3::SemanticShape);
     }
@@ -1282,25 +1427,6 @@ fn validate_live_shape_v3(
     {
         return Err(MemoryTraceRefinementErrorV3::AllocationRoster);
     }
-    let root_body = root
-        .body
-        .as_ref()
-        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
-    let call_block = exact_block_v3(root_body, root_call_location.block)?;
-    let store_block = exact_block_v3(root_body, store_location.block)?;
-    if !matches!(call_block.terminator.as_ref(), Some(Terminator::Branch { target, arguments })
-        if *target == store_location.block && arguments.is_empty())
-        || !matches!(store_block.terminator.as_ref(), Some(Terminator::Return { values })
-            if values.is_empty())
-        || !matches!(
-            semantic.blocks()[selector.store.0 as usize]
-                .terminator()
-                .kind(),
-            SemanticTerminatorKindV1::Return
-        )
-    {
-        return Err(MemoryTraceRefinementErrorV3::KirShape);
-    }
     for location in load_locations {
         let operation = operation_at_v3(root, location)?;
         let OperationKind::Load { pointer, .. } = operation.kind else {
@@ -1314,6 +1440,24 @@ fn validate_live_shape_v3(
     let guard_observation =
         validate_guard_v3(owner, root, semantic_function, selector, gid, parameters)?;
     let memory_locations = [load_locations[0], load_locations[1], store_location];
+    validate_guard_implied_trace_v3(
+        root,
+        exact_block_binding_v3(
+            correspondence,
+            semantic_function,
+            semantic_function,
+            selector.enabled_block,
+        )?,
+        [
+            load_locations[0],
+            load_locations[1],
+            root_call_location,
+            store_location,
+        ],
+        gid,
+        parameters,
+    )?;
+    validate_completion_after_store_v3(owner, root, semantic_function, selector, store_location)?;
     validate_formal_obligations_v3(
         obligations.allocations(),
         obligations.accesses(),
@@ -1364,13 +1508,6 @@ fn validate_guard_v3(
     parameters: [u32; 3],
 ) -> Result<GuardObservationV3, MemoryTraceRefinementErrorV3> {
     let correspondence = owner.correspondence();
-    let semantic = owner
-        .semantic()
-        .resolve_function(function)
-        .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
-    if semantic.entry().index() != selector.guard_blocks[0] {
-        return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
-    }
     let enabled_kir =
         exact_block_binding_v3(correspondence, function, function, selector.enabled_block)?;
     let mut false_targets = Vec::with_capacity(3);
@@ -1391,15 +1528,17 @@ fn validate_guard_v3(
             .get(index + 1)
             .copied()
             .unwrap_or(selector.enabled_block);
-        if true_target != expected_true || false_target == expected_true {
+        if false_target == expected_true {
             return Err(MemoryTraceRefinementErrorV3::SemanticShape);
         }
         let guard_kir = exact_block_binding_v3(correspondence, function, function, guard_block)?;
         if index == 0 {
-            validate_declared_entry_guard_v3(root, guard_kir)?;
+            validate_pure_entry_prefix_to_guard_v3(root, guard_kir)?;
         }
         let expected_true_kir =
             exact_block_binding_v3(correspondence, function, function, expected_true)?;
+        let true_target_kir =
+            exact_block_binding_v3(correspondence, function, function, true_target)?;
         let false_kir = exact_block_binding_v3(correspondence, function, function, false_target)?;
         let block = root
             .body
@@ -1420,7 +1559,7 @@ fn validate_guard_v3(
                 then_arguments,
                 else_target,
                 else_arguments,
-            }) if *then_target == expected_true_kir
+            }) if *then_target == true_target_kir
                 && *else_target == false_kir
                 && then_arguments.is_empty()
                 && else_arguments.is_empty() =>
@@ -1433,6 +1572,16 @@ fn validate_guard_v3(
             guarded_length_parameter_v3(root, condition, gid)?;
         if parameter != parameters[index] || compare_location.block != guard_kir {
             return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+        }
+        let semantic_setup =
+            semantic_pure_setup_path_v3(owner, function.index(), true_target, expected_true)?;
+        let kir_setup = validate_pure_linear_kir_path_v3(root, true_target_kir, expected_true_kir)?;
+        let mapped_semantic_setup = semantic_setup
+            .into_iter()
+            .map(|block| exact_block_binding_v3(correspondence, function, function, block))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if mapped_semantic_setup != kir_setup {
+            return Err(MemoryTraceRefinementErrorV3::CorrespondenceMismatch);
         }
         length_values[index] = length_value;
         guard_locations[index] = compare_location;
@@ -1480,18 +1629,51 @@ fn validate_guard_v3(
     })
 }
 
-fn validate_declared_entry_guard_v3(
+fn validate_pure_entry_prefix_to_guard_v3(
     function: &Function,
     guard: BlockId,
 ) -> Result<(), MemoryTraceRefinementErrorV3> {
-    (function
+    let body = function
         .body
         .as_ref()
-        .and_then(|body| body.blocks.first())
+        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
+    let entry = body
+        .blocks
+        .first()
         .map(|block| block.id)
-        == Some(guard))
-    .then_some(())
-    .ok_or(MemoryTraceRefinementErrorV3::GuardMismatch)
+        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
+    validate_pure_linear_kir_path_v3(function, entry, guard).map(|_| ())
+}
+
+fn validate_pure_linear_kir_path_v3(
+    function: &Function,
+    start: BlockId,
+    target: BlockId,
+) -> Result<BTreeSet<BlockId>, MemoryTraceRefinementErrorV3> {
+    let body = function
+        .body
+        .as_ref()
+        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
+    let mut current = start;
+    let mut visited = BTreeSet::new();
+    while current != target {
+        if !visited.insert(current) || visited.len() > body.blocks.len() {
+            return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+        }
+        let block = exact_block_v3(body, current)?;
+        if block.operations.iter().any(|operation| {
+            !operation.memory_effects().is_empty()
+                || !operation.has_complete_effect_summary()
+                || matches!(operation.kind, OperationKind::Call { .. })
+        }) {
+            return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+        }
+        current = match block.terminator.as_ref() {
+            Some(Terminator::Branch { target, arguments }) if arguments.is_empty() => *target,
+            _ => return Err(MemoryTraceRefinementErrorV3::GuardMismatch),
+        };
+    }
+    Ok(visited)
 }
 
 fn guarded_length_parameter_v3(
@@ -1531,6 +1713,169 @@ fn guarded_length_parameter_v3(
         rhs,
         compare_location,
     ))
+}
+
+fn validate_guard_implied_trace_v3(
+    function: &Function,
+    start: BlockId,
+    expected: [FunctionOperationLocation; 4],
+    gid: ValueId,
+    parameters: [u32; 3],
+) -> Result<(), MemoryTraceRefinementErrorV3> {
+    let body = function
+        .body
+        .as_ref()
+        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
+    let mut block_id = start;
+    let mut expected_index = 0_usize;
+    let mut visited = BTreeSet::new();
+    while visited.insert(block_id) && visited.len() <= body.blocks.len() {
+        let block = exact_block_v3(body, block_id)?;
+        for (operation_index, operation) in block.operations.iter().enumerate() {
+            let location = FunctionOperationLocation::new(block_id, operation_index);
+            if expected.get(expected_index) == Some(&location) {
+                expected_index += 1;
+                if expected_index == expected.len() {
+                    return Ok(());
+                }
+                continue;
+            }
+            if !operation.memory_effects().is_empty()
+                || !operation.has_complete_effect_summary()
+                || matches!(operation.kind, OperationKind::Call { .. })
+            {
+                return Err(MemoryTraceRefinementErrorV3::ObservationMismatch);
+            }
+        }
+        block_id = guard_implied_successor_v3(function, block, gid, parameters)?;
+    }
+    Err(MemoryTraceRefinementErrorV3::ObservationMismatch)
+}
+
+fn guard_implied_successor_v3(
+    function: &Function,
+    block: &fe2o3_kernel_ir::BasicBlock,
+    gid: ValueId,
+    parameters: [u32; 3],
+) -> Result<BlockId, MemoryTraceRefinementErrorV3> {
+    match block.terminator.as_ref() {
+        Some(Terminator::Branch { target, arguments }) if arguments.is_empty() => Ok(*target),
+        Some(Terminator::ConditionalBranch {
+            condition,
+            then_target,
+            then_arguments,
+            else_arguments,
+            ..
+        }) if then_arguments.is_empty() && else_arguments.is_empty() => {
+            let (parameter, _, _) = guarded_length_parameter_v3(function, *condition, gid)?;
+            parameters
+                .contains(&parameter)
+                .then_some(*then_target)
+                .ok_or(MemoryTraceRefinementErrorV3::GuardMismatch)
+        }
+        Some(Terminator::Switch {
+            selector,
+            cases,
+            default_arguments,
+            ..
+        }) if default_arguments.is_empty() => {
+            let condition = match &definition_v3(function, *selector)?.kind {
+                OperationKind::Cast {
+                    kind: CastKind::ZeroExtend,
+                    value,
+                    ..
+                } => *value,
+                _ => *selector,
+            };
+            let (parameter, _, _) = guarded_length_parameter_v3(function, condition, gid)?;
+            if !parameters.contains(&parameter)
+                || cases.len() != 2
+                || cases.iter().any(|case| !case.arguments.is_empty())
+                || !cases.iter().any(|case| case.value == 0)
+            {
+                return Err(MemoryTraceRefinementErrorV3::GuardMismatch);
+            }
+            let true_cases = cases
+                .iter()
+                .filter(|case| case.value == 1)
+                .collect::<Vec<_>>();
+            match true_cases.as_slice() {
+                [case] => Ok(case.target),
+                _ => Err(MemoryTraceRefinementErrorV3::GuardMismatch),
+            }
+        }
+        _ => Err(MemoryTraceRefinementErrorV3::ObservationMismatch),
+    }
+}
+
+fn validate_completion_after_store_v3(
+    owner: &ProductionSemanticKirOwnerV1,
+    root: &Function,
+    function: SemanticFunctionIdV1,
+    selector: ProductionMemoryTraceSelectorV3,
+    store: FunctionOperationLocation,
+) -> Result<(), MemoryTraceRefinementErrorV3> {
+    let semantic = owner
+        .semantic()
+        .resolve_function(function)
+        .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
+    let semantic_store_block = semantic
+        .blocks()
+        .get(selector.store.0 as usize)
+        .ok_or(MemoryTraceRefinementErrorV3::SemanticShape)?;
+    let semantic_suffix = match semantic_store_block.terminator().kind() {
+        SemanticTerminatorKindV1::Return => BTreeSet::new(),
+        SemanticTerminatorKindV1::Goto(edge) if edge.role() == SemanticEdgeRoleV1::Goto => {
+            validate_no_semantic_effect_path_v3(
+                owner,
+                function,
+                edge.target().index(),
+                selector.enabled_block,
+            )?
+        }
+        _ => return Err(MemoryTraceRefinementErrorV3::ObservationMismatch),
+    };
+
+    let body = root
+        .body
+        .as_ref()
+        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
+    let store_block = exact_block_v3(body, store.block)?;
+    let after_store = store
+        .operation_index
+        .checked_add(1)
+        .and_then(|start| store_block.operations.get(start..))
+        .ok_or(MemoryTraceRefinementErrorV3::KirShape)?;
+    if after_store.iter().any(|operation| {
+        !operation.memory_effects().is_empty()
+            || !operation.has_complete_effect_summary()
+            || matches!(operation.kind, OperationKind::Call { .. })
+    }) {
+        return Err(MemoryTraceRefinementErrorV3::ObservationMismatch);
+    }
+    let kir_suffix = match store_block.terminator.as_ref() {
+        Some(Terminator::Return { values }) if values.is_empty() => BTreeSet::new(),
+        Some(Terminator::Branch { target, arguments }) if arguments.is_empty() => {
+            validate_no_memory_effect_path_v3(
+                root,
+                *target,
+                exact_block_binding_v3(
+                    owner.correspondence(),
+                    function,
+                    function,
+                    selector.enabled_block,
+                )?,
+            )?
+        }
+        _ => return Err(MemoryTraceRefinementErrorV3::ObservationMismatch),
+    };
+    let mapped_semantic_suffix = semantic_suffix
+        .into_iter()
+        .map(|block| exact_block_binding_v3(owner.correspondence(), function, function, block))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    (mapped_semantic_suffix == kir_suffix)
+        .then_some(())
+        .ok_or(MemoryTraceRefinementErrorV3::CorrespondenceMismatch)
 }
 
 fn validate_no_memory_effect_path_v3(
@@ -2468,6 +2813,32 @@ fn operand_direct_local_v3(operand: &SemanticOperandV1) -> Option<SemanticLocalI
     }
 }
 
+fn semantic_assignment_load_place_v3(
+    value: &SemanticRvalueKindV1,
+) -> Option<&fe2o3_mir_model::semantic_mir_v1::SemanticPlaceV1> {
+    let place = match value {
+        SemanticRvalueKindV1::Load(load) => return Some(load.source()),
+        SemanticRvalueKindV1::Use(
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
+        ) => place,
+        _ => return None,
+    };
+    let has_dereference = place.projections().iter().any(|projection| {
+        matches!(
+            projection.kind(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticProjectionKindV1::Dereference
+        )
+    });
+    let has_index = place.projections().iter().any(|projection| {
+        matches!(
+            projection.kind(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticProjectionKindV1::Index(_)
+                | fe2o3_mir_model::semantic_mir_v1::SemanticProjectionKindV1::ConstantIndex { .. }
+        )
+    });
+    (has_dereference && has_index).then_some(place)
+}
+
 fn indexed_parameter_pointer_v3(
     function: &Function,
     pointer: ValueId,
@@ -2606,9 +2977,19 @@ pub fn memory_trace_refinement_model_identity_v3() -> [u8; 32] {
     digest.update(MEMORY_TRACE_REFINEMENT_PROOF_SHA256_V3);
     digest.update(MEMORY_TRACE_REFINEMENT_VERUS_SHA256_V3);
     digest.update(MEMORY_TRACE_REFINEMENT_CLOSURE_SHA256_V3);
+    digest.update(FORMAL_COMPILER_V3_CLAIM_NAME.as_bytes());
+    digest.update(FORMAL_COMPILER_V3_CONTRACT_SHA256);
     digest.update(U32_BYTES_V3.to_le_bytes());
-    digest.update([2, 1, 1]); // two reads, one XOR call, one write
-    digest.update([3, 3, 1]); // three extents, predicates, and ordered short-circuit chain
+    digest.update([
+        FORMAL_COMPILER_V3_READONLY_ACCESSES,
+        FORMAL_COMPILER_V3_DISJOINT_WRITES,
+        1,
+    ]); // exact read/write/call roster
+    digest.update([
+        FORMAL_COMPILER_V3_DYNAMIC_EXTENTS,
+        FORMAL_COMPILER_V3_GUARD_PREDICATES,
+        1,
+    ]); // exact dynamic extents, predicates, and ordered chain
     digest.finalize().into()
 }
 
@@ -2764,6 +3145,33 @@ impl Error for MemoryTraceRefinementErrorV3 {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticBasicBlockV1, SemanticBlockIdentityV1, SemanticControlFlowEdgeV1, SemanticPlaceV1,
+        SemanticSourceProvenanceV1, SemanticSwitchTargetV1, SemanticTerminatorV1, SemanticTypeIdV1,
+    };
+
+    fn semantic_control_block(
+        tag: u8,
+        terminator: SemanticTerminatorKindV1,
+    ) -> SemanticBasicBlockV1 {
+        SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([tag; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            Vec::new(),
+            SemanticTerminatorV1::new(SemanticSourceProvenanceV1::unavailable(), terminator),
+        )
+        .unwrap()
+    }
+
+    fn semantic_goto_block(tag: u8, target: u32) -> SemanticBasicBlockV1 {
+        semantic_control_block(
+            tag,
+            SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::Goto,
+                SemanticBlockIdV1::from_index(target),
+            )),
+        )
+    }
 
     fn allocation(
         parameter: u32,
@@ -2853,6 +3261,49 @@ mod tests {
                 .iter()
                 .all(|byte| *byte == 0)
         );
+    }
+
+    #[test]
+    fn differential_source_mir_kir_boundary_matrix_matches() {
+        let cases = [
+            ([0, 0], [0, 0], 0),
+            ([1, u32::MAX], [0, 0], 17),
+            ([u32::MAX, 0x8000_0000], [u32::MAX, 0x7fff_ffff], u32::MAX),
+            ([0xaaaa_5555, 0x0123_4567], [0x5555_aaaa, 0x89ab_cdef], 1),
+        ];
+        for (first, second, fallback) in cases {
+            let initial = ByteMemoryV3::try_new(vec![
+                allocation(0, 1, 0x1000, false, first),
+                allocation(1, 2, 0x2000, false, second),
+                allocation(2, 3, 0x3000, true, [0xdead_beef; 2]),
+            ])
+            .unwrap();
+            for invocation_index in 0..2 {
+                let mut current_lane = lane(true);
+                current_lane.invocation_index = invocation_index;
+                let left = first[invocation_index as usize];
+                let right = second[invocation_index as usize];
+                let expected = xor_diamond_helper_v3(left, right, fallback);
+                let related = RelatedHelperResultsV3::try_new(
+                    left, right, fallback, expected, expected, expected,
+                )
+                .unwrap();
+                let observation =
+                    check_guarded_memory_refinement_v3(initial.clone(), current_lane, related)
+                        .unwrap();
+                assert_eq!(observation.result, Some(expected));
+                assert_eq!(observation.trace.len(), 3);
+
+                current_lane.enabled = false;
+                current_lane.invocation_index = 2;
+                let disabled =
+                    check_guarded_memory_refinement_v3(initial.clone(), current_lane, related)
+                        .unwrap();
+                assert_eq!(disabled.memory, initial);
+                assert_eq!(disabled.result, None);
+                assert!(disabled.trace.is_empty());
+            }
+        }
     }
 
     #[test]
@@ -3091,27 +3542,103 @@ mod tests {
     }
 
     #[test]
-    fn guard_chain_cannot_be_bypassed_from_declared_entry() {
-        let mut bypass = fe2o3_kernel_ir::BasicBlock::new(BlockId(9));
-        bypass.terminator = Some(Terminator::Branch {
-            target: BlockId(2),
+    fn guard_chain_allows_only_a_pure_linear_entry_prefix() {
+        let mut prefix = fe2o3_kernel_ir::BasicBlock::new(BlockId(9));
+        prefix.terminator = Some(Terminator::Branch {
+            target: BlockId(0),
             arguments: Vec::new(),
         });
         let mut guard = fe2o3_kernel_ir::BasicBlock::new(BlockId(0));
         guard.terminator = Some(Terminator::Return { values: Vec::new() });
         let function = Function::kernel_entry(
+            "pure_prefix",
+            fe2o3_kernel_ir::Signature::new(Vec::new(), Vec::new()),
+            Vec::new(),
+            vec![prefix, guard.clone()],
+        );
+        assert_eq!(
+            validate_pure_entry_prefix_to_guard_v3(&function, BlockId(0)),
+            Ok(()),
+        );
+
+        let mut bypass = fe2o3_kernel_ir::BasicBlock::new(BlockId(9));
+        bypass.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(4),
+            then_target: BlockId(0),
+            then_arguments: Vec::new(),
+            else_target: BlockId(8),
+            else_arguments: Vec::new(),
+        });
+        let mut exit = fe2o3_kernel_ir::BasicBlock::new(BlockId(8));
+        exit.terminator = Some(Terminator::Return { values: Vec::new() });
+        let function = Function::kernel_entry(
             "bypass",
             fe2o3_kernel_ir::Signature::new(Vec::new(), Vec::new()),
             Vec::new(),
-            vec![bypass, guard],
+            vec![bypass, guard, exit],
         );
         assert_eq!(
-            validate_declared_entry_guard_v3(&function, BlockId(0)),
+            validate_pure_entry_prefix_to_guard_v3(&function, BlockId(0)),
             Err(MemoryTraceRefinementErrorV3::GuardMismatch),
         );
+    }
+
+    #[test]
+    fn semantic_guard_discovery_walks_one_path_and_rejects_cycles_or_forks() {
+        let linear = vec![
+            semantic_goto_block(1, 1),
+            semantic_goto_block(2, 2),
+            semantic_control_block(3, SemanticTerminatorKindV1::Return),
+        ];
+        let guards = BTreeMap::from([(2, (3, 4))]);
         assert_eq!(
-            validate_declared_entry_guard_v3(&function, BlockId(9)),
-            Ok(()),
+            semantic_next_boolean_guard_v3(&linear, &[], 0, &guards),
+            Ok(2),
+        );
+        assert_eq!(
+            semantic_pure_setup_path_in_function_v3(&linear, &[], 0, 2),
+            Ok(BTreeSet::from([0, 1])),
+        );
+
+        let cycle = vec![semantic_goto_block(4, 1), semantic_goto_block(5, 0)];
+        assert_eq!(
+            semantic_next_boolean_guard_v3(&cycle, &[], 0, &guards),
+            Err(MemoryTraceRefinementErrorV3::GuardMismatch),
+        );
+
+        let bool_ty = SemanticTypeIdV1::from_index(0);
+        let discriminant = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), Vec::new(), bool_ty).unwrap(),
+        );
+        let fork = semantic_control_block(
+            6,
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        1,
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::SwitchValue,
+                            SemanticBlockIdV1::from_index(1),
+                        ),
+                    )],
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        SemanticBlockIdV1::from_index(2),
+                    ),
+                )
+                .unwrap(),
+            },
+        );
+        let forked = vec![
+            fork,
+            semantic_control_block(7, SemanticTerminatorKindV1::Return),
+            semantic_control_block(8, SemanticTerminatorKindV1::Return),
+        ];
+        let ambiguous_guards = BTreeMap::from([(1, (3, 4)), (2, (5, 6))]);
+        assert_eq!(
+            semantic_next_boolean_guard_v3(&forked, &[], 0, &ambiguous_guards),
+            Err(MemoryTraceRefinementErrorV3::GuardMismatch),
         );
     }
 }

@@ -1,10 +1,11 @@
-name: Formal Compiler V2
+name: Formal Compiler V3
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/formal-compiler-v2.yml"
+      - ".github/workflows/formal-compiler-v3.yml"
       - "README.md"
+      - "formal/compiler-v3/**"
       - "crates/fe2o3-amdgcn-model/**"
       - "crates/fe2o3-host/**"
       - "crates/fe2o3-kernel-analysis/**"
@@ -14,15 +15,19 @@ on:
       - "crates/fe2o3-runtime-model/**"
       - "crates/fe2o3-verifier/**"
       - "crates/rustc-codegen-fe2o3/**"
+      - "docs/formal-compiler-v3.md"
       - "docs/formal-compiler-v2.md"
       - "docs/formal-compiler-v1.md"
       - "scripts/ci-local.sh"
+      - "scripts/generate-formal-compiler-v3-spec.py"
       - "scripts/test-*-verus*.sh"
+      - "scripts/tests/formal_compiler_v3_spec.py"
   push:
     branches: [main]
     paths:
-      - ".github/workflows/formal-compiler-v2.yml"
+      - ".github/workflows/formal-compiler-v3.yml"
       - "README.md"
+      - "formal/compiler-v3/**"
       - "crates/fe2o3-amdgcn-model/**"
       - "crates/fe2o3-host/**"
       - "crates/fe2o3-kernel-analysis/**"
@@ -32,24 +37,27 @@ on:
       - "crates/fe2o3-runtime-model/**"
       - "crates/fe2o3-verifier/**"
       - "crates/rustc-codegen-fe2o3/**"
+      - "docs/formal-compiler-v3.md"
       - "docs/formal-compiler-v2.md"
       - "docs/formal-compiler-v1.md"
       - "scripts/ci-local.sh"
+      - "scripts/generate-formal-compiler-v3-spec.py"
       - "scripts/test-*-verus*.sh"
+      - "scripts/tests/formal_compiler_v3_spec.py"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: formal-compiler-v2-${{ github.ref }}
+  group: formal-compiler-v3-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   proof-ledger:
     name: Pinned compiler and runtime proof closures
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -94,3 +102,19 @@ jobs:
 
       - name: Verify the complete bounded proof ledger
         run: scripts/ci-local.sh verus
+
+      - name: Verify focused Rust checkers and custody
+        env:
+          FE2O3_HIP_SYS_DISABLE: "1"
+        run: |
+          cargo test --locked -p fe2o3-proof-contracts --test dynamic_constrained_affine_bounds_v3
+          cargo test --locked -p fe2o3-verifier --lib dynamic_constrained_affine_bounds
+          cargo test --locked -p fe2o3-kernel-analysis --lib
+          cargo test --locked -p fe2o3-lower-mir-kernel --lib
+          cargo test --locked -p rustc-codegen-fe2o3 --lib production_formal_compiler_v3
+          cargo test --locked -p rustc-codegen-fe2o3 --test production_extraction_driver_v1 \
+            real_rustc_guarded_xor_fixture_reaches_composed_formal_compiler_v3_proved_status \
+            -- --ignored --exact --test-threads=1
+          cargo test --locked -p rustc-codegen-fe2o3 --test production_extraction_driver_v1 \
+            real_rustc_wrong_store_fixture_cannot_claim_formal_compiler_v3_proved_status \
+            -- --ignored --exact --test-threads=1
