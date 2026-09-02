@@ -14,6 +14,8 @@
 //! refinement from their concrete operations before consuming modeled states.
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 mod async_queue;
 mod device_identity;

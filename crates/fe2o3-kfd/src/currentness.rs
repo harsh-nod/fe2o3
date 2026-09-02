@@ -168,6 +168,63 @@ impl ObservableDeviceCurrentnessV1 {
 }
 
 impl CheckedGfx942XnackMinusDevice {
+    /// Rechecks the retained process, descriptors, UAPI mode, reset stream,
+    /// and DRM reset observation used by an already-created queue.
+    ///
+    /// The full composite observation remains mandatory around device, VM,
+    /// allocation, mapping, and queue lifecycle transitions. An active queue
+    /// uses this bounded fence around ordinary mapped-memory and submission
+    /// operations so their cost does not scale with the number of host
+    /// topology sysfs files. Topology and aperture equality are therefore
+    /// lifecycle observations; reset and descriptor loss remain hot-path
+    /// observations.
+    pub(crate) fn check_operational_currentness(&mut self) -> Result<(), DeviceBindingError> {
+        if self.currentness_poisoned {
+            return Err(DeviceBindingError::CurrentnessFencePoisoned);
+        }
+        let result = self.check_operational_currentness_inner();
+        if result.is_err() {
+            self.currentness_poisoned = true;
+        }
+        result
+    }
+
+    fn check_operational_currentness_inner(&mut self) -> Result<(), DeviceBindingError> {
+        self.kfd
+            .opened
+            .ensure_process(std::process::id())
+            .map_err(DeviceBindingError::Kfd)?;
+        let process = crate::linux::observe_process_incarnation()?;
+        if process != self.process {
+            return Err(DeviceBindingError::ProcessIncarnationChanged);
+        }
+
+        // Check the prospective stream before and after the retained identity
+        // observations so a reset concurrent with this scope is latched.
+        self.reset_fence.check_clear()?;
+        crate::linux::revalidate_descriptor(
+            &self.kfd.opened.fd,
+            self.kfd.opened.node_observation(),
+            "KFD operational currentness fstat",
+        )?;
+        crate::linux::revalidate_render_descriptor(
+            &self.render_fd,
+            self.observation.render_descriptor(),
+        )?;
+        if crate::linux::observe_uapi(&self.kfd.opened.fd)? != self.kfd.uapi.reported_version() {
+            return Err(DeviceBindingError::UapiChanged);
+        }
+        if crate::linux::query_xnack_mode(&self.kfd.opened.fd)? != 0 {
+            return Err(DeviceBindingError::UnsupportedXnackMode);
+        }
+        if crate::linux::observe_drm_identity(&self.render_fd)? != self.observation.drm() {
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "DRM identity or VRAM-loss counter",
+            ));
+        }
+        self.reset_fence.check_clear()
+    }
+
     /// Rechecks every retained R1 identity observation under the prospective
     /// whole-GPU reset subscription.
     ///

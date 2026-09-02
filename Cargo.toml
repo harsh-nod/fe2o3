@@ -147,6 +147,7 @@ pliron-llvm = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861b
 quote = "1"
 rustc_apfloat = "=0.2.3"
 sha2 = { version = "0.11.0", default-features = false }
+spin = { version = "0.12.3", default-features = false, features = ["once"] }
 syn = { version = "2", features = ["full"] }
 
 [profile.dev.package.fe2o3-verifier]

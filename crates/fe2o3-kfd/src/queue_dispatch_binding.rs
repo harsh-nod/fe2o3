@@ -12,7 +12,7 @@ use core::fmt;
 use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
     AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
-    AqlRingCapacityV1, ObservedGpuAddressV1,
+    AqlRingCapacityV1, Cov6ImplicitDispatchShapeV1, ObservedGpuAddressV1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, ExplicitValueKind,
@@ -411,6 +411,16 @@ impl Gfx942FixedDispatchDataV1 {
         }
     }
 
+    pub(crate) fn initialized_host_visible_token_mut(
+        &mut self,
+    ) -> Option<&mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>>
+    {
+        match &mut self.storage {
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => Some(memory.token_mut()),
+            _ => None,
+        }
+    }
+
     /// Returns whether the complete requested extent has initialized bytes.
     ///
     /// This observation does not identify their current content after any
@@ -498,6 +508,24 @@ pub struct Gfx942CompletedDispatchReadRequestV1 {
     byte_len: u64,
 }
 
+/// Inert request to overwrite an initialized coherent range after exact recycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942RecycledDispatchWriteRequestV1 {
+    dispatch_generation: u64,
+    data_index: usize,
+    offset: u64,
+}
+
+impl Gfx942RecycledDispatchWriteRequestV1 {
+    pub const fn new(dispatch_generation: u64, data_index: usize, offset: u64) -> Self {
+        Self {
+            dispatch_generation,
+            data_index,
+            offset,
+        }
+    }
+}
+
 /// Inert request for one exact admitted enclosing snapshot after recycle.
 ///
 /// The request contains no address or allocation authority. The retained
@@ -568,6 +596,11 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Consumes the readback and returns its owned bytes.
+    pub fn into_bytes(self) -> Box<[u8]> {
+        self.bytes
     }
 }
 
@@ -1201,6 +1234,40 @@ impl DispatchResourceOwnerV1 {
         })
     }
 
+    pub(super) fn read_completed_host_visible_into(
+        &self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        validate_completed_read_request(&self.generation, &self.data_premises, request)?;
+        if u64::try_from(destination.len()).ok() != Some(request.byte_len) {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read destination length",
+            });
+        }
+        let authority =
+            self.data
+                .get(request.data_index)
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: request.data_index,
+                    detail: "completed read authority ordinal",
+                })?;
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read requires coherent host-visible storage",
+            });
+        };
+        memory.copy_completed_dispatch_host_data_subrange_into(
+            authority,
+            request.offset,
+            destination,
+        )?;
+        Ok(())
+    }
+
     pub(super) fn read_completed_host_visible_snapshot(
         &self,
         memory: &mut SharedGttMemorySessionV1,
@@ -1235,6 +1302,55 @@ impl DispatchResourceOwnerV1 {
             offset: request.offset,
             bytes,
         })
+    }
+
+    pub(super) fn overwrite_recycled_host_visible(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942RecycledDispatchWriteRequestV1,
+        source: &[u8],
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.returned_generation()?;
+        if request.dispatch_generation != generation {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        let premise = self.data_premises.get(request.data_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite premise ordinal",
+            },
+        )?;
+        let source_len =
+            u64::try_from(source.len()).map_err(|_| Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite source length",
+            })?;
+        let end = request.offset.checked_add(source_len).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite range overflow",
+            },
+        )?;
+        if source.is_empty() || end > premise.valid_bytes || !premise.fully_initialized {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite range or initialization",
+            });
+        }
+        let authority = self.data.get_mut(request.data_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite authority ordinal",
+            },
+        )?;
+        let DispatchDataAuthorityV1::HostVisible(authority) = authority else {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "recycled overwrite requires coherent host-visible storage",
+            });
+        };
+        memory.overwrite_recycled_dispatch_host_data_subrange(authority, request.offset, source)?;
+        Ok(())
     }
 
     pub(super) fn release(
@@ -1892,10 +2008,7 @@ struct Cov6ImplicitKernargPlanV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cov6ImplicitKernargValuesV1 {
-    block_count: [u32; 3],
-    group_size: [u16; 3],
-    remainder: [u16; 3],
-    grid_dimensions: u16,
+    dispatch_shape: Cov6ImplicitDispatchShapeV1,
     dynamic_lds_size: u32,
 }
 
@@ -2518,35 +2631,12 @@ fn derive_cov6_implicit_kernarg_values(
     dynamic_lds_size: u32,
     uniform_workgroup: bool,
 ) -> Result<Cov6ImplicitKernargValuesV1, &'static str> {
-    let dimensions = usize::from(geometry.dimensions());
-    if !(1..=3).contains(&dimensions) {
-        return Err("implicit-kernarg grid dimensions");
-    }
-    let grid = geometry.grid();
-    let observed_workgroup = geometry.workgroup();
-    let mut block_count = [1; 3];
-    let mut group_size = [1; 3];
-    let mut remainder = [0; 3];
-    for axis in 0..3 {
-        let workgroup = u32::from(observed_workgroup[axis]);
-        if axis >= dimensions {
-            if grid[axis] != 1 || workgroup != 1 {
-                return Err("inactive implicit-kernarg dimension");
-            }
-            continue;
-        }
-        block_count[axis] = grid[axis] / workgroup;
-        group_size[axis] = observed_workgroup[axis];
-        remainder[axis] = (grid[axis] % workgroup) as u16;
-    }
-    if uniform_workgroup && remainder != [0; 3] {
+    let dispatch_shape = geometry.cov6_implicit_dispatch_shape();
+    if uniform_workgroup && dispatch_shape.remainder() != [0; 3] {
         return Err("uniform workgroup has a partial remainder");
     }
     Ok(Cov6ImplicitKernargValuesV1 {
-        block_count,
-        group_size,
-        remainder,
-        grid_dimensions: geometry.dimensions(),
+        dispatch_shape,
         dynamic_lds_size,
     })
 }
@@ -2556,6 +2646,9 @@ fn initialize_cov6_implicit_kernarg(
     plan: &Cov6ImplicitKernargPlanV1,
     values: Cov6ImplicitKernargValuesV1,
 ) {
+    let block_count = values.dispatch_shape.block_count();
+    let group_size = values.dispatch_shape.group_size();
+    let remainder = values.dispatch_shape.remainder();
     debug_assert!(
         kernarg[plan.byte_offset..plan.byte_offset + COV6_IMPLICIT_ARGUMENT_BYTES_V1]
             .iter()
@@ -2565,20 +2658,20 @@ fn initialize_cov6_implicit_kernarg(
         let offset = plan.byte_offset + field.relative_offset;
         match field.kind {
             Cov6ImplicitKernargFieldKindV1::BlockCount(axis) => {
-                put_u32(kernarg, offset, values.block_count[axis]);
+                put_u32(kernarg, offset, block_count[axis]);
             }
             Cov6ImplicitKernargFieldKindV1::GroupSize(axis) => {
-                put_u16(kernarg, offset, values.group_size[axis]);
+                put_u16(kernarg, offset, group_size[axis]);
             }
             Cov6ImplicitKernargFieldKindV1::Remainder(axis) => {
-                put_u16(kernarg, offset, values.remainder[axis]);
+                put_u16(kernarg, offset, remainder[axis]);
             }
             Cov6ImplicitKernargFieldKindV1::GlobalOffset(axis) => {
                 let _ = axis;
                 put_u64(kernarg, offset, 0);
             }
             Cov6ImplicitKernargFieldKindV1::GridDimensions => {
-                put_u16(kernarg, offset, values.grid_dimensions);
+                put_u16(kernarg, offset, values.dispatch_shape.grid_dimensions());
             }
             Cov6ImplicitKernargFieldKindV1::DynamicLdsSize => {
                 put_u32(kernarg, offset, values.dynamic_lds_size);
@@ -3474,10 +3567,10 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(values.block_count, [4, 1, 1]);
-        assert_eq!(values.group_size, [64, 2, 1]);
-        assert_eq!(values.remainder, [1, 1, 0]);
-        assert_eq!(values.grid_dimensions, 2);
+        assert_eq!(values.dispatch_shape.block_count(), [4, 1, 1]);
+        assert_eq!(values.dispatch_shape.group_size(), [64, 2, 1]);
+        assert_eq!(values.dispatch_shape.remainder(), [1, 1, 0]);
+        assert_eq!(values.dispatch_shape.grid_dimensions(), 2);
         assert_eq!(values.dynamic_lds_size, 384);
 
         assert!(
@@ -3494,8 +3587,8 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(uniform.block_count, [4, 2, 1]);
-        assert_eq!(uniform.remainder, [0, 0, 0]);
+        assert_eq!(uniform.dispatch_shape.block_count(), [4, 2, 1]);
+        assert_eq!(uniform.dispatch_shape.remainder(), [0, 0, 0]);
     }
 
     #[test]

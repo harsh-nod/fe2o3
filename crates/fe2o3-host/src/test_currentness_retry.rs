@@ -130,7 +130,10 @@ mod tests {
             },
         );
         assert_eq!(result, Err(TestError::Busy));
-        assert!(calls >= 2);
+        // A loaded process may be descheduled for the complete three-millisecond
+        // budget before the first call returns. Retry cardinality is covered by
+        // the zero-interval tests above; this case establishes only boundedness.
+        assert!(calls >= 1);
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

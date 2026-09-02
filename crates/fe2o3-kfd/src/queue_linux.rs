@@ -7,9 +7,9 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, Ordering, fence};
+use core::sync::atomic::{Ordering, fence};
 use std::os::fd::{AsRawFd, BorrowedFd};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_CREATE_EVENT, AMDKFD_IOC_CREATE_QUEUE, AMDKFD_IOC_DESTROY_EVENT,
@@ -32,23 +32,20 @@ const WAIT_EVENTS_OPCODE: Opcode = AMDKFD_IOC_WAIT_EVENTS as Opcode;
 const RUNTIME_ENABLE_OPCODE: Opcode = AMDKFD_IOC_RUNTIME_ENABLE as Opcode;
 const QUEUE_EXCEPTION_PAYLOAD_OFFSET: usize = 64;
 const MAX_QUEUE_EXCEPTION_WAIT_MS: u32 = 1_000;
-static KFD_RUNTIME_GATE: Mutex<()> = Mutex::new(());
-static KFD_RUNTIME_GATE_TEARDOWN_ARMED: AtomicBool = AtomicBool::new(false);
-static KFD_RUNTIME_GATE_PERMANENTLY_POISONED: AtomicBool = AtomicBool::new(false);
+static KFD_RUNTIME_GATE: Mutex<ProcessGlobalKfdRuntimeGateV1> =
+    Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
 #[allow(dead_code)]
 const UPDATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_UPDATE_QUEUE as Opcode;
 
 struct RuntimeGateTerminalTeardownArmV1<'a> {
-    flag: &'a AtomicBool,
-    previously_poisoned: bool,
+    gate: &'a Mutex<ProcessGlobalKfdRuntimeGateV1>,
+    counted: bool,
     confirmed: bool,
 }
 
 impl RuntimeGateTerminalTeardownArmV1<'_> {
     fn confirm_destroyed(mut self) {
-        if !self.previously_poisoned {
-            self.flag.store(false, Ordering::Release);
-        }
+        finish_runtime_gate_teardown_arm(self.gate, self.counted, true);
         self.confirmed = true;
     }
 }
@@ -56,20 +53,28 @@ impl RuntimeGateTerminalTeardownArmV1<'_> {
 impl Drop for RuntimeGateTerminalTeardownArmV1<'_> {
     fn drop(&mut self) {
         if !self.confirmed {
-            self.flag.store(true, Ordering::Release);
+            finish_runtime_gate_teardown_arm(self.gate, self.counted, false);
         }
     }
 }
 
-fn arm_runtime_gate_for_terminal_teardown(
-    flag: &AtomicBool,
-) -> RuntimeGateTerminalTeardownArmV1<'_> {
-    let previously_poisoned = flag.swap(true, Ordering::AcqRel);
+fn arm_runtime_gate_for_terminal_teardown<'a>(
+    gate: &'a Mutex<ProcessGlobalKfdRuntimeGateV1>,
+) -> RuntimeGateTerminalTeardownArmV1<'a> {
+    let counted = lock_runtime_gate_v1(gate).arm_teardown();
     RuntimeGateTerminalTeardownArmV1 {
-        flag,
-        previously_poisoned,
+        gate,
+        counted,
         confirmed: false,
     }
+}
+
+fn finish_runtime_gate_teardown_arm(
+    gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
+    counted: bool,
+    confirmed: bool,
+) {
+    lock_runtime_gate_v1(gate).finish_teardown_arm(counted, confirmed);
 }
 
 /// Excludes a new queue session until teardown is confirmed end to end.
@@ -83,18 +88,156 @@ impl ProcessGlobalKfdRuntimeTeardownArmV1 {
 
 pub(crate) fn arm_process_global_kfd_runtime_gate_for_teardown_v1()
 -> ProcessGlobalKfdRuntimeTeardownArmV1 {
-    ProcessGlobalKfdRuntimeTeardownArmV1(arm_runtime_gate_for_terminal_teardown(
-        &KFD_RUNTIME_GATE_TEARDOWN_ARMED,
-    ))
+    ProcessGlobalKfdRuntimeTeardownArmV1(arm_runtime_gate_for_terminal_teardown(&KFD_RUNTIME_GATE))
 }
 
 pub(crate) fn permanently_poison_process_global_kfd_runtime_gate_v1() {
-    KFD_RUNTIME_GATE_PERMANENTLY_POISONED.store(true, Ordering::Release);
+    lock_runtime_gate_v1(&KFD_RUNTIME_GATE).poison();
 }
 
-fn process_global_kfd_runtime_gate_is_blocked_v1() -> bool {
-    KFD_RUNTIME_GATE_TEARDOWN_ARMED.load(Ordering::Acquire)
-        || KFD_RUNTIME_GATE_PERMANENTLY_POISONED.load(Ordering::Acquire)
+fn lock_runtime_gate_v1(
+    gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
+) -> MutexGuard<'_, ProcessGlobalKfdRuntimeGateV1> {
+    match gate.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            guard.poison();
+            guard
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessKfdRuntimeStateV1 {
+    Disabled,
+    Enabled { opener_pid: u32, leases: usize },
+    Poisoned,
+}
+
+#[derive(Debug)]
+struct ProcessGlobalKfdRuntimeGateV1 {
+    runtime: ProcessKfdRuntimeStateV1,
+    teardown_arms: usize,
+    permanently_poisoned: bool,
+}
+
+impl ProcessGlobalKfdRuntimeGateV1 {
+    const fn new() -> Self {
+        Self {
+            runtime: ProcessKfdRuntimeStateV1::Disabled,
+            teardown_arms: 0,
+            permanently_poisoned: false,
+        }
+    }
+
+    fn admit_runtime(&mut self, opener_pid: u32) -> Result<bool, LinuxDoorbellErrorV1> {
+        if self.is_blocked() {
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global gate poisoned",
+            ));
+        }
+        self.runtime.join_enabled(opener_pid)
+    }
+
+    const fn is_blocked(&self) -> bool {
+        self.teardown_arms != 0 || self.permanently_poisoned
+    }
+
+    fn arm_teardown(&mut self) -> bool {
+        match self.teardown_arms.checked_add(1) {
+            Some(arms) => {
+                self.teardown_arms = arms;
+                true
+            }
+            None => {
+                self.poison();
+                false
+            }
+        }
+    }
+
+    fn finish_teardown_arm(&mut self, counted: bool, confirmed: bool) {
+        if counted {
+            match self.teardown_arms.checked_sub(1) {
+                Some(arms) => self.teardown_arms = arms,
+                None => self.poison(),
+            }
+        } else {
+            self.poison();
+        }
+        if !confirmed {
+            self.poison();
+        }
+    }
+
+    fn poison(&mut self) {
+        self.permanently_poisoned = true;
+        self.runtime.poison();
+    }
+}
+
+impl ProcessKfdRuntimeStateV1 {
+    fn join_enabled(&mut self, opener_pid: u32) -> Result<bool, LinuxDoorbellErrorV1> {
+        match *self {
+            Self::Disabled => Ok(true),
+            Self::Enabled {
+                opener_pid: owner_pid,
+                leases,
+            } if owner_pid == opener_pid => {
+                let leases = leases
+                    .checked_add(1)
+                    .ok_or(LinuxDoorbellErrorV1::Runtime("runtime lease capacity"))?;
+                *self = Self::Enabled { opener_pid, leases };
+                Ok(false)
+            }
+            Self::Enabled { .. } => Err(LinuxDoorbellErrorV1::ProcessChanged),
+            Self::Poisoned => Err(LinuxDoorbellErrorV1::Runtime(
+                "process runtime context poisoned",
+            )),
+        }
+    }
+
+    fn commit_first_enabled(&mut self, opener_pid: u32) {
+        debug_assert_eq!(*self, Self::Disabled);
+        *self = Self::Enabled {
+            opener_pid,
+            leases: 1,
+        };
+    }
+
+    fn release_plan(&mut self, opener_pid: u32) -> Result<bool, LinuxDoorbellErrorV1> {
+        match *self {
+            Self::Enabled {
+                opener_pid: owner_pid,
+                leases,
+            } if owner_pid == opener_pid && leases > 1 => {
+                *self = Self::Enabled {
+                    opener_pid,
+                    leases: leases - 1,
+                };
+                Ok(false)
+            }
+            Self::Enabled {
+                opener_pid: owner_pid,
+                leases: 1,
+            } if owner_pid == opener_pid => Ok(true),
+            Self::Enabled { .. } => Err(LinuxDoorbellErrorV1::ProcessChanged),
+            Self::Disabled => Err(LinuxDoorbellErrorV1::Runtime("runtime lease underflow")),
+            Self::Poisoned => Err(LinuxDoorbellErrorV1::Runtime(
+                "process runtime context poisoned",
+            )),
+        }
+    }
+
+    fn commit_last_disabled(&mut self) {
+        debug_assert!(matches!(*self, Self::Enabled { leases: 1, .. }));
+        *self = Self::Disabled;
+    }
+
+    fn poison(&mut self) {
+        *self = Self::Poisoned;
+    }
 }
 
 #[derive(Debug)]
@@ -283,13 +426,15 @@ fn admit_runtime_transition(
     }
 }
 
-/// Process-global, linear ownership of the KFD runtime-enabled state.
+/// One linear queue lease on the process-global KFD runtime context.
 ///
-/// The static guard excludes other fe2o3 queue sessions in this process. A
-/// foreign KFD client in the same process is outside this authority boundary.
+/// The first lease enables the kernel runtime and the last fully torn-down
+/// lease disables it. Intermediate leases own independent queue/event phases,
+/// so queues on admitted devices can coexist without repeating the process
+/// transition. A foreign KFD client in the same process remains outside this
+/// authority boundary.
 pub(crate) struct LinuxKfdRuntimeEnabledV1 {
     binding: KfdRuntimeBindingV1,
-    gate: Option<MutexGuard<'static, ()>>,
     active: bool,
     poisoned: bool,
     phase: KfdRuntimeLifecyclePhaseV1,
@@ -297,7 +442,7 @@ pub(crate) struct LinuxKfdRuntimeEnabledV1 {
 
 pub(crate) struct LinuxKfdRuntimeDisabledV1 {
     binding: KfdRuntimeBindingV1,
-    gate: Option<MutexGuard<'static, ()>>,
+    completion_pending: bool,
 }
 
 impl LinuxKfdRuntimeEnabledV1 {
@@ -308,29 +453,18 @@ impl LinuxKfdRuntimeEnabledV1 {
         if opener_pid != std::process::id() || kfd.as_raw_fd() < 0 {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
-        if process_global_kfd_runtime_gate_is_blocked_v1() {
-            return Err(LinuxDoorbellErrorV1::Runtime(
-                "process-global gate poisoned",
-            ));
-        }
-        let gate = match KFD_RUNTIME_GATE.try_lock() {
-            Ok(gate) => gate,
-            Err(TryLockError::WouldBlock) => {
-                return Err(LinuxDoorbellErrorV1::Runtime(
-                    "another fe2o3 runtime owner is live",
-                ));
-            }
-            Err(TryLockError::Poisoned(_)) => {
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                return Err(LinuxDoorbellErrorV1::Runtime(
-                    "process-global mutex poisoned",
-                ));
-            }
-        };
-        if process_global_kfd_runtime_gate_is_blocked_v1() {
-            return Err(LinuxDoorbellErrorV1::Runtime(
-                "process-global gate poisoned",
-            ));
+        let mut gate = lock_runtime_gate_v1(&KFD_RUNTIME_GATE);
+        let requires_kernel_enable = gate.admit_runtime(opener_pid)?;
+        if !requires_kernel_enable {
+            return Ok(Self {
+                binding: KfdRuntimeBindingV1 {
+                    opener_pid,
+                    raw_fd: kfd.as_raw_fd(),
+                },
+                active: true,
+                poisoned: false,
+                phase: KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
+            });
         }
 
         let expected = KfdIoctlRuntimeEnableArgsV1::new_queue_exception_enable();
@@ -341,24 +475,24 @@ impl LinuxKfdRuntimeEnabledV1 {
         // SAFETY: the retained process-bound fd and exact record satisfy the
         // reviewed request. Every error is treated as an ambiguous transition.
         if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
-            permanently_poison_process_global_kfd_runtime_gate_v1();
+            gate.poison();
             return Err(LinuxDoorbellErrorV1::RuntimeSyscall {
                 operation: "AMDKFD_IOC_RUNTIME_ENABLE(enable)",
                 source,
             });
         }
         if args != expected || !args.is_exact_queue_exception_enable() {
-            permanently_poison_process_global_kfd_runtime_gate_v1();
+            gate.poison();
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "RUNTIME_ENABLE enable output drift",
             ));
         }
+        gate.runtime.commit_first_enabled(opener_pid);
         Ok(Self {
             binding: KfdRuntimeBindingV1 {
                 opener_pid,
                 raw_fd: kfd.as_raw_fd(),
             },
-            gate: Some(gate),
             active: true,
             poisoned: false,
             phase: KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
@@ -376,7 +510,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
-        if !self.active || self.poisoned || self.gate.is_none() {
+        if !self.active || self.poisoned {
             return Err(LinuxDoorbellErrorV1::Runtime("linear runtime state"));
         }
         Ok(())
@@ -397,7 +531,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         if opener_pid != std::process::id() || self.binding.opener_pid != opener_pid {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
-        if !self.active || self.poisoned || self.gate.is_none() {
+        if !self.active || self.poisoned {
             return Err(LinuxDoorbellErrorV1::Runtime("linear runtime state"));
         }
         if self.phase != KfdRuntimeLifecyclePhaseV1::QueueLive {
@@ -471,6 +605,26 @@ impl LinuxKfdRuntimeEnabledV1 {
                 "disable before queue and event destruction",
             ));
         }
+        let mut gate = lock_runtime_gate_v1(&KFD_RUNTIME_GATE);
+        let requires_kernel_disable = match gate.runtime.release_plan(opener_pid) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        if !requires_kernel_disable {
+            self.active = false;
+            self.phase = admit_runtime_transition(
+                self.phase,
+                required_phase,
+                KfdRuntimeLifecyclePhaseV1::Disabled,
+            )?;
+            return Ok(LinuxKfdRuntimeDisabledV1 {
+                binding: self.binding,
+                completion_pending: true,
+            });
+        }
         let expected = KfdIoctlRuntimeEnableArgsV1::new_queue_exception_disable();
         let mut args = expected;
         // SAFETY: exact pointer-free 16-byte transition record.
@@ -479,6 +633,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         // ambiguous, poisons the global owner, and permits no later cleanup.
         if let Err(source) = unsafe { rustix::ioctl::ioctl(kfd, request) } {
             self.poisoned = true;
+            gate.poison();
             return Err(LinuxDoorbellErrorV1::RuntimeSyscall {
                 operation: "AMDKFD_IOC_RUNTIME_ENABLE(disable)",
                 source,
@@ -486,10 +641,12 @@ impl LinuxKfdRuntimeEnabledV1 {
         }
         if args != expected || !args.is_exact_queue_exception_disable() {
             self.poisoned = true;
+            gate.poison();
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "RUNTIME_ENABLE disable output drift",
             ));
         }
+        gate.runtime.commit_last_disabled();
         self.active = false;
         self.phase = admit_runtime_transition(
             self.phase,
@@ -498,7 +655,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         )?;
         Ok(LinuxKfdRuntimeDisabledV1 {
             binding: self.binding,
-            gate: Some(self.gate.take().expect("validated runtime gate")),
+            completion_pending: true,
         })
     }
 }
@@ -514,13 +671,13 @@ impl Drop for LinuxKfdRuntimeEnabledV1 {
 
 impl LinuxKfdRuntimeDisabledV1 {
     pub(crate) fn complete(mut self) {
-        let _ = self.gate.take();
+        self.completion_pending = false;
     }
 }
 
 impl Drop for LinuxKfdRuntimeDisabledV1 {
     fn drop(&mut self) {
-        if self.gate.is_some() {
+        if self.completion_pending {
             permanently_poison_process_global_kfd_runtime_gate_v1();
         }
         // Deliberately no implicit ioctl.
@@ -997,9 +1154,9 @@ impl LinuxCwsrShadowPagesV1 {
 
 impl LinuxCwsrShadowsReadyForReleaseV1 {
     pub(crate) fn validate_for_release(&self) -> Result<(), LinuxDoorbellErrorV1> {
-        let gate_is_held = self.runtime.gate.is_some();
+        let cleanup_is_pending = self.runtime.completion_pending;
         if self.shadows.active
-            || !gate_is_held
+            || !cleanup_is_pending
             || self.shadows.binding.opener_pid != std::process::id()
             || self.runtime.binding.opener_pid != self.shadows.binding.opener_pid
         {
@@ -1517,29 +1674,136 @@ mod tests {
 
     #[test]
     fn terminal_teardown_arm_clears_only_after_confirmed_success() {
-        let flag = AtomicBool::new(false);
-        let arm = arm_runtime_gate_for_terminal_teardown(&flag);
-        assert!(flag.load(Ordering::Acquire));
-        arm.confirm_destroyed();
-        assert!(!flag.load(Ordering::Acquire));
+        let gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        let first = arm_runtime_gate_for_terminal_teardown(&gate);
+        let second = arm_runtime_gate_for_terminal_teardown(&gate);
+        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 2);
+        first.confirm_destroyed();
+        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 1);
+        assert!(!lock_runtime_gate_v1(&gate).permanently_poisoned);
+        second.confirm_destroyed();
+        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 0);
+        assert!(!lock_runtime_gate_v1(&gate).permanently_poisoned);
 
-        let arm = arm_runtime_gate_for_terminal_teardown(&flag);
-        assert!(flag.load(Ordering::Acquire));
+        let arm = arm_runtime_gate_for_terminal_teardown(&gate);
+        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 1);
         drop(arm);
-        assert!(flag.load(Ordering::Acquire));
+        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 0);
+        assert!(lock_runtime_gate_v1(&gate).permanently_poisoned);
 
-        let already_poisoned = AtomicBool::new(true);
-        let arm = arm_runtime_gate_for_terminal_teardown(&already_poisoned);
-        arm.confirm_destroyed();
-        assert!(already_poisoned.load(Ordering::Acquire));
-
-        let panic_flag = AtomicBool::new(false);
+        let panic_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
         let result = std::panic::catch_unwind(|| {
-            let _arm = arm_runtime_gate_for_terminal_teardown(&panic_flag);
+            let _arm = arm_runtime_gate_for_terminal_teardown(&panic_gate);
             panic!("simulated teardown panic");
         });
         assert!(result.is_err());
-        assert!(panic_flag.load(Ordering::Acquire));
+        assert_eq!(lock_runtime_gate_v1(&panic_gate).teardown_arms, 0);
+        assert!(lock_runtime_gate_v1(&panic_gate).permanently_poisoned);
+    }
+
+    #[test]
+    fn teardown_arm_attempt_after_admission_check_linearizes_after_lease() {
+        use std::sync::{Arc, Barrier, mpsc};
+
+        let pid = 41;
+        let gate = Arc::new(Mutex::new(ProcessGlobalKfdRuntimeGateV1::new()));
+        let start_arm = Arc::new(Barrier::new(2));
+        let (attempted_tx, attempted_rx) = mpsc::sync_channel(0);
+        let (armed_tx, armed_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+
+        let mut admission = lock_runtime_gate_v1(&gate);
+        assert!(!admission.is_blocked());
+        let worker_gate = Arc::clone(&gate);
+        let worker_barrier = Arc::clone(&start_arm);
+        let worker = std::thread::spawn(move || {
+            worker_barrier.wait();
+            attempted_tx.send(()).unwrap();
+            let arm = arm_runtime_gate_for_terminal_teardown(&worker_gate);
+            armed_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            arm.confirm_destroyed();
+        });
+
+        start_arm.wait();
+        attempted_rx.recv().unwrap();
+        // This models the former gap between the final arm check and the lease
+        // join. The arm thread has started, but the shared gate lock keeps its
+        // transition ordered after this admission.
+        assert_eq!(admission.teardown_arms, 0);
+        assert!(admission.runtime.join_enabled(pid).unwrap());
+        admission.runtime.commit_first_enabled(pid);
+        drop(admission);
+
+        armed_rx.recv().unwrap();
+        let mut blocked_admission = lock_runtime_gate_v1(&gate);
+        assert!(blocked_admission.is_blocked());
+        assert!(matches!(
+            blocked_admission.admit_runtime(pid),
+            Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global gate poisoned"
+            ))
+        ));
+        drop(blocked_admission);
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let gate = lock_runtime_gate_v1(&gate);
+        assert_eq!(gate.teardown_arms, 0);
+        assert!(!gate.permanently_poisoned);
+        assert_eq!(
+            gate.runtime,
+            ProcessKfdRuntimeStateV1::Enabled {
+                opener_pid: pid,
+                leases: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn process_runtime_context_multiplexes_independent_queue_leases() {
+        let pid = 41;
+        let mut state = ProcessKfdRuntimeStateV1::Disabled;
+        assert!(state.join_enabled(pid).unwrap());
+        state.commit_first_enabled(pid);
+        assert!(!state.join_enabled(pid).unwrap());
+        assert!(!state.join_enabled(pid).unwrap());
+        assert_eq!(
+            state,
+            ProcessKfdRuntimeStateV1::Enabled {
+                opener_pid: pid,
+                leases: 3,
+            }
+        );
+
+        assert!(!state.release_plan(pid).unwrap());
+        assert!(!state.release_plan(pid).unwrap());
+        assert!(state.release_plan(pid).unwrap());
+        state.commit_last_disabled();
+        assert_eq!(state, ProcessKfdRuntimeStateV1::Disabled);
+    }
+
+    #[test]
+    fn process_runtime_context_rejects_cross_process_and_poisoned_joins() {
+        let mut state = ProcessKfdRuntimeStateV1::Enabled {
+            opener_pid: 17,
+            leases: 1,
+        };
+        assert!(matches!(
+            state.join_enabled(18),
+            Err(LinuxDoorbellErrorV1::ProcessChanged)
+        ));
+        assert!(matches!(
+            state.release_plan(18),
+            Err(LinuxDoorbellErrorV1::ProcessChanged)
+        ));
+        state.poison();
+        assert!(matches!(
+            state.join_enabled(17),
+            Err(LinuxDoorbellErrorV1::Runtime(
+                "process runtime context poisoned"
+            ))
+        ));
     }
 
     #[test]

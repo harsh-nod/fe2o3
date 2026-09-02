@@ -3,6 +3,12 @@
 
 #[allow(unsafe_code)]
 mod authorized_execution;
+mod context;
+#[allow(unsafe_code)]
+mod kfd_backend;
+#[cfg(feature = "hardware-qualification")]
+pub mod qualification_gfx942_vecadd_v1;
+mod worker;
 
 pub use authorized_execution::{
     AuthorizedRuntimeDebugTelemetrySessionV1, AuthorizedRuntimeDebugTelemetrySessionV2,
@@ -12,6 +18,10 @@ pub use authorized_execution::{
     execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
+pub use context::*;
+pub use fe2o3_host_api as contract;
+pub use kfd_backend::*;
+pub use worker::*;
 
 use core::fmt;
 
@@ -631,21 +641,23 @@ fn hidden_value(
     geometry: AqlDispatchGeometryV1,
     dynamic_group_segment_bytes: u32,
 ) -> Result<Vec<u8>, &'static str> {
-    let grid = geometry.grid();
-    let workgroup = geometry.workgroup().map(u32::from);
+    let shape = geometry.cov6_implicit_dispatch_shape();
+    let block_count = shape.block_count();
+    let group_size = shape.group_size();
+    let remainder = shape.remainder();
     let u32_value = |value: u32| value.to_le_bytes().to_vec();
     let u16_value = |value: u16| value.to_le_bytes().to_vec();
     let u64_value = |value: u64| value.to_le_bytes().to_vec();
     match kind {
-        HiddenValueKind::BlockCountX => Ok(u32_value(ceil_div_u32(grid[0], workgroup[0]))),
-        HiddenValueKind::BlockCountY => Ok(u32_value(ceil_div_u32(grid[1], workgroup[1]))),
-        HiddenValueKind::BlockCountZ => Ok(u32_value(ceil_div_u32(grid[2], workgroup[2]))),
-        HiddenValueKind::GroupSizeX => Ok(u16_value(workgroup[0] as u16)),
-        HiddenValueKind::GroupSizeY => Ok(u16_value(workgroup[1] as u16)),
-        HiddenValueKind::GroupSizeZ => Ok(u16_value(workgroup[2] as u16)),
-        HiddenValueKind::RemainderX => Ok(u16_value((grid[0] % workgroup[0]) as u16)),
-        HiddenValueKind::RemainderY => Ok(u16_value((grid[1] % workgroup[1]) as u16)),
-        HiddenValueKind::RemainderZ => Ok(u16_value((grid[2] % workgroup[2]) as u16)),
+        HiddenValueKind::BlockCountX => Ok(u32_value(block_count[0])),
+        HiddenValueKind::BlockCountY => Ok(u32_value(block_count[1])),
+        HiddenValueKind::BlockCountZ => Ok(u32_value(block_count[2])),
+        HiddenValueKind::GroupSizeX => Ok(u16_value(group_size[0])),
+        HiddenValueKind::GroupSizeY => Ok(u16_value(group_size[1])),
+        HiddenValueKind::GroupSizeZ => Ok(u16_value(group_size[2])),
+        HiddenValueKind::RemainderX => Ok(u16_value(remainder[0])),
+        HiddenValueKind::RemainderY => Ok(u16_value(remainder[1])),
+        HiddenValueKind::RemainderZ => Ok(u16_value(remainder[2])),
         HiddenValueKind::GlobalOffsetX
         | HiddenValueKind::GlobalOffsetY
         | HiddenValueKind::GlobalOffsetZ
@@ -657,7 +669,7 @@ fn hidden_value(
         | HiddenValueKind::CompletionAction
         | HiddenValueKind::MultigridSyncArgument
         | HiddenValueKind::QueuePointer => Ok(u64_value(0)),
-        HiddenValueKind::GridDimensions => Ok(u16_value(geometry.dimensions())),
+        HiddenValueKind::GridDimensions => Ok(u16_value(shape.grid_dimensions())),
         HiddenValueKind::DynamicLdsSize => Ok(u32_value(dynamic_group_segment_bytes)),
         HiddenValueKind::PrivateBase | HiddenValueKind::SharedBase => {
             Err("gfx942 aperture ABI field is unsupported")
@@ -746,7 +758,7 @@ mod tests {
     fn geometry_hidden_values_are_derived_without_native_addresses() {
         assert_eq!(
             hidden_value(HiddenValueKind::BlockCountX, geometry(), 256).unwrap(),
-            3_u32.to_le_bytes()
+            2_u32.to_le_bytes()
         );
         assert_eq!(
             hidden_value(HiddenValueKind::BlockCountY, geometry(), 256).unwrap(),

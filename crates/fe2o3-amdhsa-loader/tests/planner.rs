@@ -3,6 +3,7 @@ use std::{env, fs};
 use fe2o3_amdhsa_loader::{
     AdmittedProfile, ImageRange, InterSegmentGapOrdinal, LOAD_SEGMENT_COUNT, MaterializationError,
     PlanError, SegmentOrdinal, SegmentPermissions, ValidatedEnvelope, plan, validate,
+    validate_owned,
 };
 
 const PHOFF: usize = 64;
@@ -41,6 +42,26 @@ fn builds_a_canonical_inert_plan() {
     assert_eq!(plan.segments()[2].zero_fill_size(), 0xf80);
     assert_eq!(plan.metadata_note().file_offset(), 0x214);
     assert_eq!(plan.metadata_note().byte_len(), 1);
+}
+
+#[test]
+fn owned_validation_reuses_one_object_buffer_and_cached_plan() {
+    let bytes = fixture();
+    let object_pointer = bytes.as_ptr();
+    let owned = validate_owned(bytes, AdmittedProfile::Gfx942XnackOffCov6).unwrap();
+    assert_eq!(owned.bytes().as_ptr(), object_pointer);
+    assert_eq!(owned.validation_passes(), 1);
+
+    let first = owned.validated();
+    let second = owned.validated();
+    assert_eq!(first.plan(), second.plan());
+    assert_eq!(first.input_len(), second.input_len());
+    assert_eq!(first.metadata_descriptor(), second.metadata_descriptor());
+    assert_eq!(
+        first.metadata_descriptor().as_ptr(),
+        second.metadata_descriptor().as_ptr()
+    );
+    assert_eq!(owned.validation_passes(), 1);
 }
 
 #[test]

@@ -4,6 +4,7 @@ use core::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use rustix::fd::AsFd;
 
@@ -35,10 +36,11 @@ use super::dispatch_binding::{
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
     Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
-    Gfx942FixedDispatchStorageIdentityV1, ReturnedDispatchDataV1, TypedKernargImageV1,
-    prepare_dispatch_resources, prepare_public_fixed_dispatch_resources,
-    prepare_public_fixed_dispatch_resources_after_recycle, unwrap_completed, unwrap_published,
-    validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress, wrap_published,
+    Gfx942FixedDispatchStorageIdentityV1, Gfx942RecycledDispatchWriteRequestV1,
+    ReturnedDispatchDataV1, TypedKernargImageV1, prepare_dispatch_resources,
+    prepare_public_fixed_dispatch_resources, prepare_public_fixed_dispatch_resources_after_recycle,
+    unwrap_completed, unwrap_published, validate_fixed_batch_ring, wrap_completed,
+    wrap_poll_with_progress, wrap_published,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
@@ -90,16 +92,16 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r30-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r34-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=965ff9f903665a15a26dd37695413d8621a5019bae99e5f2be464777de34ce79\n",
+    "memory_profile_sha256=fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
-    "aql_completion_schema_sha256=56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f\n",
+    "aql_completion_schema_sha256=4b7e1090eccbae41ea09ce7d5147470eb665ee295cb0f4526f5584225c86369a\n",
     "dispatch_binding_schema_sha256=0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188\n",
     "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
@@ -113,28 +115,28 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "gtt_policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span-without-gfx7-gfx8-double-map-workaround,one-shot-diagnostic-rings:plain-executable-gtt-one-span-or-userptr-writable-executable-coherent-uncached-no-substitute-one-span,control:exact-one-page-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable;ring-userptr-never-selectable-by-reusable-or-dispatch-queue-APIs\n",
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
     "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
-    "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ordinary-queue-fd-or-consumed-debug-token-with-separate-same-process-admitted-control-fd;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
+    "runtime=one-process-global-fe2o3-context-with-refcounted-linear-queue-leases;first-lease-exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;last-fully-destroyed-lease-exact-disable;teardown-arm-permanent-poison-lifecycle-state-and-new-lease-admission-single-mutex-linearized;ordinary-queue-fd-or-consumed-debug-token-with-separate-same-process-admitted-control-fd;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-amd-aql-v1-write-dispatch-id-at-0x38-read-dispatch-id-at-0x80-both-atomic-u64-zero-read-base-offset-u32-0x80-at-0x88;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
-    "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,bounded-atomic-acquire-poll-with-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
+    "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,monotonic-deadline-or-legacy-bounded-atomic-acquire-poll-with-short-spin-yield-and-bounded-sleep-backoff-and-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
-    "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
+    "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;no-drop-ioctl-store-munmap-or-free\n",
-    "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
+    "currentness=active-queue-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence-before-publication,after-bounded-preparation,and-before-mmio;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-retain-full-device-topology-aperture-composite;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
     "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms-wait-and-terminal-timeout-direct-volatile-CWSR-reason,wait-and-payload-must-agree,unknown-reason-rejected,zero-reason-is-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
     "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-explicitly-classified-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=kernel-dispatch-hardware-completion-fault-or-exception-delivery-refinement,kernel-effect-correctness-beyond-inspected-metadata,full-kernel-write-coverage,kernel-numerical-correctness,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "excluded=kernel-dispatch-hardware-completion-fault-or-exception-delivery-refinement,kernel-effect-correctness-beyond-inspected-metadata,full-kernel-write-coverage,kernel-numerical-correctness,device-local-update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "cad16095d8b14f73fae906ebaa2ab21b0763d46f95e45622eb75f3f33c535fcf";
+    "d4c599f03c2e7bad0ea15dfd3a64cdde5ed387c7945f32d03b6b8ea59753491d";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -222,9 +224,15 @@ impl RingAuthority {
         packet: &[u8; fe2o3_aql::AQL_KERNEL_DISPATCH_PACKET_BYTES_V1],
     ) -> Result<(), MemorySessionError> {
         match self {
-            Self::AqlSpecial(authority) => memory.write_aql_ring_slot(authority, slot, packet),
-            Self::ExecutableProbe(authority) => memory.write_aql_ring_slot(authority, slot, packet),
-            Self::UserptrProbe(authority) => memory.write_aql_ring_slot(authority, slot, packet),
+            Self::AqlSpecial(authority) => {
+                memory.write_aql_ring_slot_in_current_scope(authority, slot, packet)
+            }
+            Self::ExecutableProbe(authority) => {
+                memory.write_aql_ring_slot_in_current_scope(authority, slot, packet)
+            }
+            Self::UserptrProbe(authority) => {
+                memory.write_aql_ring_slot_in_current_scope(authority, slot, packet)
+            }
         }
     }
 
@@ -235,12 +243,14 @@ impl RingAuthority {
         header: u16,
     ) -> Result<(), MemorySessionError> {
         match self {
-            Self::AqlSpecial(authority) => memory.publish_aql_ring_header(authority, slot, header),
+            Self::AqlSpecial(authority) => {
+                memory.publish_aql_ring_header_in_current_scope(authority, slot, header)
+            }
             Self::ExecutableProbe(authority) => {
-                memory.publish_aql_ring_header(authority, slot, header)
+                memory.publish_aql_ring_header_in_current_scope(authority, slot, header)
             }
             Self::UserptrProbe(authority) => {
-                memory.publish_aql_ring_header(authority, slot, header)
+                memory.publish_aql_ring_header_in_current_scope(authority, slot, header)
             }
         }
     }
@@ -394,7 +404,7 @@ struct LinuxCompletionSignalBackendV1<'a> {
 impl NativeCompletionSignalBackendV1 for LinuxCompletionSignalBackendV1<'_> {
     fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
         self.memory
-            .check_queue_currentness()
+            .check_queue_operational_currentness()
             .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
         self.exception
             .runtime
@@ -421,7 +431,7 @@ impl NativeCompletionSignalBackendV1 for LinuxCompletionSignalBackendV1<'_> {
 
     fn reset_pending_release(&mut self, slot_index: u32) -> Result<(), Gfx942CompletionErrorV1> {
         self.memory
-            .reset_aql_completion_signal(self.signals, slot_index)
+            .reset_aql_completion_signal_in_current_scope(self.signals, slot_index)
             .map_err(|_| Gfx942CompletionErrorV1::Recycle)
     }
 }
@@ -429,7 +439,7 @@ impl NativeCompletionSignalBackendV1 for LinuxCompletionSignalBackendV1<'_> {
 impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
     fn check_currentness(&mut self) -> Result<(), NativeAqlSubmissionErrorV1> {
         self.memory
-            .check_queue_currentness()
+            .check_queue_operational_currentness()
             .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)?;
         self.exception
             .runtime
@@ -447,7 +457,7 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
 
     fn observe_counters_acquire(&mut self) -> Result<(u64, u64), NativeAqlSubmissionErrorV1> {
         self.memory
-            .observe_aql_control_counters(self.control)
+            .observe_aql_control_counters_in_current_scope(self.control)
             .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)
     }
 
@@ -456,7 +466,7 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
         increment: u64,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
         self.memory
-            .fetch_add_aql_control_write(self.control, increment)
+            .fetch_add_aql_control_write_in_current_scope(self.control, increment)
             .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)
     }
 
@@ -2249,6 +2259,68 @@ impl ComputeAqlQueueSessionV1 {
         self.require_new_detached_data_index(data_index)
     }
 
+    /// Overwrites one initialized coherent extent retained from the immediately
+    /// preceding completed dispatch while the queue is unbound.
+    ///
+    /// The exact detached storage identity and bounds are checked before the
+    /// mapped bytes are changed. Native handles and GPU addresses remain private.
+    pub fn overwrite_detached_initialized_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        data: &mut Gfx942FixedDispatchDataV1,
+        offset: u64,
+        source: &[u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        let expected_identity = *self.detached_data_identities.get(data_index).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data_index,
+                detail: "detached overwrite ordinal",
+            },
+        )?;
+        if data.storage_identity() != expected_identity {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data_index,
+                detail: "detached overwrite storage identity",
+            }
+            .into());
+        }
+        let end = offset
+            .checked_add(u64::try_from(source.len()).map_err(|_| {
+                Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: data_index,
+                    detail: "detached overwrite source length",
+                }
+            })?)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data_index,
+                detail: "detached overwrite range overflow",
+            })?;
+        if source.is_empty() || end > data.layout().requested_bytes() {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data_index,
+                detail: "detached overwrite range",
+            }
+            .into());
+        }
+        let token = data.initialized_host_visible_token_mut().ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data_index,
+                detail: "detached overwrite requires initialized coherent storage",
+            },
+        )?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .overwrite_mapped_host_visible_subrange(token, offset, source)
+                .map_err(Into::into)
+        });
+        if let Err(error) = result {
+            self.poison_terminal();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Allocates, initializes, and inserts one coherent host-visible extent at
     /// an exact detached data ordinal.
     pub fn insert_initialized_host_visible_fixed_dispatch_data(
@@ -2946,6 +3018,52 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
+    /// Waits for the exact published batch until a monotonic relative deadline.
+    ///
+    /// This is the preferred blocking API. It performs a short latency spin,
+    /// then yields and sleeps with bounded backoff. The poll-count method is
+    /// retained for compatibility with callers that require an observation
+    /// budget rather than a time budget.
+    pub fn wait_fixed_dispatch_for<const N: usize>(
+        &mut self,
+        batch: Gfx942DispatchBatchV1<N>,
+        timeout_milliseconds: u32,
+    ) -> Result<Gfx942CompletedDispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        let (completion, generation) = unwrap_published(batch);
+        if self
+            .dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+            .active_generation()?
+            != generation
+        {
+            self.poison_terminal();
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into());
+        }
+        let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_milliseconds));
+        match self.wait_completion_batch_until(completion, deadline) {
+            Ok(completion) => {
+                if self
+                    .dispatch
+                    .as_mut()
+                    .expect("dispatch owner retained")
+                    .mark_completed(generation)
+                    .is_err()
+                {
+                    self.poison_terminal();
+                    return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into());
+                }
+                Ok(wrap_completed(completion, generation))
+            }
+            Err(error) => {
+                if let Some(dispatch) = self.dispatch.as_mut() {
+                    dispatch.poison();
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// Recycles all completed signal slots and returns the queue to prepared state.
     pub fn recycle_fixed_dispatch<const N: usize>(
         &mut self,
@@ -3026,6 +3144,38 @@ impl ComputeAqlQueueSessionV1 {
         result.map_err(Into::into)
     }
 
+    /// Copies one inspected writable coherent subrange into caller-owned bytes.
+    ///
+    /// This has the same generation, effect, kind, and bounds checks as
+    /// [`Self::read_recycled_fixed_dispatch_data`] but avoids an intermediate
+    /// owned readback allocation when the caller already owns the destination.
+    pub fn read_recycled_fixed_dispatch_data_into(
+        &mut self,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        let dispatch = self
+            .dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let memory = &mut self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .backend
+            .session;
+        let result = dispatch.read_completed_host_visible_into(memory, request, destination);
+        if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
     /// Copies one exact admitted enclosing snapshot from coherent host-visible data.
     ///
     /// The exact attached dispatch must have completed and recycled. Admission
@@ -3052,6 +3202,35 @@ impl ComputeAqlQueueSessionV1 {
             .backend
             .session;
         let result = dispatch.read_completed_host_visible_snapshot(memory, request);
+        if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
+    /// Overwrites one initialized coherent range while the attached dispatch
+    /// is exactly completed, recycled, and ready for another generation.
+    pub fn overwrite_recycled_fixed_dispatch_host_data(
+        &mut self,
+        request: Gfx942RecycledDispatchWriteRequestV1,
+        source: &[u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        let dispatch = self
+            .dispatch
+            .as_mut()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let memory = &mut self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .backend
+            .session;
+        let result = dispatch.overwrite_recycled_host_visible(memory, request, source);
         if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
             self.poison_terminal();
         }
@@ -3300,6 +3479,68 @@ impl ComputeAqlQueueSessionV1 {
                     exception,
                 };
                 owner.wait_bounded(batch, polls, &mut backend)
+            };
+        match result {
+            Ok(completed) => Ok(completed),
+            Err(Gfx942CompletionWaitFailureV1::Terminal(error)) => {
+                self.poison_terminal();
+                Err(error.into())
+            }
+            Err(Gfx942CompletionWaitFailureV1::Timeout { batch, polls }) => {
+                let observation = observe_then_poison(
+                    self,
+                    |session| session.observe_completion_timeout(&batch),
+                    Self::poison_terminal,
+                );
+                match observation {
+                    Ok(observation) => Err(Gfx942CompletionErrorV1::Timeout {
+                        polls,
+                        observation: Box::new(observation),
+                    }
+                    .into()),
+                    Err(error) => Err(error.into()),
+                }
+            }
+        }
+    }
+
+    fn wait_completion_batch_until<const N: usize>(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+        deadline: Instant,
+    ) -> Result<Gfx942CompletedBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result =
+            {
+                let owner = &mut self.completion_owner;
+                let engine =
+                    self.engine
+                        .as_mut()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue engine",
+                        ))?;
+                if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "queue is not active",
+                    ));
+                }
+                let signals = self.completion_signals.as_mut().ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                )?;
+                let exception =
+                    self.exception
+                        .as_ref()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue exception gate",
+                        ))?;
+                let mut backend = LinuxCompletionSignalBackendV1 {
+                    memory: &mut engine.backend.session,
+                    signals,
+                    exception,
+                };
+                owner.wait_until(batch, deadline, &mut backend)
             };
         match result {
             Ok(completed) => Ok(completed),
@@ -4774,7 +5015,7 @@ mod tests {
         );
         assert_eq!(
             super::super::completion::GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
-            "56c7fb38daeffda945cffeb287ed61f26ee9446dbf8edbbd5337dd008309bd0f"
+            "4b7e1090eccbae41ea09ce7d5147470eb665ee295cb0f4526f5584225c86369a"
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
@@ -4786,7 +5027,7 @@ mod tests {
         )));
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "965ff9f903665a15a26dd37695413d8621a5019bae99e5f2be464777de34ce79"
+            "fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,

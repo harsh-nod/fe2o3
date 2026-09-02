@@ -1204,3 +1204,178 @@ fn vm_history_has_a_process_lifetime_bound_and_rejects_domain_substitution() {
         Err(MemoryTransitionErrorV1::ObservationDomainMismatch)
     );
 }
+
+#[test]
+fn transitions_copy_only_the_changed_memory_journal() {
+    let devices = admissions();
+    let (state, _, allocation) = live_allocation(devices);
+    let key = mapping(allocation, 40);
+    let state = advance(
+        state,
+        MemoryTransitionV1::BeginMap {
+            key,
+            target_devices: vec![devices.first.model_key(), devices.second.model_key()],
+            access: MemoryAccessV1::ReadWrite,
+        },
+    );
+
+    let next = state
+        .next(MemoryTransitionV1::ObserveMap {
+            key,
+            progress: PartialProgressObservationV1 {
+                n_success: 2,
+                status: PartialOperationStatusV1::Succeeded,
+            },
+        })
+        .unwrap();
+
+    assert_eq!(
+        state.shared_journals_for_test(&next),
+        [true, true, true, false, true, true]
+    );
+    state.validate_global_invariants().unwrap();
+    next.validate_global_invariants().unwrap();
+}
+
+#[test]
+fn sequential_publication_growth_and_tail_updates_copy_subquadratically() {
+    const RECORDS: usize = 512;
+    const COPIES_PER_TREE_LEVEL_CEILING: usize = 96;
+
+    let devices = admissions();
+    let (state, _, allocation) = live_allocation(devices);
+    let mapped = mapping(allocation, 40);
+    let mut state = map_succeeded(
+        state,
+        mapped,
+        &[devices.first.model_key(), devices.second.model_key()],
+    );
+    let keys: Vec<_> = (0..RECORDS)
+        .map(|offset| MemoryPublicationKeyV1 {
+            mapping: mapped,
+            id: MemoryPublicationIdV1(10_000 + offset as u64),
+        })
+        .collect();
+
+    reset_journal_copied_records_for_test();
+    for &key in &keys {
+        state = state
+            .next(MemoryTransitionV1::PublishMapping { key })
+            .unwrap();
+    }
+    let append_copies = journal_copied_records_for_test();
+    assert!(append_copies <= RECORDS * COPIES_PER_TREE_LEVEL_CEILING);
+    assert!(append_copies < RECORDS * RECORDS / 4);
+
+    reset_journal_copied_records_for_test();
+    for &key in keys.iter().rev() {
+        state = state
+            .next(MemoryTransitionV1::ReleasePublication { key })
+            .unwrap();
+    }
+    let update_copies = journal_copied_records_for_test();
+    assert!(update_copies <= RECORDS * COPIES_PER_TREE_LEVEL_CEILING);
+    assert!(update_copies < RECORDS * RECORDS / 4);
+
+    assert_eq!(state.publications().len(), RECORDS);
+    assert!(state.publications().iter().zip(keys).all(
+        |(record, key)| record.key == key && record.state == MemoryPublicationStateV1::Released
+    ));
+    state.validate_global_invariants().unwrap();
+}
+
+#[test]
+#[ignore = "benchmark-style sequential scale check; run explicitly with --release --ignored"]
+fn sequential_journal_growth_and_tail_update_benchmark() {
+    use std::time::Instant;
+
+    const RECORDS: usize = MAX_MEMORY_PUBLICATIONS_V1;
+
+    let devices = admissions();
+    let (state, _, allocation) = live_allocation(devices);
+    let mapped = mapping(allocation, 40);
+    let mut state = map_succeeded(
+        state,
+        mapped,
+        &[devices.first.model_key(), devices.second.model_key()],
+    );
+    let keys: Vec<_> = (0..RECORDS)
+        .map(|offset| MemoryPublicationKeyV1 {
+            mapping: mapped,
+            id: MemoryPublicationIdV1(20_000 + offset as u64),
+        })
+        .collect();
+
+    reset_journal_copied_records_for_test();
+    let append_started = Instant::now();
+    for &key in &keys {
+        state = state
+            .next(MemoryTransitionV1::PublishMapping { key })
+            .unwrap();
+    }
+    let append_elapsed = append_started.elapsed();
+    let append_copies = journal_copied_records_for_test();
+
+    reset_journal_copied_records_for_test();
+    let update_started = Instant::now();
+    for &key in keys.iter().rev() {
+        state = state
+            .next(MemoryTransitionV1::ReleasePublication { key })
+            .unwrap();
+    }
+    let update_elapsed = update_started.elapsed();
+    let update_copies = journal_copied_records_for_test();
+
+    assert!(append_copies < RECORDS * RECORDS / 4);
+    assert!(update_copies < RECORDS * RECORDS / 4);
+    state.validate_global_invariants().unwrap();
+    std::eprintln!(
+        "sequential journal records={RECORDS}: append={append_elapsed:?} ({append_copies} copied), reverse-tail update={update_elapsed:?} ({update_copies} copied)"
+    );
+}
+
+#[test]
+#[ignore = "benchmark-style scale check; run explicitly with --release --ignored"]
+fn large_unrelated_journal_transition_benchmark() {
+    use std::{hint::black_box, time::Instant};
+
+    const ITERATIONS: usize = 20_000;
+
+    let devices = admissions();
+    let (state, _, allocation) = live_allocation(devices);
+    let published_mapping = mapping(allocation, 40);
+    let state = map_succeeded(
+        state,
+        published_mapping,
+        &[devices.first.model_key(), devices.second.model_key()],
+    );
+    let pending_mapping = mapping(allocation, 41);
+    let state = advance(
+        state,
+        MemoryTransitionV1::BeginMap {
+            key: pending_mapping,
+            target_devices: vec![devices.first.model_key(), devices.second.model_key()],
+            access: MemoryAccessV1::ReadWrite,
+        },
+    )
+    .with_generic_publications_for_test(published_mapping, MAX_MEMORY_PUBLICATIONS_V1);
+    let transition = MemoryTransitionV1::ObserveMap {
+        key: pending_mapping,
+        progress: PartialProgressObservationV1 {
+            n_success: 2,
+            status: PartialOperationStatusV1::Succeeded,
+        },
+    };
+
+    let started = Instant::now();
+    for _ in 0..ITERATIONS {
+        black_box(state.next(transition.clone()).unwrap());
+    }
+    let elapsed = started.elapsed();
+
+    assert_eq!(state.publications().len(), MAX_MEMORY_PUBLICATIONS_V1);
+    std::eprintln!(
+        "{ITERATIONS} transitions with {} unrelated publications: {elapsed:?}",
+        state.publications().len()
+    );
+}

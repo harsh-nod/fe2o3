@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec;
 
 use fe2o3_hsaco::{
@@ -11,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     AdmittedProfile, LOADER_PROFILE_ID, LoadPlan, MaterializationError, MetadataNote,
-    SegmentPermissions, ValidatedEnvelope,
+    OwnedValidatedEnvelope, SegmentPermissions, ValidatedEnvelope,
 };
 
 const KERNEL_DESCRIPTOR_BYTES: u64 = 64;
@@ -239,7 +240,7 @@ impl KernelIdentityInputsV1 {
 /// resolve a device address, or authorize a dispatch.
 pub struct ValidatedKernelEnvelope<'a> {
     envelope: ValidatedEnvelope<'a>,
-    bindings: InspectedKernelBindings,
+    bindings: Arc<InspectedKernelBindings>,
     selected_index: usize,
     descriptor_bytes: &'a [u8],
     entry_bytes: &'a [u8],
@@ -248,6 +249,64 @@ pub struct ValidatedKernelEnvelope<'a> {
     identity: KernelIdentityInputsV1,
     reconciled_global_buffers: Option<Box<[Option<ReconciledGlobalBufferAbiV1>]>>,
     dispatch_abi_identity: Option<[u8; 32]>,
+}
+
+/// Owned, shareable selected-kernel closure cached from one semantic binding.
+///
+/// The object retains immutable module bytes, inspected metadata and ELF
+/// bindings. [`Self::validated`] creates a borrowed launch descriptor without
+/// reparsing the module or kernel metadata. It remains descriptive and grants
+/// no mapping, W^X, device-address, or dispatch authority.
+#[derive(Clone)]
+pub struct OwnedValidatedKernelEnvelope {
+    envelope: OwnedValidatedEnvelope,
+    bindings: Arc<InspectedKernelBindings>,
+    selected_index: usize,
+    resources: SelectedKernelResourceBindingV1,
+    relocation: ClosedRelocationEvidenceV1,
+    identity: KernelIdentityInputsV1,
+}
+
+impl OwnedValidatedKernelEnvelope {
+    /// Selected inspected kernel cached by the semantic binding pass.
+    pub fn selected_kernel(&self) -> &InspectedKernel {
+        &self.bindings.inspection().kernels()[self.selected_index]
+    }
+
+    /// Number of kernel metadata and ELF binding passes represented by this cache.
+    pub const fn semantic_binding_passes(&self) -> u64 {
+        1
+    }
+
+    /// Reconstructs the exact borrowed descriptor without parsing or copying.
+    pub fn validated(&self) -> ValidatedKernelEnvelope<'_> {
+        let envelope = self.envelope.validated();
+        let selected_binding = self.bindings.bindings()[self.selected_index];
+        let descriptor_bytes = exact_range(
+            self.envelope.bytes(),
+            selected_binding.descriptor_file_offset(),
+            KERNEL_DESCRIPTOR_BYTES,
+        )
+        .expect("owned validated descriptor range remains in immutable bytes");
+        let entry_bytes = exact_range(
+            self.envelope.bytes(),
+            selected_binding.entry_file_offset(),
+            selected_binding.entry_size(),
+        )
+        .expect("owned validated entry range remains in immutable bytes");
+        ValidatedKernelEnvelope {
+            envelope,
+            bindings: Arc::clone(&self.bindings),
+            selected_index: self.selected_index,
+            descriptor_bytes,
+            entry_bytes,
+            resources: self.resources,
+            relocation: self.relocation,
+            identity: self.identity,
+            reconciled_global_buffers: None,
+            dispatch_abi_identity: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -543,7 +602,7 @@ impl<'a> ValidatedEnvelope<'a> {
             return Err(KernelClosureError::KernelNameTooLong);
         }
 
-        let bindings = inspect_and_bind_kernel_descriptors(self.bytes)?;
+        let bindings = Arc::new(inspect_and_bind_kernel_descriptors(self.bytes)?);
         let inspection = bindings.inspection();
         if inspection.code_object_version() != CodeObjectVersion::V6 {
             return Err(KernelClosureError::UnsupportedCodeObjectVersion(
@@ -657,6 +716,27 @@ impl<'a> ValidatedEnvelope<'a> {
             identity,
             reconciled_global_buffers: None,
             dispatch_abi_identity: None,
+        })
+    }
+}
+
+impl OwnedValidatedEnvelope {
+    /// Selects and caches one kernel closure from the already validated object.
+    ///
+    /// Load-envelope parsing is not repeated. Kernel metadata and ELF binding
+    /// are inspected once for this owned selected-kernel value.
+    pub fn bind_kernel(
+        &self,
+        kernel_name: &str,
+    ) -> Result<OwnedValidatedKernelEnvelope, KernelClosureError> {
+        let validated = self.validated().bind_kernel(kernel_name)?;
+        Ok(OwnedValidatedKernelEnvelope {
+            envelope: self.clone(),
+            bindings: validated.bindings,
+            selected_index: validated.selected_index,
+            resources: validated.resources,
+            relocation: validated.relocation,
+            identity: validated.identity,
         })
     }
 }

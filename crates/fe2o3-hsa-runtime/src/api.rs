@@ -1,13 +1,21 @@
 use crate::sys;
-use fe2o3_artifacts::{DigestAlgorithm, PayloadDigest};
+#[cfg(feature = "native-hsa")]
+use fe2o3_artifacts::DigestAlgorithm;
+use fe2o3_artifacts::PayloadDigest;
+#[cfg(feature = "native-hsa")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "native-hsa")]
 use std::ffi::{CStr, CString};
+#[cfg(feature = "native-hsa")]
 use std::fs;
+#[cfg(feature = "native-hsa")]
 use std::io::Read;
+#[cfg(feature = "native-hsa")]
 use std::mem::MaybeUninit;
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 use std::os::unix::fs::MetadataExt;
 
+#[cfg(any(feature = "native-hsa", test))]
 pub(crate) const HSA_SUCCESS: i32 = 0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -99,6 +107,7 @@ impl QueueHandle {
     }
 }
 
+#[cfg(any(feature = "native-hsa", test))]
 const fn valid_queue_record(record: &sys::QueueRecord) -> bool {
     record.pointer != 0
         && record.size != 0
@@ -106,6 +115,7 @@ const fn valid_queue_record(record: &sys::QueueRecord) -> bool {
         && record.async_error != 0
 }
 
+#[cfg(any(feature = "native-hsa", test))]
 fn queue_record_after_create(
     status: i32,
     record: sys::QueueRecord,
@@ -154,6 +164,7 @@ pub(crate) trait DispatchApi: ExecutableApi {
     fn memory_allocate(&mut self, pool: u64, len: usize) -> Result<usize, ApiError>;
     fn allow_access(&mut self, agent: u64, address: usize) -> Result<(), ApiError>;
     fn write_memory(&mut self, address: usize, bytes: &[u8]);
+    fn read_memory(&mut self, address: usize, destination: &mut [u8]);
     fn memory_free(&mut self, address: usize) -> Result<(), ApiError>;
     fn queue_create(&mut self, agent: u64, size: u32) -> Result<QueueHandle, ApiError>;
     fn queue_async_error(&mut self, queue: &QueueHandle) -> Result<(), ApiError>;
@@ -200,6 +211,7 @@ pub(crate) trait DispatchApi: ExecutableApi {
         kernel_object: u64,
         kernarg: usize,
         completion_signal: u64,
+        dependency_signals: &[u64],
     ) -> Result<u64, ApiError>;
 }
 
@@ -210,6 +222,7 @@ pub(crate) struct ApiError {
 }
 
 impl ApiError {
+    #[cfg(feature = "native-hsa")]
     fn status(operation: &'static str, status: i32) -> Result<(), Self> {
         if status == HSA_SUCCESS {
             Ok(())
@@ -220,16 +233,20 @@ impl ApiError {
 }
 
 pub(crate) struct DirectRuntimeApi {
+    #[cfg(feature = "native-hsa")]
     initialized: bool,
 }
 
 impl DirectRuntimeApi {
     pub const fn new() -> Self {
-        Self { initialized: false }
+        Self {
+            #[cfg(feature = "native-hsa")]
+            initialized: false,
+        }
     }
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 impl EnvironmentApi for DirectRuntimeApi {
     fn initialize(&mut self) -> Result<RuntimeFacts, ApiError> {
         if self.initialized {
@@ -385,7 +402,7 @@ impl EnvironmentApi for DirectRuntimeApi {
     }
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 impl ExecutableApi for DirectRuntimeApi {
     fn reader_create(&mut self, bytes: &[u8]) -> Result<u64, ApiError> {
         if bytes.is_empty() {
@@ -494,7 +511,7 @@ impl ExecutableApi for DirectRuntimeApi {
     }
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 impl DispatchApi for DirectRuntimeApi {
     fn memory_allocate(&mut self, pool: u64, len: usize) -> Result<usize, ApiError> {
         let mut address = core::ptr::null_mut();
@@ -522,6 +539,18 @@ impl DispatchApi for DirectRuntimeApi {
         // SAFETY: `address` denotes a live allocation of exactly `bytes.len()`
         // bytes retained by the dispatch lifecycle, and the regions do not overlap.
         unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), address as *mut u8, bytes.len()) };
+    }
+
+    fn read_memory(&mut self, address: usize, destination: &mut [u8]) {
+        // SAFETY: `address` denotes a live host-visible allocation covering
+        // `destination`; callers establish dispatch quiescence before reading.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                address as *const u8,
+                destination.as_mut_ptr(),
+                destination.len(),
+            )
+        };
     }
 
     fn memory_free(&mut self, address: usize) -> Result<(), ApiError> {
@@ -654,6 +683,7 @@ impl DispatchApi for DirectRuntimeApi {
         kernel_object: u64,
         kernarg: usize,
         completion_signal: u64,
+        dependency_signals: &[u64],
     ) -> Result<u64, ApiError> {
         let mut packet_id = 0;
         // SAFETY: every handle and pointer is private, live, and retained until completion.
@@ -667,6 +697,8 @@ impl DispatchApi for DirectRuntimeApi {
                 kernel_object,
                 kernarg as *mut core::ffi::c_void,
                 completion_signal,
+                dependency_signals.as_ptr(),
+                dependency_signals.len(),
                 &mut packet_id,
             )
         })?;
@@ -674,7 +706,7 @@ impl DispatchApi for DirectRuntimeApi {
     }
 }
 
-#[cfg(not(fe2o3_hsa_runtime))]
+#[cfg(not(feature = "native-hsa"))]
 impl EnvironmentApi for DirectRuntimeApi {
     fn initialize(&mut self) -> Result<RuntimeFacts, ApiError> {
         Err(ApiError {
@@ -700,7 +732,7 @@ impl EnvironmentApi for DirectRuntimeApi {
     }
 }
 
-#[cfg(not(fe2o3_hsa_runtime))]
+#[cfg(not(feature = "native-hsa"))]
 impl ExecutableApi for DirectRuntimeApi {
     fn reader_create(&mut self, _bytes: &[u8]) -> Result<u64, ApiError> {
         unreachable!("initialization fails before executable operations")
@@ -741,7 +773,7 @@ impl ExecutableApi for DirectRuntimeApi {
     }
 }
 
-#[cfg(not(fe2o3_hsa_runtime))]
+#[cfg(not(feature = "native-hsa"))]
 impl DispatchApi for DirectRuntimeApi {
     fn memory_allocate(&mut self, _pool: u64, _len: usize) -> Result<usize, ApiError> {
         unreachable!("initialization fails before dispatch operations")
@@ -752,6 +784,10 @@ impl DispatchApi for DirectRuntimeApi {
     }
 
     fn write_memory(&mut self, _address: usize, _bytes: &[u8]) {
+        unreachable!("initialization fails before dispatch operations")
+    }
+
+    fn read_memory(&mut self, _address: usize, _destination: &mut [u8]) {
         unreachable!("initialization fails before dispatch operations")
     }
 
@@ -793,12 +829,13 @@ impl DispatchApi for DirectRuntimeApi {
         _kernel_object: u64,
         _kernarg: usize,
         _completion_signal: u64,
+        _dependency_signals: &[u64],
     ) -> Result<u64, ApiError> {
         unreachable!("initialization fails before dispatch operations")
     }
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 fn c_text<const N: usize>(
     bytes: &[core::ffi::c_char; N],
     operation: &'static str,
@@ -811,7 +848,7 @@ fn c_text<const N: usize>(
     })
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 fn measure_loaded_runtime_image(function_address: usize) -> Result<PayloadDigest, ApiError> {
     const MAX_RUNTIME_IMAGE_BYTES: u64 = 128 * 1024 * 1024;
     let maps = fs::read_to_string("/proc/self/maps").map_err(|_| ApiError {
@@ -921,7 +958,7 @@ fn measure_loaded_runtime_image(function_address: usize) -> Result<PayloadDigest
     Ok(DigestAlgorithm::Sha256.calculate(&bytes))
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 fn parse_address_range(range: &str) -> Option<(usize, usize)> {
     let (start, end) = range.split_once('-')?;
     Some((
@@ -930,7 +967,7 @@ fn parse_address_range(range: &str) -> Option<(usize, usize)> {
     ))
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 fn parse_device_number(device: &str) -> Option<(u64, u64)> {
     let (major, minor) = device.split_once(':')?;
     Some((
@@ -939,13 +976,14 @@ fn parse_device_number(device: &str) -> Option<(u64, u64)> {
     ))
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 const fn linux_device_components(device: u64) -> (u64, u64) {
     let major = ((device & 0x0000_0000_000f_ff00) >> 8) | ((device & 0xffff_f000_0000_0000) >> 32);
     let minor = (device & 0xff) | ((device & 0x0000_0fff_fff0_0000) >> 12);
     (major, minor)
 }
 
+#[cfg(feature = "native-hsa")]
 fn derive_runtime_stack_digest(hsa: PayloadDigest, hip: PayloadDigest) -> PayloadDigest {
     let mut preimage = Vec::with_capacity(96);
     preimage.extend_from_slice(b"fe2o3-hsa-hip-runtime-stack-v1\0");
@@ -954,7 +992,7 @@ fn derive_runtime_stack_digest(hsa: PayloadDigest, hip: PayloadDigest) -> Payloa
     DigestAlgorithm::Sha256.calculate(&preimage)
 }
 
-#[cfg(fe2o3_hsa_runtime)]
+#[cfg(feature = "native-hsa")]
 fn derive_runtime_instance(
     image: PayloadDigest,
     hsa_function_address: usize,
@@ -975,6 +1013,65 @@ fn derive_runtime_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "hardware-test-hooks")]
+    type AqlPacket = [u64; 8];
+
+    #[cfg(feature = "hardware-test-hooks")]
+    fn packet_u16(packet: &AqlPacket, byte_offset: usize) -> u16 {
+        let bytes = packet[byte_offset / 8].to_le_bytes();
+        u16::from_le_bytes(
+            bytes[byte_offset % 8..byte_offset % 8 + 2]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    #[cfg(feature = "hardware-test-hooks")]
+    fn packet_u32(packet: &AqlPacket, byte_offset: usize) -> u32 {
+        let bytes = packet[byte_offset / 8].to_le_bytes();
+        u32::from_le_bytes(
+            bytes[byte_offset % 8..byte_offset % 8 + 4]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    #[cfg(feature = "hardware-test-hooks")]
+    unsafe fn publish_to_test_ring(
+        ring: &mut [AqlPacket],
+        read_index: u64,
+        write_index: u64,
+        observed_write_index: u64,
+        dependencies: &[u64],
+        new_write_index: &mut u64,
+        packet_id: &mut u64,
+    ) -> i32 {
+        let grid = [64, 1, 1];
+        let workgroup = [64, 1, 1];
+        // SAFETY: the feature-gated native hook receives a complete aligned fake
+        // ring and only materializes packets after its bounded reservation check.
+        unsafe {
+            sys::fe2o3_hsa_test_publish_kernel_dispatch(
+                ring.as_mut_ptr().cast(),
+                u32::try_from(ring.len()).unwrap(),
+                read_index,
+                write_index,
+                observed_write_index,
+                grid.as_ptr(),
+                workgroup.as_ptr(),
+                17,
+                23,
+                0x1122_3344_5566_7788,
+                0x1000usize as *mut core::ffi::c_void,
+                0x8877_6655_4433_2211,
+                dependencies.as_ptr(),
+                dependencies.len(),
+                new_write_index,
+                packet_id,
+            )
+        }
+    }
 
     #[test]
     fn queue_identity_zero_is_valid_but_missing_resources_are_not() {
@@ -1002,7 +1099,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(fe2o3_hsa_runtime)]
+    #[cfg(feature = "native-hsa")]
     fn malformed_queue_destroy_failure_retains_callback_authority() {
         let mut record = sys::QueueRecord {
             pointer: 0,
@@ -1023,6 +1120,131 @@ mod tests {
         unsafe { sys::fe2o3_hsa_test_release_malformed_queue_record(&mut record) };
         assert_eq!(record.pointer, 0);
         assert_eq!(record.async_error, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "hardware-test-hooks")]
+    fn native_packet_publication_wraps_and_splits_six_dependencies() {
+        const SENTINEL: AqlPacket = [0xa5a5_a5a5_a5a5_a5a5; 8];
+        const HSA_PACKET_TYPE_KERNEL_DISPATCH: u16 = 2;
+        const HSA_PACKET_TYPE_BARRIER_AND: u16 = 3;
+        const HSA_PACKET_HEADER_BARRIER: u16 = 8;
+
+        let dependencies = [11, 12, 13, 14, 15, 16];
+        let mut ring = [SENTINEL; 8];
+        let mut new_write_index = u64::MAX;
+        let mut packet_id = u64::MAX;
+        // SAFETY: the wrapper supplies an eight-packet aligned fake ring and
+        // does not provide any native HSA handle or executable authority.
+        let status = unsafe {
+            publish_to_test_ring(
+                &mut ring,
+                7,
+                7,
+                7,
+                &dependencies,
+                &mut new_write_index,
+                &mut packet_id,
+            )
+        };
+        assert_eq!(status, HSA_SUCCESS);
+        assert_eq!(new_write_index, 10);
+        assert_eq!(packet_id, 9);
+
+        let first_barrier = &ring[7];
+        assert_eq!(
+            packet_u16(first_barrier, 0) & 0xff,
+            HSA_PACKET_TYPE_BARRIER_AND
+        );
+        assert_eq!(&first_barrier[1..=5], &[11, 12, 13, 14, 15]);
+        assert_eq!(first_barrier[6], 0);
+        assert_eq!(first_barrier[7], 0);
+
+        let second_barrier = &ring[0];
+        assert_eq!(
+            packet_u16(second_barrier, 0) & 0xff,
+            HSA_PACKET_TYPE_BARRIER_AND
+        );
+        assert_eq!(second_barrier[1], 16);
+        assert_eq!(&second_barrier[2..], &[0; 6]);
+
+        let dispatch = &ring[1];
+        let dispatch_header = packet_u16(dispatch, 0);
+        assert_eq!(dispatch_header & 0xff, HSA_PACKET_TYPE_KERNEL_DISPATCH);
+        assert_ne!(dispatch_header & (1 << HSA_PACKET_HEADER_BARRIER), 0);
+        assert_eq!(packet_u16(dispatch, 2), 1);
+        assert_eq!(packet_u16(dispatch, 4), 64);
+        assert_eq!(packet_u16(dispatch, 6), 1);
+        assert_eq!(packet_u16(dispatch, 8), 1);
+        assert_eq!(packet_u32(dispatch, 12), 64);
+        assert_eq!(packet_u32(dispatch, 16), 1);
+        assert_eq!(packet_u32(dispatch, 20), 1);
+        assert_eq!(packet_u32(dispatch, 24), 17);
+        assert_eq!(packet_u32(dispatch, 28), 23);
+        assert_eq!(dispatch[4], 0x1122_3344_5566_7788);
+        assert_eq!(dispatch[5], 0x1000);
+        assert_eq!(dispatch[6], 0);
+        assert_eq!(dispatch[7], 0x8877_6655_4433_2211);
+        for packet in &ring[2..7] {
+            assert_eq!(*packet, SENTINEL);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "hardware-test-hooks")]
+    fn native_packet_reservation_failures_leave_ring_and_outputs_unchanged() {
+        const SENTINEL: AqlPacket = [0x5a5a_5a5a_5a5a_5a5a; 8];
+        const HSA_STATUS_ERROR_OUT_OF_RESOURCES: i32 = 0x1008;
+
+        let dependencies = [21, 22, 23, 24, 25, 26];
+        for (read_index, write_index, observed_write_index) in [
+            (0, 6, 6), // two free slots cannot hold two barriers plus dispatch
+            (7, 7, 8), // another producer won the write-index reservation
+        ] {
+            let mut ring = [SENTINEL; 8];
+            let before = ring;
+            let mut new_write_index = 0xaaaa_aaaa_aaaa_aaaa;
+            let mut packet_id = 0xbbbb_bbbb_bbbb_bbbb;
+            // SAFETY: the wrapper supplies only fake ring storage and indices.
+            let status = unsafe {
+                publish_to_test_ring(
+                    &mut ring,
+                    read_index,
+                    write_index,
+                    observed_write_index,
+                    &dependencies,
+                    &mut new_write_index,
+                    &mut packet_id,
+                )
+            };
+            assert_eq!(status, HSA_STATUS_ERROR_OUT_OF_RESOURCES);
+            assert_eq!(ring, before);
+            assert_eq!(new_write_index, 0xaaaa_aaaa_aaaa_aaaa);
+            assert_eq!(packet_id, 0xbbbb_bbbb_bbbb_bbbb);
+        }
+
+        let dependencies: Vec<_> = (1..=256).collect();
+        let mut ring = [SENTINEL; 8];
+        let before = ring;
+        let mut new_write_index = 0xcccc_cccc_cccc_cccc;
+        let mut packet_id = 0xdddd_dddd_dddd_dddd;
+        // SAFETY: the packet count exceeds this fake queue's capacity, so the
+        // shared production reservation check returns before any packet write.
+        let status = unsafe {
+            publish_to_test_ring(
+                &mut ring,
+                0,
+                0,
+                0,
+                &dependencies,
+                &mut new_write_index,
+                &mut packet_id,
+            )
+        };
+        assert_eq!(status, HSA_STATUS_ERROR_OUT_OF_RESOURCES);
+        assert_eq!(ring, before);
+        assert_eq!(new_write_index, 0xcccc_cccc_cccc_cccc);
+        assert_eq!(packet_id, 0xdddd_dddd_dddd_dddd);
     }
 
     #[test]

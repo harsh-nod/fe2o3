@@ -283,6 +283,11 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.device.check_operational_currentness()?;
+        Ok(())
+    }
+
     fn acquire_vm(&mut self) -> Result<(), MemorySessionError> {
         let raw_fd = self.device.render_fd.as_raw_fd();
         let drm_fd = u32::try_from(raw_fd)

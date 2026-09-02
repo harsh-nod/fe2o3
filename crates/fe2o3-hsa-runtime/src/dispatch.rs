@@ -96,7 +96,7 @@ impl ReviewedHsaHardwareTestBufferV1 {
 #[cfg(feature = "hardware-test-hooks")]
 impl Drop for ReviewedHsaHardwareTestBufferV1 {
     fn drop(&mut self) {
-        #[cfg(fe2o3_hsa_runtime)]
+        #[cfg(feature = "native-hsa")]
         {
             // SAFETY: this token uniquely owns one live HSA pool allocation and
             // consumes it exactly once while the enclosing adapter is still live.
@@ -108,7 +108,7 @@ impl Drop for ReviewedHsaHardwareTestBufferV1 {
             }
         }
 
-        #[cfg(not(fe2o3_hsa_runtime))]
+        #[cfg(not(feature = "native-hsa"))]
         {
             // Construction cannot succeed without the reviewed runtime. If a
             // future internal path violates that invariant, do not leak a
@@ -199,6 +199,7 @@ impl ReviewedHsaProfiledDispatchSessionV1<'_> {
                 self.kernel_object,
                 kernarg_address,
                 completion_signal,
+                &[],
             )
             .map_err(HsaRuntimeAdapterError::api)?;
         let started = Instant::now();
@@ -860,6 +861,7 @@ pub(crate) fn launch_and_wait<A: DispatchApi>(
         kernel.kernel_object,
         pre_submit.kernarg_address,
         pre_submit.completion_signal,
+        &[],
     ) {
         Ok(packet_id) => packet_id,
         Err(primary) => {
@@ -1270,6 +1272,11 @@ mod tests {
             self.written = bytes.to_vec();
         }
 
+        fn read_memory(&mut self, _address: usize, destination: &mut [u8]) {
+            self.log.push("read_memory");
+            destination.fill(0);
+        }
+
         fn memory_free(&mut self, _address: usize) -> Result<(), ApiError> {
             self.call("memory_free")
         }
@@ -1329,6 +1336,7 @@ mod tests {
             _kernel_object: u64,
             _kernarg: usize,
             _completion_signal: u64,
+            _dependency_signals: &[u64],
         ) -> Result<u64, ApiError> {
             self.call("publish")?;
             self.published_grid = Some(grid);

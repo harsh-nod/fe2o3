@@ -6,7 +6,9 @@ reviewed for the first gfx942 runtime path.
 
 It provides:
 
-- bounded one-, two-, and three-dimensional dispatch geometry;
+- bounded one-, two-, and three-dimensional dispatch geometry, including one
+  canonical derivation of COV6 complete-block counts, group sizes, partial
+  remainders, and grid rank;
 - the exact INVALID unpublished 64-byte kernel-dispatch packet layout;
 - the exact INVALID unpublished 64-byte zero-dependency BARRIER_AND packet,
   including zero reserved/dependency fields and the system-scoped `0x1403`

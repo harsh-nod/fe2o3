@@ -1333,3 +1333,69 @@ fn four_publication_plan_is_failure_atomic_when_a_later_stage_hits_capacity() {
     assert_eq!(memory, original_memory);
     assert_eq!(memory.publications().len(), MAX_MEMORY_PUBLICATIONS_V1 - 2);
 }
+
+#[test]
+fn queue_admission_batches_publications_into_one_memory_snapshot() {
+    let fixture = fixture();
+    let original = fixture.memory.clone();
+    let admission = QueueLifecycleStateV1::new(domain(1))
+        .admit_compute_aql_plan(&fixture.identity, &fixture.memory, fixture.plan)
+        .unwrap();
+
+    assert_eq!(
+        original.shared_journals_for_test(admission.memory_state()),
+        [true, true, true, true, false, true]
+    );
+    admission
+        .queue_state()
+        .validate_global_invariants(&fixture.identity, admission.memory_state())
+        .unwrap();
+    admission
+        .memory_state()
+        .validate_global_invariants()
+        .unwrap();
+}
+
+#[test]
+fn sequential_queue_updates_copy_bounded_tree_paths() {
+    const UPDATE_CYCLES: usize = 100;
+    const TRANSITIONS: usize = UPDATE_CYCLES * 2;
+
+    let fixture = fixture();
+    let (queue, memory) = admit(&fixture).into_states();
+    let mut queue = create_active(queue, &fixture, &memory);
+    let key = fixture.plan.queue;
+
+    reset_journal_copied_records_for_test();
+    for cycle in 0..UPDATE_CYCLES {
+        let configuration = QueueConfigurationIdV1::from_untrusted_digest(digest(
+            u8::try_from(cycle + 32).unwrap(),
+        ));
+        queue = advance(
+            queue,
+            &fixture,
+            &memory,
+            QueueTransitionV1::BeginUpdate {
+                queue: key,
+                configuration,
+            },
+        );
+        queue = advance(
+            queue,
+            &fixture,
+            &memory,
+            QueueTransitionV1::ObserveUpdate {
+                queue: key,
+                status: QueueSyscallStatusV1::Succeeded,
+            },
+        );
+    }
+    let copied = journal_copied_records_for_test();
+
+    assert!(copied < TRANSITIONS * TRANSITIONS / 4);
+    assert_eq!(queue.queues()[0].plan.queue, key);
+    assert_eq!(queue.history().len(), 3 + TRANSITIONS);
+    queue
+        .validate_global_invariants(&fixture.identity, &memory)
+        .unwrap();
+}

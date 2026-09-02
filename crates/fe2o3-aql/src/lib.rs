@@ -555,6 +555,36 @@ pub struct AqlDispatchGeometryV1 {
     dimensions: u16,
 }
 
+/// Canonical COV6 implicit-kernarg values derived from checked AQL geometry.
+///
+/// Block counts contain only complete workgroups. A partial final workgroup is
+/// represented independently by `remainder`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Cov6ImplicitDispatchShapeV1 {
+    block_count: [u32; 3],
+    group_size: [u16; 3],
+    remainder: [u16; 3],
+    grid_dimensions: u16,
+}
+
+impl Cov6ImplicitDispatchShapeV1 {
+    pub const fn block_count(self) -> [u32; 3] {
+        self.block_count
+    }
+
+    pub const fn group_size(self) -> [u16; 3] {
+        self.group_size
+    }
+
+    pub const fn remainder(self) -> [u16; 3] {
+        self.remainder
+    }
+
+    pub const fn grid_dimensions(self) -> u16 {
+        self.grid_dimensions
+    }
+}
+
 impl AqlDispatchGeometryV1 {
     pub fn new(grid: [u32; 3], workgroup: [u32; 3]) -> Result<Self, AqlGeometryError> {
         if grid.contains(&0) {
@@ -608,6 +638,17 @@ impl AqlDispatchGeometryV1 {
 
     pub const fn dimensions(self) -> u16 {
         self.dimensions
+    }
+
+    /// Derives the COV6 block-count, group-size, remainder, and rank values.
+    pub fn cov6_implicit_dispatch_shape(self) -> Cov6ImplicitDispatchShapeV1 {
+        let workgroup = self.workgroup.map(u32::from);
+        Cov6ImplicitDispatchShapeV1 {
+            block_count: core::array::from_fn(|axis| self.grid[axis] / workgroup[axis]),
+            group_size: self.workgroup,
+            remainder: core::array::from_fn(|axis| (self.grid[axis] % workgroup[axis]) as u16),
+            grid_dimensions: self.dimensions,
+        }
     }
 }
 
@@ -1140,6 +1181,17 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cov6_shape_separates_complete_blocks_from_partial_remainders() {
+        let geometry = AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap();
+        let shape = geometry.cov6_implicit_dispatch_shape();
+        assert_eq!(geometry.grid(), [257, 3, 1]);
+        assert_eq!(shape.block_count(), [4, 1, 1]);
+        assert_eq!(shape.group_size(), [64, 2, 1]);
+        assert_eq!(shape.remainder(), [1, 1, 0]);
+        assert_eq!(shape.grid_dimensions(), 2);
+    }
 
     #[test]
     fn completion_observation_is_exact() {
