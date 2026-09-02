@@ -339,8 +339,11 @@ Native Linux requires read/write access to `/dev/kfd`; WSL `/dev/dxg` is not a
 KFD substitute. The lane measures the pure-Rust KFD identity boundary, admits
 every visible `gfx942:xnack-` device, maps and releases host-visible memory on
 each device, and creates, validates, and destroys one isolated compute AQL
-queue per device without packet submission or MMIO stores. It does not execute
-a kernel or claim application-level Worker V3 dispatch coverage.
+queue per device without packet submission in those all-device checks. A
+separate step selects one admitted device, executes the repository-owned vecadd
+fixture through the direct-KFD runtime, publishes a bounded range-only runtime
+profile, and queries its exact capture identity and loss-free completeness.
+This does not claim application-level Worker V3 dispatch coverage.
 
 Supplying both diagnostic variables extends the lane with one exact-artifact
 packet in an isolated selected-device process:

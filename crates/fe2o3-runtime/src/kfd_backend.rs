@@ -26,9 +26,9 @@ use fe2o3_kfd::{
     HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd, SharedGttMemorySessionV1,
 };
 use fe2o3_profiler_protocol::{
-    KfdProfileAccessV1, KfdProfileBindingV1, KfdProfileHostTimingV1, KfdProfileLaunchV1,
-    KfdProfileMemoryKindV1, KfdProfileResourceKindV1, KfdRuntimeProfileEventKindV1,
-    KfdRuntimeProfileV1, ProfileContentIdentityV1, ProfileIdentityV1,
+    KfdProfileAccessV1, KfdProfileBindingV1, KfdProfileHostContentV1, KfdProfileHostTimingV1,
+    KfdProfileLaunchV1, KfdProfileMemoryKindV1, KfdProfileResourceKindV1,
+    KfdRuntimeProfileEventKindV1, KfdRuntimeProfileV1, ProfileContentIdentityV1, ProfileIdentityV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -683,6 +683,8 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if self.profiler.is_some()
+            || self.next_handle != 1
+            || self.queue_retired
             || !self.streams.is_empty()
             || !self.allocations.is_empty()
             || !self.modules.is_empty()
@@ -755,6 +757,14 @@ impl KfdRuntimeBackendV1 {
     fn profile_content_v1(&self, bytes: &[u8]) -> Option<ProfileContentIdentityV1> {
         self.profiler.as_ref()?;
         ProfileContentIdentityV1::observed(bytes).ok()
+    }
+
+    fn profile_host_content_v1(
+        &self,
+        bytes: &[u8],
+        known_sha256: Option<[u8; 32]>,
+    ) -> Option<KfdProfileHostContentV1> {
+        self.profiler.as_ref()?.host_content(bytes, known_sha256)
     }
 
     fn prepare_profile_bindings_v1(
@@ -2485,9 +2495,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             descriptor.device_may_have_modified = false;
             descriptor.host_content_sha256 = record.content_sha256;
         }
+        let known_sha256 = full_write.then_some(record.content_sha256).flatten();
         let profile_allocation =
             self.profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocation);
-        let content = self.profile_content_v1(bytes);
+        let content = self.profile_host_content_v1(bytes, known_sha256);
         self.observe_profile_v1(
             profile_allocation
                 .zip(content)
@@ -2518,7 +2529,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         if self.read_native_allocation_into_v1(allocation, byte_offset, destination)? {
             let profile_allocation =
                 self.profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocation);
-            let content = self.profile_content_v1(destination);
+            let content = self.profile_host_content_v1(destination, None);
             self.observe_profile_v1(profile_allocation.zip(content).map(
                 |(allocation, content)| KfdRuntimeProfileEventKindV1::HostRead {
                     allocation,
@@ -2554,9 +2565,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             )
         })?;
         destination.copy_from_slice(source);
+        let known_sha256 = (offset == 0 && end == record.bytes.len())
+            .then_some(record.content_sha256)
+            .flatten();
         let profile_allocation =
             self.profile_resource_v1(KfdProfileResourceKindV1::Allocation, allocation);
-        let content = self.profile_content_v1(destination);
+        let content = self.profile_host_content_v1(destination, known_sha256);
         self.observe_profile_v1(
             profile_allocation
                 .zip(content)
@@ -2955,6 +2969,10 @@ mod tests {
         backend.shutdown_native_v1().unwrap();
         let capture = backend.finish_profiler_v1().unwrap();
         capture.validate().unwrap();
+        assert_eq!(
+            capture.host_content_mode,
+            fe2o3_profiler_protocol::KfdProfileHostContentModeV1::RangeOnly
+        );
         assert!(capture.coverage.complete_runtime_operation_history);
         assert_eq!(capture.coverage.dropped_events, 0);
         assert!(
@@ -2977,6 +2995,48 @@ mod tests {
     }
 
     #[test]
+    fn profiler_content_identity_mode_is_explicit_in_every_host_record() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend
+            .enable_profiler_v1(
+                KfdRuntimeProfilerConfigV1::new([15; 32], 16)
+                    .unwrap()
+                    .with_host_content_identities(),
+            )
+            .unwrap();
+        let allocation = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        backend.write_allocation_v1(allocation, 0, &[1; 8]).unwrap();
+        let mut readback = [0; 8];
+        backend
+            .read_allocation_v1(allocation, 0, &mut readback)
+            .unwrap();
+        backend.release_allocation_v1(allocation).unwrap();
+        backend.shutdown_native_v1().unwrap();
+        let capture = backend.finish_profiler_v1().unwrap();
+        assert_eq!(
+            capture.host_content_mode,
+            fe2o3_profiler_protocol::KfdProfileHostContentModeV1::ContentIdentity
+        );
+        let host_records: Vec<_> = capture
+            .events
+            .iter()
+            .filter_map(|event| match &event.event {
+                KfdRuntimeProfileEventKindV1::HostWrite { content, .. }
+                | KfdRuntimeProfileEventKindV1::HostRead { content, .. } => Some(*content),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(host_records.len(), 2);
+        assert!(host_records.iter().all(|content| matches!(
+            content,
+            KfdProfileHostContentV1::ContentIdentity { content }
+                if content.byte_len == 8
+        )));
+    }
+
+    #[test]
     fn profiler_loss_is_bounded_and_freezes_a_valid_prefix() {
         let mut backend = KfdRuntimeBackendV1::mock();
         backend
@@ -2995,6 +3055,29 @@ mod tests {
         assert_eq!(capture.events.len(), 2);
         assert_eq!(capture.coverage.dropped_events, 3);
         assert!(!capture.coverage.complete_runtime_operation_history);
+    }
+
+    #[test]
+    fn profiler_enable_rejects_a_logically_clean_but_used_backend() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        assert!(matches!(
+            backend.enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([13; 32], 8).unwrap()),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+    }
+
+    #[test]
+    fn profiler_enable_rejects_a_shutdown_backend() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend.shutdown_native_v1().unwrap();
+        assert!(matches!(
+            backend.enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([14; 32], 8).unwrap()),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
     }
 
     #[test]

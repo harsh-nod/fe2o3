@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_hardware:
-        description: Confirm this run may create KFD memory and queue resources
+        description: Confirm this run may create KFD resources and execute repository fixtures
         required: true
         default: false
         type: boolean
@@ -24,7 +24,7 @@ concurrency:
 jobs:
   smoke:
     if: ${{ inputs.confirm_hardware }}
-    name: Validate KFD resources on every GPU
+    name: Validate KFD resources and one profiled repository dispatch
     runs-on: [self-hosted, linux, x64, rocm, amd-gpu]
     environment: gpu-hardware
     timeout-minutes: 120
@@ -41,6 +41,15 @@ jobs:
 
       - name: Run guarded KFD hardware suite
         run: scripts/ci-local.sh hardware-smoke
+
+      - name: Upload direct-KFD profiler smoke evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: direct-kfd-profiler-smoke
+          path: target/fe2o3/kfd-profiler-hardware-smoke/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload smoke failure artifacts
         if: failure()

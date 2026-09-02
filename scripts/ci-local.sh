@@ -1244,6 +1244,8 @@ run_hardware_smoke() {
   run_step hardware-kfd-compute-aql-queue \
     cargo run --locked -p fe2o3-kfd --features live-validation \
       --example kfd-compute-aql-queue -- --all
+  run_step hardware-kfd-profiler-smoke \
+    bash scripts/kfd-profiler-hardware-smoke.sh
   run_step hardware-kfd-debug-trap-live \
     cargo test --locked -p fe2o3-kfd --features live-validation \
       --test kfd_debug_trap_live -- \

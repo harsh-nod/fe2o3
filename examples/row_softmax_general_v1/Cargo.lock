@@ -711,6 +711,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-profiler-protocol"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
 
@@ -731,6 +741,7 @@ dependencies = [
  "fe2o3-host-api",
  "fe2o3-hsaco",
  "fe2o3-kfd",
+ "fe2o3-profiler-protocol",
  "fe2o3-runtime-model",
  "sha2 0.11.0",
 ]

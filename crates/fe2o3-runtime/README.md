@@ -70,9 +70,11 @@ general V1 facade operation. This is not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
 The direct-KFD backend also exposes an opt-in bounded profiler. It records
-address-free logical resource lifecycle, content-bound host staging reads and
-writes, native queue creation/teardown, successful AQL publication, completion,
-and host-monotonic phase durations for every admitted kernel shape. It reports
+address-free logical resource lifecycle, host staging read/write ranges, native
+queue creation/teardown, successful AQL publication, completion, and
+host-monotonic phase durations for every admitted kernel shape. Range-only host
+content observation is the low-overhead default; callers can explicitly request
+content identities when the additional hashing cost is appropriate. It reports
 rocprof correlation, device timestamps, copy-engine events, counters, PC
 samples, decoded ATT, and authenticated source/IR/ISA attribution as unavailable
 rather than inferring them. Collection begins before context construction and

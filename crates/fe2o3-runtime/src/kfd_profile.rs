@@ -1,11 +1,11 @@
 //! Opt-in, bounded observation state for the direct-KFD backend.
 
 use fe2o3_profiler_protocol::{
-    KfdProfileDeviceV1, KfdProfileResourceKindV1, KfdRuntimeProfileEventKindV1,
-    KfdRuntimeProfileEventV1, KfdRuntimeProfileV1, MAX_KFD_RUNTIME_PROFILE_BYTES_V1,
-    MAX_KFD_RUNTIME_PROFILE_EVENTS_V1, MAX_KFD_RUNTIME_PROFILE_FIXED_JSON_BYTES_V1,
-    ProfileIdentityV1, encode_kfd_runtime_profile_v1, encoded_kfd_runtime_profile_event_len_v1,
-    push_observed_event_v1, resource_identity_v1,
+    KfdProfileDeviceV1, KfdProfileHostContentModeV1, KfdProfileHostContentV1,
+    KfdProfileResourceKindV1, KfdRuntimeProfileEventKindV1, KfdRuntimeProfileEventV1,
+    KfdRuntimeProfileV1, MAX_KFD_RUNTIME_PROFILE_BYTES_V1, MAX_KFD_RUNTIME_PROFILE_EVENTS_V1,
+    MAX_KFD_RUNTIME_PROFILE_FIXED_JSON_BYTES_V1, ProfileContentIdentityV1, ProfileIdentityV1,
+    encode_kfd_runtime_profile_v1, push_observed_event_with_encoded_len_v1, resource_identity_v1,
 };
 
 /// Explicit direct-KFD runtime profiling configuration.
@@ -16,6 +16,7 @@ use fe2o3_profiler_protocol::{
 pub struct KfdRuntimeProfilerConfigV1 {
     capture_scope: ProfileIdentityV1,
     max_events: u32,
+    host_content_mode: KfdProfileHostContentModeV1,
 }
 
 impl KfdRuntimeProfilerConfigV1 {
@@ -31,7 +32,16 @@ impl KfdRuntimeProfilerConfigV1 {
         Ok(Self {
             capture_scope,
             max_events,
+            host_content_mode: KfdProfileHostContentModeV1::RangeOnly,
         })
+    }
+
+    /// Requests content identities for host staging records. This can be
+    /// expensive for large reads or partial writes; range-only observation is
+    /// the default and always remains explicit in the capture.
+    pub fn with_host_content_identities(mut self) -> Self {
+        self.host_content_mode = KfdProfileHostContentModeV1::ContentIdentity;
+        self
     }
 
     pub const fn capture_scope(self) -> ProfileIdentityV1 {
@@ -40,6 +50,10 @@ impl KfdRuntimeProfilerConfigV1 {
 
     pub const fn max_events(self) -> u32 {
         self.max_events
+    }
+
+    pub const fn host_content_mode(self) -> KfdProfileHostContentModeV1 {
+        self.host_content_mode
     }
 }
 
@@ -64,6 +78,7 @@ impl std::error::Error for KfdRuntimeProfilerConfigErrorV1 {}
 pub(crate) struct KfdRuntimeProfileRecorderV1 {
     scope: ProfileIdentityV1,
     device: KfdProfileDeviceV1,
+    host_content_mode: KfdProfileHostContentModeV1,
     max_events: usize,
     events: Vec<KfdRuntimeProfileEventV1>,
     encoded_event_bytes: u64,
@@ -87,6 +102,7 @@ impl KfdRuntimeProfileRecorderV1 {
         Ok(Self {
             scope: config.capture_scope,
             device,
+            host_content_mode: config.host_content_mode,
             max_events,
             events,
             encoded_event_bytes: 0,
@@ -102,6 +118,27 @@ impl KfdRuntimeProfileRecorderV1 {
         resource_identity_v1(self.scope, kind, private_runtime_handle).ok()
     }
 
+    pub(crate) fn host_content(
+        &self,
+        bytes: &[u8],
+        known_sha256: Option<[u8; 32]>,
+    ) -> Option<KfdProfileHostContentV1> {
+        let byte_len = u64::try_from(bytes.len()).ok()?;
+        match self.host_content_mode {
+            KfdProfileHostContentModeV1::RangeOnly => {
+                Some(KfdProfileHostContentV1::RangeOnly { byte_len })
+            }
+            KfdProfileHostContentModeV1::ContentIdentity => {
+                let content = match known_sha256 {
+                    Some(sha256) => ProfileContentIdentityV1::observed_sha256(byte_len, sha256),
+                    None => ProfileContentIdentityV1::observed(bytes),
+                }
+                .ok()?;
+                Some(KfdProfileHostContentV1::ContentIdentity { content })
+            }
+        }
+    }
+
     /// Records a fact without changing runtime success or failure. Once any
     /// fact is lost, later facts are counted but omitted so the retained data
     /// remains a valid prefix rather than a misleading trace with holes.
@@ -114,14 +151,15 @@ impl KfdRuntimeProfileRecorderV1 {
             self.dropped_events = self.dropped_events.saturating_add(1);
             return;
         };
-        if push_observed_event_v1(self.scope, &mut self.events, event).is_err() {
-            self.dropped_events = self.dropped_events.saturating_add(1);
-            return;
-        }
-        let encoded_len = self
-            .events
-            .last()
-            .and_then(|event| encoded_kfd_runtime_profile_event_len_v1(event).ok())
+        let event_len =
+            match push_observed_event_with_encoded_len_v1(self.scope, &mut self.events, event) {
+                Ok(len) => len,
+                Err(_) => {
+                    self.dropped_events = self.dropped_events.saturating_add(1);
+                    return;
+                }
+            };
+        let encoded_len = Some(event_len)
             .and_then(|len| len.checked_add(1))
             .and_then(|len| self.encoded_event_bytes.checked_add(len));
         let encoded_budget = MAX_KFD_RUNTIME_PROFILE_BYTES_V1
@@ -136,9 +174,14 @@ impl KfdRuntimeProfileRecorderV1 {
     }
 
     pub(crate) fn finish(self) -> Result<KfdRuntimeProfileV1, String> {
-        let capture =
-            KfdRuntimeProfileV1::new(self.scope, self.device, self.events, self.dropped_events)
-                .map_err(|error| error.to_string())?;
+        let capture = KfdRuntimeProfileV1::new(
+            self.scope,
+            self.device,
+            self.host_content_mode,
+            self.events,
+            self.dropped_events,
+        )
+        .map_err(|error| error.to_string())?;
         encode_kfd_runtime_profile_v1(&capture).map_err(|error| error.to_string())?;
         Ok(capture)
     }

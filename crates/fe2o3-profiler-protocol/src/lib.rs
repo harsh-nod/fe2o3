@@ -149,6 +149,13 @@ pub enum KfdProfileAccessV1 {
     ReadWrite,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KfdProfileHostContentModeV1 {
+    RangeOnly,
+    ContentIdentity,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KfdProfileUnavailableFactV1 {
@@ -184,10 +191,44 @@ impl ProfileContentIdentityV1 {
     pub fn observed(bytes: &[u8]) -> Result<Self, KfdRuntimeProfileErrorV1> {
         let byte_len =
             u64::try_from(bytes.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)?;
+        let sha256 = Sha256::digest(bytes).into();
+        Self::observed_sha256(byte_len, sha256)
+    }
+
+    pub fn observed_sha256(
+        byte_len: u64,
+        sha256: [u8; 32],
+    ) -> Result<Self, KfdRuntimeProfileErrorV1> {
         Ok(Self {
-            digest: domain_identity(CONTENT_IDENTITY_DOMAIN_V1, &[bytes])?,
+            digest: domain_identity(
+                CONTENT_IDENTITY_DOMAIN_V1,
+                &[&byte_len.to_le_bytes(), &sha256],
+            )?,
             byte_len,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum KfdProfileHostContentV1 {
+    RangeOnly { byte_len: u64 },
+    ContentIdentity { content: ProfileContentIdentityV1 },
+}
+
+impl KfdProfileHostContentV1 {
+    pub const fn byte_len(self) -> u64 {
+        match self {
+            Self::RangeOnly { byte_len } => byte_len,
+            Self::ContentIdentity { content } => content.byte_len,
+        }
+    }
+
+    const fn mode(self) -> KfdProfileHostContentModeV1 {
+        match self {
+            Self::RangeOnly { .. } => KfdProfileHostContentModeV1::RangeOnly,
+            Self::ContentIdentity { .. } => KfdProfileHostContentModeV1::ContentIdentity,
+        }
     }
 }
 
@@ -309,12 +350,12 @@ pub enum KfdRuntimeProfileEventKindV1 {
     HostWrite {
         allocation: ProfileIdentityV1,
         byte_offset: u64,
-        content: ProfileContentIdentityV1,
+        content: KfdProfileHostContentV1,
     },
     HostRead {
         allocation: ProfileIdentityV1,
         byte_offset: u64,
-        content: ProfileContentIdentityV1,
+        content: KfdProfileHostContentV1,
     },
     AllocationReleased {
         allocation: ProfileIdentityV1,
@@ -375,6 +416,7 @@ pub struct KfdRuntimeProfileV1 {
     pub schema_version: u16,
     pub capture_scope: ProfileIdentityV1,
     pub device: KfdProfileDeviceV1,
+    pub host_content_mode: KfdProfileHostContentModeV1,
     pub events: Vec<KfdRuntimeProfileEventV1>,
     pub coverage: KfdRuntimeProfileCoverageV1,
     pub unavailable: Vec<KfdProfileUnavailableFactV1>,
@@ -384,6 +426,7 @@ impl KfdRuntimeProfileV1 {
     pub fn new(
         capture_scope: ProfileIdentityV1,
         device: KfdProfileDeviceV1,
+        host_content_mode: KfdProfileHostContentModeV1,
         events: Vec<KfdRuntimeProfileEventV1>,
         dropped_events: u64,
     ) -> Result<Self, KfdRuntimeProfileErrorV1> {
@@ -394,6 +437,7 @@ impl KfdRuntimeProfileV1 {
             schema_version: KFD_RUNTIME_PROFILE_SCHEMA_VERSION_V1,
             capture_scope,
             device,
+            host_content_mode,
             events,
             coverage: KfdRuntimeProfileCoverageV1 {
                 origin: ProfileTruthOriginV1::Observed,
@@ -430,12 +474,20 @@ impl KfdRuntimeProfileV1 {
             return Err(KfdRuntimeProfileErrorV1::InvalidCoverage);
         }
 
+        struct LiveDispatchV1 {
+            queue: ProfileIdentityV1,
+            stream: ProfileIdentityV1,
+            kernel: ProfileIdentityV1,
+            allocations: BTreeSet<ProfileIdentityV1>,
+        }
+
+        let mut resource_identities = BTreeSet::new();
         let mut queues = BTreeSet::new();
         let mut streams = BTreeSet::new();
         let mut allocations = BTreeMap::new();
         let mut modules = BTreeSet::new();
         let mut kernels = BTreeMap::new();
-        let mut dispatches = BTreeSet::new();
+        let mut dispatches: BTreeMap<ProfileIdentityV1, LiveDispatchV1> = BTreeMap::new();
         let mut completed = BTreeSet::new();
         for (sequence, event) in (0_u64..).zip(&self.events) {
             if event.sequence != sequence
@@ -447,22 +499,28 @@ impl KfdRuntimeProfileV1 {
             }
             match &event.event {
                 KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue } => {
-                    if !queues.insert(*queue) {
+                    if !resource_identities.insert(*queue) || !queues.insert(*queue) {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue } => {
-                    if !queues.remove(queue) {
+                    if !streams.is_empty()
+                        || dispatches.values().any(|owner| owner.queue == *queue)
+                        || !queues.remove(queue)
+                    {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::StreamCreated { stream } => {
-                    if !streams.insert(*stream) {
+                    if !resource_identities.insert(*stream) || !streams.insert(*stream) {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::StreamDestroyed { stream } => {
-                    if !streams.remove(stream) {
+                    if dispatches.iter().any(|(dispatch, owner)| {
+                        !completed.contains(dispatch) && owner.stream == *stream
+                    }) || !streams.remove(stream)
+                    {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
@@ -475,6 +533,7 @@ impl KfdRuntimeProfileV1 {
                     if *byte_len == 0
                         || *alignment == 0
                         || !alignment.is_power_of_two()
+                        || !resource_identities.insert(*allocation)
                         || allocations.insert(*allocation, *byte_len).is_some()
                     {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
@@ -492,20 +551,31 @@ impl KfdRuntimeProfileV1 {
                 } => {
                     let in_bounds = allocations.get(allocation).is_some_and(|allocation_len| {
                         byte_offset
-                            .checked_add(content.byte_len)
+                            .checked_add(content.byte_len())
                             .is_some_and(|end| end <= *allocation_len)
                     });
-                    if !in_bounds {
+                    if content.mode() != self.host_content_mode
+                        || !in_bounds
+                        || dispatches.iter().any(|(dispatch, owner)| {
+                            !completed.contains(dispatch) && owner.allocations.contains(allocation)
+                        })
+                    {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::AllocationReleased { allocation } => {
-                    if allocations.remove(allocation).is_none() {
+                    if dispatches.iter().any(|(dispatch, owner)| {
+                        !completed.contains(dispatch) && owner.allocations.contains(allocation)
+                    }) || allocations.remove(allocation).is_none()
+                    {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::ModuleLoaded { module, artifact } => {
-                    if artifact.byte_len == 0 || !modules.insert(*module) {
+                    if artifact.byte_len == 0
+                        || !resource_identities.insert(*module)
+                        || !modules.insert(*module)
+                    {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
@@ -517,13 +587,20 @@ impl KfdRuntimeProfileV1 {
                 } => {
                     if !modules.contains(module)
                         || name.byte_len == 0
+                        || !resource_identities.insert(*kernel)
                         || kernels.insert(*kernel, *module).is_some()
                     {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::ModuleUnloaded { module } => {
-                    if !modules.remove(module) {
+                    if dispatches.iter().any(|(dispatch, owner)| {
+                        !completed.contains(dispatch)
+                            && kernels
+                                .get(&owner.kernel)
+                                .is_some_and(|owner_module| owner_module == module)
+                    }) || !modules.remove(module)
+                    {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                     kernels.retain(|_, owner| owner != module);
@@ -553,18 +630,28 @@ impl KfdRuntimeProfileV1 {
                                     },
                                 )
                         })
-                        || !dispatches.insert(*dispatch)
+                        || !resource_identities.insert(*dispatch)
                     {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
+                    let allocations = bindings.iter().map(|binding| binding.allocation).collect();
+                    dispatches.insert(
+                        *dispatch,
+                        LiveDispatchV1 {
+                            queue: *queue,
+                            stream: *stream,
+                            kernel: *kernel,
+                            allocations,
+                        },
+                    );
                 }
                 KfdRuntimeProfileEventKindV1::DispatchCompleted { dispatch, .. } => {
-                    if !dispatches.contains(dispatch) || !completed.insert(*dispatch) {
+                    if !dispatches.contains_key(dispatch) || !completed.insert(*dispatch) {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
                 KfdRuntimeProfileEventKindV1::SubmissionReleased { dispatch } => {
-                    if !completed.remove(dispatch) || !dispatches.remove(dispatch) {
+                    if !completed.remove(dispatch) || dispatches.remove(dispatch).is_none() {
                         return Err(KfdRuntimeProfileErrorV1::InvalidLifecycle);
                     }
                 }
@@ -615,26 +702,43 @@ pub fn push_observed_event_v1(
     events: &mut Vec<KfdRuntimeProfileEventV1>,
     event: KfdRuntimeProfileEventKindV1,
 ) -> Result<(), KfdRuntimeProfileErrorV1> {
+    push_observed_event_with_encoded_len_v1(capture_scope, events, event).map(|_| ())
+}
+
+pub fn push_observed_event_with_encoded_len_v1(
+    capture_scope: ProfileIdentityV1,
+    events: &mut Vec<KfdRuntimeProfileEventV1>,
+    event: KfdRuntimeProfileEventKindV1,
+) -> Result<u64, KfdRuntimeProfileErrorV1> {
     if events.len() >= MAX_KFD_RUNTIME_PROFILE_EVENTS_V1 as usize {
         return Err(KfdRuntimeProfileErrorV1::EventLimitExceeded);
     }
     let sequence =
         u64::try_from(events.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)?;
-    let identity = derive_event_identity_v1(capture_scope, sequence, &event)?;
+    let payload = serde_json::to_vec(&event).map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)?;
+    let identity = derive_event_identity_from_payload_v1(capture_scope, sequence, &payload)?;
     events.push(KfdRuntimeProfileEventV1 {
         sequence,
         identity,
         origin: ProfileTruthOriginV1::Observed,
         event,
     });
-    Ok(())
+    const FIXED_OBSERVED_EVENT_JSON_BYTES: u64 = 120;
+    let payload_len =
+        u64::try_from(payload.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)?;
+    FIXED_OBSERVED_EVENT_JSON_BYTES
+        .checked_add(decimal_digits(sequence))
+        .and_then(|len| len.checked_add(payload_len))
+        .ok_or(KfdRuntimeProfileErrorV1::SizeOverflow)
 }
 
-pub fn encoded_kfd_runtime_profile_event_len_v1(
-    event: &KfdRuntimeProfileEventV1,
-) -> Result<u64, KfdRuntimeProfileErrorV1> {
-    let bytes = serde_json::to_vec(event).map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)?;
-    u64::try_from(bytes.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)
+const fn decimal_digits(mut value: u64) -> u64 {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
 }
 
 fn derive_event_identity_v1(
@@ -643,9 +747,17 @@ fn derive_event_identity_v1(
     event: &KfdRuntimeProfileEventKindV1,
 ) -> Result<ProfileIdentityV1, KfdRuntimeProfileErrorV1> {
     let payload = serde_json::to_vec(event).map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)?;
+    derive_event_identity_from_payload_v1(capture_scope, sequence, &payload)
+}
+
+fn derive_event_identity_from_payload_v1(
+    capture_scope: ProfileIdentityV1,
+    sequence: u64,
+    payload: &[u8],
+) -> Result<ProfileIdentityV1, KfdRuntimeProfileErrorV1> {
     domain_identity(
         EVENT_IDENTITY_DOMAIN_V1,
-        &[&capture_scope.as_bytes(), &sequence.to_le_bytes(), &payload],
+        &[&capture_scope.as_bytes(), &sequence.to_le_bytes(), payload],
     )
 }
 
@@ -740,28 +852,28 @@ pub enum AgentKfdProfilerOperationV1 {
     InspectDispatch,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentKfdProfilerRequestV1 {
     pub schema: String,
     pub request_id: u64,
     pub operation: AgentKfdProfilerOperationV1,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<ProfileIdentityV1>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch: Option<ProfileIdentityV1>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKfdProfilerCapabilityStateV1 {
     Available,
     Unavailable,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentKfdProfilerCapabilityV1 {
     pub operation: String,
@@ -769,15 +881,15 @@ pub struct AgentKfdProfilerCapabilityV1 {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentKfdProfilerCursorV1 {
     pub identity: ProfileIdentityV1,
     pub next_sequence: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "response", rename_all = "snake_case")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "response", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentKfdProfilerResponseBodyV1 {
     Capabilities {
         capabilities: Vec<AgentKfdProfilerCapabilityV1>,
@@ -804,12 +916,25 @@ pub enum AgentKfdProfilerResponseBodyV1 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentKfdProfilerResponseV1 {
-    pub schema: &'static str,
+    pub schema: String,
     pub request_id: u64,
     pub body: AgentKfdProfilerResponseBodyV1,
+}
+
+pub fn encode_agent_kfd_profiler_request_v1(
+    request: &AgentKfdProfilerRequestV1,
+) -> Result<Vec<u8>, AgentKfdProfilerErrorV1> {
+    if request.schema != AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1 {
+        return Err(AgentKfdProfilerErrorV1::InvalidRequest);
+    }
+    let bytes = serde_json::to_vec(request).map_err(|_| AgentKfdProfilerErrorV1::InvalidRequest)?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_AGENT_KFD_PROFILER_REQUEST_BYTES_V1 {
+        return Err(AgentKfdProfilerErrorV1::RequestSizeOutOfRange);
+    }
+    Ok(bytes)
 }
 
 pub fn answer_agent_kfd_profiler_request_v1(
@@ -826,22 +951,46 @@ pub fn answer_agent_kfd_profiler_request_v1(
     if request.schema != AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1 {
         return Err(AgentKfdProfilerErrorV1::InvalidRequest);
     }
+    if serde_json::to_vec(&request).map_err(|_| AgentKfdProfilerErrorV1::InvalidRequest)?
+        != request_bytes
+    {
+        return Err(AgentKfdProfilerErrorV1::InvalidRequest);
+    }
     let capture =
         decode_kfd_runtime_profile_v1(capture_bytes).map_err(AgentKfdProfilerErrorV1::Capture)?;
     let capture_identity = kfd_runtime_profile_content_identity_v1(capture_bytes)
         .map_err(AgentKfdProfilerErrorV1::Capture)?;
+    let body = match answer_agent_operation_v1(&capture, capture_identity, &request) {
+        Ok(body) => body,
+        Err(error) => AgentKfdProfilerResponseBodyV1::Error {
+            code: error.code().to_owned(),
+            detail: error.detail().to_owned(),
+        },
+    };
+    encode_agent_kfd_profiler_response_v1(AgentKfdProfilerResponseV1 {
+        schema: AGENT_KFD_PROFILER_RESPONSE_SCHEMA_V1.to_owned(),
+        request_id: request.request_id,
+        body,
+    })
+}
+
+fn answer_agent_operation_v1(
+    capture: &KfdRuntimeProfileV1,
+    capture_identity: ProfileContentIdentityV1,
+    request: &AgentKfdProfilerRequestV1,
+) -> Result<AgentKfdProfilerResponseBodyV1, AgentKfdProfilerErrorV1> {
     let body = match request.operation {
         AgentKfdProfilerOperationV1::DiscoverCapabilities => {
             reject_selectors(&request, false, false)?;
             AgentKfdProfilerResponseBodyV1::Capabilities {
-                capabilities: capabilities(),
+                capabilities: capabilities(capture.host_content_mode),
             }
         }
         AgentKfdProfilerOperationV1::InspectCapture => {
             reject_selectors(&request, false, false)?;
             AgentKfdProfilerResponseBodyV1::Capture {
                 capture_identity,
-                device: capture.device,
+                device: capture.device.clone(),
                 coverage: capture.coverage,
                 unavailable: capture.unavailable.clone(),
             }
@@ -899,16 +1048,50 @@ pub fn answer_agent_kfd_profiler_request_v1(
             }
         }
     };
-    let bytes = serde_json::to_vec(&AgentKfdProfilerResponseV1 {
-        schema: AGENT_KFD_PROFILER_RESPONSE_SCHEMA_V1,
-        request_id: request.request_id,
-        body,
+    Ok(body)
+}
+
+pub fn encode_agent_kfd_profiler_error_response_v1(
+    request_id: u64,
+    error: &AgentKfdProfilerErrorV1,
+) -> Result<Vec<u8>, AgentKfdProfilerErrorV1> {
+    encode_agent_kfd_profiler_response_v1(AgentKfdProfilerResponseV1 {
+        schema: AGENT_KFD_PROFILER_RESPONSE_SCHEMA_V1.to_owned(),
+        request_id,
+        body: AgentKfdProfilerResponseBodyV1::Error {
+            code: error.code().to_owned(),
+            detail: error.detail().to_owned(),
+        },
     })
-    .map_err(|_| AgentKfdProfilerErrorV1::JsonEncode)?;
+}
+
+fn encode_agent_kfd_profiler_response_v1(
+    response: AgentKfdProfilerResponseV1,
+) -> Result<Vec<u8>, AgentKfdProfilerErrorV1> {
+    let bytes = serde_json::to_vec(&response).map_err(|_| AgentKfdProfilerErrorV1::JsonEncode)?;
     if bytes.len() as u64 > MAX_AGENT_KFD_PROFILER_RESPONSE_BYTES_V1 {
         return Err(AgentKfdProfilerErrorV1::ResponseSizeExceeded);
     }
     Ok(bytes)
+}
+
+pub fn decode_agent_kfd_profiler_response_v1(
+    bytes: &[u8],
+) -> Result<AgentKfdProfilerResponseV1, AgentKfdProfilerErrorV1> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_AGENT_KFD_PROFILER_RESPONSE_BYTES_V1 {
+        return Err(AgentKfdProfilerErrorV1::ResponseSizeExceeded);
+    }
+    let response: AgentKfdProfilerResponseV1 =
+        serde_json::from_slice(bytes).map_err(|_| AgentKfdProfilerErrorV1::InvalidResponse)?;
+    if response.schema != AGENT_KFD_PROFILER_RESPONSE_SCHEMA_V1 {
+        return Err(AgentKfdProfilerErrorV1::InvalidResponse);
+    }
+    let canonical =
+        serde_json::to_vec(&response).map_err(|_| AgentKfdProfilerErrorV1::JsonEncode)?;
+    if canonical != bytes {
+        return Err(AgentKfdProfilerErrorV1::InvalidResponse);
+    }
+    Ok(response)
 }
 
 fn reject_selectors(
@@ -924,12 +1107,24 @@ fn reject_selectors(
     Ok(())
 }
 
-fn capabilities() -> Vec<AgentKfdProfilerCapabilityV1> {
+fn capabilities(
+    host_content_mode: KfdProfileHostContentModeV1,
+) -> Vec<AgentKfdProfilerCapabilityV1> {
     let mut values = vec![
         available("inspect_capture"),
         available("list_events"),
         available("inspect_dispatch"),
     ];
+    values.push(match host_content_mode {
+        KfdProfileHostContentModeV1::RangeOnly => AgentKfdProfilerCapabilityV1 {
+            operation: "query_host_staging_content_identity".to_owned(),
+            state: AgentKfdProfilerCapabilityStateV1::Unavailable,
+            reason: Some("host_content_identity_not_requested".to_owned()),
+        },
+        KfdProfileHostContentModeV1::ContentIdentity => {
+            available("query_host_staging_content_identity")
+        }
+    });
     for (operation, reason) in [
         (
             "correlate_rocprofv3_dispatch",
@@ -1008,7 +1203,42 @@ pub enum AgentKfdProfilerErrorV1 {
     InvalidCursor,
     ResponseSizeExceeded,
     JsonEncode,
+    InvalidResponse,
     Capture(KfdRuntimeProfileErrorV1),
+}
+
+impl AgentKfdProfilerErrorV1 {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::RequestSizeOutOfRange => "request_size_out_of_range",
+            Self::InvalidRequest => "invalid_request",
+            Self::UnexpectedSelector => "unexpected_selector",
+            Self::MissingDispatch => "missing_dispatch",
+            Self::UnknownDispatch => "unknown_dispatch",
+            Self::PageLimitOutOfRange => "page_limit_out_of_range",
+            Self::InvalidCursor => "invalid_cursor",
+            Self::ResponseSizeExceeded => "response_size_exceeded",
+            Self::JsonEncode => "json_encode",
+            Self::InvalidResponse => "invalid_response",
+            Self::Capture(_) => "capture_rejected",
+        }
+    }
+
+    pub const fn detail(&self) -> &'static str {
+        match self {
+            Self::RequestSizeOutOfRange => "request exceeds the canonical byte bound",
+            Self::InvalidRequest => "request is not canonical profiler query JSON",
+            Self::UnexpectedSelector => "operation received an unsupported selector",
+            Self::MissingDispatch => "inspect_dispatch requires a dispatch identity",
+            Self::UnknownDispatch => "dispatch identity is absent from this capture",
+            Self::PageLimitOutOfRange => "event page limit is outside the admitted bound",
+            Self::InvalidCursor => "cursor is not bound to an available page in this capture",
+            Self::ResponseSizeExceeded => "response exceeds the canonical byte bound",
+            Self::JsonEncode => "response encoding failed",
+            Self::InvalidResponse => "response is not canonical profiler query JSON",
+            Self::Capture(_) => "capture failed canonical validation",
+        }
+    }
 }
 
 impl fmt::Display for AgentKfdProfilerErrorV1 {
@@ -1052,7 +1282,16 @@ mod tests {
             KfdRuntimeProfileEventKindV1::HostWrite {
                 allocation,
                 byte_offset: 0,
-                content: ProfileContentIdentityV1::observed(&[1; 64]).unwrap(),
+                content: KfdProfileHostContentV1::ContentIdentity {
+                    content: ProfileContentIdentityV1::observed(&[1; 64]).unwrap(),
+                },
+            },
+            KfdRuntimeProfileEventKindV1::HostRead {
+                allocation,
+                byte_offset: 0,
+                content: KfdProfileHostContentV1::ContentIdentity {
+                    content: ProfileContentIdentityV1::observed(&[1; 64]).unwrap(),
+                },
             },
             KfdRuntimeProfileEventKindV1::ModuleLoaded {
                 module,
@@ -1090,18 +1329,34 @@ mod tests {
             KfdRuntimeProfileEventKindV1::SubmissionReleased { dispatch },
             KfdRuntimeProfileEventKindV1::ModuleUnloaded { module },
             KfdRuntimeProfileEventKindV1::AllocationReleased { allocation },
-            KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue },
             KfdRuntimeProfileEventKindV1::StreamDestroyed { stream },
+            KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue },
         ] {
-            push_observed_event_v1(scope, &mut events, event).unwrap();
+            let encoded_len =
+                push_observed_event_with_encoded_len_v1(scope, &mut events, event).unwrap();
+            assert_eq!(
+                encoded_len,
+                serde_json::to_vec(events.last().unwrap()).unwrap().len() as u64
+            );
         }
         KfdRuntimeProfileV1::new(
             scope,
             KfdProfileDeviceV1::observed(7, "gfx942:xnack-", 64).unwrap(),
+            KfdProfileHostContentModeV1::ContentIdentity,
             events,
             0,
         )
         .unwrap()
+    }
+
+    fn reauthenticate(capture: &mut KfdRuntimeProfileV1) {
+        for (sequence, event) in capture.events.iter_mut().enumerate() {
+            event.sequence = sequence as u64;
+            event.identity =
+                derive_event_identity_v1(capture.capture_scope, event.sequence, &event.event)
+                    .unwrap();
+        }
+        capture.coverage.observed_events = capture.events.len() as u64;
     }
 
     #[test]
@@ -1140,34 +1395,253 @@ mod tests {
     }
 
     #[test]
+    fn complete_capture_rejects_parent_teardown_before_dispatch_completion() {
+        for parent in 0..4 {
+            let mut capture = closed_capture();
+            let teardown = capture
+                .events
+                .iter()
+                .position(|event| match (&event.event, parent) {
+                    (KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }, 0)
+                    | (KfdRuntimeProfileEventKindV1::StreamDestroyed { .. }, 1)
+                    | (KfdRuntimeProfileEventKindV1::AllocationReleased { .. }, 2)
+                    | (KfdRuntimeProfileEventKindV1::ModuleUnloaded { .. }, 3) => true,
+                    _ => false,
+                })
+                .unwrap();
+            let teardown = capture.events.remove(teardown);
+            let before_completion = capture
+                .events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event.event,
+                        KfdRuntimeProfileEventKindV1::DispatchCompleted { .. }
+                    )
+                })
+                .unwrap();
+            capture.events.insert(before_completion, teardown);
+            reauthenticate(&mut capture);
+            assert!(matches!(
+                capture.validate(),
+                Err(KfdRuntimeProfileErrorV1::InvalidLifecycle)
+            ));
+        }
+    }
+
+    #[test]
+    fn capture_rejects_host_access_while_a_dispatch_owns_the_allocation() {
+        for read in [false, true] {
+            let mut capture = closed_capture();
+            let host_access = capture
+                .events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        (&event.event, read),
+                        (KfdRuntimeProfileEventKindV1::HostWrite { .. }, false)
+                            | (KfdRuntimeProfileEventKindV1::HostRead { .. }, true)
+                    )
+                })
+                .unwrap();
+            let host_access = capture.events.remove(host_access);
+            let after_publication = capture
+                .events
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event.event,
+                        KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
+                    )
+                })
+                .unwrap()
+                + 1;
+            capture.events.insert(after_publication, host_access);
+            reauthenticate(&mut capture);
+            assert!(matches!(
+                capture.validate(),
+                Err(KfdRuntimeProfileErrorV1::InvalidLifecycle)
+            ));
+        }
+    }
+
+    #[test]
+    fn host_access_and_parent_teardown_are_valid_after_dispatch_completion() {
+        let mut capture = closed_capture();
+        let mut quiescent_events = Vec::new();
+        for predicate in [
+            |event: &KfdRuntimeProfileEventV1| {
+                matches!(event.event, KfdRuntimeProfileEventKindV1::HostRead { .. })
+            },
+            |event: &KfdRuntimeProfileEventV1| {
+                matches!(
+                    event.event,
+                    KfdRuntimeProfileEventKindV1::ModuleUnloaded { .. }
+                )
+            },
+            |event: &KfdRuntimeProfileEventV1| {
+                matches!(
+                    event.event,
+                    KfdRuntimeProfileEventKindV1::AllocationReleased { .. }
+                )
+            },
+            |event: &KfdRuntimeProfileEventV1| {
+                matches!(
+                    event.event,
+                    KfdRuntimeProfileEventKindV1::StreamDestroyed { .. }
+                )
+            },
+        ] as [fn(&KfdRuntimeProfileEventV1) -> bool; 4]
+        {
+            let index = capture.events.iter().position(predicate).unwrap();
+            quiescent_events.push(capture.events.remove(index));
+        }
+        let before_release = capture
+            .events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event.event,
+                    KfdRuntimeProfileEventKindV1::SubmissionReleased { .. }
+                )
+            })
+            .unwrap();
+        capture
+            .events
+            .splice(before_release..before_release, quiescent_events);
+        reauthenticate(&mut capture);
+        capture.validate().unwrap();
+    }
+
+    #[test]
+    fn capture_rejects_cross_kind_and_historical_resource_identity_reuse() {
+        let mut cross_kind = closed_capture();
+        let stream = cross_kind
+            .events
+            .iter()
+            .find_map(|event| match event.event {
+                KfdRuntimeProfileEventKindV1::StreamCreated { stream } => Some(stream),
+                _ => None,
+            })
+            .unwrap();
+        for event in &mut cross_kind.events {
+            match &mut event.event {
+                KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue }
+                | KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue }
+                | KfdRuntimeProfileEventKindV1::DispatchPublished { queue, .. } => *queue = stream,
+                _ => {}
+            }
+        }
+        reauthenticate(&mut cross_kind);
+        assert!(matches!(
+            cross_kind.validate(),
+            Err(KfdRuntimeProfileErrorV1::InvalidLifecycle)
+        ));
+
+        let mut historical = closed_capture();
+        let queue = historical
+            .events
+            .iter()
+            .find_map(|event| match event.event {
+                KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue } => Some(queue),
+                _ => None,
+            })
+            .unwrap();
+        historical.events.push(KfdRuntimeProfileEventV1 {
+            sequence: 0,
+            identity: identity(9),
+            origin: ProfileTruthOriginV1::Observed,
+            event: KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue },
+        });
+        historical.events.push(KfdRuntimeProfileEventV1 {
+            sequence: 0,
+            identity: identity(9),
+            origin: ProfileTruthOriginV1::Observed,
+            event: KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue },
+        });
+        reauthenticate(&mut historical);
+        assert!(matches!(
+            historical.validate(),
+            Err(KfdRuntimeProfileErrorV1::InvalidLifecycle)
+        ));
+    }
+
+    #[test]
+    fn host_content_policy_is_explicit_and_cached_sha256_is_equivalent() {
+        let bytes = [7_u8; 64];
+        let sha256 = Sha256::digest(bytes).into();
+        assert_eq!(
+            ProfileContentIdentityV1::observed(&bytes).unwrap(),
+            ProfileContentIdentityV1::observed_sha256(bytes.len() as u64, sha256).unwrap()
+        );
+        let mut capture = closed_capture();
+        capture.host_content_mode = KfdProfileHostContentModeV1::RangeOnly;
+        assert!(matches!(
+            capture.validate(),
+            Err(KfdRuntimeProfileErrorV1::InvalidLifecycle)
+        ));
+    }
+
+    #[test]
     fn agent_pages_are_capture_bound_and_capabilities_are_explicit() {
         let bytes = encode_kfd_runtime_profile_v1(&closed_capture()).unwrap();
-        let request = serde_json::json!({
-            "schema": AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1,
-            "request_id": 1,
-            "operation": "list_events",
-            "limit": 2
-        });
-        let response =
-            answer_agent_kfd_profiler_request_v1(&bytes, &serde_json::to_vec(&request).unwrap())
-                .unwrap();
+        let request = encode_agent_kfd_profiler_request_v1(&AgentKfdProfilerRequestV1 {
+            schema: AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1.to_owned(),
+            request_id: 1,
+            operation: AgentKfdProfilerOperationV1::ListEvents,
+            cursor: None,
+            limit: Some(2),
+            dispatch: None,
+        })
+        .unwrap();
+        let response = answer_agent_kfd_profiler_request_v1(&bytes, &request).unwrap();
         let response: serde_json::Value = serde_json::from_slice(&response).unwrap();
         assert_eq!(response["body"]["items"].as_array().unwrap().len(), 2);
         assert!(response["body"]["next_cursor"].is_object());
 
-        let capabilities = serde_json::json!({
-            "schema": AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1,
-            "request_id": 2,
-            "operation": "discover_capabilities"
-        });
-        let response = answer_agent_kfd_profiler_request_v1(
-            &bytes,
-            &serde_json::to_vec(&capabilities).unwrap(),
-        )
+        let capabilities = encode_agent_kfd_profiler_request_v1(&AgentKfdProfilerRequestV1 {
+            schema: AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1.to_owned(),
+            request_id: 2,
+            operation: AgentKfdProfilerOperationV1::DiscoverCapabilities,
+            cursor: None,
+            limit: None,
+            dispatch: None,
+        })
         .unwrap();
+        let response = answer_agent_kfd_profiler_request_v1(&bytes, &capabilities).unwrap();
         let text = String::from_utf8(response).unwrap();
         assert!(text.contains("rocprofv3_dispatch_correlation_unavailable"));
         assert!(text.contains("only_host_monotonic_elapsed_durations_observed"));
+        assert!(text.contains("query_host_staging_content_identity"));
+    }
+
+    #[test]
+    fn valid_but_rejected_requests_return_canonical_typed_errors() {
+        let bytes = encode_kfd_runtime_profile_v1(&closed_capture()).unwrap();
+        let request = encode_agent_kfd_profiler_request_v1(&AgentKfdProfilerRequestV1 {
+            schema: AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1.to_owned(),
+            request_id: 41,
+            operation: AgentKfdProfilerOperationV1::InspectCapture,
+            cursor: None,
+            limit: Some(1),
+            dispatch: None,
+        })
+        .unwrap();
+        let response = answer_agent_kfd_profiler_request_v1(&bytes, &request).unwrap();
+        let decoded = decode_agent_kfd_profiler_response_v1(&response).unwrap();
+        assert_eq!(decoded.request_id, 41);
+        assert!(matches!(
+            decoded.body,
+            AgentKfdProfilerResponseBodyV1::Error { ref code, .. }
+                if code == "unexpected_selector"
+        ));
+
+        let mut noncanonical = response;
+        noncanonical.push(b'\n');
+        assert!(matches!(
+            decode_agent_kfd_profiler_response_v1(&noncanonical),
+            Err(AgentKfdProfilerErrorV1::InvalidResponse)
+        ));
     }
 
     #[test]
@@ -1184,7 +1658,16 @@ mod tests {
     #[test]
     fn authenticated_event_identity_does_not_admit_out_of_range_binding() {
         let mut capture = closed_capture();
-        let event = &mut capture.events[6];
+        let event = capture
+            .events
+            .iter_mut()
+            .find(|event| {
+                matches!(
+                    event.event,
+                    KfdRuntimeProfileEventKindV1::DispatchPublished { .. }
+                )
+            })
+            .unwrap();
         if let KfdRuntimeProfileEventKindV1::DispatchPublished { bindings, .. } = &mut event.event {
             bindings[0].byte_offset = 63;
             bindings[0].byte_len = 2;
@@ -1205,6 +1688,7 @@ mod tests {
             identity(1),
             KfdProfileDeviceV1::observed(7, &"a".repeat(MAX_KFD_PROFILE_TARGET_BYTES_V1), u16::MAX)
                 .unwrap(),
+            KfdProfileHostContentModeV1::RangeOnly,
             Vec::new(),
             u64::MAX,
         )

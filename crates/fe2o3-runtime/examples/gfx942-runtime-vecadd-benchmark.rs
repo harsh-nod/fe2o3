@@ -28,11 +28,24 @@ mod enabled {
         RuntimePollV1, RuntimeStreamIdV1, TypedRuntimeKernelV1,
     };
 
-    const USAGE: &str = "usage: gfx942-runtime-vecadd-benchmark UNIQUE_ID WARMUPS SAMPLES \
+    const USAGE: &str = "usage: gfx942-runtime-vecadd-benchmark UNIQUE_ID_OR_AUTO WARMUPS SAMPLES \
         LAUNCHES_PER_SAMPLE [PROFILE_SCOPE_HEX PROFILE_OUTPUT]";
     const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 
     fn parse_unique_id(text: &str) -> Result<u64, String> {
+        if text == "auto" {
+            return fe2o3_kfd::topology::discover_default_topology()
+                .map_err(|error| format!("KFD topology discovery: {error}"))?
+                .topology()
+                .gpu_nodes()
+                .iter()
+                .filter(|node| node.target().name() == "gfx942")
+                .filter(|node| node.capacity().wavefront_size() == 64)
+                .map(|node| node.unique_id())
+                .filter(|unique_id| *unique_id != 0)
+                .min()
+                .ok_or_else(|| "no nonzero gfx942 Wave64 KFD device was observed".to_owned());
+        }
         let value = text
             .strip_prefix("0x")
             .map_or_else(|| text.parse::<u64>(), |hex| u64::from_str_radix(hex, 16));

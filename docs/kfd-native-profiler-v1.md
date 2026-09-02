@@ -14,7 +14,8 @@ scope and a bounded event limit. After logical context cleanup and
 The current production emitter records successful direct-KFD transitions:
 
 - logical stream, allocation, module, and kernel lifecycle;
-- content-bound host staging writes and reads, with allocation-relative ranges;
+- host staging writes and reads with allocation-relative ranges and an explicit
+  range-only or content-identity policy;
 - creation and teardown of the backend's native queue;
 - the exact artifact, kernel name/signature, dispatch shape, launch geometry,
   typed binding regions, and the point after AQL publication succeeds;
@@ -26,6 +27,13 @@ wire contains no raw device address, descriptor, queue ID, packet ID, or
 runtime handle. Recording is a bounded prefix. Once capacity or encoding loses
 an event, later events are counted but not retained, and completeness is false.
 Profiling evidence never participates in launch authority.
+
+`KfdRuntimeProfilerConfigV1::new` selects range-only host content records so
+large staging buffers do not require an extra digest on every operation.
+`with_host_content_identities` explicitly selects content identities. Complete
+full-buffer writes reuse the runtime's existing SHA-256 when available; other
+captured host content is hashed synchronously. Both modes retain the same
+lifecycle and range checks, and the selected policy is part of the capture.
 
 The target-profile field is bounded exact text plus wave width, so the protocol
 does not require a wire redesign for a newly admitted KFD target. The production
@@ -45,14 +53,18 @@ The following remain typed unavailable in every V1 runtime capture:
 `host_write` and `host_read` are observations of the runtime's host staging
 path. They are not observations of a GPU DMA engine. `publish_to_completion_ns`
 uses the host monotonic clock around completion polling; it is not a GPU device
-duration. A capture does not establish that an unavailable rocprof or ATT event
-did not occur.
+duration. Host timings are measured while the synchronous observer is enabled
+and can include observer work, including publication-record encoding before
+completion is observed. A capture does not establish that an unavailable
+rocprof or ATT event did not occur.
 
 ## Agent query
 
-`fe2o3-kfd-profiler-query` opens one single-link regular file with
-`O_NOFOLLOW`, checks bounded same-descriptor metadata, reads it twice, and
-admits only canonical V1 bytes. It accepts versioned JSONL requests on stdin:
+`fe2o3-kfd-profiler-query` uses Linux `openat2` with `NO_SYMLINKS` and
+`NO_MAGICLINKS` across every path component, admits one private single-link
+regular file, checks stable same-descriptor metadata and bytes twice, and
+rejects path substitution before admitting canonical V1 bytes. It accepts
+versioned JSONL requests on stdin:
 
 ```json
 {"schema":"fe2o3-agent-kfd-profiler-request-v1","request_id":1,"operation":"discover_capabilities"}
@@ -67,10 +79,15 @@ dispatch identity. Request, response, page, capture, event, and binding counts
 all have hard limits. The query process has no build, load, dispatch, attach,
 pause, or recapture operation.
 
+Valid requests that cannot be satisfied return a typed `error` response and do
+not end the JSONL session. A response decoder enforces the version, bounds, and
+canonical encoding. Malformed requests receive a typed error with request ID
+zero unless a bounded unsigned request ID can be recovered.
+
 ## MI300X qualification command
 
-The existing exact-artifact qualification benchmark can publish a capture when
-given both an explicit scope and a new output path:
+The existing exact-artifact qualification benchmark can publish a range-only
+capture when given both an explicit scope and a new output path:
 
 ```bash
 cargo run -p fe2o3-runtime --features hardware-qualification \
@@ -89,6 +106,10 @@ printf '%s\n' \
 This is an exact qualification fixture, not a general application authority.
 The profiler API itself is independent of kernel name and applies to every
 module, ABI, binding roster, and launch geometry admitted by the runtime.
+
+The opt-in `scripts/ci-local.sh hardware-smoke` lane runs a separate short
+producer/query acceptance with a fresh scope. It is deliberately distinct from
+the 5-warmup/30-repetition profiler-overhead protocol.
 
 ## ROCprof boundary
 

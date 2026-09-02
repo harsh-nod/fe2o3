@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use fe2o3_profiler_protocol::{
     MAX_AGENT_KFD_PROFILER_REQUEST_BYTES_V1, MAX_KFD_RUNTIME_PROFILE_BYTES_V1,
     answer_agent_kfd_profiler_request_v1, decode_kfd_runtime_profile_v1,
+    encode_agent_kfd_profiler_error_response_v1,
 };
 
 fn main() -> ExitCode {
@@ -33,9 +34,15 @@ fn run() -> Result<(), String> {
     decode_kfd_runtime_profile_v1(&capture).map_err(|error| error.to_string())?;
 
     let input = io::stdin();
-    let mut input = input.lock();
     let output = io::stdout();
-    let mut output = output.lock();
+    serve_requests(&capture, input.lock(), output.lock())
+}
+
+fn serve_requests(
+    capture: &[u8],
+    mut input: impl BufRead,
+    mut output: impl Write,
+) -> Result<(), String> {
     let mut request = Vec::new();
     loop {
         request.clear();
@@ -47,14 +54,20 @@ fn run() -> Result<(), String> {
         if read == 0 {
             return Ok(());
         }
-        if request.last() == Some(&b'\n') {
+        let terminated = request.last() == Some(&b'\n');
+        if terminated {
             request.pop();
         }
         if request.last() == Some(&b'\r') {
             request.pop();
         }
-        let response = answer_agent_kfd_profiler_request_v1(&capture, &request)
-            .map_err(|error| error.to_string())?;
+        let response = match answer_agent_kfd_profiler_request_v1(&capture, &request) {
+            Ok(response) => response,
+            Err(error) => {
+                encode_agent_kfd_profiler_error_response_v1(request_id_hint(&request), &error)
+                    .map_err(|error| error.to_string())?
+            }
+        };
         output
             .write_all(&response)
             .map_err(|error| format!("response write: {error}"))?;
@@ -64,6 +77,33 @@ fn run() -> Result<(), String> {
         output
             .flush()
             .map_err(|error| format!("response flush: {error}"))?;
+        if read as u64 > MAX_AGENT_KFD_PROFILER_REQUEST_BYTES_V1 && !terminated {
+            discard_through_newline(&mut input)?;
+        }
+    }
+}
+
+fn request_id_hint(bytes: &[u8]) -> u64 {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|value| value.get("request_id")?.as_u64())
+        .unwrap_or(0)
+}
+
+fn discard_through_newline(input: &mut impl BufRead) -> Result<(), String> {
+    loop {
+        let buffered = input
+            .fill_buf()
+            .map_err(|error| format!("oversized request discard: {error}"))?;
+        if buffered.is_empty() {
+            return Ok(());
+        }
+        let newline = buffered.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(buffered.len(), |index| index + 1);
+        input.consume(consumed);
+        if newline.is_some() {
+            return Ok(());
+        }
     }
 }
 
@@ -118,17 +158,7 @@ fn read_stable_capture_with_hook(
     path: &Path,
     after_first_read: impl FnOnce(),
 ) -> Result<Vec<u8>, String> {
-    let mut file = File::from(
-        rustix::fs::open(
-            path,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|error| format!("capture open: {error}"))?,
-    );
+    let mut file = open_capture_path(path)?;
     let initial = FileSnapshotV1::read(&file)?;
     let capacity =
         usize::try_from(initial.len).map_err(|_| "capture length overflow".to_owned())?;
@@ -157,7 +187,25 @@ fn read_stable_capture_with_hook(
     if second != first || FileSnapshotV1::read(&file)? != initial {
         return Err("capture changed while its content snapshot was admitted".to_owned());
     }
+    if FileSnapshotV1::read(&open_capture_path(path)?)? != initial {
+        return Err("capture path changed while its content snapshot was admitted".to_owned());
+    }
     Ok(first)
+}
+
+fn open_capture_path(path: &Path) -> Result<File, String> {
+    rustix::fs::openat2(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::NO_SYMLINKS | rustix::fs::ResolveFlags::NO_MAGICLINKS,
+    )
+    .map(File::from)
+    .map_err(|error| format!("capture open: {error}"))
 }
 
 #[cfg(test)]
@@ -211,6 +259,19 @@ mod tests {
     }
 
     #[test]
+    fn stable_reader_rejects_an_intermediate_symlink() {
+        let directory = TestDirectoryV1::new();
+        let real_parent = directory.0.join("real");
+        fs::create_dir(&real_parent).unwrap();
+        let source = real_parent.join("capture");
+        fs::write(&source, b"bounded capture bytes").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias_parent = directory.0.join("alias-parent");
+        symlink(&real_parent, &alias_parent).unwrap();
+        assert!(read_stable_capture(&alias_parent.join("capture")).is_err());
+    }
+
+    #[test]
     fn stable_reader_rejects_in_place_mutation_between_observations() {
         let directory = TestDirectoryV1::new();
         let source = directory.file("source", b"first bounded content");
@@ -219,5 +280,81 @@ mod tests {
             fs::write(mutation_path, b"other bounded content").unwrap();
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn stable_reader_rejects_parent_and_path_substitution_after_open() {
+        let directory = TestDirectoryV1::new();
+        let parent = directory.0.join("parent");
+        let displaced = directory.0.join("displaced");
+        fs::create_dir(&parent).unwrap();
+        let source = parent.join("capture");
+        fs::write(&source, b"first bounded content").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+        let replacement_parent = parent.clone();
+        let result = read_stable_capture_with_hook(&source, move || {
+            fs::rename(&replacement_parent, &displaced).unwrap();
+            fs::create_dir(&replacement_parent).unwrap();
+            let replacement = replacement_parent.join("capture");
+            fs::write(&replacement, b"first bounded content").unwrap();
+            fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn request_id_hint_is_bounded_to_an_unsigned_json_integer() {
+        assert_eq!(request_id_hint(br#"{"request_id":17}"#), 17);
+        assert_eq!(request_id_hint(br#"{"request_id":"17"}"#), 0);
+        assert_eq!(request_id_hint(b"not-json"), 0);
+    }
+
+    #[test]
+    fn rejected_request_does_not_end_or_desynchronize_the_session() {
+        let capture = fe2o3_profiler_protocol::KfdRuntimeProfileV1::new(
+            fe2o3_profiler_protocol::ProfileIdentityV1::new([1; 32]).unwrap(),
+            fe2o3_profiler_protocol::KfdProfileDeviceV1::observed(7, "gfx942:xnack-", 64).unwrap(),
+            fe2o3_profiler_protocol::KfdProfileHostContentModeV1::RangeOnly,
+            Vec::new(),
+            0,
+        )
+        .unwrap();
+        let capture = fe2o3_profiler_protocol::encode_kfd_runtime_profile_v1(&capture).unwrap();
+        let valid = fe2o3_profiler_protocol::encode_agent_kfd_profiler_request_v1(
+            &fe2o3_profiler_protocol::AgentKfdProfilerRequestV1 {
+                schema: fe2o3_profiler_protocol::AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1.to_owned(),
+                request_id: 19,
+                operation:
+                    fe2o3_profiler_protocol::AgentKfdProfilerOperationV1::DiscoverCapabilities,
+                cursor: None,
+                limit: None,
+                dispatch: None,
+            },
+        )
+        .unwrap();
+        let mut requests = b"{\"request_id\":18,\"bad\":true}\n".to_vec();
+        requests.extend_from_slice(&valid);
+        requests.push(b'\n');
+        let mut responses = Vec::new();
+        serve_requests(&capture, io::Cursor::new(requests), &mut responses).unwrap();
+
+        let rows: Vec<_> = responses.split(|byte| *byte == b'\n').collect();
+        assert_eq!(rows.len(), 3);
+        let first =
+            fe2o3_profiler_protocol::decode_agent_kfd_profiler_response_v1(rows[0]).unwrap();
+        assert_eq!(first.request_id, 18);
+        assert!(matches!(
+            first.body,
+            fe2o3_profiler_protocol::AgentKfdProfilerResponseBodyV1::Error { ref code, .. }
+                if code == "invalid_request"
+        ));
+        let second =
+            fe2o3_profiler_protocol::decode_agent_kfd_profiler_response_v1(rows[1]).unwrap();
+        assert_eq!(second.request_id, 19);
+        assert!(matches!(
+            second.body,
+            fe2o3_profiler_protocol::AgentKfdProfilerResponseBodyV1::Capabilities { .. }
+        ));
+        assert!(rows[2].is_empty());
     }
 }

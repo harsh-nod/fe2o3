@@ -1148,6 +1148,10 @@ assert_equals \
   "$(step_command hardware-kfd-compute-aql-queue)" \
   'hardware smoke did not exercise KFD AQL queue ownership on every device'
 assert_equals \
+  'bash scripts/kfd-profiler-hardware-smoke.sh' \
+  "$(step_command hardware-kfd-profiler-smoke)" \
+  'hardware smoke did not produce and query a direct-KFD runtime capture'
+assert_equals \
   'cargo test --locked -p fe2o3-kfd --features live-validation --test kfd_debug_trap_live -- --exact mi300x_ptrace_runtime_handshake_and_typed_gate --nocapture --test-threads=1' \
   "$(step_command hardware-kfd-debug-trap-live)" \
   'hardware smoke did not exercise explicit KFD debugger target teardown'
