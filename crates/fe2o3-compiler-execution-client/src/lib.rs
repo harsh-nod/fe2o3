@@ -37,6 +37,54 @@ pub use supervisor_handoff::{
 /// Fixed rustc descriptor reserved for the compiler-execution service peer.
 pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
 
+/// Move-only caller-owned challenge for one terminal current-record verification.
+///
+/// Construction checks only the protocol's nonzero requirement. The caller owns cryptographic
+/// freshness, uniqueness, and replay exclusion for supplied bytes. Consuming this value in a client
+/// exchange does not prevent the caller from having retained or reconstructed the original bytes,
+/// and therefore grants no currentness or other authority by itself.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_client::CompilerExecutionCurrentRecordChallengeV1;
+/// fn duplicate(challenge: CompilerExecutionCurrentRecordChallengeV1) {
+///     let _second = challenge.clone();
+/// }
+/// ```
+#[derive(Eq, PartialEq)]
+pub struct CompilerExecutionCurrentRecordChallengeV1([u8; 32]);
+
+impl CompilerExecutionCurrentRecordChallengeV1 {
+    /// Wraps caller-supplied bytes. The caller remains responsible for cryptographic freshness and
+    /// replay exclusion.
+    pub fn from_bytes(
+        bytes: [u8; 32],
+    ) -> Result<Self, CompilerExecutionCurrentRecordVerificationErrorV3> {
+        if bytes == [0; 32] {
+            return Err(CompilerExecutionCurrentRecordVerificationErrorV3::ZeroChallenge);
+        }
+        Ok(Self(bytes))
+    }
+
+    /// Borrows the exact caller-supplied bytes for independent retention and comparison.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Reports that challenge construction alone confers no currentness or other authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Debug for CompilerExecutionCurrentRecordChallengeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerExecutionCurrentRecordChallengeV1")
+            .field("authority", &"none")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Outcome of a recovery-only compiler-receipt session.
 // Keep the complete bounded carriage inline so the authority boundary does not introduce a
 // fallible heap allocation merely to report successful recovery.
@@ -198,6 +246,24 @@ impl CompilerExecutionClientV1 {
             return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
         }
         let verification_challenge = fresh_verification_challenge()?;
+        self.verify_current_only_with_challenge(policy, expected_carriage, verification_challenge)
+    }
+
+    /// Verifies one exact carriage using a caller-owned expected challenge.
+    ///
+    /// This operation consumes both the connection and challenge. The response must bind the exact
+    /// supplied bytes, pinned policy, and carriage. The caller remains responsible for challenge
+    /// freshness and replay exclusion; successful verification remains authority-free.
+    pub fn verify_current_only_with_challenge(
+        self,
+        policy: &CompilerExecutionIssuerPolicyV1,
+        expected_carriage: CompilerExecutionReceiptCarriageV1,
+        expected_challenge: CompilerExecutionCurrentRecordChallengeV1,
+    ) -> Result<VerifiedCompilerExecutionCurrentRecordV3, CompilerExecutionClientErrorV1> {
+        if expected_carriage.policy() != policy {
+            return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
+        }
+        let verification_challenge = *expected_challenge.as_bytes();
         let request = CompilerExecutionServiceRequestV1::verify_current(
             policy,
             expected_carriage,
@@ -694,7 +760,8 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
     rounded.clamp(1, i32::MAX as u128) as i32
 }
 
-fn fresh_verification_challenge() -> Result<[u8; 32], CompilerExecutionClientErrorV1> {
+fn fresh_verification_challenge()
+-> Result<CompilerExecutionCurrentRecordChallengeV1, CompilerExecutionClientErrorV1> {
     let mut challenge = [0_u8; 32];
     let mut offset = 0;
     while offset < challenge.len() {
@@ -731,7 +798,7 @@ fn fresh_verification_challenge() -> Result<[u8; 32], CompilerExecutionClientErr
             io::Error::other("getrandom returned an all-zero challenge"),
         ));
     }
-    Ok(challenge)
+    Ok(CompilerExecutionCurrentRecordChallengeV1(challenge))
 }
 
 /// Bounded client admission, transport, correlation, or state-machine failure.

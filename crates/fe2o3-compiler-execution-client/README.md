@@ -8,6 +8,11 @@ exact signed receipt and returns the complete inert receipt carriage.
 
 The terminal `verify_current_only` operation sends one complete expected
 carriage and a fresh internally generated challenge to the protected service.
+`verify_current_only_with_challenge` instead consumes a typed nonzero challenge
+owned by its caller so a downstream protected verifier can generate the
+expected bytes and enforce replay exclusion itself. The typed challenge is
+move-only but cannot prove that its source was fresh; caller-supplied freshness
+and uniqueness remain explicit unsafe deployment obligations.
 It accepts only a canonical issuer-signed `VerifiedCurrent` response under the
 caller-pinned issuer key, bound to that challenge and the exact request, policy,
 subject, carriage, issuer journal, Worker record, sequence, and rollback
