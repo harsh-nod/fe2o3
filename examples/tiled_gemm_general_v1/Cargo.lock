@@ -752,14 +752,19 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amdhsa-loader",
  "fe2o3-aql",
+ "fe2o3-host-api",
  "fe2o3-hsaco",
  "fe2o3-kfd",
+ "fe2o3-runtime-model",
  "sha2 0.11.0",
 ]
 
 [[package]]
 name = "fe2o3-runtime-model"
 version = "0.1.0"
+dependencies = [
+ "spin",
+]
 
 [[package]]
 name = "fe2o3-runtime-protocol"
