@@ -1349,9 +1349,11 @@ orchestration are now supported, but local-clean parity remains partial because
 fe2o3 deliberately removes only its guarded `target/fe2o3` output.
 
 Historical command behavior tried to infer an unset `FE2O3_TARGET` from
-`rocminfo` and fell back to `gfx1100`. Current production commands instead
-require exact `FE2O3_TARGET=gfx942` or `FE2O3_TARGET=gfx950` and fail closed when
-the variable is absent or names any other profile.
+`rocminfo` and fell back to `gfx1100`. The current production `rocm-compile` and
+`hardware-smoke` CI lanes accept only exact `FE2O3_TARGET=gfx942` and fail
+closed for every other profile. Bounded frontend, target-model, simulation, and
+example records may name `gfx950`; they do not extend those production CI lanes
+or establish a production gfx950 launch path.
 
 Historical external builds used a generation identity that bound the selected
 target, backend, Worker V2 configuration, and effective Cargo configuration.

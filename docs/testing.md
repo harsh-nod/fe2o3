@@ -229,12 +229,17 @@ FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
     --test hsa_executable_lifecycle_ui
 ```
 
-With a configured ROCm development installation, compile the native legacy
-runtime hooks without executing them:
+With a configured ROCm development installation, compile the deprecated native
+HSA/HIP qualification API and every feature-gated hardware test target without
+executing them:
 
 ```text
-cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-hooks --no-run
+cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-qualification --no-run
 ```
+
+This checks only that the legacy qualification surface and its test harnesses
+compile and link. It does not initialize HSA/HIP, admit a code object, or execute
+a kernel, and it is not production direct-KFD qualification.
 
 The macro fixture suite also checks the generated pure-KFD argument boundary:
 safe code cannot implement its unsafe generated trait, mutable host outputs
