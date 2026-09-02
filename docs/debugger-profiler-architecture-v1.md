@@ -125,6 +125,7 @@ unbounded state. Important current ceilings include:
 | profiler collection time | 900 seconds |
 | profiler artifacts | 4,096 entries, depth 8 |
 | qualification manifest | 256 KiB; exactly 7 component rows and 6 capture-mode rows |
+| qualification assessment response | 512 KiB including its terminating newline |
 
 These are safety ceilings, not recommended defaults or performance budgets.
 Every capture records its requested limits, truncation/loss state, and actual
@@ -207,13 +208,13 @@ contract and an unavailable response are both tested here.
 
 | Track | Exit evidence | Current closure gap |
 | --- | --- | --- |
-| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | a caller-pinned, fixed-role evidence archive and isolated fresh-process reference acceptance cover open/query/diagnose/compare/plan without checkout paths; authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
+| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | a caller-pinned, fixed-role evidence archive and isolated fresh-process reference acceptance cover open/query/diagnose/compare/plan without checkout paths; the bounded qualification assessment makes every component and capture-mode gap directly queryable, but authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
 | T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | bounded collection inspection preserves a synthetic six-frame gfx942/gfx950 rendering fixture plus typed unavailable/error outcomes and rejects hostile bytes; the additive [characteristic V2 contract](source-isa-characteristic-acceptance-v2.md) now fixes lossless source/no-source/backend-eliminated/pre-KIR fact shapes, complete zero-result scans, duplicate occurrence preservation, exact producer versus Broker bindings, hostile resealing, and Broker V3 requirements, but its production adapter and protected 3x2 run remain unavailable; general schedule/LLVM/ISA semantic validation and optimization-shape round trips remain incomplete |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | V4 exact KFD publication-to-structured-MI correlation is implemented and the installed ROCgdb path reports typed stopped-state unavailability; authenticated native registers/source/memory and general cooperative live-kernel acceptance remain incomplete |
 | T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; authenticated semantic/IR/ISA localization, decoded ATT/runtime/copy attribution, and causal end-to-end explanation are incomplete |
 | T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | process-isolated reference acceptance now covers seeded OOB, barrier divergence, Variant V1 schedule/resource co-observation, bounded paging, and the minimum ambiguous capture plan; operating-system sandbox deployment is external to the evidence protocol |
-| T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | awaits versioned #182 operation, transfer, collective, and clock-correlation inputs |
-| T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | all six overhead modes remain unmeasured or unsupported under candidate policies; broad target/reset/usability evidence is incomplete |
+| T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | the versioned #182 operation, dependency-edge, transfer, collective, clock-correlation, loss, completeness, and evidence input contract plus its typed unavailable response are implemented and tested; the producer and eight-GPU acceptance run remain external and T5 is not claimed |
+| T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | the assessment revalidates and evaluates all six caller-bound mode records without granting qualification authority; those modes remain unmeasured or unsupported under candidate policies, and broad target/reset/usability evidence is incomplete |
 
 ## Required acceptance records
 

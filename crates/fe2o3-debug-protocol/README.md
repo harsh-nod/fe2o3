@@ -180,6 +180,16 @@ manifest immediately before re-deriving whether caller-supplied values meet
 the declared policy. A separate authenticated producer is required for a
 production observation claim.
 
+`QualificationManifestV1::assessment()` produces the additive
+`fe2o3-debug-qualification-assessment-v1` projection used by agents and CI. It
+retains the complete evidence matrix, reports the exact manifest and
+environment identities, lists all six mode assessments, and distinguishes an
+incomplete matrix from a measured policy failure. Even when every caller-bound
+policy is satisfied, both authority flags remain false.
+`decode_qualification_assessment_v1` rejects any assessment whose embedded
+manifest, identities, per-mode results, disposition, or authority flags do not
+exactly match a fresh derivation.
+
 An available comparator requires exactly one measured no-capture row whose
 axes, configurations, raw/no-capture evidence, statistic, clock, warmups,
 repetitions, and durations match the comparator record. That baseline must be
@@ -187,7 +197,8 @@ loss-free and non-truncated. Every other measured mode uses that no-capture
 evidence and configuration as its baseline and must use treatment evidence
 distinct from both canonical evidence records.
 
-The manifest is capped at 256 KiB. It requires all seven component rows and all
+The manifest is capped at 256 KiB, and the CLI assessment response including
+its newline is capped at 512 KiB. It requires all seven component rows and all
 six capture-mode rows once in canonical order, bounds all text and numeric
 fields, rejects unknown/duplicate/trailing JSON, and domain-separates and
 length-binds its content identity. No typed field interprets text as an

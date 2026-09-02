@@ -29,15 +29,30 @@ checked-in record is an archived caller-supplied projection of separately run
 version/probe commands; strict admission checks its shape and identities, not
 the identity of the process that produced those bytes.
 
+Agents and CI can inspect that contract without custom parsing:
+
+```sh
+fe2o3-debug qualification --manifest \
+  "$PWD/crates/fe2o3-debug-protocol/tests/fixtures/mi300x-qualification-v1.json"
+```
+
+The command securely reads one absolute, single-link regular file, revalidates
+its descriptor, content, and persistent path identity, and writes one
+assessment JSON line bounded to 512 KiB including its newline. It runs no tool
+or workload. The embedded manifest and per-mode assessment make unavailable
+evidence directly queryable while the fixed false authority fields prevent a
+caller-bound archive from becoming a hardware claim.
+
 ## MI300X baseline
 
-The 2026-08-30 record binds Linux `6.8.0-124-generic`, one gfx942/wave64 KFD
-topology record, and exact content/configuration identities for:
+The record last updated on 2026-09-02 binds Linux `6.8.0-124-generic`, one
+gfx942/wave64 KFD topology record, and exact content/configuration identities
+for:
 
 | Component | Caller-bound local installation record | Capability boundary |
 | --- | --- | --- |
 | fe2o3 native KFD debugger | usable executable identity | KFD device/queue/publication only; no native wave/register/source/memory claim |
-| fe2o3 ROCgdb/KFD debugger | usable workflow identity | exact run reached KFD publication; ROCgdb stopped state was unavailable |
+| fe2o3 ROCgdb/KFD debugger | usable workflow identity at compiler `308d8fa00fa41e098b2a1a47bbfea1bc29735464` | exact run reached KFD declaration and publication; ROCgdb stopped state was unavailable |
 | ROCgdb | `rocm-rel-7.2-93`, GDB 16.3 | native debugging is documentation-only in the task matrix unless an exact fe2o3 stop is admitted |
 | rocprofv3 | 1.1.0, git `97f5574f`, ROCm 7.2.4 | counter/PC/ATT collection is documented; no new complete capture is claimed |
 | ROCprof Compute Viewer/ATT | entrypoint content observed, initialization unusable | version probe failed because required Python dependencies are absent; decoded ATT remains unavailable locally |

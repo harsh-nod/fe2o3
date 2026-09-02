@@ -16,6 +16,7 @@ pub mod live_kfd_v3;
 mod live_rocgdb_kfd_v4;
 #[cfg(target_os = "linux")]
 mod live_rocgdb_v3;
+mod qualification_v1;
 pub mod reference_archive_v1;
 #[cfg(target_os = "linux")]
 mod rocgdb_mi_parser_v3;
@@ -73,7 +74,7 @@ use fe2o3_kir_sim_cli::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -1891,6 +1892,12 @@ struct BootstrapErrorV1<'a> {
 
 pub fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|value| value == OsStr::new("qualification"))
+    {
+        return qualification_v1::run(arguments);
+    }
     if arguments
         .first()
         .is_some_and(|value| value == OsStr::new("live-rocgdb-kfd-v4"))
