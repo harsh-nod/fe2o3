@@ -168,6 +168,69 @@ impl ObservableDeviceCurrentnessV1 {
 }
 
 impl CheckedGfx942XnackMinusDevice {
+    /// Reobserves the additive SDMA topology sidecar without changing frozen
+    /// base-device equality or admission semantics.
+    pub(crate) fn check_gfx942_sdma_topology_capability_currentness(
+        &mut self,
+    ) -> Result<(), DeviceBindingError> {
+        if self.currentness_poisoned {
+            return Err(DeviceBindingError::CurrentnessFencePoisoned);
+        }
+        let result = self.check_gfx942_sdma_topology_capability_currentness_inner();
+        if result.is_err() {
+            self.currentness_poisoned = true;
+        }
+        result
+    }
+
+    fn check_gfx942_sdma_topology_capability_currentness_inner(
+        &mut self,
+    ) -> Result<(), DeviceBindingError> {
+        self.kfd
+            .opened
+            .ensure_process(std::process::id())
+            .map_err(DeviceBindingError::Kfd)?;
+        let process_before = crate::linux::observe_process_incarnation()?;
+        if process_before != self.process {
+            return Err(DeviceBindingError::ProcessIncarnationChanged);
+        }
+        self.reset_fence.check_clear()?;
+
+        let observed = crate::topology::discover_default_topology()?;
+        if observed != self.topology {
+            return Err(DeviceBindingError::TopologySnapshotChanged);
+        }
+        let selected_unique_id = self.observation.unique_id();
+        let retained_inventory = self
+            .topology
+            .topology()
+            .gpu_nodes()
+            .iter()
+            .find(|gpu| gpu.unique_id() == selected_unique_id)
+            .map_or((None, None), |gpu| gpu.sdma_engine_inventory());
+        let observed_inventory = observed
+            .topology()
+            .gpu_nodes()
+            .iter()
+            .find(|gpu| gpu.unique_id() == selected_unique_id)
+            .map_or((None, None), |gpu| gpu.sdma_engine_inventory());
+        let expected = (
+            Some(fe2o3_kfd_uapi::KFD_GFX942_SDMA_ENGINE_COUNT_V1),
+            Some(fe2o3_kfd_uapi::KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1),
+        );
+        if retained_inventory != expected || observed_inventory != retained_inventory {
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "targeted SDMA topology capability",
+            ));
+        }
+
+        let process_after = crate::linux::observe_process_incarnation()?;
+        if process_after != process_before || process_after != self.process {
+            return Err(DeviceBindingError::ProcessIncarnationChanged);
+        }
+        self.reset_fence.check_clear()
+    }
+
     /// Rechecks the retained process, descriptors, UAPI mode, reset stream,
     /// and DRM reset observation used by an already-created queue.
     ///

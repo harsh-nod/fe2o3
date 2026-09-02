@@ -102,7 +102,8 @@ pub use queue::{
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
     Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
     Gfx942RecycledDispatchResourcesV1, Gfx942RecycledDispatchWriteRequestV1,
-    Gfx942RepeatedByteContentV1, Gfx942SdmaBatchSubmissionFailureV1,
+    Gfx942RepeatedByteContentV1, Gfx942SdmaBatchExecutionFailureV1,
+    Gfx942SdmaBatchExecutionRecoveryV1, Gfx942SdmaBatchSubmissionFailureV1,
     Gfx942SdmaBufferTransitionFailureV1, Gfx942SdmaSubmissionFailureV1,
     Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
     KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
@@ -116,11 +117,12 @@ pub use queue::{
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use sdma::{
     GFX942_SDMA_COPY_MANIFEST_SHA256_V1, GFX942_SDMA_COPY_MANIFEST_V1,
-    GFX942_SDMA_COPY_PACKET_BYTES_V1, GFX942_SDMA_FENCE_PACKET_BYTES_V1,
+    GFX942_SDMA_COPY_PACKET_BYTES_V1, GFX942_SDMA_D2H_ENGINE_INDEX_V1,
+    GFX942_SDMA_FENCE_PACKET_BYTES_V1, GFX942_SDMA_H2D_ENGINE_INDEX_V1,
     GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, GFX942_SDMA_RING_BYTES_V1,
-    GFX942_SDMA_SUBMISSION_BYTES_V1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
-    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
-    Gfx942SdmaCopySubmissionV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
+    GFX942_SDMA_SUBMISSION_BYTES_V1, Gfx942DirectionalSdmaQueueObservationV1,
+    Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1,
+    Gfx942SdmaCopyRequestV1, Gfx942SdmaCopySubmissionV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
     Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaPacketErrorV1, Gfx942SdmaQueueObservationV1,
 };
 

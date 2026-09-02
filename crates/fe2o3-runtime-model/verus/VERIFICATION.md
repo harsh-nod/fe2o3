@@ -1,7 +1,7 @@
 # Runtime model verification
 
 This directory contains the issue #137 Verus specifications and the additive R7
-asynchronous-resource model. The authenticated runner proves fifty-seven
+asynchronous-resource and R8 execution-contract models. The authenticated runner proves sixty-seven
 obligations over finite abstract values
 and traces. The materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
@@ -196,6 +196,41 @@ queue counters, mapped atomics, the multi-device router, or any native call.
 They do not prove that a hardware completion occurred or that a pool operation
 is lock-free, wait-free, or performant.
 
+`r8_execution_contracts_v1.rs` proves ten abstract scheduling, atomic, and
+collective obligations:
+
+1. reserving a copy leaves it unpublished and retains the destination epoch;
+2. an incomplete dependency frontier prevents publication;
+3. ready publication retains the exact operation, resource-generation, and
+   destination-device binding;
+4. two admitted overlapping operations have no read/write or write/write
+   resource conflict;
+5. a valid abstract atomic location has a supported 32- or 64-bit width and an
+   offset aligned to that width;
+6. an abstract aligned 32- or 64-bit fetch-add linearization retains its exact
+   resource, generation, order, and scope, returns the old value, and records
+   the mathematical sum as the new value;
+7. a non-final, previously unseen collective member arrival remains in the
+   gathering phase and cannot be published;
+8. the final unique-member arrival makes the collective ready but does not
+   publish it;
+9. publishing a ready collective retains its device and epoch and requires the
+   complete membership set; and
+10. a duplicate member arrival does not advance the collective.
+
+The R8 file models mathematical operations and values. It neither implements
+wrapping device-integer arithmetic nor refines the executable runtime or KFD
+adapter. In particular, its `destination_epoch` is a retained abstract field,
+not a proof that executable submission performed no memory access. Its
+copy type models whole, distinct resources without byte ranges or a physical
+alias relation. Same-resource ranged copies accepted by an executable backend
+are outside its domain. Its conflict predicate is a scheduling policy, not a
+proof of concurrent hardware execution. Its atomic order, scope, and coherence
+fields are retained labels; the proof performs no CPU or GPU atomic operation.
+Its collective membership set is bounded to 256 positive participant
+identities, but proves no wave convergence, LDS behavior, numerical reduction,
+firmware progress, or cross-device communication.
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -231,8 +266,13 @@ production-shaped zero-first transition omitting the first zero byte, an INVALID
 packet body changed to vendor type zero, setup substitution during the modeled
 release word, reservation replay without write advance, acceptance of a
 regressed read observation, overwrite of a full ring, reuse of a released block
-without advancing its generation, and execution of a peer copy on its source
-device. The launcher
+without advancing its generation, execution of a peer copy on its source
+device, eager copy publication, conflicting overlap, returning a fetch-add's
+new value instead of its old value, inverted dependency readiness, destination
+binding substitution, resource-generation substitution, destination-epoch
+substitution, omitted atomic alignment, dropped atomic coherence, early
+collective publication, and a duplicate collective member incorrectly advancing
+the phase. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after

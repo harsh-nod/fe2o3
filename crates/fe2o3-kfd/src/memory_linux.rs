@@ -91,6 +91,25 @@ impl LinuxMemoryBackend {
         self.device.observation().aperture().gpuvm()
     }
 
+    pub(super) fn sdma_engine_inventory(&self) -> (Option<u32>, Option<u32>) {
+        let unique_id = self.device.observation().unique_id();
+        self.device
+            .topology_snapshot()
+            .topology()
+            .gpu_nodes()
+            .iter()
+            .find(|gpu| gpu.unique_id() == unique_id)
+            .map_or((None, None), |gpu| gpu.sdma_engine_inventory())
+    }
+
+    pub(super) fn check_gfx942_sdma_topology_capability_currentness(
+        &mut self,
+    ) -> Result<(), MemorySessionError> {
+        self.device
+            .check_gfx942_sdma_topology_capability_currentness()?;
+        Ok(())
+    }
+
     pub(super) fn plan_aql_queue_resources(
         &self,
         ring_bytes: u32,
@@ -599,6 +618,43 @@ impl MemoryBackend for LinuxMemoryBackend {
         .fetch_add(increment, Ordering::AcqRel))
     }
 
+    fn publish_sdma_write_release(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        expected: u64,
+        new: u64,
+    ) -> Result<(), MemorySessionError> {
+        if new <= expected {
+            return Err(malformed_aql_mapping("SDMA write-pointer progression"));
+        }
+        checked_atomic_u64(
+            mapping,
+            requested_bytes,
+            AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        )?
+        .compare_exchange(expected, new, Ordering::Release, Ordering::Relaxed)
+        .map(|_| ())
+        .map_err(|_| malformed_aql_mapping("SDMA visible write pointer changed"))
+    }
+
+    fn write_sdma_slot(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(packet.len()))
+            .ok_or_else(|| malformed_aql_mapping("SDMA packet slot offset"))?;
+        let pointer = checked_mapping_pointer(mapping, requested_bytes, offset, packet.len(), 1)?;
+        // SAFETY: the checked slot contains the complete private SDMA packet
+        // image. It is not consumable within the published queue range until
+        // the later release update of the visible write pointer.
+        unsafe { core::ptr::copy_nonoverlapping(packet.as_ptr(), pointer, packet.len()) };
+        Ok(())
+    }
+
     fn write_aql_slot(
         mapping: &mut Self::Mapping,
         requested_bytes: usize,
@@ -972,6 +1028,82 @@ mod tests {
         );
         assert_eq!(&control.0[..8], &0xaaaa_aaaa_aaaa_aaaa_u64.to_le_bytes());
         assert_eq!(&control.0[8..16], &0xbbbb_bbbb_bbbb_bbbb_u64.to_le_bytes());
+    }
+
+    #[test]
+    fn sdma_packet_construction_precedes_exact_visible_write_publication() {
+        let mut ring = MinimumRing([0; 4096]);
+        let mut ring_mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut ring).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        let mut control = AmdAqlControl([0; 4096]);
+        crate::queue::submit::initialize_amd_aql_control(&mut control.0).unwrap();
+        let mut control_mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut control).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        checked_atomic_u64(
+            &mut control_mapping,
+            4096,
+            AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        )
+        .unwrap()
+        .store(17 * 64, Ordering::Relaxed);
+
+        let packet = [0x5a; 64];
+        LinuxMemoryBackend::write_sdma_slot(&mut ring_mapping, 4096, 63, &packet).unwrap();
+        assert_eq!(&ring.0[63 * 64..], &packet);
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut control_mapping, 4096)
+                .unwrap()
+                .0,
+            17 * 64
+        );
+
+        LinuxMemoryBackend::publish_sdma_write_release(
+            &mut control_mapping,
+            4096,
+            17 * 64,
+            18 * 64,
+        )
+        .unwrap();
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut control_mapping, 4096)
+                .unwrap()
+                .0,
+            18 * 64
+        );
+        assert!(
+            LinuxMemoryBackend::publish_sdma_write_release(
+                &mut control_mapping,
+                4096,
+                17 * 64,
+                19 * 64,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut control_mapping, 4096)
+                .unwrap()
+                .0,
+            18 * 64
+        );
+        assert!(
+            LinuxMemoryBackend::publish_sdma_write_release(
+                &mut control_mapping,
+                4096,
+                18 * 64,
+                18 * 64,
+            )
+            .is_err()
+        );
     }
 
     #[test]

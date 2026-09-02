@@ -8,9 +8,10 @@ use core::fmt;
 use std::time::{Duration, Instant};
 
 use fe2o3_kfd_uapi::{
+    KFD_GFX942_SDMA_ENGINE_COUNT_V1, KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1, KfdGfx942SdmaEngineId,
     KfdIoctlCreateQueueArgs, KfdIoctlDestroyQueueArgs, KfdSdmaQueueBuffers,
     admit_kfd_aql_queue_ring_size, admit_kfd_gfx942_create_queue_outputs,
-    admit_kfd_queue_percentage, admit_kfd_queue_priority,
+    admit_kfd_gfx942_sdma_engine_id, admit_kfd_queue_percentage, admit_kfd_queue_priority,
 };
 use fe2o3_runtime_model::QueueKeyV1;
 
@@ -32,24 +33,38 @@ pub const GFX942_SDMA_FENCE_PACKET_BYTES_V1: usize = 4 * 4;
 pub const GFX942_SDMA_SUBMISSION_BYTES_V1: usize = 64;
 pub const GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1: u32 = 0x003f_ffe0;
 pub const GFX942_SDMA_RING_BYTES_V1: u32 = 4_096;
-pub const GFX942_SDMA_MAX_IN_FLIGHT_V1: usize =
+const GFX942_SDMA_RING_SLOT_COUNT_V1: usize =
     GFX942_SDMA_RING_BYTES_V1 as usize / GFX942_SDMA_SUBMISSION_BYTES_V1;
+pub const GFX942_SDMA_MAX_IN_FLIGHT_V1: usize = GFX942_SDMA_RING_SLOT_COUNT_V1 - 1;
+pub const GFX942_SDMA_D2H_ENGINE_INDEX_V1: u32 = 0;
+pub const GFX942_SDMA_H2D_ENGINE_INDEX_V1: u32 = 1;
+const GFX942_SDMA_D2H_OWNER_SLOT_V1: usize = 0;
+const GFX942_SDMA_H2D_OWNER_SLOT_V1: usize = 1;
+const GFX942_SDMA_SINGLE_OWNER_COUNT_V1: usize = 1;
+const GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1: usize = 2;
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v1\n",
-    "kfd_sdma_queue_schema_sha256=bd862d85fcf5c4c3ae972e109777079fd22ade9f00dcc779415031605c998baf\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v2\n",
+    "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
+    "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
+    "rocr_amd_gpu_agent_sha256=50ee3dd832dcbd572a2c58e88fefd12697d396033d2c5b959dd866c54ea2a989\n",
+    "rocr_engine_policy=projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_gpu_agent.cpp:991-993,1052-1055\n",
     "rocr_sdma_registers_sha256=0287a021439e49cd3075bd88c8f9f4558f20ad16e8f473f59732aa803c62df5b\n",
+    "rocr_blit_sdma_source=projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_blit_sdma.cpp\n",
     "rocr_blit_sdma_sha256=f4d0be236a034cd9ad44b9dd196f4498bcf9dedb89a7812a217b988aef1ff359\n",
+    "rocr_publication_policy=projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_blit_sdma.cpp:1954-1988,1998-2023,2049-2055\n",
     "packet=copy-linear-28-bytes,count-minus-one,source-u64,destination-u64;fence-16-bytes,mtype-3,sys-1,snp-1,u32-generation;zero-pad-to-64\n",
-    "bounds=copy:1..4194272,ring:4096,submission:64,in-flight:64,nonoverlap\n",
+    "bounds=copy:1..4194272,ring:4096,submission:64,ring-slots:64,in-flight:63,one-slot-always-empty,nonoverlap\n",
+    "engines=generic-compatible-or-topology-exact-ordinary:2,queues-per-engine:8,h2d-index:1,d2h-index:0,targeted-queue-type:4\n",
+    "queue-identity=directional-native-queue-ids-must-be-distinct-before-publication\n",
     "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight\n",
-    "submission=single-producer,write-reservation-before-ring-publication,release-doorbell-per-submission,queue-occurrence-and-generation-tagged-ticket\n",
+    "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
     "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-generation,deadline-wait,custody-returned-only-after-observation\n",
     "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown\n",
-    "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch,internal-atomics-and-mapped-writes-only-inside-envelope\n",
-    "failure=structural-preflight-and-ordinary-capacity-rejection-recover-inputs,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody\n",
+    "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,internal-atomics-and-mapped-writes-only-inside-envelope\n",
+    "failure=structural-preflight-and-ordinary-capacity-rejection-recover-inputs,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,partial-directional-create-or-destroy-has-process-only-terminal-custody\n",
     "teardown=destroy-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,no-executable-rust-refinement\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,kernel-firmware-packet-consumption,completion,progress,liveness\n",
@@ -58,7 +73,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "a1a2f3cb07b67e8f66d89578d278853d5750b1a0ad862f0edd27c2fb1ef7b4ec";
+    "e794d249b2d4a585a30cb4f22caa39931319784b824df344627560d4248ef914";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -367,6 +382,16 @@ pub struct Gfx942SdmaQueueObservationV1 {
     pub queue_id: u32,
     pub ring_bytes: u32,
     pub maximum_in_flight: u16,
+    /// KFD engine index for a targeted queue; `None` for a generic queue.
+    pub engine_index: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942DirectionalSdmaQueueObservationV1 {
+    pub host_to_device: Gfx942SdmaQueueObservationV1,
+    pub device_to_host: Gfx942SdmaQueueObservationV1,
+    pub admitted_engine_count: u32,
+    pub admitted_queues_per_engine: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -386,15 +411,33 @@ struct SdmaCopyRecordV1 {
     copy_bytes: u32,
 }
 
+#[derive(Clone, Copy)]
+struct PreparedSdmaCopyV1 {
+    packet: Gfx942SdmaCopySubmissionV1,
+    slot: usize,
+    generation: u32,
+    completion_value: u32,
+}
+
+pub(crate) struct PreparedSdmaBatchV1 {
+    queue_id: u32,
+    write: u64,
+    write_end: u64,
+    copies: Vec<PreparedSdmaCopyV1>,
+    tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    requests: Vec<Gfx942SdmaCopyRequestV1>,
+}
+
 pub(crate) struct Gfx942SdmaQueueOwnerV1 {
     owner: QueueKeyV1,
     queue_id: u32,
+    engine_index: Option<u32>,
     ring: Option<SdmaRingAuthorityV1>,
     control: Option<SdmaControlAuthorityV1>,
     completions: Option<MappedHostBufferV1>,
     doorbell: Option<LinuxDoorbellSliceV1>,
     records: Vec<Option<SdmaCopyRecordV1>>,
-    generations: [u32; GFX942_SDMA_MAX_IN_FLIGHT_V1],
+    generations: [u32; GFX942_SDMA_RING_SLOT_COUNT_V1],
     destroyed: bool,
     poisoned: bool,
 }
@@ -404,11 +447,27 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
     ) -> Result<Self, Gfx942SdmaErrorV1> {
+        Self::create_with_engine(memory, owner, None)
+    }
+
+    fn create_on_engine(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+        engine: KfdGfx942SdmaEngineId,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        Self::create_with_engine(memory, owner, Some(engine))
+    }
+
+    fn create_with_engine(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+        engine: Option<KfdGfx942SdmaEngineId>,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
         let mut records = Vec::new();
         records
-            .try_reserve_exact(GFX942_SDMA_MAX_IN_FLIGHT_V1)
+            .try_reserve_exact(GFX942_SDMA_RING_SLOT_COUNT_V1)
             .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA record roster allocation"))?;
-        records.resize_with(GFX942_SDMA_MAX_IN_FLIGHT_V1, || None);
+        records.resize_with(GFX942_SDMA_RING_SLOT_COUNT_V1, || None);
         memory.check_queue_currentness()?;
         let mut ring = memory.allocate_aql_queue(GFX942_SDMA_RING_BYTES_V1 as usize)?;
         memory.with_bytes_mut(&mut ring, |bytes| bytes.fill(0))?;
@@ -438,16 +497,29 @@ impl Gfx942SdmaQueueOwnerV1 {
                 .checked_add(AMD_AQL_READ_DISPATCH_ID_OFFSET_V1 as u64)
                 .ok_or(Gfx942SdmaErrorV1::Contract("SDMA read pointer address"))?,
         };
-        let expected = KfdIoctlCreateQueueArgs::new_sdma(
-            buffers,
-            admit_kfd_aql_queue_ring_size(GFX942_SDMA_RING_BYTES_V1)
-                .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA ring size"))?,
-            memory.gpu_id(),
-            admit_kfd_queue_percentage(100)
-                .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA queue percentage"))?,
-            admit_kfd_queue_priority(0)
-                .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA queue priority"))?,
-        );
+        let ring_size = admit_kfd_aql_queue_ring_size(GFX942_SDMA_RING_BYTES_V1)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA ring size"))?;
+        let queue_percentage = admit_kfd_queue_percentage(100)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA queue percentage"))?;
+        let queue_priority = admit_kfd_queue_priority(0)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA queue priority"))?;
+        let expected = match engine {
+            Some(engine) => KfdIoctlCreateQueueArgs::new_sdma_on_engine(
+                buffers,
+                ring_size,
+                memory.gpu_id(),
+                queue_percentage,
+                queue_priority,
+                engine,
+            ),
+            None => KfdIoctlCreateQueueArgs::new_sdma(
+                buffers,
+                ring_size,
+                memory.gpu_id(),
+                queue_percentage,
+                queue_priority,
+            ),
+        };
         let mut actual = expected;
         create_queue(memory.kfd_fd(), &mut actual)
             .map_err(|_| Gfx942SdmaErrorV1::QueueCreationIndeterminate)?;
@@ -474,12 +546,13 @@ impl Gfx942SdmaQueueOwnerV1 {
         Ok(Self {
             owner,
             queue_id,
+            engine_index: engine.map(KfdGfx942SdmaEngineId::value),
             ring: Some(ring),
             control: Some(control),
             completions: Some(completions),
             doorbell: Some(doorbell),
             records,
-            generations: [0; GFX942_SDMA_MAX_IN_FLIGHT_V1],
+            generations: [0; GFX942_SDMA_RING_SLOT_COUNT_V1],
             destroyed: false,
             poisoned: false,
         })
@@ -490,6 +563,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             queue_id: self.queue_id,
             ring_bytes: GFX942_SDMA_RING_BYTES_V1,
             maximum_in_flight: GFX942_SDMA_MAX_IN_FLIGHT_V1 as u16,
+            engine_index: self.engine_index,
         }
     }
 
@@ -503,45 +577,23 @@ impl Gfx942SdmaQueueOwnerV1 {
         copy_bytes: u32,
     ) -> Result<(), Gfx942SdmaErrorV1> {
         self.require_live()?;
-        let source_address =
-            source.checked_gpu_subrange(memory, source_offset, u64::from(copy_bytes))?;
-        let destination_address =
-            destination.checked_gpu_subrange(memory, destination_offset, u64::from(copy_bytes))?;
-        if ranges_overlap(
-            source_address,
-            u64::from(copy_bytes),
-            destination_address,
-            u64::from(copy_bytes),
-        ) {
-            return Err(Gfx942SdmaErrorV1::Contract("overlapping SDMA copy ranges"));
-        }
-        let control = self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
-            "missing SDMA control authority",
-        ))?;
-        let (write, read) = memory.observe_aql_control_counters_in_current_scope(control)?;
-        if read > write || write - read > u64::from(GFX942_SDMA_RING_BYTES_V1) {
-            self.poisoned = true;
-            return Err(Gfx942SdmaErrorV1::Contract("invalid SDMA queue counters"));
-        }
-        if write - read + GFX942_SDMA_SUBMISSION_BYTES_V1 as u64
-            > u64::from(GFX942_SDMA_RING_BYTES_V1)
-        {
-            return Err(Gfx942SdmaErrorV1::QueueFull);
-        }
-        let ring_slot = ((write % u64::from(GFX942_SDMA_RING_BYTES_V1))
-            / GFX942_SDMA_SUBMISSION_BYTES_V1 as u64) as usize;
-        if self.records[ring_slot].is_some() {
-            return Err(Gfx942SdmaErrorV1::QueueFull);
-        }
+        Self::checked_copy_addresses(
+            memory,
+            source,
+            source_offset,
+            destination,
+            destination_offset,
+            copy_bytes,
+        )?;
+        self.observe_batch_start(memory, 1)?;
         Ok(())
     }
 
-    pub(crate) fn ensure_batch_capacity(
+    fn observe_batch_start(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
         count: usize,
-    ) -> Result<(), Gfx942SdmaErrorV1> {
-        self.require_live()?;
+    ) -> Result<u64, Gfx942SdmaErrorV1> {
         if count == 0 || count > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
             return Err(Gfx942SdmaErrorV1::QueueFull);
         }
@@ -549,28 +601,25 @@ impl Gfx942SdmaQueueOwnerV1 {
             "missing SDMA control authority",
         ))?;
         let (write, read) = memory.observe_aql_control_counters_in_current_scope(control)?;
+        validate_sdma_write_counter_or_poison(write, &mut self.poisoned)?;
         let requested = (count as u64)
             .checked_mul(GFX942_SDMA_SUBMISSION_BYTES_V1 as u64)
             .ok_or(Gfx942SdmaErrorV1::Contract("SDMA batch byte count"))?;
-        if read > write || write - read > u64::from(GFX942_SDMA_RING_BYTES_V1) {
+        if !sdma_ring_delta_is_below_capacity(write, read) {
             self.poisoned = true;
             return Err(Gfx942SdmaErrorV1::Contract("invalid SDMA queue counters"));
         }
-        if write - read + requested > u64::from(GFX942_SDMA_RING_BYTES_V1) {
+        let end = checked_sdma_write_end(write, requested, &mut self.poisoned)?;
+        if !sdma_ring_delta_is_below_capacity(end, read) {
             return Err(Gfx942SdmaErrorV1::QueueFull);
         }
         for index in 0..count {
-            let offset = (index as u64)
-                .checked_mul(GFX942_SDMA_SUBMISSION_BYTES_V1 as u64)
-                .and_then(|offset| write.checked_add(offset))
-                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA batch slot offset"))?;
-            let slot = ((offset % u64::from(GFX942_SDMA_RING_BYTES_V1))
-                / GFX942_SDMA_SUBMISSION_BYTES_V1 as u64) as usize;
+            let slot = batch_ring_slot(write, index)?;
             if self.records[slot].is_some() {
                 return Err(Gfx942SdmaErrorV1::QueueFull);
             }
         }
-        Ok(())
+        Ok(write)
     }
 
     pub(crate) fn submit(
@@ -600,13 +649,17 @@ impl Gfx942SdmaQueueOwnerV1 {
             "missing SDMA control authority",
         ))?;
         let (write, read) = memory.observe_aql_control_counters_in_current_scope(control)?;
-        if read > write || write - read > u64::from(GFX942_SDMA_RING_BYTES_V1) {
+        validate_sdma_write_counter_or_poison(write, &mut self.poisoned)?;
+        if !sdma_ring_delta_is_below_capacity(write, read) {
             self.poisoned = true;
             return Err(Gfx942SdmaErrorV1::Contract("invalid SDMA queue counters"));
         }
-        if write - read + GFX942_SDMA_SUBMISSION_BYTES_V1 as u64
-            > u64::from(GFX942_SDMA_RING_BYTES_V1)
-        {
+        let write_end = checked_sdma_write_end(
+            write,
+            GFX942_SDMA_SUBMISSION_BYTES_V1 as u64,
+            &mut self.poisoned,
+        )?;
+        if !sdma_ring_delta_is_below_capacity(write_end, read) {
             return Err(Gfx942SdmaErrorV1::QueueFull);
         }
         let ring_slot = ((write % u64::from(GFX942_SDMA_RING_BYTES_V1))
@@ -614,25 +667,16 @@ impl Gfx942SdmaQueueOwnerV1 {
         if self.records[ring_slot].is_some() {
             return Err(Gfx942SdmaErrorV1::QueueFull);
         }
-        let generation = self.generations[ring_slot]
-            .checked_add(1)
-            .filter(|value| *value != 0)
-            .ok_or(Gfx942SdmaErrorV1::Contract(
-                "SDMA ticket generation exhausted",
-            ))?;
+        let generation =
+            next_sdma_ticket_generation(self.generations[ring_slot], &mut self.poisoned)?;
         let completion_value = generation;
         let completion_offset = (ring_slot * 8) as u64;
-        let completions = self
-            .completions
-            .as_mut()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?;
-        memory.overwrite_mapped_host_visible_subrange_in_current_scope(
-            completions,
-            completion_offset,
-            &[0; 8],
-        )?;
         let completion_address = memory
-            .mapped_resource_facts(completions)?
+            .mapped_resource_facts(
+                self.completions
+                    .as_ref()
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
+            )?
             .checked_gpu_subrange(completion_offset, 4, 4)
             .ok_or(Gfx942SdmaErrorV1::Contract("SDMA completion address"))?;
         let packet = Gfx942SdmaCopySubmissionV1::new(
@@ -642,32 +686,24 @@ impl Gfx942SdmaQueueOwnerV1 {
             completion_address,
             completion_value,
         )?;
-        let reserved = memory.fetch_add_aql_control_write_in_current_scope(
-            control,
-            GFX942_SDMA_SUBMISSION_BYTES_V1 as u64,
-        )?;
-        if reserved != write {
-            self.poisoned = true;
+        if self.ring.is_none() || self.control.is_none() || self.doorbell.is_none() {
             return Err(Gfx942SdmaErrorV1::Contract(
-                "SDMA single-producer counter changed",
+                "missing SDMA publication authority",
             ));
         }
-        memory.write_aql_ring_slot_in_current_scope(
-            self.ring
-                .as_mut()
-                .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA ring authority"))?,
+
+        self.poisoned = true;
+        let completions = self.completions.as_mut().expect("checked completion arena");
+        memory.overwrite_mapped_host_visible_subrange_in_current_scope(
+            completions,
+            completion_offset,
+            &[0; 8],
+        )?;
+        memory.write_sdma_ring_slot_in_current_scope(
+            self.ring.as_mut().expect("checked SDMA ring"),
             ring_slot as u32,
             packet.bytes(),
         )?;
-        self.doorbell
-            .as_mut()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
-            .store_packet_id_release(
-                write
-                    .checked_add(GFX942_SDMA_SUBMISSION_BYTES_V1 as u64)
-                    .ok_or(Gfx942SdmaErrorV1::Contract("SDMA doorbell value"))?,
-            )
-            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
         self.generations[ring_slot] = generation;
         self.records[ring_slot] = Some(SdmaCopyRecordV1 {
             generation,
@@ -677,12 +713,210 @@ impl Gfx942SdmaQueueOwnerV1 {
             destination,
             copy_bytes,
         });
+        memory.publish_sdma_control_write_release_in_current_scope(
+            self.control.as_mut().expect("checked SDMA control"),
+            write,
+            write_end,
+        )?;
+        self.doorbell
+            .as_mut()
+            .expect("checked SDMA doorbell")
+            .store_packet_id_release(write_end)
+            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
+        self.poisoned = false;
         Ok(Gfx942SdmaCopyTicketV1 {
             owner: self.owner,
             queue_id: self.queue_id,
             slot: ring_slot as u16,
             generation,
         })
+    }
+
+    fn prepare_batch_recoverable(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942SdmaCopyRequestV1>,
+    ) -> Result<PreparedSdmaBatchV1, (Gfx942SdmaErrorV1, Vec<Gfx942SdmaCopyRequestV1>)> {
+        match self.prepare_batch(memory, &requests) {
+            Ok((write, write_end, copies, tickets)) => Ok(PreparedSdmaBatchV1 {
+                queue_id: self.queue_id,
+                write,
+                write_end,
+                copies,
+                tickets,
+                requests,
+            }),
+            Err(error) => Err((error, requests)),
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn prepare_batch(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        requests: &[Gfx942SdmaCopyRequestV1],
+    ) -> Result<
+        (
+            u64,
+            u64,
+            Vec<PreparedSdmaCopyV1>,
+            Vec<Gfx942SdmaCopyTicketV1>,
+        ),
+        Gfx942SdmaErrorV1,
+    > {
+        self.require_live()?;
+        let mut tickets = Vec::new();
+        tickets
+            .try_reserve_exact(requests.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA ticket roster allocation"))?;
+        let write = self.observe_batch_start(memory, requests.len())?;
+        let requested = submission_batch_bytes(requests.len())?;
+        let write_end = checked_sdma_write_end(write, requested, &mut self.poisoned)?;
+        let completion_base = memory
+            .mapped_resource_facts(
+                self.completions
+                    .as_ref()
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
+            )?
+            .gpu_va();
+        let mut prepared = Vec::new();
+        prepared
+            .try_reserve_exact(requests.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA packet roster allocation"))?;
+        for (index, request) in requests.iter().enumerate() {
+            let (source_address, destination_address) = Self::checked_copy_addresses(
+                memory,
+                &request.source,
+                request.source_offset,
+                &request.destination,
+                request.destination_offset,
+                request.copy_bytes,
+            )?;
+            let slot = batch_ring_slot(write, index)?;
+            let generation =
+                next_sdma_ticket_generation(self.generations[slot], &mut self.poisoned)?;
+            let completion_offset = (slot * 8) as u64;
+            let completion_address = completion_base
+                .checked_add(completion_offset)
+                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA completion address"))?;
+            let packet = Gfx942SdmaCopySubmissionV1::new(
+                source_address,
+                destination_address,
+                request.copy_bytes,
+                completion_address,
+                generation,
+            )?;
+            prepared.push(PreparedSdmaCopyV1 {
+                packet,
+                slot,
+                generation,
+                completion_value: generation,
+            });
+            tickets.push(Gfx942SdmaCopyTicketV1 {
+                owner: self.owner,
+                queue_id: self.queue_id,
+                slot: slot as u16,
+                generation,
+            });
+        }
+        Ok((write, write_end, prepared, tickets))
+    }
+
+    fn submit_prepared_batch(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared_batch: PreparedSdmaBatchV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942SdmaErrorV1> {
+        if prepared_batch.queue_id != self.queue_id
+            || prepared_batch.requests.len() != prepared_batch.copies.len()
+            || prepared_batch.requests.len() != prepared_batch.tickets.len()
+        {
+            self.poisoned = true;
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "SDMA prepared batch queue or roster",
+            ));
+        }
+        let PreparedSdmaBatchV1 {
+            queue_id: _,
+            write,
+            write_end,
+            copies,
+            tickets,
+            requests,
+        } = prepared_batch;
+        // Every fallible structural check and allocation precedes this point.
+        // From the first mapped write onward, any error retains native custody.
+        self.poisoned = true;
+        let completions = self
+            .completions
+            .as_mut()
+            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?;
+        for item in &copies {
+            memory.overwrite_mapped_host_visible_subrange_in_current_scope(
+                completions,
+                (item.slot * 8) as u64,
+                &[0; 8],
+            )?;
+        }
+        let ring = self
+            .ring
+            .as_mut()
+            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA ring authority"))?;
+        for item in &copies {
+            memory.write_sdma_ring_slot_in_current_scope(
+                ring,
+                item.slot as u32,
+                item.packet.bytes(),
+            )?;
+        }
+        for (request, item) in requests.into_iter().zip(copies) {
+            self.generations[item.slot] = item.generation;
+            self.records[item.slot] = Some(SdmaCopyRecordV1 {
+                generation: item.generation,
+                completion_value: item.completion_value,
+                completion_observed: false,
+                source: request.source,
+                destination: request.destination,
+                copy_bytes: request.copy_bytes,
+            });
+        }
+        memory.publish_sdma_control_write_release_in_current_scope(
+            self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
+                "missing SDMA control authority",
+            ))?,
+            write,
+            write_end,
+        )?;
+        self.doorbell
+            .as_mut()
+            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
+            .store_packet_id_release(write_end)
+            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
+        self.poisoned = false;
+        Ok(tickets)
+    }
+
+    fn checked_copy_addresses(
+        memory: &SharedGttMemorySessionV1,
+        source: &Gfx942SdmaBufferV1,
+        source_offset: u64,
+        destination: &Gfx942SdmaBufferV1,
+        destination_offset: u64,
+        copy_bytes: u32,
+    ) -> Result<(u64, u64), Gfx942SdmaErrorV1> {
+        let source_address =
+            source.checked_gpu_subrange(memory, source_offset, u64::from(copy_bytes))?;
+        let destination_address =
+            destination.checked_gpu_subrange(memory, destination_offset, u64::from(copy_bytes))?;
+        if ranges_overlap(
+            source_address,
+            u64::from(copy_bytes),
+            destination_address,
+            u64::from(copy_bytes),
+        ) {
+            return Err(Gfx942SdmaErrorV1::Contract("overlapping SDMA copy ranges"));
+        }
+        Ok((source_address, destination_address))
     }
 
     pub(crate) fn poll(
@@ -779,6 +1013,22 @@ impl Gfx942SdmaQueueOwnerV1 {
         tickets: &[Gfx942SdmaCopyTicketV1],
         timeout: Duration,
     ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, Gfx942SdmaErrorV1> {
+        memory.check_queue_operational_currentness()?;
+        let result = self.wait_many_for_in_current_scope(memory, tickets, timeout);
+        let post = memory.check_queue_operational_currentness();
+        match (result, post) {
+            (Ok(completed), Ok(())) => Ok(completed),
+            (Err(error), Ok(())) => Err(error),
+            (_, Err(error)) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn wait_many_for_in_current_scope(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, Gfx942SdmaErrorV1> {
         self.require_live()?;
         if tickets.is_empty() || tickets.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
             return Err(Gfx942SdmaErrorV1::Contract("SDMA wait batch size"));
@@ -802,7 +1052,6 @@ impl Gfx942SdmaQueueOwnerV1 {
             .try_reserve_exact(slots.len())
             .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA ready roster allocation"))?;
         ready.resize(slots.len(), false);
-        memory.check_queue_operational_currentness()?;
         loop {
             let mut all_ready = true;
             for (index, slot) in slots.iter().copied().enumerate() {
@@ -834,12 +1083,10 @@ impl Gfx942SdmaQueueOwnerV1 {
                 break;
             }
             if Instant::now() >= deadline {
-                memory.check_queue_operational_currentness()?;
                 return Err(Gfx942SdmaErrorV1::Timeout);
             }
             core::hint::spin_loop();
         }
-        memory.check_queue_operational_currentness()?;
         let mut completed = Vec::new();
         completed
             .try_reserve_exact(slots.len())
@@ -940,6 +1187,387 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     pub(crate) const fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+}
+
+pub(crate) enum Gfx942SdmaQueueSetV1 {
+    Generic(Vec<Gfx942SdmaQueueOwnerV1>),
+    Directional(Vec<Gfx942SdmaQueueOwnerV1>),
+}
+
+impl Gfx942SdmaQueueSetV1 {
+    pub(crate) fn create_generic(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        let mut owners = Vec::new();
+        owners
+            .try_reserve_exact(GFX942_SDMA_SINGLE_OWNER_COUNT_V1)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("generic SDMA owner roster allocation"))?;
+        owners.push(Gfx942SdmaQueueOwnerV1::create(memory, owner)?);
+        Ok(Self::Generic(owners))
+    }
+
+    pub(crate) fn create_directional(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        memory.check_gfx942_sdma_topology_capability_currentness()?;
+        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
+        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
+            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "directional SDMA engine inventory is not the exact gfx942 profile",
+            ));
+        }
+        let mut directional = Vec::new();
+        directional
+            .try_reserve_exact(GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("directional SDMA owner roster allocation"))?;
+        let device_to_host = Gfx942SdmaQueueOwnerV1::create_on_engine(
+            memory,
+            owner,
+            admit_kfd_gfx942_sdma_engine_id(GFX942_SDMA_D2H_ENGINE_INDEX_V1)
+                .map_err(|_| Gfx942SdmaErrorV1::Contract("D2H SDMA engine index"))?,
+        )?;
+        let host_to_device = Gfx942SdmaQueueOwnerV1::create_on_engine(
+            memory,
+            owner,
+            admit_kfd_gfx942_sdma_engine_id(GFX942_SDMA_H2D_ENGINE_INDEX_V1)
+                .map_err(|_| Gfx942SdmaErrorV1::Contract("H2D SDMA engine index"))?,
+        )?;
+        if !directional_queue_ids_are_distinct(device_to_host.queue_id, host_to_device.queue_id) {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "directional SDMA queues returned duplicate native queue IDs",
+            ));
+        }
+        directional.push(device_to_host);
+        directional.push(host_to_device);
+        memory.check_gfx942_sdma_topology_capability_currentness()?;
+        Ok(Self::Directional(directional))
+    }
+
+    pub(crate) fn create_targeted(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+        engine_index: u32,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        memory.check_gfx942_sdma_topology_capability_currentness()?;
+        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
+        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
+            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "targeted SDMA engine inventory is not the exact gfx942 profile",
+            ));
+        }
+        let engine = admit_kfd_gfx942_sdma_engine_id(engine_index)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("targeted SDMA engine index"))?;
+        let mut owners = Vec::new();
+        owners
+            .try_reserve_exact(GFX942_SDMA_SINGLE_OWNER_COUNT_V1)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("targeted SDMA owner roster allocation"))?;
+        owners.push(Gfx942SdmaQueueOwnerV1::create_on_engine(
+            memory, owner, engine,
+        )?);
+        memory.check_gfx942_sdma_topology_capability_currentness()?;
+        Ok(Self::Generic(owners))
+    }
+
+    pub(crate) fn generic_observation(&self) -> Option<Gfx942SdmaQueueObservationV1> {
+        match self {
+            Self::Generic(owners) => owners.first().map(Gfx942SdmaQueueOwnerV1::observation),
+            Self::Directional(_) => None,
+        }
+    }
+
+    pub(crate) fn directional_observation(
+        &self,
+    ) -> Option<Gfx942DirectionalSdmaQueueObservationV1> {
+        match self {
+            Self::Generic(_) => None,
+            Self::Directional(owners) => Some(Gfx942DirectionalSdmaQueueObservationV1 {
+                host_to_device: owners.get(GFX942_SDMA_H2D_OWNER_SLOT_V1)?.observation(),
+                device_to_host: owners.get(GFX942_SDMA_D2H_OWNER_SLOT_V1)?.observation(),
+                admitted_engine_count: KFD_GFX942_SDMA_ENGINE_COUNT_V1,
+                admitted_queues_per_engine: KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1,
+            }),
+        }
+    }
+
+    pub(crate) fn preflight_recoverable(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        source: &Gfx942SdmaBufferV1,
+        source_offset: u64,
+        destination: &Gfx942SdmaBufferV1,
+        destination_offset: u64,
+        copy_bytes: u32,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
+        self.owner_for_copy(source.kind(), destination.kind())?
+            .preflight_recoverable(
+                memory,
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                copy_bytes,
+            )
+    }
+
+    pub(crate) fn prepare_batch_recoverable(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942SdmaCopyRequestV1>,
+    ) -> Result<PreparedSdmaBatchV1, (Gfx942SdmaErrorV1, Vec<Gfx942SdmaCopyRequestV1>)> {
+        let owner = match self.owner_for_requests(&requests) {
+            Ok(owner) => owner,
+            Err(error) => return Err((error, requests)),
+        };
+        owner.prepare_batch_recoverable(memory, requests)
+    }
+
+    pub(crate) fn submit(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        source: Gfx942SdmaBufferV1,
+        source_offset: u64,
+        destination: Gfx942SdmaBufferV1,
+        destination_offset: u64,
+        copy_bytes: u32,
+    ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1> {
+        self.owner_for_copy(source.kind(), destination.kind())?
+            .submit(
+                memory,
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                copy_bytes,
+            )
+    }
+
+    pub(crate) fn submit_prepared_batch(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared: PreparedSdmaBatchV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942SdmaErrorV1> {
+        let ticket = prepared
+            .tickets
+            .first()
+            .copied()
+            .ok_or(Gfx942SdmaErrorV1::Contract(
+                "SDMA prepared batch ticket roster",
+            ))?;
+        self.owner_for_ticket(ticket)?
+            .submit_prepared_batch(memory, prepared)
+    }
+
+    pub(crate) fn poll(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<Gfx942SdmaCopyPollV1, Gfx942SdmaErrorV1> {
+        self.owner_for_ticket(ticket)?.poll(memory, ticket)
+    }
+
+    pub(crate) fn wait_for(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+        timeout: Duration,
+    ) -> Result<Gfx942SdmaCompletedCopyV1, Gfx942SdmaErrorV1> {
+        self.owner_for_ticket(ticket)?
+            .wait_for(memory, ticket, timeout)
+    }
+
+    pub(crate) fn wait_many_for(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, Gfx942SdmaErrorV1> {
+        self.owner_for_tickets(tickets)?
+            .wait_many_for(memory, tickets, timeout)
+    }
+
+    pub(crate) fn wait_many_for_in_current_scope(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, Gfx942SdmaErrorV1> {
+        self.owner_for_tickets(tickets)?
+            .wait_many_for_in_current_scope(memory, tickets, timeout)
+    }
+
+    fn owner_for_tickets(
+        &mut self,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<&mut Gfx942SdmaQueueOwnerV1, Gfx942SdmaErrorV1> {
+        let ticket = tickets
+            .first()
+            .copied()
+            .ok_or(Gfx942SdmaErrorV1::Contract("SDMA wait batch size"))?;
+        let owner = self.owner_for_ticket(ticket)?;
+        if tickets
+            .iter()
+            .any(|ticket| ticket.queue_id != owner.queue_id)
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "mixed directional SDMA wait batch",
+            ));
+        }
+        Ok(owner)
+    }
+
+    pub(crate) fn destroy_queue(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
+        let targeted = match self {
+            Self::Generic(owners) => owners
+                .first()
+                .is_some_and(|owner| owner.engine_index.is_some()),
+            Self::Directional(_) => true,
+        };
+        if targeted {
+            memory.check_gfx942_sdma_topology_capability_currentness()?;
+        }
+        match self {
+            Self::Generic(owners) => owners
+                .first_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing generic SDMA owner"))?
+                .destroy_queue(memory),
+            Self::Directional(owners) => {
+                if owners.len() != GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1 {
+                    return Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"));
+                }
+                owners[GFX942_SDMA_H2D_OWNER_SLOT_V1].destroy_queue(memory)?;
+                owners[GFX942_SDMA_D2H_OWNER_SLOT_V1].destroy_queue(memory)
+            }
+        }?;
+        if targeted {
+            memory.check_gfx942_sdma_topology_capability_currentness()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn release_resources(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
+        match self {
+            Self::Generic(mut owners) => owners
+                .pop()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing generic SDMA owner"))?
+                .release_resources(memory),
+            Self::Directional(mut owners) => {
+                if owners.len() != GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1 {
+                    return Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"));
+                }
+                owners
+                    .pop()
+                    .expect("checked H2D SDMA owner")
+                    .release_resources(memory)?;
+                owners
+                    .pop()
+                    .expect("checked D2H SDMA owner")
+                    .release_resources(memory)
+            }
+        }
+    }
+
+    pub(crate) fn additional_resource_count(&self) -> u8 {
+        match self {
+            Self::Generic(_) => 3,
+            Self::Directional(_) => 6,
+        }
+    }
+
+    pub(crate) fn is_poisoned(&self) -> bool {
+        match self {
+            Self::Generic(owners) => {
+                owners.len() != GFX942_SDMA_SINGLE_OWNER_COUNT_V1 || owners[0].is_poisoned()
+            }
+            Self::Directional(owners) => {
+                owners.len() != GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1
+                    || owners.iter().any(Gfx942SdmaQueueOwnerV1::is_poisoned)
+            }
+        }
+    }
+
+    fn owner_for_copy(
+        &mut self,
+        source: Gfx942SdmaBufferKindV1,
+        destination: Gfx942SdmaBufferKindV1,
+    ) -> Result<&mut Gfx942SdmaQueueOwnerV1, Gfx942SdmaErrorV1> {
+        match self {
+            Self::Generic(owners) => owners
+                .first_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing generic SDMA owner")),
+            Self::Directional(owners) => match (source, destination) {
+                (
+                    Gfx942SdmaBufferKindV1::HostVisibleCoherent,
+                    Gfx942SdmaBufferKindV1::DeviceLocal,
+                ) => owners
+                    .get_mut(GFX942_SDMA_H2D_OWNER_SLOT_V1)
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing H2D SDMA owner")),
+                (
+                    Gfx942SdmaBufferKindV1::DeviceLocal,
+                    Gfx942SdmaBufferKindV1::HostVisibleCoherent,
+                ) => owners
+                    .get_mut(GFX942_SDMA_D2H_OWNER_SLOT_V1)
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing D2H SDMA owner")),
+                _ => Err(Gfx942SdmaErrorV1::Contract(
+                    "directional SDMA profile admits only H2D or D2H copies",
+                )),
+            },
+        }
+    }
+
+    fn owner_for_requests(
+        &mut self,
+        requests: &[Gfx942SdmaCopyRequestV1],
+    ) -> Result<&mut Gfx942SdmaQueueOwnerV1, Gfx942SdmaErrorV1> {
+        if requests.is_empty() {
+            return Err(Gfx942SdmaErrorV1::QueueFull);
+        }
+        self.owner_for_request_kinds(
+            requests
+                .iter()
+                .map(|request| (request.source.kind(), request.destination.kind())),
+        )
+    }
+
+    fn owner_for_request_kinds(
+        &mut self,
+        mut kinds: impl Iterator<Item = (Gfx942SdmaBufferKindV1, Gfx942SdmaBufferKindV1)>,
+    ) -> Result<&mut Gfx942SdmaQueueOwnerV1, Gfx942SdmaErrorV1> {
+        let first = kinds.next().ok_or(Gfx942SdmaErrorV1::QueueFull)?;
+        if kinds.any(|kinds| kinds != first) {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "mixed directional SDMA submission batch",
+            ));
+        }
+        self.owner_for_copy(first.0, first.1)
+    }
+
+    fn owner_for_ticket(
+        &mut self,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<&mut Gfx942SdmaQueueOwnerV1, Gfx942SdmaErrorV1> {
+        match self {
+            Self::Generic(owners) => owners
+                .iter_mut()
+                .find(|owner| owner.queue_id == ticket.queue_id)
+                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
+            Self::Directional(owners) => owners
+                .iter_mut()
+                .find(|owner| owner.queue_id == ticket.queue_id)
+                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
+        }
     }
 }
 
@@ -1046,6 +1674,83 @@ fn ranges_overlap(left: u64, left_bytes: u64, right: u64, right_bytes: u64) -> b
         return true;
     };
     left < right_end && right < left_end
+}
+
+fn submission_batch_bytes(count: usize) -> Result<u64, Gfx942SdmaErrorV1> {
+    if count == 0 || count > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+        return Err(Gfx942SdmaErrorV1::QueueFull);
+    }
+    (count as u64)
+        .checked_mul(GFX942_SDMA_SUBMISSION_BYTES_V1 as u64)
+        .ok_or(Gfx942SdmaErrorV1::Contract("SDMA batch byte count"))
+}
+
+fn sdma_ring_delta_is_below_capacity(later: u64, earlier: u64) -> bool {
+    later
+        .checked_sub(earlier)
+        .is_some_and(|delta| delta < u64::from(GFX942_SDMA_RING_BYTES_V1))
+}
+
+fn batch_ring_slot(write: u64, index: usize) -> Result<usize, Gfx942SdmaErrorV1> {
+    validate_sdma_write_counter_alignment(write)?;
+    let offset = (index as u64)
+        .checked_mul(GFX942_SDMA_SUBMISSION_BYTES_V1 as u64)
+        .and_then(|offset| write.checked_add(offset))
+        .ok_or(Gfx942SdmaErrorV1::Contract("SDMA batch slot offset"))?;
+    Ok(
+        ((offset % u64::from(GFX942_SDMA_RING_BYTES_V1)) / GFX942_SDMA_SUBMISSION_BYTES_V1 as u64)
+            as usize,
+    )
+}
+
+fn validate_sdma_write_counter_alignment(write: u64) -> Result<(), Gfx942SdmaErrorV1> {
+    if !write.is_multiple_of(GFX942_SDMA_SUBMISSION_BYTES_V1 as u64) {
+        return Err(Gfx942SdmaErrorV1::Contract("unaligned SDMA write counter"));
+    }
+    Ok(())
+}
+
+fn validate_sdma_write_counter_or_poison(
+    write: u64,
+    poisoned: &mut bool,
+) -> Result<(), Gfx942SdmaErrorV1> {
+    if let Err(error) = validate_sdma_write_counter_alignment(write) {
+        *poisoned = true;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn next_sdma_ticket_generation(
+    current: u32,
+    poisoned: &mut bool,
+) -> Result<u32, Gfx942SdmaErrorV1> {
+    let Some(next) = current.checked_add(1).filter(|value| *value != 0) else {
+        *poisoned = true;
+        return Err(Gfx942SdmaErrorV1::Contract(
+            "SDMA ticket generation exhausted",
+        ));
+    };
+    Ok(next)
+}
+
+fn checked_sdma_write_end(
+    write: u64,
+    requested: u64,
+    poisoned: &mut bool,
+) -> Result<u64, Gfx942SdmaErrorV1> {
+    let Some(end) = write.checked_add(requested) else {
+        *poisoned = true;
+        return Err(Gfx942SdmaErrorV1::Contract("SDMA write counter exhausted"));
+    };
+    Ok(end)
+}
+
+const fn directional_queue_ids_are_distinct(
+    device_to_host_queue_id: u32,
+    host_to_device_queue_id: u32,
+) -> bool {
+    device_to_host_queue_id != host_to_device_queue_id
 }
 
 fn exact_queue_owner(left: QueueKeyV1, right: QueueKeyV1) -> bool {
@@ -1179,7 +1884,61 @@ mod tests {
     }
 
     #[test]
+    fn fixed_batch_geometry_has_unique_slots_across_wrap() {
+        assert_eq!(submission_batch_bytes(1).unwrap(), 64);
+        assert_eq!(submission_batch_bytes(63).unwrap(), 4032);
+        assert!(submission_batch_bytes(0).is_err());
+        assert!(submission_batch_bytes(64).is_err());
+        assert!(batch_ring_slot(1, 0).is_err());
+
+        let slots = (0..GFX942_SDMA_RING_SLOT_COUNT_V1)
+            .map(|index| batch_ring_slot(4032, index).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(slots[0], 63);
+        assert_eq!(slots[1], 0);
+        let mut unique = slots.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), GFX942_SDMA_RING_SLOT_COUNT_V1);
+
+        assert!(sdma_ring_delta_is_below_capacity(4032, 0));
+        assert!(!sdma_ring_delta_is_below_capacity(4096, 0));
+        assert!(!sdma_ring_delta_is_below_capacity(63, 64));
+    }
+
+    #[test]
+    fn directional_queue_ids_must_be_distinct() {
+        assert!(directional_queue_ids_are_distinct(7, 8));
+        assert!(!directional_queue_ids_are_distinct(7, 7));
+    }
+
+    #[test]
+    fn counter_and_generation_invariant_failures_are_terminal() {
+        let mut poisoned = false;
+        assert!(validate_sdma_write_counter_or_poison(1, &mut poisoned).is_err());
+        assert!(poisoned);
+
+        let mut poisoned = false;
+        assert_eq!(next_sdma_ticket_generation(7, &mut poisoned).unwrap(), 8);
+        assert!(!poisoned);
+        assert!(next_sdma_ticket_generation(u32::MAX, &mut poisoned).is_err());
+        assert!(poisoned);
+
+        let mut poisoned = false;
+        assert!(checked_sdma_write_end(u64::MAX - 63, 64, &mut poisoned).is_err());
+        assert!(poisoned);
+    }
+
+    #[test]
     fn sdma_copy_manifest_digest_is_frozen() {
+        assert!(
+            GFX942_SDMA_COPY_MANIFEST_V1
+                .contains(fe2o3_kfd_uapi::KFD_SDMA_QUEUE_SCHEMA_MANIFEST_SHA256)
+        );
+        assert!(
+            GFX942_SDMA_COPY_MANIFEST_V1
+                .contains(crate::topology::GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_SHA256_V1)
+        );
         let digest = Sha256::digest(GFX942_SDMA_COPY_MANIFEST_V1);
         let mut rendered = String::with_capacity(64);
         for byte in digest {

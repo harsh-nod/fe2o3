@@ -402,6 +402,26 @@ pub trait RuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
 }
 
+/// Optional nonblocking same-device copy SPI.
+///
+/// This extension makes the operation explicit at the backend type boundary
+/// without silently changing the Worker V3 wire contract. Worker V3 has no
+/// per-device same-device-copy capability bit, so implementations may reject
+/// the operation as unsupported. They may use a native copy engine or bounded
+/// cooperative host progress, but must document which. Successful submission
+/// retains source and destination against mutation until conclusive completion;
+/// the submission handle remains retained until
+/// [`RuntimeBackendV1::release_submission_v1`].
+pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
+    fn copy_async_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
 /// Validation failure before entering a backend.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeValidationErrorV1 {
@@ -1783,6 +1803,126 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         self.seal_backend_protocol(protocol_error, submission)
     }
+
+    /// Submits a same-device copy without waiting for completion.
+    ///
+    /// The concrete backend determines whether progress is native or
+    /// cooperative. The direct KFD backend currently rejects this extension;
+    /// the multi-device router supplies bounded cooperative host progress.
+    pub fn copy_async(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: &[RuntimeEventIdV1],
+    ) -> Result<RuntimeSubmissionV1<RuntimeCopyV1>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        self.require_live()?;
+        if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
+            return Err(RuntimeValidationErrorV1::Capacity.into());
+        }
+        if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(RuntimeValidationErrorV1::TooManyDependencies.into());
+        }
+        for (index, dependency) in dependencies.iter().enumerate() {
+            if dependencies[..index].contains(dependency) {
+                return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
+            }
+        }
+        let stream_record = *self
+            .streams
+            .get(&stream)
+            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let translate = |region: RuntimeMemoryRegionV1| -> Result<
+            (BackendMemoryRegionV1, RuntimeDeviceIdV1),
+            RuntimeValidationErrorV1,
+        > {
+            let allocation = *self
+                .allocations
+                .get(&region.allocation)
+                .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+            let end = region
+                .byte_offset
+                .checked_add(region.byte_len)
+                .ok_or(RuntimeValidationErrorV1::InvalidRange)?;
+            if region.byte_len == 0 || end > allocation.byte_len {
+                return Err(RuntimeValidationErrorV1::InvalidRange);
+            }
+            Ok((
+                BackendMemoryRegionV1 {
+                    allocation: allocation.backend_allocation,
+                    access: region.access,
+                    byte_offset: region.byte_offset,
+                    byte_len: region.byte_len,
+                },
+                allocation.device,
+            ))
+        };
+        let (source, source_device) = translate(source)?;
+        let (destination, destination_device) = translate(destination)?;
+        if !matches!(
+            source.access,
+            RuntimeAccessV1::Read | RuntimeAccessV1::ReadWrite
+        ) || !matches!(
+            destination.access,
+            RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+        ) {
+            return Err(RuntimeValidationErrorV1::InvalidAccess.into());
+        }
+        if source_device != destination_device || stream_record.device != destination_device {
+            return Err(RuntimeValidationErrorV1::WrongDevice.into());
+        }
+        if source.byte_len != destination.byte_len {
+            return Err(RuntimeValidationErrorV1::InvalidRange.into());
+        }
+        let mut backend_dependencies = Vec::with_capacity(dependencies.len());
+        for dependency in dependencies {
+            let event = self
+                .events
+                .get(dependency)
+                .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+            if event.device != destination_device {
+                return Err(RuntimeValidationErrorV1::WrongDevice.into());
+            }
+            backend_dependencies.push(event.backend_event);
+        }
+        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+        let result = self.backend.copy_async_v1(
+            stream_record.backend_stream,
+            source,
+            destination,
+            &backend_dependencies,
+        );
+        let backend_submission = self.backend_result(result)?;
+        let protocol_error = self.backend_handle_protocol_error(
+            RuntimeBackendResourceKindV1::Submission,
+            backend_submission,
+        );
+        self.submissions.insert(
+            id,
+            SubmissionRecordV1 {
+                backend_submission,
+                stream,
+                device: destination_device,
+                quiescent: false,
+            },
+        );
+        if protocol_error.is_none() {
+            self.backend_submissions.insert(backend_submission);
+        }
+        let submission = RuntimeSubmissionV1 {
+            id,
+            backend_submission,
+            stream,
+            device: destination_device,
+            completion: None,
+            peer_transfer: None,
+            marker: PhantomData,
+        };
+        self.seal_backend_protocol(protocol_error, submission)
+    }
 }
 
 fn validate_byte_range(
@@ -1843,6 +1983,9 @@ fn peer_copy_contract_identity(
 
 /// Marker identifying a typed peer-copy submission.
 pub enum RuntimePeerCopyV1 {}
+
+/// Marker identifying a same-device asynchronous copy submission.
+pub enum RuntimeCopyV1 {}
 
 /// Moveable asynchronous submission bound to its argument type.
 pub struct RuntimeSubmissionV1<A> {
@@ -2197,6 +2340,28 @@ mod tests {
         }
     }
 
+    impl RuntimeAsyncCopyBackendV1 for MockBackend {
+        fn copy_async_v1(
+            &mut self,
+            _stream: u64,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+            dependencies: &[u64],
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.last_dependency_count = dependencies.len();
+            let source_start = source.byte_offset as usize;
+            let source_end = source_start + source.byte_len as usize;
+            let bytes = self.memory[&source.allocation][source_start..source_end].to_vec();
+            let destination_start = destination.byte_offset as usize;
+            self.memory.get_mut(&destination.allocation).unwrap()
+                [destination_start..destination_start + bytes.len()]
+                .copy_from_slice(&bytes);
+            let identity = self.handle(MockHandleKind::Submission);
+            self.polls.insert(identity, 0);
+            Ok(identity)
+        }
+    }
+
     struct AddArguments {
         allocation: RuntimeAllocationIdV1,
         scalar: u32,
@@ -2507,6 +2672,36 @@ mod tests {
             assert!(context.is_terminal());
             assert_eq!(context.submissions.len(), 1);
         }
+        {
+            let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+            let device = context.devices()[0].id();
+            let stream = context.create_stream(device).unwrap();
+            let source = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let destination = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let source = RuntimeMemoryRegionV1 {
+                allocation: source,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            let destination = RuntimeMemoryRegionV1 {
+                allocation: destination,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            context.backend.handle_override = Some((MockHandleKind::Submission, 0));
+            assert_protocol_failure(
+                context.copy_async(stream, source, destination, &[]),
+                RuntimeBackendProtocolErrorV1::ZeroHandle(RuntimeBackendResourceKindV1::Submission),
+            );
+            assert!(context.is_terminal());
+            assert_eq!(context.submissions.len(), 1);
+        }
     }
 
     #[test]
@@ -2639,6 +2834,42 @@ mod tests {
                 Some((MockHandleKind::Submission, first.backend_submission));
             assert_protocol_failure(
                 context.peer_copy(stream, source, destination, &[]),
+                RuntimeBackendProtocolErrorV1::DuplicateHandle(
+                    RuntimeBackendResourceKindV1::Submission,
+                ),
+            );
+            assert!(context.is_terminal());
+            assert_eq!(context.submissions.len(), 2);
+        }
+        {
+            let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+            let device = context.devices()[0].id();
+            let stream = context.create_stream(device).unwrap();
+            let source_allocation = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let destination_allocation = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let source = RuntimeMemoryRegionV1 {
+                allocation: source_allocation,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            let destination = RuntimeMemoryRegionV1 {
+                allocation: destination_allocation,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            let first = context
+                .copy_async(stream, source, destination, &[])
+                .unwrap();
+            context.backend.handle_override =
+                Some((MockHandleKind::Submission, first.backend_submission));
+            assert_protocol_failure(
+                context.copy_async(stream, source, destination, &[]),
                 RuntimeBackendProtocolErrorV1::DuplicateHandle(
                     RuntimeBackendResourceKindV1::Submission,
                 ),
@@ -3023,6 +3254,117 @@ mod tests {
                 ))
             ));
         }
+    }
+
+    #[test]
+    fn async_copy_is_typed_validated_and_same_device() {
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        let other_device = context.devices()[1].id();
+        let stream = context.create_stream(device).unwrap();
+        let source = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        let destination = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        let foreign = context
+            .allocate(other_device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        context.write_allocation(source, 2, &[4, 3, 2, 1]).unwrap();
+        let region = |allocation, access, byte_offset| RuntimeMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset,
+            byte_len: 4,
+        };
+        let mut submission = context
+            .copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(destination, RuntimeAccessV1::Write, 8),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(submission.peer_transfer_mechanism(), None);
+        assert_eq!(
+            context.poll(&mut submission).unwrap(),
+            RuntimePollV1::Pending
+        );
+        assert_eq!(
+            context
+                .wait(&mut submission, Duration::from_secs(1))
+                .unwrap(),
+            RuntimePollV1::Succeeded
+        );
+        let mut observed = [0_u8; 4];
+        context
+            .read_allocation(destination, 8, &mut observed)
+            .unwrap();
+        assert_eq!(observed, [4, 3, 2, 1]);
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(foreign, RuntimeAccessV1::Write, 0),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::WrongDevice
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Write, 2),
+                region(destination, RuntimeAccessV1::Write, 8),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidAccess
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                RuntimeMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 8,
+                    byte_len: 5,
+                },
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidRange
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(destination, RuntimeAccessV1::Write, 14),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidRange
+            ))
+        ));
+        let event = context.record_event(&submission).unwrap();
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(destination, RuntimeAccessV1::Write, 8),
+                &[event, event],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::DuplicateDependency
+            ))
+        ));
+        context.release_event(event).unwrap();
+        context.release_submission(submission).unwrap();
     }
 
     #[test]

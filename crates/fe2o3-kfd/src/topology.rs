@@ -20,6 +20,22 @@ pub const DEFAULT_AMDGPU_MODULE_ROOT: &str = "/sys/module/amdgpu";
 pub const DEFAULT_DEVICE_CHARACTER_ROOT: &str = "/sys/dev/char";
 pub const DEFAULT_SYSFS_DEVICES_ROOT: &str = "/sys/devices";
 
+/// Additive provenance for targeted gfx942 ordinary-SDMA queue admission.
+pub const GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-gfx942-sdma-topology-capability-v1\n",
+    "source=/sys/class/kfd/kfd/topology/nodes/<selected>/properties\n",
+    "producer=amdgpu-kfd-topology-sysfs,read-only-decimal-node-properties\n",
+    "producer_source=/usr/src/amdgpu-6.16.13-2341068.24.04/amd/amdkfd/kfd_topology.c:502-507,2181-2186\n",
+    "producer_source_sha256=6a1453f8f70a9fba549694b71db132eb80679d7fbb8d0eb7af9dd8e7b669f802\n",
+    "properties=num_sdma_engines:exactly-2,num_sdma_queues_per_engine:exactly-8\n",
+    "base-compatibility=properties-optional-and-excluded-from-frozen-base-topology-equality,mandatory-only-for-targeted-or-directional-sdma\n",
+    "currentness=fresh-generation-consistent-selected-node-sidecar-must-match-retained-exact-profile-before-and-after-targeted-create-or-destroy\n",
+    "authority=observation-only,no-queue-or-engine-authority\n",
+);
+
+pub const GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_SHA256_V1: &str =
+    "51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26";
+
 const MAX_TOPOLOGY_NODES: usize = 256;
 const MAX_ROOT_ENTRIES: usize = 8;
 const MAX_NODE_ENTRIES: usize = 16;
@@ -474,8 +490,14 @@ impl GpuCapacityObservation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Gfx942SdmaTopologyCapabilityObservationV1 {
+    engine_count: Option<u32>,
+    queues_per_engine: Option<u32>,
+}
+
 /// One GPU identity observation from a stable KFD topology generation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct GpuTopologyNode {
     node_id: u32,
     gpu_id: u64,
@@ -490,7 +512,30 @@ pub struct GpuTopologyNode {
     fw_version: u32,
     sdma_fw_version: u32,
     capacity: GpuCapacityObservation,
+    sdma_topology_capability: Gfx942SdmaTopologyCapabilityObservationV1,
 }
+
+// The frozen base topology equality intentionally excludes the additive SDMA
+// capability sidecar. Targeted-SDMA admission inspects that sidecar explicitly.
+impl PartialEq for GpuTopologyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.node_id == other.node_id
+            && self.gpu_id == other.gpu_id
+            && self.name == other.name
+            && self.target == other.target
+            && self.pci_device_id == other.pci_device_id
+            && self.drm_render_minor == other.drm_render_minor
+            && self.unique_id == other.unique_id
+            && self.hive_id == other.hive_id
+            && self.location_id == other.location_id
+            && self.domain == other.domain
+            && self.fw_version == other.fw_version
+            && self.sdma_fw_version == other.sdma_fw_version
+            && self.capacity == other.capacity
+    }
+}
+
+impl Eq for GpuTopologyNode {}
 
 impl GpuTopologyNode {
     pub const fn node_id(&self) -> u32 {
@@ -545,6 +590,13 @@ impl GpuTopologyNode {
 
     pub const fn capacity(&self) -> GpuCapacityObservation {
         self.capacity
+    }
+
+    pub(crate) const fn sdma_engine_inventory(&self) -> (Option<u32>, Option<u32>) {
+        (
+            self.sdma_topology_capability.engine_count,
+            self.sdma_topology_capability.queues_per_engine,
+        )
     }
 }
 
@@ -1380,6 +1432,28 @@ fn bounded_u32(
     Ok(value as u32)
 }
 
+fn optional_bounded_u32(
+    properties: &BTreeMap<String, u64>,
+    path: &Path,
+    key: &'static str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Option<u32>, TopologyError> {
+    let Some(value) = properties.get(key).copied() else {
+        return Ok(None);
+    };
+    if value < minimum || value > maximum {
+        return Err(TopologyError::PropertyOutOfRange {
+            path: path.to_path_buf(),
+            key: key.to_owned(),
+            value,
+            minimum,
+            maximum,
+        });
+    }
+    Ok(Some(value as u32))
+}
+
 fn parse_platform(path: &Path) -> Result<PlatformObservation, TopologyError> {
     let properties = parse_named_properties(
         path,
@@ -1669,6 +1743,22 @@ fn parse_gpu_node(
         wavefront_size: bounded_u32(properties, properties_path, "wave_front_size", 64, 64)?,
         xcc_count: bounded_u32(properties, properties_path, "num_xcc", 1, 64)?,
     };
+    let sdma_topology_capability = Gfx942SdmaTopologyCapabilityObservationV1 {
+        engine_count: optional_bounded_u32(
+            properties,
+            properties_path,
+            "num_sdma_engines",
+            0,
+            4096,
+        )?,
+        queues_per_engine: optional_bounded_u32(
+            properties,
+            properties_path,
+            "num_sdma_queues_per_engine",
+            0,
+            4096,
+        )?,
+    };
     Ok(GpuTopologyNode {
         node_id,
         gpu_id,
@@ -1683,6 +1773,7 @@ fn parse_gpu_node(
         fw_version,
         sdma_fw_version,
         capacity,
+        sdma_topology_capability,
     })
 }
 
@@ -1983,9 +2074,21 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn sdma_topology_capability_manifest_is_frozen() {
+        let digest = Sha256::digest(GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_V1);
+        let mut rendered = String::with_capacity(64);
+        for byte in digest {
+            use core::fmt::Write;
+            write!(&mut rendered, "{byte:02x}").unwrap();
+        }
+        assert_eq!(rendered, GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_SHA256_V1);
+    }
 
     struct Fixture {
         root: PathBuf,
@@ -2032,7 +2135,8 @@ mod tests {
                      location_id {}\ndomain 0\ndrm_render_minor {}\nhive_id 99\n\
                      unique_id {}\nfw_version 192\nsdma_fw_version 25\nnum_xcc 8\n\
                      simd_per_cu 4\narray_count 32\nsimd_arrays_per_engine 1\n\
-                     lds_size_in_kb 64\nmax_waves_per_simd 8\nnum_cp_queues 24\n",
+                     lds_size_in_kb 64\nmax_waves_per_simd 8\nnum_cp_queues 24\n\
+                     num_sdma_engines 2\nnum_sdma_queues_per_engine 8\n",
                     4096 * identity,
                     127 + identity,
                     2000 + u64::from(identity),
@@ -2141,6 +2245,10 @@ mod tests {
                         wavefront_size: 64,
                         xcc_count: 8,
                     },
+                    sdma_topology_capability: Gfx942SdmaTopologyCapabilityObservationV1 {
+                        engine_count: Some(2),
+                        queues_per_engine: Some(8),
+                    },
                 },
             }
         }
@@ -2185,7 +2293,44 @@ mod tests {
         assert_eq!(snapshot.gpu_nodes()[0].fw_version(), 192);
         assert_eq!(snapshot.gpu_nodes()[0].sdma_fw_version(), 25);
         assert_eq!(snapshot.gpu_nodes()[0].capacity().xcc_count(), 8);
+        assert_eq!(
+            snapshot.gpu_nodes()[0].sdma_engine_inventory(),
+            (Some(2), Some(8))
+        );
         assert_eq!(snapshot.gpu_nodes()[1].node_id(), 2);
+    }
+
+    #[test]
+    fn sdma_capability_properties_are_additive_to_base_topology() {
+        let fixture = Fixture::valid(1);
+        fixture.replace_property(1, "num_sdma_engines 2\n", "");
+        fixture.replace_property(1, "num_sdma_queues_per_engine 8\n", "");
+        let without_capability = fixture.discover().unwrap();
+        assert_eq!(
+            without_capability.gpu_nodes()[0].sdma_engine_inventory(),
+            (None, None)
+        );
+
+        let fixture = Fixture::valid(1);
+        fixture.replace_property(1, "num_sdma_engines 2", "num_sdma_engines 0");
+        fixture.replace_property(
+            1,
+            "num_sdma_queues_per_engine 8",
+            "num_sdma_queues_per_engine 0",
+        );
+        let zero_capability = fixture.discover().unwrap();
+        assert_eq!(
+            zero_capability.gpu_nodes()[0].sdma_engine_inventory(),
+            (Some(0), Some(0))
+        );
+
+        let mut changed_sidecar = without_capability.clone();
+        changed_sidecar.gpu_nodes[0].sdma_topology_capability =
+            Gfx942SdmaTopologyCapabilityObservationV1 {
+                engine_count: Some(2),
+                queues_per_engine: Some(8),
+            };
+        assert_eq!(without_capability, changed_sidecar);
     }
 
     #[test]

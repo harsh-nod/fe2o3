@@ -40,7 +40,7 @@ fn create_queue(
     device: CheckedGfx942XnackMinusDevice,
 ) -> Result<ComputeAqlQueueSessionV1, Box<dyn std::error::Error>> {
     let mut queue = device.create_compute_aql_queue(4096)?;
-    queue.enable_sdma_copy_engine()?;
+    queue.enable_gfx942_directional_sdma_copy_engines()?;
     Ok(queue)
 }
 
@@ -312,8 +312,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     recycle_all(&mut left, left_buffers)?;
     let right_destroyed = right.destroy()?;
     let left_destroyed = left.destroy()?;
-    assert_eq!(right_destroyed.released_resources(), 8);
-    assert_eq!(left_destroyed.released_resources(), 8);
+    assert_eq!(right_destroyed.released_resources(), 11);
+    assert_eq!(left_destroyed.released_resources(), 11);
 
     let transferred = copy_bytes * depth * 2;
     let h2d_p50 = percentile(&h2d, 1, 2);

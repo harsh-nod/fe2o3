@@ -12,6 +12,7 @@ load_plan_proof="$script_dir/load_plan_v1.rs"
 materialization_proof="$script_dir/materialization_v1.rs"
 aql_proof="$script_dir/aql_publication_v1.rs"
 r7_async_resources_proof="$script_dir/r7_async_resources_v1.rs"
+r8_execution_contracts_proof="$script_dir/r8_execution_contracts_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -46,6 +47,17 @@ negative_aql_read_regression="$script_dir/negative/aql_reservation_v1_read_regre
 negative_aql_full_overwrite="$script_dir/negative/aql_reservation_v1_full_overwrite.rs"
 negative_r7_generation_reuse="$script_dir/negative/r7_async_resources_v1_generation_reuse.rs"
 negative_r7_cross_device="$script_dir/negative/r7_async_resources_v1_cross_device.rs"
+negative_r8_eager_publication="$script_dir/negative/r8_execution_contracts_v1_eager_publication.rs"
+negative_r8_conflicting_overlap="$script_dir/negative/r8_execution_contracts_v1_conflicting_overlap.rs"
+negative_r8_dependency_polarity="$script_dir/negative/r8_execution_contracts_v1_dependency_polarity.rs"
+negative_r8_binding_substitution="$script_dir/negative/r8_execution_contracts_v1_binding_substitution.rs"
+negative_r8_generation_substitution="$script_dir/negative/r8_execution_contracts_v1_generation_substitution.rs"
+negative_r8_epoch_substitution="$script_dir/negative/r8_execution_contracts_v1_epoch_substitution.rs"
+negative_r8_atomic_alignment="$script_dir/negative/r8_execution_contracts_v1_atomic_alignment.rs"
+negative_r8_atomic_coherence="$script_dir/negative/r8_execution_contracts_v1_atomic_coherence.rs"
+negative_r8_atomic_return="$script_dir/negative/r8_execution_contracts_v1_atomic_return.rs"
+negative_r8_early_collective="$script_dir/negative/r8_execution_contracts_v1_early_collective.rs"
+negative_r8_duplicate_collective="$script_dir/negative/r8_execution_contracts_v1_duplicate_collective.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -79,6 +91,7 @@ expected_materialization=$(read_pin "$pin_dir/MATERIALIZATION_SHA256")
 expected_negative_lifecycle=$(read_pin "$pin_dir/NEGATIVE_SHA256")
 expected_aql=$(read_pin "$pin_dir/AQL_PUBLICATION_SHA256")
 expected_r7_async_resources=$(read_pin "$pin_dir/R7_ASYNC_RESOURCES_SHA256")
+expected_r8_execution_contracts=$(read_pin "$pin_dir/R8_EXECUTION_CONTRACTS_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -113,6 +126,17 @@ expected_negative_aql_read_regression=$(read_pin "$pin_dir/NEGATIVE_AQL_READ_REG
 expected_negative_aql_full_overwrite=$(read_pin "$pin_dir/NEGATIVE_AQL_FULL_OVERWRITE_SHA256")
 expected_negative_r7_generation_reuse=$(read_pin "$pin_dir/NEGATIVE_R7_GENERATION_REUSE_SHA256")
 expected_negative_r7_cross_device=$(read_pin "$pin_dir/NEGATIVE_R7_CROSS_DEVICE_SHA256")
+expected_negative_r8_eager_publication=$(read_pin "$pin_dir/NEGATIVE_R8_EAGER_PUBLICATION_SHA256")
+expected_negative_r8_conflicting_overlap=$(read_pin "$pin_dir/NEGATIVE_R8_CONFLICTING_OVERLAP_SHA256")
+expected_negative_r8_dependency_polarity=$(read_pin "$pin_dir/NEGATIVE_R8_DEPENDENCY_POLARITY_SHA256")
+expected_negative_r8_binding_substitution=$(read_pin "$pin_dir/NEGATIVE_R8_BINDING_SUBSTITUTION_SHA256")
+expected_negative_r8_generation_substitution=$(read_pin "$pin_dir/NEGATIVE_R8_GENERATION_SUBSTITUTION_SHA256")
+expected_negative_r8_epoch_substitution=$(read_pin "$pin_dir/NEGATIVE_R8_EPOCH_SUBSTITUTION_SHA256")
+expected_negative_r8_atomic_alignment=$(read_pin "$pin_dir/NEGATIVE_R8_ATOMIC_ALIGNMENT_SHA256")
+expected_negative_r8_atomic_coherence=$(read_pin "$pin_dir/NEGATIVE_R8_ATOMIC_COHERENCE_SHA256")
+expected_negative_r8_atomic_return=$(read_pin "$pin_dir/NEGATIVE_R8_ATOMIC_RETURN_SHA256")
+expected_negative_r8_early_collective=$(read_pin "$pin_dir/NEGATIVE_R8_EARLY_COLLECTIVE_SHA256")
+expected_negative_r8_duplicate_collective=$(read_pin "$pin_dir/NEGATIVE_R8_DUPLICATE_COLLECTIVE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -149,6 +173,7 @@ check_sources() {
     check_digest "$expected_negative_vm" "$negative_vm"
     check_digest "$expected_aql" "$aql_proof"
     check_digest "$expected_r7_async_resources" "$r7_async_resources_proof"
+    check_digest "$expected_r8_execution_contracts" "$r8_execution_contracts_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -183,6 +208,17 @@ check_sources() {
     check_digest "$expected_negative_aql_full_overwrite" "$negative_aql_full_overwrite"
     check_digest "$expected_negative_r7_generation_reuse" "$negative_r7_generation_reuse"
     check_digest "$expected_negative_r7_cross_device" "$negative_r7_cross_device"
+    check_digest "$expected_negative_r8_eager_publication" "$negative_r8_eager_publication"
+    check_digest "$expected_negative_r8_conflicting_overlap" "$negative_r8_conflicting_overlap"
+    check_digest "$expected_negative_r8_dependency_polarity" "$negative_r8_dependency_polarity"
+    check_digest "$expected_negative_r8_binding_substitution" "$negative_r8_binding_substitution"
+    check_digest "$expected_negative_r8_generation_substitution" "$negative_r8_generation_substitution"
+    check_digest "$expected_negative_r8_epoch_substitution" "$negative_r8_epoch_substitution"
+    check_digest "$expected_negative_r8_atomic_alignment" "$negative_r8_atomic_alignment"
+    check_digest "$expected_negative_r8_atomic_coherence" "$negative_r8_atomic_coherence"
+    check_digest "$expected_negative_r8_atomic_return" "$negative_r8_atomic_return"
+    check_digest "$expected_negative_r8_early_collective" "$negative_r8_early_collective"
+    check_digest "$expected_negative_r8_duplicate_collective" "$negative_r8_duplicate_collective"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -200,6 +236,7 @@ check_sources
     "$negative_stale" \
     "$aql_proof" \
     "$r7_async_resources_proof" \
+    "$r8_execution_contracts_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -230,7 +267,18 @@ check_sources
     "$negative_aql_read_regression" \
     "$negative_aql_full_overwrite" \
     "$negative_r7_generation_reuse" \
-    "$negative_r7_cross_device"
+    "$negative_r7_cross_device" \
+    "$negative_r8_eager_publication" \
+    "$negative_r8_conflicting_overlap" \
+    "$negative_r8_dependency_polarity" \
+    "$negative_r8_binding_substitution" \
+    "$negative_r8_generation_substitution" \
+    "$negative_r8_epoch_substitution" \
+    "$negative_r8_atomic_alignment" \
+    "$negative_r8_atomic_coherence" \
+    "$negative_r8_atomic_return" \
+    "$negative_r8_early_collective" \
+    "$negative_r8_duplicate_collective"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -338,6 +386,7 @@ check_positive "$load_plan_proof" 'verification results:: 3 verified, 0 errors' 
 check_positive "$materialization_proof" 'verification results:: 8 verified, 0 errors' materialization
 check_positive "$aql_proof" 'verification results:: 11 verified, 0 errors' aql-publication
 check_positive "$r7_async_resources_proof" 'verification results:: 8 verified, 0 errors' r7-async-resources
+check_positive "$r8_execution_contracts_proof" 'verification results:: 10 verified, 0 errors' r8-execution-contracts
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -372,13 +421,24 @@ check_negative "$negative_aql_read_regression" mutated_read_regression_is_nondec
 check_negative "$negative_aql_full_overwrite" mutated_full_overwrite_is_rejected_v1 aql-full-overwrite
 check_negative "$negative_r7_generation_reuse" mutated_released_generation_is_reusable_v1 r7-generation-reuse
 check_negative "$negative_r7_cross_device" mutated_peer_copy_executes_on_source_v1 r7-cross-device
+check_negative "$negative_r8_eager_publication" mutated_reservation_is_deferred_v1 r8-eager-publication
+check_negative "$negative_r8_conflicting_overlap" mutated_conflicting_overlap_is_safe_v1 r8-conflicting-overlap
+check_negative "$negative_r8_dependency_polarity" mutated_incomplete_dependency_blocks_publication_v1 r8-dependency-polarity
+check_negative "$negative_r8_binding_substitution" mutated_ready_publication_retains_destination_v1 r8-binding-substitution
+check_negative "$negative_r8_generation_substitution" mutated_ready_publication_retains_generation_v1 r8-generation-substitution
+check_negative "$negative_r8_epoch_substitution" mutated_ready_publication_retains_epoch_v1 r8-epoch-substitution
+check_negative "$negative_r8_atomic_alignment" mutated_valid_atomic_location_is_aligned_v1 r8-atomic-alignment
+check_negative "$negative_r8_atomic_coherence" mutated_fetch_add_retains_coherence_v1 r8-atomic-coherence
+check_negative "$negative_r8_atomic_return" mutated_fetch_add_returns_old_v1 r8-atomic-return
+check_negative "$negative_r8_early_collective" mutated_partial_collective_cannot_publish_v1 r8-early-collective
+check_negative "$negative_r8_duplicate_collective" mutated_duplicate_collective_arrival_does_not_advance_v1 r8-duplicate-collective
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 mutations=34'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 mutations=45'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

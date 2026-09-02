@@ -185,12 +185,13 @@ The launch macro currently packs slice-like values as two HIP kernel arguments:
 device pointer then `usize` length. The compiler backend should generate matching
 kernel entry signatures.
 
-## Runtime R7 Status
+## Runtime R8 Status
 
 Implemented for `gfx942:xnack-`:
 
 - a classic KFD SDMA queue with nonblocking generation-tagged submission,
-  deadline polling/waiting, exact completion custody, and batches of at most 64;
+  deadline polling/waiting, exact completion custody, and batches of at most 63
+  so the 64-slot ring always retains one empty slot;
 - host-to-host, host-to-HBM, and HBM-to-host linear copies through the same
   move-only buffer API;
 - per-device best-fit host/HBM pools with completion-gated recycle, stale-lease
@@ -199,7 +200,7 @@ Implemented for `gfx942:xnack-`:
   independent child queues, and mandatory explicit reverse-order qualification
   teardown;
 - a multi-device runtime router with globally unique facade handles and bounded
-  synchronous host-staged peer copy; and
+  cooperative asynchronous host-staged peer copy; and
 - aligned-traffic KFD, HSA, and HIP single-device and two-device copy harnesses
   with common host submit/wait timing boundaries.
 
@@ -212,6 +213,24 @@ artifact before they are described as measured. The current bounded result is
 [`async-copy-mi300x-2026-09-01.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-01.md);
 it reports a correctness pass but not KFD copy-performance parity.
 
+The additive `RuntimeAsyncCopyBackendV1` SPI and typed `copy_async` facade are
+implemented. The router can drive same-device and cross-device host-staged
+copies with one logical range request of at most 64 KiB per read/write poll;
+child reconciliation can still touch allocation-wide native-dirty or
+copy-on-write state. The additive R8 Verus abstraction proves ten
+scheduling, resource-binding, atomic-linearization, and unique-member
+collective-phase obligations with eleven expected-negative mutations. It is a
+whole-resource mathematical model, not a refinement of the ranged Rust copy
+state machine or native copy-engine overlap.
+
+The executable gfx942 kernel-semantic model checks exact device, code,
+artifact, mapping, atomic-object, ordering/scope, coherence-premise, collective
+geometry, convergence-premise, and LDS bindings for the reviewed integer
+atomic and collective roster. Those premises are caller declarations and the
+result remains `ModelOnly`; this is Checked admission evidence, not proof of
+the loaded instructions, GPU coherence, or execution.
+
 Still open: multiple simultaneous compute dispatches on one KFD device,
-compute/copy overlap through the public runtime SPI, native XGMI peer mapping and
-copy, asynchronous host-staged peer submissions, atomics, and collectives.
+persistent compute allocations shared with the KFD SDMA engine, native XGMI
+peer mapping and copy, authenticated code-object semantic refinement, native
+system-coherence evidence, and broader atomic/collective language support.

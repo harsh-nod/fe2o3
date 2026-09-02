@@ -75,6 +75,7 @@ pub use live::{
     Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1,
     Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1,
     Gfx942KfdQueueExceptionObservationV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
     Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
     Gfx942SdmaSubmissionFailureV1, KfdTargetRuntimeDebugQueueTeardownV1,
     KfdTargetRuntimeDebugQueueV1, QuarantinedGfx942BarrierProbeV1,

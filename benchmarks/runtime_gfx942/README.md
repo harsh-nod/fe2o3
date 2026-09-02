@@ -82,11 +82,19 @@ to publish a result when either relevant GPU exceeds
 `FE2O3_ASYNC_COPY_MAX_BUSY_PERCENT`, which defaults to 5. Every backend phase
 also has an outer foreground timeout, controlled by
 `FE2O3_ASYNC_COPY_PHASE_TIMEOUT_SECONDS` and defaulting to 120 seconds.
+`FE2O3_ASYNC_COPY_KFD_PROFILE` selects the single-device KFD lane from
+`directional` (the default), `generic`, `engine0`, or `engine1`; the
+multi-device KFD lane remains directional.
 
 Single-device H2D and D2H rows include submission of the complete depth, host
-waiting for every completion, and no allocation. KFD uses one classic SDMA
-queue, HSA uses `hsa_amd_memory_async_copy`, and HIP uses one nonblocking stream
-per depth entry. The two-device rows publish both devices' work before either
+waiting for every completion, and no allocation. KFD defaults to two targeted
+queues, index 1 for H2D and index 0 for D2H, but serializes the measured
+directions and does not claim directional overlap. Its split metrics report
+submit and wait phases separately; `combined_*` reports the checked
+submit-through-observed-completion API with one currentness envelope. The KFD
+runner can select `generic`, `engine0`, or `engine1` for engine-policy
+ablations. HSA uses `hsa_amd_memory_async_copy`, and HIP uses one nonblocking
+stream per depth entry. The two-device rows publish both devices' work before either
 wait and report aggregate bytes over the shared wall-clock interval. These are
 aligned host submit-plus-wait boundaries and byte counts, not identical native
 mechanisms or allocation/currentness policies.

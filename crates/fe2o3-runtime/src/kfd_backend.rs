@@ -29,8 +29,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
-    BackendPollV1, RuntimeAccessV1, RuntimeBackendFailureV1, RuntimeBackendV1,
-    RuntimeCapabilitiesV1, RuntimeMemoryKindV1,
+    BackendPollV1, MAX_RUNTIME_DEPENDENCIES_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
+    RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCapabilitiesV1, RuntimeMemoryKindV1,
 };
 
 const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
@@ -39,12 +39,18 @@ const WAIT_SPINS_V1: u32 = 32;
 const WAIT_YIELDS_V1: u32 = 8;
 const WAIT_INITIAL_SLEEP_V1: Duration = Duration::from_micros(50);
 const WAIT_MAX_SLEEP_V1: Duration = Duration::from_millis(1);
+const COOPERATIVE_COPY_CHUNK_BYTES_V1: usize = 64 * 1024;
+const COOPERATIVE_COPY_FAILURE_CODE_V1: i64 = -1;
+const MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1: usize = 256;
 
 /// Maximum host-staged size of one logical direct-KFD allocation.
 pub const KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1: u64 = 256 * 1024 * 1024;
 
 /// Maximum aggregate host-staged logical allocation bytes in one backend.
 pub const KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1: u64 = 1024 * 1024 * 1024;
+
+/// Maximum aggregate host staging retained by pending cooperative copies.
+pub const KFD_RUNTIME_MAX_COOPERATIVE_COPY_STAGING_BYTES_V1: u64 = 1024 * 1024 * 1024;
 
 /// Stable classification for failures returned by [`KfdRuntimeBackendV1`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1937,27 +1943,54 @@ fn wait_with_deadline_v1<E>(
     deadline: Instant,
     mut poll: impl FnMut() -> Result<BackendPollV1, E>,
 ) -> Result<BackendPollV1, E> {
+    wait_with_deadline_tracking_progress_v1(deadline, || poll().map(|status| (status, false)))
+}
+
+fn wait_with_deadline_tracking_progress_v1<E>(
+    deadline: Instant,
+    poll: impl FnMut() -> Result<(BackendPollV1, bool), E>,
+) -> Result<BackendPollV1, E> {
+    wait_with_deadline_tracking_progress_by_v1(deadline, poll, apply_wait_backoff_v1)
+}
+
+fn wait_with_deadline_tracking_progress_by_v1<E>(
+    deadline: Instant,
+    mut poll: impl FnMut() -> Result<(BackendPollV1, bool), E>,
+    mut backoff: impl FnMut(u32, &mut Duration, Instant) -> bool,
+) -> Result<BackendPollV1, E> {
     let mut attempts = 0_u32;
     let mut sleep = WAIT_INITIAL_SLEEP_V1;
     loop {
-        let status = poll()?;
+        let (status, made_progress) = poll()?;
         if status != BackendPollV1::Pending || Instant::now() >= deadline {
             return Ok(status);
         }
-        if attempts < WAIT_SPINS_V1 {
-            core::hint::spin_loop();
-        } else if attempts < WAIT_SPINS_V1 + WAIT_YIELDS_V1 {
-            std::thread::yield_now();
-        } else {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(BackendPollV1::Pending);
-            }
-            std::thread::sleep(sleep.min(remaining));
-            sleep = sleep.saturating_mul(2).min(WAIT_MAX_SLEEP_V1);
+        if made_progress {
+            attempts = 0;
+            sleep = WAIT_INITIAL_SLEEP_V1;
+            continue;
+        }
+        if !backoff(attempts, &mut sleep, deadline) {
+            return Ok(BackendPollV1::Pending);
         }
         attempts = attempts.saturating_add(1);
     }
+}
+
+fn apply_wait_backoff_v1(attempts: u32, sleep: &mut Duration, deadline: Instant) -> bool {
+    if attempts < WAIT_SPINS_V1 {
+        core::hint::spin_loop();
+    } else if attempts < WAIT_SPINS_V1 + WAIT_YIELDS_V1 {
+        std::thread::yield_now();
+    } else {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep((*sleep).min(remaining));
+        *sleep = sleep.saturating_mul(2).min(WAIT_MAX_SLEEP_V1);
+    }
+    true
 }
 
 impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
@@ -2555,16 +2588,16 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct RoutedHandleV1 {
     child: usize,
     local: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 enum RoutedSubmissionV1 {
     Native(RoutedHandleV1),
-    HostStagedPeer { stream: u64 },
+    CooperativeCopy(CooperativeCopySubmissionV1),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2573,19 +2606,64 @@ enum RoutedEventV1 {
         route: RoutedHandleV1,
         submission: u64,
     },
-    HostStagedPeer {
+    CooperativeCopy {
         submission: u64,
         child: usize,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CooperativeCopyPhaseV1 {
+    Dependencies,
+    Read,
+    Write,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug)]
+struct CooperativeCopySubmissionV1 {
+    stream: u64,
+    source: RoutedHandleV1,
+    source_region: BackendMemoryRegionV1,
+    destination: RoutedHandleV1,
+    destination_region: BackendMemoryRegionV1,
+    dependencies: Vec<u64>,
+    dependency_cursor: usize,
+    dependency_depth: usize,
+    staging: Vec<u8>,
+    phase: CooperativeCopyPhaseV1,
+    byte_cursor: usize,
+}
+
+impl CooperativeCopySubmissionV1 {
+    const fn status(&self) -> BackendPollV1 {
+        match self.phase {
+            CooperativeCopyPhaseV1::Succeeded => BackendPollV1::Succeeded,
+            CooperativeCopyPhaseV1::Failed => BackendPollV1::Failed {
+                code: COOPERATIVE_COPY_FAILURE_CODE_V1,
+            },
+            CooperativeCopyPhaseV1::Dependencies
+            | CooperativeCopyPhaseV1::Read
+            | CooperativeCopyPhaseV1::Write => BackendPollV1::Pending,
+        }
+    }
+
+    const fn is_quiescent(&self) -> bool {
+        matches!(
+            self.phase,
+            CooperativeCopyPhaseV1::Succeeded | CooperativeCopyPhaseV1::Failed
+        )
+    }
 }
 
 /// Process-local multi-device KFD router.
 ///
 /// Every selected device is admitted before any child lazily creates a VM or
 /// queue, satisfying KFD's process-wide no-queue XNACK barrier. Dispatches on
-/// different children can execute independently. Cross-device copies use a
-/// bounded host staging buffer in this profile; native XGMI/peer mappings are
-/// not claimed.
+/// different children can execute independently. Copies use a bounded,
+/// poll-driven host staging state machine in this profile; native SDMA and
+/// XGMI/peer mappings are not claimed through this generic SPI.
 #[must_use = "multi-device KFD backends must remain owned through quiescence"]
 pub struct KfdMultiDeviceRuntimeBackendV1 {
     children: Vec<KfdRuntimeBackendV1>,
@@ -2599,6 +2677,13 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
     kernel_modules: HashMap<u64, u64>,
     submissions: HashMap<u64, RoutedSubmissionV1>,
     events: HashMap<u64, RoutedEventV1>,
+    cooperative_allocation_owners: HashMap<RoutedHandleV1, Vec<u64>>,
+    cooperative_dependency_retain_counts: HashMap<u64, usize>,
+    cooperative_stream_pending_counts: HashMap<u64, usize>,
+    event_submission_retain_counts: HashMap<u64, usize>,
+    cooperative_progress_generation: u64,
+    cooperative_staging_bytes: u64,
+    cooperative_staging_limit_bytes: u64,
 }
 
 impl fmt::Debug for KfdMultiDeviceRuntimeBackendV1 {
@@ -2612,6 +2697,27 @@ impl fmt::Debug for KfdMultiDeviceRuntimeBackendV1 {
             .field("kernels", &self.kernels.len())
             .field("submissions", &self.submissions.len())
             .field("events", &self.events.len())
+            .field(
+                "cooperative_allocation_owners",
+                &self.cooperative_allocation_owners.len(),
+            )
+            .field(
+                "cooperative_dependency_retain_counts",
+                &self.cooperative_dependency_retain_counts.len(),
+            )
+            .field(
+                "cooperative_stream_pending_counts",
+                &self.cooperative_stream_pending_counts.len(),
+            )
+            .field(
+                "event_submission_retain_counts",
+                &self.event_submission_retain_counts.len(),
+            )
+            .field("cooperative_staging_bytes", &self.cooperative_staging_bytes)
+            .field(
+                "cooperative_staging_limit_bytes",
+                &self.cooperative_staging_limit_bytes,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -2725,6 +2831,13 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             kernel_modules: HashMap::new(),
             submissions: HashMap::new(),
             events: HashMap::new(),
+            cooperative_allocation_owners: HashMap::new(),
+            cooperative_dependency_retain_counts: HashMap::new(),
+            cooperative_stream_pending_counts: HashMap::new(),
+            event_submission_retain_counts: HashMap::new(),
+            cooperative_progress_generation: 0,
+            cooperative_staging_bytes: 0,
+            cooperative_staging_limit_bytes: KFD_RUNTIME_MAX_COOPERATIVE_COPY_STAGING_BYTES_V1,
         })
     }
 
@@ -2740,6 +2853,11 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             || !self.kernel_modules.is_empty()
             || !self.submissions.is_empty()
             || !self.events.is_empty()
+            || !self.cooperative_allocation_owners.is_empty()
+            || !self.cooperative_dependency_retain_counts.is_empty()
+            || !self.cooperative_stream_pending_counts.is_empty()
+            || !self.event_submission_retain_counts.is_empty()
+            || self.cooperative_staging_bytes != 0
         {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -2818,6 +2936,16 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })
     }
 
+    fn routed_region_fits(&self, route: RoutedHandleV1, region: BackendMemoryRegionV1) -> bool {
+        let Some(end) = region.byte_offset.checked_add(region.byte_len) else {
+            return false;
+        };
+        self.children
+            .get(route.child)
+            .and_then(|child| child.allocations.get(&route.local))
+            .is_some_and(|allocation| end <= allocation.bytes.len() as u64)
+    }
+
     fn dependency_for_child(
         &mut self,
         event: u64,
@@ -2834,33 +2962,44 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 KfdRuntimeBackendErrorKindV1::WrongDevice,
                 "kernel dependency belongs to another KFD device",
             )),
-            RoutedEventV1::HostStagedPeer {
+            RoutedEventV1::CooperativeCopy {
                 submission,
                 child: event_child,
-            } if event_child == child => match self.poll_v1(submission)? {
-                BackendPollV1::Succeeded => Ok(None),
-                BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::Busy,
-                    "host-staged peer dependency is pending",
-                )),
-                BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                    "host-staged peer dependency failed",
-                )),
-            },
-            RoutedEventV1::HostStagedPeer { .. } => Err(KfdRuntimeBackendV1::rejected(
+            } if event_child == child => {
+                let status = match self.submissions.get(&submission) {
+                    Some(RoutedSubmissionV1::CooperativeCopy(copy)) => copy.status(),
+                    Some(RoutedSubmissionV1::Native(_)) | None => {
+                        return Err(KfdRuntimeBackendV1::rejected(
+                            KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                            "copy event does not retain its cooperative submission",
+                        ));
+                    }
+                };
+                match status {
+                    BackendPollV1::Succeeded => Ok(None),
+                    BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::Busy,
+                        "host-staged peer dependency is pending",
+                    )),
+                    BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "host-staged peer dependency failed",
+                    )),
+                }
+            }
+            RoutedEventV1::CooperativeCopy { .. } => Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::WrongDevice,
-                "kernel dependency belongs to another KFD device",
+                "copy dependency belongs to another KFD device",
             )),
         }
     }
 
-    fn require_dependency_complete(
-        &mut self,
+    fn peer_dependency_submission(
+        &self,
         event: u64,
         source_child: usize,
         destination_child: usize,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         match self.events.get(&event).copied().ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -2870,38 +3009,758 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             RoutedEventV1::Native { route, submission }
                 if route.child == source_child || route.child == destination_child =>
             {
-                match self.poll_v1(submission)? {
-                    BackendPollV1::Succeeded => Ok(()),
-                    BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::Busy,
-                        "peer-copy dependency is pending",
-                    )),
-                    BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "peer-copy dependency failed",
-                    )),
-                }
+                Ok(submission)
             }
-            RoutedEventV1::HostStagedPeer { submission, child }
+            RoutedEventV1::CooperativeCopy { submission, child }
                 if child == source_child || child == destination_child =>
             {
-                match self.poll_v1(submission)? {
-                    BackendPollV1::Succeeded => Ok(()),
-                    BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::Busy,
-                        "peer-copy dependency is pending",
-                    )),
-                    BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "peer-copy dependency failed",
-                    )),
-                }
+                Ok(submission)
             }
             _ => Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::WrongDevice,
                 "peer-copy dependency belongs to an unrelated KFD device",
             )),
         }
+    }
+
+    fn allocation_retained_by_cooperative_copy(&self, route: RoutedHandleV1) -> bool {
+        self.cooperative_allocation_owners.contains_key(&route)
+    }
+
+    fn submission_retained_as_dependency(&self, submission: u64) -> bool {
+        self.cooperative_dependency_retain_counts
+            .contains_key(&submission)
+    }
+
+    fn remove_cooperative_allocation_owner(&mut self, route: RoutedHandleV1, submission: u64) {
+        let remove_entry = {
+            let owners = self
+                .cooperative_allocation_owners
+                .get_mut(&route)
+                .expect("pending cooperative copy retains indexed allocation custody");
+            let index = owners
+                .iter()
+                .position(|owner| *owner == submission)
+                .expect("indexed allocation custody retains the pending submission");
+            owners.swap_remove(index);
+            owners.is_empty()
+        };
+        if remove_entry {
+            self.cooperative_allocation_owners.remove(&route);
+        }
+    }
+
+    fn decrement_indexed_count(table: &mut HashMap<u64, usize>, key: u64, detail: &'static str) {
+        let remove_entry = {
+            let count = table.get_mut(&key).expect(detail);
+            *count = count.checked_sub(1).expect(detail);
+            *count == 0
+        };
+        if remove_entry {
+            table.remove(&key);
+        }
+    }
+
+    fn finish_cooperative_copy(
+        &mut self,
+        submission: u64,
+        phase: CooperativeCopyPhaseV1,
+    ) -> BackendPollV1 {
+        debug_assert!(matches!(
+            phase,
+            CooperativeCopyPhaseV1::Succeeded | CooperativeCopyPhaseV1::Failed
+        ));
+        let (stream, source, destination, dependencies, released_staging_bytes, status) = {
+            let RoutedSubmissionV1::CooperativeCopy(copy) = self
+                .submissions
+                .get_mut(&submission)
+                .expect("validated cooperative copy remains retained")
+            else {
+                unreachable!("validated cooperative copy changed kind")
+            };
+            debug_assert!(!copy.is_quiescent());
+            copy.phase = phase;
+            let staging = core::mem::take(&mut copy.staging);
+            let released_staging_bytes = u64::try_from(staging.len())
+                .expect("cooperative staging length was admitted as u64");
+            debug_assert_eq!(released_staging_bytes, copy.source_region.byte_len);
+            (
+                copy.stream,
+                copy.source,
+                copy.destination,
+                core::mem::take(&mut copy.dependencies),
+                released_staging_bytes,
+                copy.status(),
+            )
+        };
+
+        self.cooperative_staging_bytes = self
+            .cooperative_staging_bytes
+            .checked_sub(released_staging_bytes)
+            .expect("pending cooperative staging is accounted exactly");
+
+        self.remove_cooperative_allocation_owner(source, submission);
+        if destination != source {
+            self.remove_cooperative_allocation_owner(destination, submission);
+        }
+        for dependency in dependencies {
+            Self::decrement_indexed_count(
+                &mut self.cooperative_dependency_retain_counts,
+                dependency,
+                "pending cooperative dependency retain count is indexed",
+            );
+        }
+        Self::decrement_indexed_count(
+            &mut self.cooperative_stream_pending_counts,
+            stream,
+            "pending cooperative stream retain count is indexed",
+        );
+        self.note_cooperative_progress();
+        status
+    }
+
+    fn note_cooperative_progress(&mut self) {
+        self.cooperative_progress_generation = self.cooperative_progress_generation.wrapping_add(1);
+    }
+
+    #[cfg(test)]
+    fn assert_cooperative_indexes_consistent(&self) {
+        let mut expected_allocation_owners = HashMap::<RoutedHandleV1, Vec<u64>>::new();
+        let mut expected_dependency_counts = HashMap::<u64, usize>::new();
+        let mut expected_stream_counts = HashMap::<u64, usize>::new();
+        let mut expected_staging_bytes = 0_u64;
+        for (submission, record) in &self.submissions {
+            let RoutedSubmissionV1::CooperativeCopy(copy) = record else {
+                continue;
+            };
+            assert!(copy.dependency_depth <= MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1);
+            if copy.is_quiescent() {
+                assert!(copy.dependencies.is_empty());
+                assert!(copy.staging.is_empty());
+                continue;
+            }
+            assert!(copy.dependency_cursor <= copy.dependencies.len());
+            assert_eq!(
+                u64::try_from(copy.staging.len()).unwrap(),
+                copy.source_region.byte_len
+            );
+            expected_staging_bytes = expected_staging_bytes
+                .checked_add(copy.source_region.byte_len)
+                .unwrap();
+            expected_allocation_owners
+                .entry(copy.source)
+                .or_default()
+                .push(*submission);
+            if copy.destination != copy.source {
+                expected_allocation_owners
+                    .entry(copy.destination)
+                    .or_default()
+                    .push(*submission);
+            }
+            for dependency in &copy.dependencies {
+                *expected_dependency_counts.entry(*dependency).or_insert(0) += 1;
+            }
+            *expected_stream_counts.entry(copy.stream).or_insert(0) += 1;
+        }
+        for owners in expected_allocation_owners.values_mut() {
+            owners.sort_unstable();
+        }
+        let mut actual_allocation_owners = self.cooperative_allocation_owners.clone();
+        for owners in actual_allocation_owners.values_mut() {
+            owners.sort_unstable();
+            assert!(!owners.is_empty());
+            assert!(owners.windows(2).all(|pair| pair[0] != pair[1]));
+        }
+        assert_eq!(actual_allocation_owners, expected_allocation_owners);
+        assert_eq!(
+            self.cooperative_dependency_retain_counts,
+            expected_dependency_counts
+        );
+        assert_eq!(
+            self.cooperative_stream_pending_counts,
+            expected_stream_counts
+        );
+
+        let mut expected_event_counts = HashMap::<u64, usize>::new();
+        for event in self.events.values() {
+            let submission = match event {
+                RoutedEventV1::Native { submission, .. }
+                | RoutedEventV1::CooperativeCopy { submission, .. } => *submission,
+            };
+            *expected_event_counts.entry(submission).or_insert(0) += 1;
+        }
+        assert_eq!(self.event_submission_retain_counts, expected_event_counts);
+        assert_eq!(self.cooperative_staging_bytes, expected_staging_bytes);
+        assert!(self.cooperative_staging_bytes <= self.cooperative_staging_limit_bytes);
+    }
+
+    fn oldest_pending_cooperative_dependency(
+        &mut self,
+        submission: u64,
+    ) -> Result<Option<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let mut current = submission;
+        for _ in 0..MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            let Some(RoutedSubmissionV1::CooperativeCopy(copy)) = self.submissions.get(&current)
+            else {
+                return Ok(None);
+            };
+            if copy.is_quiescent() {
+                return Ok(None);
+            }
+            let predecessor = (copy.phase == CooperativeCopyPhaseV1::Dependencies)
+                .then(|| copy.dependencies.get(copy.dependency_cursor).copied())
+                .flatten()
+                .filter(|dependency| {
+                    matches!(
+                        self.submissions.get(dependency),
+                        Some(RoutedSubmissionV1::CooperativeCopy(prior))
+                            if !prior.is_quiescent()
+                    )
+                });
+            let Some(predecessor) = predecessor else {
+                return Ok(Some(current));
+            };
+            debug_assert!(
+                predecessor < current,
+                "copy dependencies precede submission"
+            );
+            current = predecessor;
+        }
+        self.terminal = true;
+        Err(RuntimeBackendFailureV1::Terminal(
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Terminal,
+                "cooperative copy dependency depth exceeded its admitted bound",
+            ),
+        ))
+    }
+
+    fn observe_dependency(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let native_route = match self.submissions.get(&submission).ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "cooperative copy retained an unknown dependency submission",
+            )
+        })? {
+            RoutedSubmissionV1::Native(route) => Some(*route),
+            RoutedSubmissionV1::CooperativeCopy(_) => None,
+        };
+        match native_route {
+            Some(route) => {
+                let result = self.children[route.child].poll_v1(route.local);
+                self.latch(result)
+            }
+            None => Ok(match &self.submissions[&submission] {
+                RoutedSubmissionV1::CooperativeCopy(copy) => copy.status(),
+                RoutedSubmissionV1::Native(_) => unreachable!(),
+            }),
+        }
+    }
+
+    fn fail_cooperative_copy(&mut self, submission: u64) -> BackendPollV1 {
+        self.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Failed)
+    }
+
+    /// Advances at most one cooperative host-staging transition.
+    ///
+    /// This is cooperative host progress, not background DMA. Submission is
+    /// nonblocking because no child allocation access occurs before this path.
+    /// A read/write transition issues one child range request of at most 64 KiB,
+    /// but that child may first reconcile allocation-wide native-dirty or copy-
+    /// on-write state; this is not a strict host-work or latency bound.
+    fn progress_cooperative_copy(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        // Dependencies name older submissions. Select the oldest reachable
+        // pending copy first, advance exactly that one operation, and return;
+        // this keeps fan-in progress bounded without recursive chain growth.
+        if let Some(oldest) = self.oldest_pending_cooperative_dependency(submission)?
+            && oldest != submission
+        {
+            self.progress_cooperative_copy(oldest)?;
+            return Ok(BackendPollV1::Pending);
+        }
+        let phase = match self.submissions.get(&submission).ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown cooperative copy submission",
+            )
+        })? {
+            RoutedSubmissionV1::CooperativeCopy(copy) => copy.phase,
+            RoutedSubmissionV1::Native(_) => {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "native submission routed through cooperative copy progress",
+                ));
+            }
+        };
+
+        match phase {
+            CooperativeCopyPhaseV1::Succeeded | CooperativeCopyPhaseV1::Failed => {
+                let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
+                else {
+                    unreachable!()
+                };
+                Ok(copy.status())
+            }
+            CooperativeCopyPhaseV1::Dependencies => {
+                let dependency = match &self.submissions[&submission] {
+                    RoutedSubmissionV1::CooperativeCopy(copy) => {
+                        copy.dependencies.get(copy.dependency_cursor).copied()
+                    }
+                    RoutedSubmissionV1::Native(_) => unreachable!(),
+                };
+                if let Some(dependency) = dependency {
+                    match self.observe_dependency(dependency) {
+                        Ok(BackendPollV1::Succeeded) => {
+                            let RoutedSubmissionV1::CooperativeCopy(copy) =
+                                self.submissions.get_mut(&submission).unwrap()
+                            else {
+                                unreachable!()
+                            };
+                            copy.dependency_cursor += 1;
+                            self.note_cooperative_progress();
+                            return Ok(BackendPollV1::Pending);
+                        }
+                        Ok(BackendPollV1::Pending) => return Ok(BackendPollV1::Pending),
+                        Ok(BackendPollV1::Failed { .. })
+                        | Err(RuntimeBackendFailureV1::Rejected(_))
+                        | Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                            return Ok(self.fail_cooperative_copy(submission));
+                        }
+                        Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
+                            self.terminal = true;
+                            return Err(failure);
+                        }
+                    }
+                }
+                let RoutedSubmissionV1::CooperativeCopy(copy) =
+                    self.submissions.get_mut(&submission).unwrap()
+                else {
+                    unreachable!()
+                };
+                copy.phase = CooperativeCopyPhaseV1::Read;
+                self.note_cooperative_progress();
+                Ok(BackendPollV1::Pending)
+            }
+            CooperativeCopyPhaseV1::Read => {
+                let (route, byte_offset, start, end) = {
+                    let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
+                    else {
+                        unreachable!()
+                    };
+                    let start = copy.byte_cursor;
+                    let end = start
+                        .saturating_add(COOPERATIVE_COPY_CHUNK_BYTES_V1)
+                        .min(copy.staging.len());
+                    (
+                        copy.source,
+                        copy.source_region.byte_offset + start as u64,
+                        start,
+                        end,
+                    )
+                };
+                let result = {
+                    let children = &mut self.children;
+                    let submissions = &mut self.submissions;
+                    let RoutedSubmissionV1::CooperativeCopy(copy) =
+                        submissions.get_mut(&submission).unwrap()
+                    else {
+                        unreachable!()
+                    };
+                    children[route.child].read_allocation_v1(
+                        route.local,
+                        byte_offset,
+                        &mut copy.staging[start..end],
+                    )
+                };
+                match result {
+                    Ok(()) => {
+                        let RoutedSubmissionV1::CooperativeCopy(copy) =
+                            self.submissions.get_mut(&submission).unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        copy.byte_cursor = end;
+                        if end == copy.staging.len() {
+                            copy.phase = CooperativeCopyPhaseV1::Write;
+                            copy.byte_cursor = 0;
+                        }
+                        self.note_cooperative_progress();
+                        Ok(BackendPollV1::Pending)
+                    }
+                    Err(RuntimeBackendFailureV1::Rejected(error))
+                        if error.kind() == KfdRuntimeBackendErrorKindV1::Busy =>
+                    {
+                        Ok(BackendPollV1::Pending)
+                    }
+                    Err(RuntimeBackendFailureV1::Rejected(_))
+                    | Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                        Ok(self.fail_cooperative_copy(submission))
+                    }
+                    Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
+                        self.terminal = true;
+                        Err(failure)
+                    }
+                }
+            }
+            CooperativeCopyPhaseV1::Write => {
+                let (route, byte_offset, start, end) = {
+                    let RoutedSubmissionV1::CooperativeCopy(copy) = &self.submissions[&submission]
+                    else {
+                        unreachable!()
+                    };
+                    let start = copy.byte_cursor;
+                    let end = start
+                        .saturating_add(COOPERATIVE_COPY_CHUNK_BYTES_V1)
+                        .min(copy.staging.len());
+                    (
+                        copy.destination,
+                        copy.destination_region.byte_offset + start as u64,
+                        start,
+                        end,
+                    )
+                };
+                let result = {
+                    let children = &mut self.children;
+                    let submissions = &self.submissions;
+                    let RoutedSubmissionV1::CooperativeCopy(copy) = &submissions[&submission]
+                    else {
+                        unreachable!()
+                    };
+                    children[route.child].write_allocation_v1(
+                        route.local,
+                        byte_offset,
+                        &copy.staging[start..end],
+                    )
+                };
+                match result {
+                    Ok(()) => {
+                        let RoutedSubmissionV1::CooperativeCopy(copy) =
+                            self.submissions.get_mut(&submission).unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        copy.byte_cursor = end;
+                        if end == copy.staging.len() {
+                            return Ok(self.finish_cooperative_copy(
+                                submission,
+                                CooperativeCopyPhaseV1::Succeeded,
+                            ));
+                        }
+                        let status = copy.status();
+                        self.note_cooperative_progress();
+                        Ok(status)
+                    }
+                    Err(RuntimeBackendFailureV1::Rejected(error))
+                        if error.kind() == KfdRuntimeBackendErrorKindV1::Busy =>
+                    {
+                        Ok(BackendPollV1::Pending)
+                    }
+                    Err(RuntimeBackendFailureV1::Rejected(_))
+                    | Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                        Ok(self.fail_cooperative_copy(submission))
+                    }
+                    Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
+                        self.terminal = true;
+                        Err(failure)
+                    }
+                }
+            }
+        }
+    }
+
+    fn submit_cooperative_copy(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+        require_distinct_devices: bool,
+    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        let source_route = Self::route(
+            &self.allocations,
+            source.allocation,
+            "unknown source KFD allocation",
+        )?;
+        let destination_route = Self::route(
+            &self.allocations,
+            destination.allocation,
+            "unknown destination KFD allocation",
+        )?;
+        let distinct_devices = source_route.child != destination_route.child;
+        if distinct_devices != require_distinct_devices
+            || destination_route.child != stream_route.child
+            || source.byte_len != destination.byte_len
+            || source.byte_len == 0
+            || source.byte_offset.checked_add(source.byte_len).is_none()
+            || destination
+                .byte_offset
+                .checked_add(destination.byte_len)
+                .is_none()
+            || !matches!(
+                source.access,
+                RuntimeAccessV1::Read | RuntimeAccessV1::ReadWrite
+            )
+            || !matches!(
+                destination.access,
+                RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+            )
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "cooperative copy requires equal nonzero ranges, valid access, and a destination stream",
+            ));
+        }
+        if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "cooperative copy dependency capacity exceeded",
+            ));
+        }
+        if !self.routed_region_fits(source_route, source)
+            || !self.routed_region_fits(destination_route, destination)
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "cooperative copy range exceeds its routed allocation",
+            ));
+        }
+        if self.children[source_route.child].allocation_is_active(source_route.local)
+            || self.children[destination_route.child].allocation_is_active(destination_route.local)
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "cooperative copy allocation is retained by an active native dispatch",
+            ));
+        }
+        let len = usize::try_from(source.byte_len)
+            .map_err(|_| KfdRuntimeBackendV1::capacity("copy staging size overflow"))?;
+        let mut dependency_submissions = Vec::new();
+        dependency_submissions
+            .try_reserve_exact(dependencies.len())
+            .map_err(|_| KfdRuntimeBackendV1::capacity("copy dependency allocation failed"))?;
+        let mut dependency_set = HashSet::new();
+        dependency_set
+            .try_reserve(dependencies.len())
+            .map_err(|_| KfdRuntimeBackendV1::capacity("copy dependency set allocation failed"))?;
+        for event in dependencies {
+            let dependency = self.peer_dependency_submission(
+                *event,
+                source_route.child,
+                destination_route.child,
+            )?;
+            if !dependency_set.insert(dependency) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "cooperative copy dependencies must name distinct submissions",
+                ));
+            }
+            dependency_submissions.push(dependency);
+        }
+        let mut dependency_depth = 1_usize;
+        for dependency in &dependency_submissions {
+            if let Some(RoutedSubmissionV1::CooperativeCopy(copy)) =
+                self.submissions.get(dependency)
+                && !copy.is_quiescent()
+            {
+                dependency_depth = dependency_depth.max(
+                    copy.dependency_depth.checked_add(1).ok_or_else(|| {
+                        KfdRuntimeBackendV1::capacity("cooperative copy dependency depth overflow")
+                    })?,
+                );
+            }
+        }
+        if dependency_depth > MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "cooperative copy dependency depth exceeds its admitted bound",
+            ));
+        }
+        let source_dependencies_complete = self
+            .cooperative_allocation_owners
+            .get(&source_route)
+            .is_none_or(|owners| owners.iter().all(|owner| dependency_set.contains(owner)));
+        let destination_dependencies_complete = self
+            .cooperative_allocation_owners
+            .get(&destination_route)
+            .is_none_or(|owners| owners.iter().all(|owner| dependency_set.contains(owner)));
+        if !source_dependencies_complete || !destination_dependencies_complete {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "overlapping cooperative copies require an explicit dependency",
+            ));
+        }
+
+        let next_cooperative_staging_bytes = self
+            .cooperative_staging_bytes
+            .checked_add(source.byte_len)
+            .filter(|total| *total <= self.cooperative_staging_limit_bytes)
+            .ok_or_else(|| {
+                KfdRuntimeBackendV1::capacity(
+                    "cooperative copy aggregate staging capacity exceeded",
+                )
+            })?;
+
+        let distinct_allocation_routes = source_route != destination_route;
+        let missing_allocation_owner_entries = usize::from(
+            !self
+                .cooperative_allocation_owners
+                .contains_key(&source_route),
+        ) + usize::from(
+            distinct_allocation_routes
+                && !self
+                    .cooperative_allocation_owners
+                    .contains_key(&destination_route),
+        );
+        self.cooperative_allocation_owners
+            .try_reserve(missing_allocation_owner_entries)
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity(
+                    "cooperative copy allocation-custody index growth failed",
+                )
+            })?;
+        let mut new_source_owners = None;
+        if let Some(owners) = self.cooperative_allocation_owners.get_mut(&source_route) {
+            owners.try_reserve(1).map_err(|_| {
+                KfdRuntimeBackendV1::capacity("cooperative source allocation owner growth failed")
+            })?;
+        } else {
+            let mut owners = Vec::new();
+            owners.try_reserve_exact(1).map_err(|_| {
+                KfdRuntimeBackendV1::capacity(
+                    "cooperative source allocation owner allocation failed",
+                )
+            })?;
+            new_source_owners = Some(owners);
+        }
+        let mut new_destination_owners = None;
+        if distinct_allocation_routes {
+            if let Some(owners) = self
+                .cooperative_allocation_owners
+                .get_mut(&destination_route)
+            {
+                owners.try_reserve(1).map_err(|_| {
+                    KfdRuntimeBackendV1::capacity(
+                        "cooperative destination allocation owner growth failed",
+                    )
+                })?;
+            } else {
+                let mut owners = Vec::new();
+                owners.try_reserve_exact(1).map_err(|_| {
+                    KfdRuntimeBackendV1::capacity(
+                        "cooperative destination allocation owner allocation failed",
+                    )
+                })?;
+                new_destination_owners = Some(owners);
+            }
+        }
+        let new_dependency_count_entries = dependency_submissions
+            .iter()
+            .filter(|dependency| {
+                !self
+                    .cooperative_dependency_retain_counts
+                    .contains_key(dependency)
+            })
+            .count();
+        self.cooperative_dependency_retain_counts
+            .try_reserve(new_dependency_count_entries)
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("cooperative dependency-retain index growth failed")
+            })?;
+        if dependency_submissions.iter().any(|dependency| {
+            self.cooperative_dependency_retain_counts
+                .get(dependency)
+                .is_some_and(|count| *count == usize::MAX)
+        }) {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "cooperative dependency retain count overflow",
+            ));
+        }
+        if !self.cooperative_stream_pending_counts.contains_key(&stream) {
+            self.cooperative_stream_pending_counts
+                .try_reserve(1)
+                .map_err(|_| {
+                    KfdRuntimeBackendV1::capacity("cooperative stream-retain index growth failed")
+                })?;
+        }
+        if self
+            .cooperative_stream_pending_counts
+            .get(&stream)
+            .is_some_and(|count| *count == usize::MAX)
+        {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "cooperative stream retain count overflow",
+            ));
+        }
+        Self::reserve_route(
+            &mut self.submissions,
+            "multi-device copy submission route allocation failed",
+        )?;
+        let staging = try_zeroed_staging_v1(len)?;
+        let id = self.next_id()?;
+
+        if let Some(owners) = self.cooperative_allocation_owners.get_mut(&source_route) {
+            owners.push(id);
+        } else {
+            let mut owners = new_source_owners
+                .take()
+                .expect("new cooperative source owner storage was reserved");
+            owners.push(id);
+            self.cooperative_allocation_owners
+                .insert(source_route, owners);
+        }
+        if distinct_allocation_routes {
+            if let Some(owners) = self
+                .cooperative_allocation_owners
+                .get_mut(&destination_route)
+            {
+                owners.push(id);
+            } else {
+                let mut owners = new_destination_owners
+                    .take()
+                    .expect("new cooperative destination owner storage was reserved");
+                owners.push(id);
+                self.cooperative_allocation_owners
+                    .insert(destination_route, owners);
+            }
+        }
+        for dependency in &dependency_submissions {
+            let count = self
+                .cooperative_dependency_retain_counts
+                .entry(*dependency)
+                .or_insert(0);
+            *count += 1;
+        }
+        let stream_count = self
+            .cooperative_stream_pending_counts
+            .entry(stream)
+            .or_insert(0);
+        *stream_count += 1;
+        self.cooperative_staging_bytes = next_cooperative_staging_bytes;
+        self.submissions.insert(
+            id,
+            RoutedSubmissionV1::CooperativeCopy(CooperativeCopySubmissionV1 {
+                stream,
+                source: source_route,
+                source_region: source,
+                destination: destination_route,
+                destination_region: destination,
+                dependencies: dependency_submissions,
+                dependency_cursor: 0,
+                dependency_depth,
+                staging,
+                phase: CooperativeCopyPhaseV1::Dependencies,
+                byte_cursor: 0,
+            }),
+        );
+        Ok(id)
     }
 }
 
@@ -2952,6 +3811,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         stream: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.cooperative_stream_pending_counts.contains_key(&stream) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "stream retains a pending cooperative copy",
+            ));
+        }
         let route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
         let result = self.children[route.child].destroy_stream_v1(route.local);
         self.latch(result)?;
@@ -2989,6 +3854,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             allocation,
             "unknown multi-device KFD allocation",
         )?;
+        if self.allocation_retained_by_cooperative_copy(route) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "allocation is retained by a pending cooperative copy",
+            ));
+        }
         let result = self.children[route.child].release_allocation_v1(route.local);
         self.latch(result)?;
         self.allocations.remove(&allocation);
@@ -3007,6 +3878,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             allocation,
             "unknown multi-device KFD allocation",
         )?;
+        if self.allocation_retained_by_cooperative_copy(route) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "allocation is retained by a pending cooperative copy",
+            ));
+        }
         let result =
             self.children[route.child].write_allocation_v1(route.local, byte_offset, bytes);
         self.latch(result)
@@ -3024,6 +3901,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             allocation,
             "unknown multi-device KFD allocation",
         )?;
+        if self.allocation_retained_by_cooperative_copy(route) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "allocation is retained by a pending cooperative copy",
+            ));
+        }
         let result =
             self.children[route.child].read_allocation_v1(route.local, byte_offset, destination);
         self.latch(result)
@@ -3132,6 +4015,12 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                     "kernel binding belongs to another KFD device",
                 ));
             }
+            if self.allocation_retained_by_cooperative_copy(allocation) {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "kernel binding is retained by a pending cooperative copy",
+                ));
+            }
             bindings.push(BackendBindingV1 {
                 region: BackendMemoryRegionV1 {
                     allocation: allocation.local,
@@ -3182,17 +4071,21 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        match self.submissions.get(&submission).copied().ok_or_else(|| {
+        let native_route = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown multi-device KFD submission",
             )
         })? {
-            RoutedSubmissionV1::Native(route) => {
+            RoutedSubmissionV1::Native(route) => Some(*route),
+            RoutedSubmissionV1::CooperativeCopy(_) => None,
+        };
+        match native_route {
+            Some(route) => {
                 let result = self.children[route.child].poll_v1(route.local);
                 self.latch(result)
             }
-            RoutedSubmissionV1::HostStagedPeer { .. } => Ok(BackendPollV1::Succeeded),
+            None => self.progress_cooperative_copy(submission),
         }
     }
 
@@ -3202,17 +4095,28 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         deadline: Instant,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        match self.submissions.get(&submission).copied().ok_or_else(|| {
+        let native_route = match self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown multi-device KFD submission",
             )
         })? {
-            RoutedSubmissionV1::Native(route) => {
+            RoutedSubmissionV1::Native(route) => Some(*route),
+            RoutedSubmissionV1::CooperativeCopy(_) => None,
+        };
+        match native_route {
+            Some(route) => {
                 let result = self.children[route.child].wait_v1(route.local, deadline);
                 self.latch(result)
             }
-            RoutedSubmissionV1::HostStagedPeer { .. } => Ok(BackendPollV1::Succeeded),
+            None => wait_with_deadline_tracking_progress_v1(deadline, || {
+                let progress_before = self.cooperative_progress_generation;
+                let status = self.progress_cooperative_copy(submission)?;
+                Ok((
+                    status,
+                    self.cooperative_progress_generation != progress_before,
+                ))
+            }),
         }
     }
 
@@ -3221,21 +4125,37 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        let route = self.submissions.get(&submission).copied().ok_or_else(|| {
+        let route = self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown multi-device KFD submission",
             )
         })?;
-        if self.events.values().any(|event| {
-            matches!(event, RoutedEventV1::HostStagedPeer { submission: retained, .. } if *retained == submission)
-        }) {
+        if self
+            .event_submission_retain_counts
+            .contains_key(&submission)
+        {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "submission is retained by a multi-device event",
             ));
         }
+        if self.submission_retained_as_dependency(submission) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "submission is retained by a pending cooperative copy",
+            ));
+        }
+        if let RoutedSubmissionV1::CooperativeCopy(copy) = route
+            && !copy.is_quiescent()
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "cooperative copy submission is pending",
+            ));
+        }
         if let RoutedSubmissionV1::Native(route) = route {
+            let route = *route;
             let result = self.children[route.child].release_submission_v1(route.local);
             self.latch(result)?;
         }
@@ -3250,19 +4170,57 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
-        let submission_route = self.submissions.get(&submission).copied().ok_or_else(|| {
+        let submission_route = self.submissions.get(&submission).ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown multi-device KFD submission",
             )
         })?;
+        let submission_route = match submission_route {
+            RoutedSubmissionV1::Native(route) => (Some(*route), None),
+            RoutedSubmissionV1::CooperativeCopy(copy) => (None, Some(copy.stream)),
+        };
+        let stream_matches = match submission_route {
+            (Some(route), None) => route.child == stream_route.child,
+            (None, Some(copy_stream)) => copy_stream == stream,
+            _ => false,
+        };
+        if !stream_matches {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "submission belongs to another multi-device stream",
+            ));
+        }
         Self::reserve_route(
             &mut self.events,
             "multi-device event route allocation failed",
         )?;
-        let id = self.next_id()?;
+        if !self
+            .event_submission_retain_counts
+            .contains_key(&submission)
+        {
+            self.event_submission_retain_counts
+                .try_reserve(1)
+                .map_err(|_| {
+                    KfdRuntimeBackendV1::capacity("multi-device event-retain index growth failed")
+                })?;
+        }
+        if self
+            .event_submission_retain_counts
+            .get(&submission)
+            .is_some_and(|count| *count == usize::MAX)
+        {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "multi-device event retain count overflow",
+            ));
+        }
+        if self.next_handle == u64::MAX {
+            return Err(KfdRuntimeBackendV1::capacity(
+                "multi-device routing handle space exhausted",
+            ));
+        }
         let routed = match submission_route {
-            RoutedSubmissionV1::Native(route) if route.child == stream_route.child => {
+            (Some(route), None) => {
                 let result =
                     self.children[route.child].record_event_v1(stream_route.local, route.local);
                 let local = self.latch(result)?;
@@ -3274,20 +4232,19 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
                     submission,
                 }
             }
-            RoutedSubmissionV1::HostStagedPeer {
-                stream: source_stream,
-            } if source_stream == stream => RoutedEventV1::HostStagedPeer {
+            (None, Some(_)) => RoutedEventV1::CooperativeCopy {
                 submission,
                 child: stream_route.child,
             },
-            _ => {
-                return Err(KfdRuntimeBackendV1::rejected(
-                    KfdRuntimeBackendErrorKindV1::WrongDevice,
-                    "submission belongs to another multi-device stream",
-                ));
-            }
+            _ => unreachable!("validated routed submission has one kind"),
         };
+        let id = self.next_id()?;
         self.events.insert(id, routed);
+        let count = self
+            .event_submission_retain_counts
+            .entry(submission)
+            .or_insert(0);
+        *count += 1;
         Ok(id)
     }
 
@@ -3303,7 +4260,16 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             let result = self.children[route.child].release_event_v1(route.local);
             self.latch(result)?;
         }
+        let submission = match route {
+            RoutedEventV1::Native { submission, .. }
+            | RoutedEventV1::CooperativeCopy { submission, .. } => submission,
+        };
         self.events.remove(&event);
+        Self::decrement_indexed_count(
+            &mut self.event_submission_retain_counts,
+            submission,
+            "live multi-device event retain count is indexed",
+        );
         Ok(())
     }
 
@@ -3314,62 +4280,35 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         destination: BackendMemoryRegionV1,
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.submit_cooperative_copy(stream, source, destination, dependencies, true)
+    }
+}
+
+impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
+    fn copy_async_v1(
+        &mut self,
+        _stream: u64,
+        _source: BackendMemoryRegionV1,
+        _destination: BackendMemoryRegionV1,
+        _dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
-        let source_route = Self::route(
-            &self.allocations,
-            source.allocation,
-            "unknown source KFD allocation",
-        )?;
-        let destination_route = Self::route(
-            &self.allocations,
-            destination.allocation,
-            "unknown destination KFD allocation",
-        )?;
-        if source_route.child == destination_route.child
-            || destination_route.child != stream_route.child
-            || source.byte_len != destination.byte_len
-            || source.byte_len == 0
-            || !matches!(
-                source.access,
-                RuntimeAccessV1::Read | RuntimeAccessV1::ReadWrite
-            )
-            || !matches!(
-                destination.access,
-                RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
-            )
-        {
-            return Err(KfdRuntimeBackendV1::rejected(
-                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                "host-staged peer copy requires equal nonzero ranges on distinct devices and a destination stream",
-            ));
-        }
-        for event in dependencies {
-            self.require_dependency_complete(*event, source_route.child, destination_route.child)?;
-        }
-        let len = usize::try_from(source.byte_len)
-            .map_err(|_| KfdRuntimeBackendV1::capacity("peer-copy staging size overflow"))?;
-        let mut staging = try_zeroed_staging_v1(len)?;
-        Self::reserve_route(
-            &mut self.submissions,
-            "multi-device peer submission route allocation failed",
-        )?;
-        let id = self.next_id()?;
-        let result = self.children[source_route.child].read_allocation_v1(
-            source_route.local,
-            source.byte_offset,
-            &mut staging,
-        );
-        self.latch(result)?;
-        let result = self.children[destination_route.child].write_allocation_v1(
-            destination_route.local,
-            destination.byte_offset,
-            &staging,
-        );
-        self.latch(result)?;
-        self.submissions
-            .insert(id, RoutedSubmissionV1::HostStagedPeer { stream });
-        Ok(id)
+        Err(Self::rejected(
+            KfdRuntimeBackendErrorKindV1::Unsupported,
+            "direct KFD async copy requires persistent allocations shared by compute and SDMA",
+        ))
+    }
+}
+
+impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    fn copy_async_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.submit_cooperative_copy(stream, source, destination, dependencies, false)
     }
 }
 
@@ -3753,6 +4692,61 @@ mod tests {
     }
 
     #[test]
+    fn productive_pending_polls_do_not_enter_wait_backoff() {
+        let mut polls = 0_u32;
+        let mut backoffs = 0_u32;
+        let status = wait_with_deadline_tracking_progress_by_v1(
+            Instant::now() + Duration::from_secs(1),
+            || {
+                polls += 1;
+                Ok::<_, ()>((
+                    if polls == 128 {
+                        BackendPollV1::Succeeded
+                    } else {
+                        BackendPollV1::Pending
+                    },
+                    true,
+                ))
+            },
+            |_, _, _| {
+                backoffs += 1;
+                true
+            },
+        )
+        .unwrap();
+        assert_eq!(status, BackendPollV1::Succeeded);
+        assert_eq!(polls, 128);
+        assert_eq!(backoffs, 0);
+    }
+
+    #[test]
+    fn stalled_pending_polls_still_enter_wait_backoff() {
+        let mut polls = 0_u32;
+        let mut backoffs = 0_u32;
+        let status = wait_with_deadline_tracking_progress_by_v1(
+            Instant::now() + Duration::from_secs(1),
+            || {
+                polls += 1;
+                Ok::<_, ()>((
+                    if polls == 4 {
+                        BackendPollV1::Succeeded
+                    } else {
+                        BackendPollV1::Pending
+                    },
+                    false,
+                ))
+            },
+            |_, _, _| {
+                backoffs += 1;
+                true
+            },
+        )
+        .unwrap();
+        assert_eq!(status, BackendPollV1::Succeeded);
+        assert_eq!(backoffs, 3);
+    }
+
+    #[test]
     fn peer_copy_is_explicitly_rejected() {
         let mut backend = KfdRuntimeBackendV1::mock();
         let binding = BackendMemoryRegionV1 {
@@ -3793,6 +4787,7 @@ mod tests {
             .unwrap();
         let expected = (1_u8..=32).collect::<Vec<_>>();
         backend.write_allocation_v1(source, 0, &expected).unwrap();
+        let destination_route = backend.allocations[&destination];
         let submission = backend
             .peer_copy_v1(
                 right_stream,
@@ -3811,10 +4806,13 @@ mod tests {
                 &[],
             )
             .unwrap();
-        assert_eq!(
-            backend.poll_v1(submission).unwrap(),
-            BackendPollV1::Succeeded
+        assert!(
+            backend.children[destination_route.child].allocations[&destination_route.local]
+                .bytes
+                .iter()
+                .all(|byte| *byte == 0)
         );
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
         let event = backend.record_event_v1(right_stream, submission).unwrap();
         let left_child = backend.child_for_device(7).unwrap();
         assert!(matches!(
@@ -3827,6 +4825,17 @@ mod tests {
             Err(RuntimeBackendFailureV1::Rejected(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
         ));
+        assert!(matches!(
+            backend.read_allocation_v1(destination, 0, &mut [0_u8; 1]),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        assert_eq!(
+            backend
+                .wait_v1(submission, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
         let mut observed = [0_u8; 32];
         backend
             .read_allocation_v1(destination, 0, &mut observed)
@@ -3838,6 +4847,967 @@ mod tests {
         backend.release_allocation_v1(destination).unwrap();
         backend.destroy_stream_v1(left_stream).unwrap();
         backend.destroy_stream_v1(right_stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn multi_device_router_cooperatively_copies_on_one_device() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 16, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 16, 8)
+            .unwrap();
+        backend
+            .write_allocation_v1(source, 4, &[9, 8, 7, 6])
+            .unwrap();
+        let submission = backend
+            .copy_async_v1(
+                stream,
+                BackendMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 4,
+                    byte_len: 4,
+                },
+                BackendMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 8,
+                    byte_len: 4,
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        let mut observed = [0_u8; 4];
+        backend
+            .read_allocation_v1(destination, 8, &mut observed)
+            .unwrap();
+        assert_eq!(observed, [9, 8, 7, 6]);
+        backend.release_submission_v1(submission).unwrap();
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_dependency_translation_is_observational() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        backend
+            .write_allocation_v1(source, 0, &[1, 2, 3, 4])
+            .unwrap();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+        let submission = backend
+            .copy_async_v1(
+                stream,
+                region(source, RuntimeAccessV1::Read),
+                region(destination, RuntimeAccessV1::Write),
+                &[],
+            )
+            .unwrap();
+        let event = backend.record_event_v1(stream, submission).unwrap();
+        let child = backend.child_for_device(7).unwrap();
+
+        assert!(matches!(
+            backend.dependency_for_child(event, child),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        assert!(matches!(
+            &backend.submissions[&submission],
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.phase == CooperativeCopyPhaseV1::Dependencies
+                    && copy.dependency_cursor == 0
+                    && copy.byte_cursor == 0
+        ));
+        let destination_route = backend.allocations[&destination];
+        assert!(
+            backend.children[destination_route.child].allocations[&destination_route.local]
+                .bytes
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+
+        backend.release_event_v1(event).unwrap();
+        assert_eq!(
+            backend
+                .wait_v1(submission, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.release_submission_v1(submission).unwrap();
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_rejects_native_allocation_custody_before_mutation() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let source_route = backend.allocations[&source];
+        let mut active_allocations = HashSet::new();
+        active_allocations.insert(source_route.local);
+        backend.children[source_route.child].active = Some(ActiveSubmissionV1 {
+            id: 99,
+            stream: 1,
+            kernel: 1,
+            allocations: active_allocations,
+            writebacks: Vec::new(),
+            resident_descriptors: Vec::new(),
+            dispatch_shape_sha256: [0; 32],
+            published_at: Instant::now(),
+            performance: KfdRuntimeLaunchPerformanceV1::default(),
+            batch: None,
+        });
+        let submissions_before = backend.submissions.len();
+        let next_handle_before = backend.next_handle;
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+
+        assert!(matches!(
+            backend.copy_async_v1(
+                stream,
+                region(source, RuntimeAccessV1::Read),
+                region(destination, RuntimeAccessV1::Write),
+                &[],
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        assert_eq!(backend.submissions.len(), submissions_before);
+        assert_eq!(backend.next_handle, next_handle_before);
+
+        backend.children[source_route.child].active = None;
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_backend_enforces_dependency_capacity() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let excessive = vec![0_u64; MAX_RUNTIME_DEPENDENCIES_V1 + 1];
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+
+        assert!(matches!(
+            backend.copy_async_v1(
+                stream,
+                region(source, RuntimeAccessV1::Read),
+                region(destination, RuntimeAccessV1::Write),
+                &excessive,
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert!(backend.submissions.is_empty());
+
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_rejects_both_out_of_bounds_ranges_before_publication() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        backend.write_allocation_v1(source, 0, &[7; 8]).unwrap();
+        let region = |allocation, byte_offset, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset,
+            byte_len: 8,
+        };
+
+        for (source_offset, destination_offset) in [(1, 0), (0, 1)] {
+            assert!(matches!(
+                backend.copy_async_v1(
+                    stream,
+                    region(source, source_offset, RuntimeAccessV1::Read),
+                    region(destination, destination_offset, RuntimeAccessV1::Write),
+                    &[],
+                ),
+                Err(RuntimeBackendFailureV1::Rejected(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+            ));
+            assert!(backend.submissions.is_empty());
+            let destination_route = backend.allocations[&destination];
+            assert!(
+                backend.children[destination_route.child].allocations[&destination_route.local]
+                    .bytes
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+        }
+
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn direct_kfd_async_copy_is_explicitly_unsupported() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let region = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        assert!(matches!(
+            backend.copy_async_v1(1, region, region, &[]),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+        ));
+    }
+
+    #[test]
+    fn cooperative_copy_dependency_retains_prior_submission_until_completion() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let first_source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let shared = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let final_destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        backend
+            .write_allocation_v1(first_source, 0, &[1, 3, 3, 7])
+            .unwrap();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+        let first = backend
+            .copy_async_v1(
+                stream,
+                region(first_source, RuntimeAccessV1::Read),
+                region(shared, RuntimeAccessV1::Write),
+                &[],
+            )
+            .unwrap();
+        let event = backend.record_event_v1(stream, first).unwrap();
+        let second = backend
+            .copy_async_v1(
+                stream,
+                region(shared, RuntimeAccessV1::Read),
+                region(final_destination, RuntimeAccessV1::Write),
+                &[event],
+            )
+            .unwrap();
+        assert_eq!(backend.poll_v1(second).unwrap(), BackendPollV1::Pending);
+        backend.release_event_v1(event).unwrap();
+        assert!(matches!(
+            backend.release_submission_v1(first),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        assert_eq!(
+            backend
+                .wait_v1(second, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert_eq!(backend.poll_v1(first).unwrap(), BackendPollV1::Succeeded);
+        backend.release_submission_v1(first).unwrap();
+        backend.release_submission_v1(second).unwrap();
+        let mut observed = [0_u8; 4];
+        backend
+            .read_allocation_v1(final_destination, 0, &mut observed)
+            .unwrap();
+        assert_eq!(observed, [1, 3, 3, 7]);
+        for allocation in [first_source, shared, final_destination] {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_indexes_track_fan_out_and_quiescence_exactly() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let allocations = (0..6)
+            .map(|_| {
+                backend
+                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+        let first = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[0], RuntimeAccessV1::Read),
+                region(allocations[1], RuntimeAccessV1::Write),
+                &[],
+            )
+            .unwrap();
+        backend.assert_cooperative_indexes_consistent();
+        assert_eq!(backend.cooperative_stream_pending_counts[&stream], 1);
+
+        let first_event = backend.record_event_v1(stream, first).unwrap();
+        let second_event = backend.record_event_v1(stream, first).unwrap();
+        backend.assert_cooperative_indexes_consistent();
+        assert_eq!(backend.event_submission_retain_counts[&first], 2);
+
+        let second = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[2], RuntimeAccessV1::Read),
+                region(allocations[3], RuntimeAccessV1::Write),
+                &[first_event],
+            )
+            .unwrap();
+        let third = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[4], RuntimeAccessV1::Read),
+                region(allocations[5], RuntimeAccessV1::Write),
+                &[second_event],
+            )
+            .unwrap();
+        backend.assert_cooperative_indexes_consistent();
+        assert_eq!(backend.cooperative_dependency_retain_counts[&first], 2);
+        assert_eq!(backend.cooperative_stream_pending_counts[&stream], 3);
+
+        backend.release_event_v1(first_event).unwrap();
+        backend.assert_cooperative_indexes_consistent();
+        assert_eq!(backend.event_submission_retain_counts[&first], 1);
+        backend.release_event_v1(second_event).unwrap();
+        backend.assert_cooperative_indexes_consistent();
+        assert!(!backend.event_submission_retain_counts.contains_key(&first));
+        assert!(matches!(
+            backend.release_submission_v1(first),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+
+        assert_eq!(
+            backend
+                .wait_v1(second, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.assert_cooperative_indexes_consistent();
+        assert_eq!(backend.cooperative_dependency_retain_counts[&first], 1);
+        assert_eq!(backend.cooperative_stream_pending_counts[&stream], 1);
+        assert!(matches!(
+            backend.release_submission_v1(first),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+
+        assert_eq!(
+            backend
+                .wait_v1(third, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.assert_cooperative_indexes_consistent();
+        assert!(backend.cooperative_allocation_owners.is_empty());
+        assert!(backend.cooperative_dependency_retain_counts.is_empty());
+        assert!(backend.cooperative_stream_pending_counts.is_empty());
+        for submission in [first, second, third] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_staging_budget_rejects_before_publication_and_releases_at_quiescence() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        backend.cooperative_staging_limit_bytes = 8;
+        let stream = backend.create_stream_v1(7).unwrap();
+        let allocations = (0..6)
+            .map(|_| {
+                backend
+                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let region = |allocation, access, byte_len| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len,
+        };
+        let first = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[0], RuntimeAccessV1::Read, 4),
+                region(allocations[1], RuntimeAccessV1::Write, 4),
+                &[],
+            )
+            .unwrap();
+        let second = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[2], RuntimeAccessV1::Read, 4),
+                region(allocations[3], RuntimeAccessV1::Write, 4),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(backend.cooperative_staging_bytes, 8);
+        backend.assert_cooperative_indexes_consistent();
+
+        let submissions_before = backend.submissions.len();
+        let next_handle_before = backend.next_handle;
+        let allocation_owners_before = backend.cooperative_allocation_owners.clone();
+        let dependency_counts_before = backend.cooperative_dependency_retain_counts.clone();
+        let stream_counts_before = backend.cooperative_stream_pending_counts.clone();
+        let event_counts_before = backend.event_submission_retain_counts.clone();
+        let events_before = backend.events.len();
+        assert!(matches!(
+            backend.copy_async_v1(
+                stream,
+                region(allocations[4], RuntimeAccessV1::Read, 1),
+                region(allocations[5], RuntimeAccessV1::Write, 1),
+                &[],
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert_eq!(backend.submissions.len(), submissions_before);
+        assert_eq!(backend.next_handle, next_handle_before);
+        assert_eq!(backend.cooperative_staging_bytes, 8);
+        assert_eq!(
+            backend.cooperative_allocation_owners,
+            allocation_owners_before
+        );
+        assert_eq!(
+            backend.cooperative_dependency_retain_counts,
+            dependency_counts_before
+        );
+        assert_eq!(
+            backend.cooperative_stream_pending_counts,
+            stream_counts_before
+        );
+        assert_eq!(backend.event_submission_retain_counts, event_counts_before);
+        assert_eq!(backend.events.len(), events_before);
+        backend.assert_cooperative_indexes_consistent();
+
+        assert_eq!(
+            backend
+                .wait_v1(first, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert_eq!(backend.cooperative_staging_bytes, 4);
+        assert!(matches!(
+            &backend.submissions[&first],
+            RoutedSubmissionV1::CooperativeCopy(copy) if copy.staging.is_empty()
+        ));
+        backend.assert_cooperative_indexes_consistent();
+
+        let third = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[4], RuntimeAccessV1::Read, 1),
+                region(allocations[5], RuntimeAccessV1::Write, 1),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(backend.cooperative_staging_bytes, 5);
+        for submission in [second, third] {
+            assert_eq!(
+                backend
+                    .wait_v1(submission, Instant::now() + Duration::from_secs(1))
+                    .unwrap(),
+                BackendPollV1::Succeeded
+            );
+        }
+        assert_eq!(backend.cooperative_staging_bytes, 0);
+        backend.assert_cooperative_indexes_consistent();
+
+        for submission in [first, second, third] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_index_overflow_rejects_before_publication() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let allocations = (0..4)
+            .map(|_| {
+                backend
+                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+        let first = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[0], RuntimeAccessV1::Read),
+                region(allocations[1], RuntimeAccessV1::Write),
+                &[],
+            )
+            .unwrap();
+        let submissions_before = backend.submissions.len();
+        let next_handle_before = backend.next_handle;
+        let owners_before = backend.cooperative_allocation_owners.clone();
+
+        backend
+            .cooperative_stream_pending_counts
+            .insert(stream, usize::MAX);
+        assert!(matches!(
+            backend.copy_async_v1(
+                stream,
+                region(allocations[2], RuntimeAccessV1::Read),
+                region(allocations[3], RuntimeAccessV1::Write),
+                &[],
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert_eq!(backend.submissions.len(), submissions_before);
+        assert_eq!(backend.next_handle, next_handle_before);
+        assert_eq!(backend.cooperative_allocation_owners, owners_before);
+        backend.cooperative_stream_pending_counts.insert(stream, 1);
+        backend.assert_cooperative_indexes_consistent();
+
+        backend
+            .event_submission_retain_counts
+            .insert(first, usize::MAX);
+        assert!(matches!(
+            backend.record_event_v1(stream, first),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert!(backend.events.is_empty());
+        assert_eq!(backend.next_handle, next_handle_before);
+        backend.event_submission_retain_counts.remove(&first);
+        backend.assert_cooperative_indexes_consistent();
+
+        let event = backend.record_event_v1(stream, first).unwrap();
+        let next_handle_before = backend.next_handle;
+        backend
+            .cooperative_dependency_retain_counts
+            .insert(first, usize::MAX);
+        assert!(matches!(
+            backend.copy_async_v1(
+                stream,
+                region(allocations[2], RuntimeAccessV1::Read),
+                region(allocations[3], RuntimeAccessV1::Write),
+                &[event],
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert_eq!(backend.submissions.len(), submissions_before);
+        assert_eq!(backend.next_handle, next_handle_before);
+        assert_eq!(backend.cooperative_allocation_owners, owners_before);
+        backend.cooperative_dependency_retain_counts.remove(&first);
+        backend.assert_cooperative_indexes_consistent();
+
+        backend.release_event_v1(event).unwrap();
+        assert_eq!(
+            backend
+                .wait_v1(first, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.assert_cooperative_indexes_consistent();
+        backend.release_submission_v1(first).unwrap();
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_dependency_depth_is_bounded_before_publication() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let mut allocations = Vec::new();
+        let mut submissions = Vec::new();
+        let mut dependency_event = None;
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 1,
+        };
+
+        for expected_depth in 1..=MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1 {
+            let source = backend
+                .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 1, 1)
+                .unwrap();
+            let destination = backend
+                .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 1, 1)
+                .unwrap();
+            let dependencies = dependency_event.as_slice();
+            let submission = backend
+                .copy_async_v1(
+                    stream,
+                    region(source, RuntimeAccessV1::Read),
+                    region(destination, RuntimeAccessV1::Write),
+                    dependencies,
+                )
+                .unwrap();
+            assert!(matches!(
+                &backend.submissions[&submission],
+                RoutedSubmissionV1::CooperativeCopy(copy)
+                    if copy.dependency_depth == expected_depth
+            ));
+            if let Some(event) =
+                dependency_event.replace(backend.record_event_v1(stream, submission).unwrap())
+            {
+                backend.release_event_v1(event).unwrap();
+            }
+            allocations.extend([source, destination]);
+            submissions.push(submission);
+        }
+        backend.assert_cooperative_indexes_consistent();
+
+        let rejected_source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 1, 1)
+            .unwrap();
+        let rejected_destination = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 1, 1)
+            .unwrap();
+        let submissions_before = backend.submissions.len();
+        let next_handle_before = backend.next_handle;
+        let allocation_owners_before = backend.cooperative_allocation_owners.clone();
+        let dependency_counts_before = backend.cooperative_dependency_retain_counts.clone();
+        let stream_counts_before = backend.cooperative_stream_pending_counts.clone();
+        let event_counts_before = backend.event_submission_retain_counts.clone();
+        assert!(matches!(
+            backend.copy_async_v1(
+                stream,
+                region(rejected_source, RuntimeAccessV1::Read),
+                region(rejected_destination, RuntimeAccessV1::Write),
+                dependency_event.as_slice(),
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert_eq!(backend.submissions.len(), submissions_before);
+        assert_eq!(backend.next_handle, next_handle_before);
+        assert_eq!(
+            backend.cooperative_allocation_owners,
+            allocation_owners_before
+        );
+        assert_eq!(
+            backend.cooperative_dependency_retain_counts,
+            dependency_counts_before
+        );
+        assert_eq!(
+            backend.cooperative_stream_pending_counts,
+            stream_counts_before
+        );
+        assert_eq!(backend.event_submission_retain_counts, event_counts_before);
+        backend.assert_cooperative_indexes_consistent();
+        backend.release_allocation_v1(rejected_source).unwrap();
+        backend.release_allocation_v1(rejected_destination).unwrap();
+
+        let last = *submissions.last().unwrap();
+        assert_eq!(
+            backend
+                .wait_v1(last, Instant::now() + Duration::from_secs(2))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.release_event_v1(dependency_event.unwrap()).unwrap();
+        backend.assert_cooperative_indexes_consistent();
+        assert!(backend.cooperative_allocation_owners.is_empty());
+        assert!(backend.cooperative_dependency_retain_counts.is_empty());
+        assert!(backend.cooperative_stream_pending_counts.is_empty());
+        assert!(backend.event_submission_retain_counts.is_empty());
+        for submission in submissions {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_fan_in_advances_only_one_predecessor_per_poll() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let allocations = (0..6)
+            .map(|_| {
+                backend
+                    .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        backend
+            .write_allocation_v1(allocations[0], 0, &[1, 2, 3, 4])
+            .unwrap();
+        backend
+            .write_allocation_v1(allocations[2], 0, &[5, 6, 7, 8])
+            .unwrap();
+        backend
+            .write_allocation_v1(allocations[4], 0, &[9, 10, 11, 12])
+            .unwrap();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 4,
+        };
+        let first = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[0], RuntimeAccessV1::Read),
+                region(allocations[1], RuntimeAccessV1::Write),
+                &[],
+            )
+            .unwrap();
+        let second = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[2], RuntimeAccessV1::Read),
+                region(allocations[3], RuntimeAccessV1::Write),
+                &[],
+            )
+            .unwrap();
+        for submission in [first, second] {
+            assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+            assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        }
+        let first_event = backend.record_event_v1(stream, first).unwrap();
+        let second_event = backend.record_event_v1(stream, second).unwrap();
+        let dependent = backend
+            .copy_async_v1(
+                stream,
+                region(allocations[4], RuntimeAccessV1::Read),
+                region(allocations[5], RuntimeAccessV1::Write),
+                &[first_event, second_event],
+            )
+            .unwrap();
+
+        assert_eq!(backend.poll_v1(dependent).unwrap(), BackendPollV1::Pending);
+        assert!(matches!(
+            &backend.submissions[&first],
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.status() == BackendPollV1::Succeeded
+        ));
+        assert!(matches!(
+            &backend.submissions[&second],
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.status() == BackendPollV1::Pending
+        ));
+        let second_destination = backend.allocations[&allocations[3]];
+        assert!(
+            backend.children[second_destination.child].allocations[&second_destination.local]
+                .bytes
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+
+        assert_eq!(backend.poll_v1(dependent).unwrap(), BackendPollV1::Pending);
+        assert!(matches!(
+            &backend.submissions[&dependent],
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.dependency_cursor == 1
+                    && copy.status() == BackendPollV1::Pending
+        ));
+        assert!(matches!(
+            &backend.submissions[&second],
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.status() == BackendPollV1::Pending
+        ));
+
+        assert_eq!(backend.poll_v1(dependent).unwrap(), BackendPollV1::Pending);
+        assert!(matches!(
+            &backend.submissions[&second],
+            RoutedSubmissionV1::CooperativeCopy(copy)
+                if copy.status() == BackendPollV1::Succeeded
+        ));
+        assert_eq!(
+            backend
+                .wait_v1(dependent, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.release_event_v1(first_event).unwrap();
+        backend.release_event_v1(second_event).unwrap();
+        for submission in [first, second, dependent] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn cooperative_copy_terminal_failure_latches_and_retains_custody() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(8).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(8, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let submission = backend
+            .peer_copy_v1(
+                stream,
+                BackendMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                BackendMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(backend.cooperative_staging_bytes, 8);
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        let source_child = backend.allocations[&source].child;
+        backend.children[source_child].terminal = true;
+        assert!(matches!(
+            backend.poll_v1(submission),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(backend.terminal);
+        assert_eq!(backend.cooperative_staging_bytes, 8);
+        assert!(backend.submissions.contains_key(&submission));
+        assert!(matches!(
+            backend.poll_v1(submission),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+
+        // Private test-only repair prevents the mock child's fail-closed Drop
+        // path from aborting the test process; production has no reset API.
+        backend.children[source_child].terminal = false;
+        backend.terminal = false;
+        backend.finish_cooperative_copy(submission, CooperativeCopyPhaseV1::Failed);
+        assert_eq!(backend.cooperative_staging_bytes, 0);
+        backend.assert_cooperative_indexes_consistent();
+        backend.submissions.remove(&submission);
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
         backend.shutdown_native_v1().unwrap();
     }
 

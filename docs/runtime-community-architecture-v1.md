@@ -60,7 +60,7 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The base backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, multiple serialized logical streams, and one pending compute launch. `KfdMultiDeviceRuntimeBackendV1` admits all devices before queue creation and routes one independent child per device. The lower-level gfx942 SDMA engine owns one additional classic copy queue per child with at most 64 in-flight copies. | Persistent compute storage is unchanged. The SDMA profile adds move-only host-coherent and HBM buffers plus per-device best-fit pools with explicit recycle and trim. The routed facade peer copy is bounded, synchronous host staging. | Same-device concurrent compute dispatches, native XGMI peer copy, integrated runtime-SPI async copy, atomics, collectives |
+| KFD | The base backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, multiple serialized logical streams, and one pending compute launch. `KfdMultiDeviceRuntimeBackendV1` admits all devices before queue creation and routes one independent child per device. The lower-level gfx942 SDMA layer owns either one generic copy queue or an exact H2D/D2H targeted pair per child, with at most 63 in-flight copies per queue. | Persistent compute storage is unchanged. The SDMA profile adds move-only host-coherent and HBM buffers plus per-device best-fit pools with explicit recycle and trim. The routed facade has bounded cooperative host-staged same-device and peer copies. | Same-device concurrent compute dispatches, persistent compute allocations shared with runtime-SPI SDMA, native XGMI peer copy, atomics, collectives |
 | HSA | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy only because it
@@ -109,19 +109,29 @@ result into their owned kernarg storage.
 Peer copies require two distinct peer-capable devices, an exact destination
 stream, equal nonempty source/destination ranges, and explicit event
 dependencies. Each copy retains a model peer-transfer contract identity. The
-current KFD router completes the staged copy before returning its submission
-handle; `poll` and `wait` therefore report success immediately. This is not a
-claim of asynchronous native peer DMA.
+current KFD router returns before child allocation access. `poll` advances one
+dependency observation or issues one child range request of at most 64 KiB,
+while `wait` repeatedly drives those same steps to its monotonic deadline. The
+child may first reconcile allocation-wide native-dirty or copy-on-write state,
+so the range size is not a strict host-work or latency bound. Pending staging is
+capped at 1 GiB per router and released at conclusive completion. Overlapping
+copies require an exact dependency, live copies retain both allocations, and
+ambiguous child failure terminally seals the router without releasing the
+retained state. This is cooperative host progress, not asynchronous native peer
+DMA. The executable Rust tests check these implementation contracts; the R7
+Verus proof does not cover this router state machine.
 
 The gfx942 SDMA API is backend-specific so the frozen Worker V1 protocol does
 not silently change. Batch submit is nonblocking, tickets bind queue slot and
 generation plus the non-reused queue occurrence, buffers remain owned by the
 queue until exact completion is
-observed, and batch wait uses one operational-currentness envelope. Queue-full
-and structural prepublication validation failures return the move-only buffers
-after a successful currentness check. Counter or generation divergence,
-currentness failure, and any uncertainty after preflight terminally poison the
-session and retain native custody.
+observed. Split batch submit and wait each use one operational-currentness
+envelope; the checked combined form uses one envelope around preparation,
+publication, and observed completion. Queue-full and structural prepublication
+validation failures return the move-only buffers after a successful currentness
+check. Counter or generation divergence, currentness failure, and any
+uncertainty after mutation terminally poison the session and retain native
+custody.
 
 ## Performance Rules
 
@@ -134,9 +144,10 @@ session and retain native custody.
 - Completion waits use deadlines and a bounded spin/backoff policy. Poll counts
   are not timeout units.
 - SDMA batch submission and batch completion are linear in batch depth, bounded
-  by 64. Currentness validation is constant per batch rather than per packet;
-  ring reservation, packet publication, and doorbell notification remain one
-  bounded operation per submitted copy.
+  by 63 so one of the 64 physical ring slots remains empty. Currentness
+  validation is constant per batch rather than per packet; packet construction
+  is linear, while visible write-pointer publication and final doorbell
+  notification are each one release operation per batch.
 - KFD device, VM, allocation, mapping, and queue lifecycle transitions use the
   full contracted topology/aperture currentness composite. Active mapped-memory
   and queue operations use the retained process, reset-event, descriptor, UAPI,
@@ -179,10 +190,25 @@ retained blocks cannot alias, dependency frontiers gate publication, and peer
 copies retain exact device coordinates. Expected-negative mutations demonstrate
 that generation reuse and source-device execution invalidate named theorems.
 
+The additive R8 Verus file proves ten theorems over a separate whole-resource
+execution model: deferred reservation, dependency-gated exact publication,
+conflict-free admitted overlap, aligned abstract fetch-add binding and
+old-value return, unique collective membership, idempotent duplicate arrival,
+and publication only after every named member arrives. Eleven R8 mutations
+exercise eager and dependency-inverted publication, identity/generation/epoch
+substitution, conflicting overlap, atomic alignment/coherence/return, and
+early or duplicate collective arrival. The model has no byte ranges or
+physical-alias relation and does not refine the executable Rust router.
+
 Executable Rust tests cover the pool model, router route-exhaustion preflight
-and terminal latching, packet bytes, range checks, queue admission, and custody
-transitions. The frozen SDMA manifest pins the reviewed ROCr revision and packet
-sources. KFD ioctl results, MMIO, coherence, kernel and firmware behavior,
+and terminal latching, bounded dependency-chain progress, packet bytes, range
+checks, queue admission, and custody transitions. The separate executable
+kernel-semantic model checks the reviewed gfx942 integer-atomic and collective
+roster against exact runtime resources and rejects misaligned or overlapping
+atomic objects and invalid geometry; its coherence and convergence facts are
+caller premises and it remains `ModelOnly`. The frozen SDMA manifest pins the
+reviewed ROCr revision and packet sources. KFD ioctl results, MMIO, coherence,
+compiler-to-code-object semantic correspondence, kernel and firmware behavior,
 hardware completion, progress, liveness, and performance are not formally
 proved. Native claims require a retained result artifact from an identified
 MI300X run. The R7 copy qualification record names the exact measured commit,

@@ -16,8 +16,8 @@ use fe2o3_kfd_uapi::{
     KFD_GFX942_QUEUE_DOORBELL_SOURCE_SHA256, KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID,
     KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST, KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256,
     KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256_BYTES, KFD_IOC_QUEUE_TYPE_COMPUTE_AQL,
-    KFD_IOC_QUEUE_TYPE_SDMA, KFD_IOC_QUEUE_TYPE_SDMA_XGMI, KFD_MAX_QUEUE_PERCENTAGE,
-    KFD_MAX_QUEUE_PRIORITY, KFD_MAX_QUEUE_SLOTS_PER_PROCESS,
+    KFD_IOC_QUEUE_TYPE_SDMA, KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID, KFD_IOC_QUEUE_TYPE_SDMA_XGMI,
+    KFD_MAX_QUEUE_PERCENTAGE, KFD_MAX_QUEUE_PRIORITY, KFD_MAX_QUEUE_SLOTS_PER_PROCESS,
     KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256, KFD_MIN_QUEUE_RING_SIZE,
     KFD_MMAP_GPU_ID_HASH_SHIFT, KFD_MMAP_TYPE_DOORBELL, KFD_MMAP_TYPE_SHIFT,
     KFD_SDMA_QUEUE_SCHEMA_ID, KFD_SDMA_QUEUE_SCHEMA_MANIFEST,
@@ -26,7 +26,8 @@ use fe2o3_kfd_uapi::{
     KfdGfx942CreateQueueOutputError, KfdIoctlCreateQueueArgs, KfdIoctlDestroyQueueArgs,
     KfdIoctlUpdateQueueArgs, KfdQueuePercentageError, KfdQueuePriorityError, KfdSdmaQueueBuffers,
     admit_kfd_aql_queue_ring_address, admit_kfd_aql_queue_ring_size,
-    admit_kfd_gfx942_create_queue_outputs, admit_kfd_queue_percentage, admit_kfd_queue_priority,
+    admit_kfd_gfx942_create_queue_outputs, admit_kfd_gfx942_sdma_engine_id,
+    admit_kfd_queue_percentage, admit_kfd_queue_priority,
 };
 use sha2::{Digest, Sha256};
 
@@ -92,15 +93,14 @@ fn gfx942_output_schema_is_separate_and_composes_with_queue_schema() {
 fn sdma_queue_schema_is_additive_and_digest_pinned() {
     assert_eq!(
         KFD_SDMA_QUEUE_SCHEMA_ID,
-        "linux-kfd-sdma-queue-1.18-generic-ioc-v1"
+        "linux-kfd-sdma-queue-1.18-generic-ioc-v2"
     );
     assert!(KFD_SDMA_QUEUE_SCHEMA_MANIFEST.contains(
         "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119"
     ));
-    assert!(
-        KFD_SDMA_QUEUE_SCHEMA_MANIFEST
-            .contains("queue_type=sdma:00000001,sdma_xgmi_known_not_admitted:00000003")
-    );
+    assert!(KFD_SDMA_QUEUE_SCHEMA_MANIFEST.contains(
+        "queue_type=sdma:00000001,sdma_xgmi_known_not_admitted:00000003,sdma_by_engine_id:00000004"
+    ));
     assert_eq!(
         hex(&Sha256::digest(KFD_SDMA_QUEUE_SCHEMA_MANIFEST)),
         KFD_SDMA_QUEUE_SCHEMA_MANIFEST_SHA256
@@ -337,6 +337,7 @@ fn queue_constants_and_requests_match_active_header_oracle() {
     assert_eq!(KFD_IOC_QUEUE_TYPE_SDMA, 0x1);
     assert_eq!(KFD_IOC_QUEUE_TYPE_COMPUTE_AQL, 0x2);
     assert_eq!(KFD_IOC_QUEUE_TYPE_SDMA_XGMI, 0x3);
+    assert_eq!(KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID, 0x4);
     assert_eq!(KFD_MAX_QUEUE_PERCENTAGE, 100);
     assert_eq!(KFD_MAX_QUEUE_PRIORITY, 15);
     assert_eq!(KFD_MIN_QUEUE_RING_SIZE, 1024);
@@ -377,6 +378,32 @@ fn sdma_builder_fixes_type_outputs_and_compute_only_fields() {
     assert_eq!(args.ctl_stack_size, 0);
     assert_eq!(args.sdma_engine_id, 0);
     assert_eq!(args.pad, 0);
+}
+
+#[test]
+fn targeted_sdma_builder_uses_an_engine_index_not_an_hsa_mask() {
+    let buffers = KfdSdmaQueueBuffers {
+        ring_base_address: 0x5_0000,
+        write_pointer_address: 0x6_0000,
+        read_pointer_address: 0x6_1000,
+    };
+    for index in [0_u32, 1] {
+        let args = KfdIoctlCreateQueueArgs::new_sdma_on_engine(
+            buffers,
+            admit_kfd_aql_queue_ring_size(4096).unwrap(),
+            7,
+            admit_kfd_queue_percentage(100).unwrap(),
+            admit_kfd_queue_priority(15).unwrap(),
+            admit_kfd_gfx942_sdma_engine_id(index).unwrap(),
+        );
+
+        assert_eq!(args.queue_type, KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID);
+        assert_eq!(args.sdma_engine_id, index);
+        assert_eq!(args.sdma_engine_id.to_ne_bytes(), index.to_ne_bytes());
+        assert_eq!(args.doorbell_offset, u64::MAX);
+        assert_eq!(args.queue_id, u32::MAX);
+    }
+    assert!(admit_kfd_gfx942_sdma_engine_id(2).is_err());
 }
 
 #[test]

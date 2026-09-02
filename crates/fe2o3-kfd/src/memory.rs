@@ -384,6 +384,26 @@ pub(super) trait MemoryBackend {
             "AQL mapped write backend",
         ))
     }
+    fn publish_sdma_write_release(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _expected: u64,
+        _new: u64,
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "SDMA visible write-pointer backend",
+        ))
+    }
+    fn write_sdma_slot(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+        _packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "SDMA mapped slot backend",
+        ))
+    }
     fn write_aql_slot(
         _mapping: &mut Self::Mapping,
         _requested_bytes: usize,

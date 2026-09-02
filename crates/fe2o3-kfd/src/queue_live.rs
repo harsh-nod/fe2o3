@@ -55,11 +55,11 @@ use crate::queue_linux::{
     permanently_poison_process_global_kfd_runtime_gate_v1,
 };
 use crate::sdma::{
-    Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1,
-    Gfx942SdmaCopyRequestV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
-    Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueOwnerV1,
-    allocate_device_buffer, allocate_host_buffer, read_host_buffer, release_buffer,
-    write_host_buffer,
+    Gfx942DirectionalSdmaQueueObservationV1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
+    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
+    Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1, Gfx942SdmaMemoryPoolObservationV1,
+    Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueSetV1, allocate_device_buffer,
+    allocate_host_buffer, read_host_buffer, release_buffer, write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -1189,6 +1189,56 @@ impl Gfx942SdmaBatchSubmissionFailureV1 {
     }
 }
 
+#[must_use = "a recoverable execution failure returns requests or pending tickets"]
+pub enum Gfx942SdmaBatchExecutionRecoveryV1 {
+    Requests(Vec<Gfx942SdmaCopyRequestV1>),
+    PendingTickets(Vec<Gfx942SdmaCopyTicketV1>),
+}
+
+#[must_use = "inspect the error and recover pre-publication requests or timeout tickets"]
+pub struct Gfx942SdmaBatchExecutionFailureV1 {
+    error: ComputeAqlQueueSessionErrorV1,
+    recovery: Option<Gfx942SdmaBatchExecutionRecoveryV1>,
+}
+
+impl Gfx942SdmaBatchExecutionFailureV1 {
+    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Option<Gfx942SdmaBatchExecutionRecoveryV1>,
+    ) {
+        (self.error, self.recovery)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Gfx942SdmaBatchExecutionFinishV1 {
+    Success,
+    RecoverableTimeout,
+    Terminal,
+}
+
+fn classify_sdma_batch_execution_finish(
+    wait_error: Option<&ComputeAqlQueueSessionErrorV1>,
+    closing_currentness_succeeded: bool,
+) -> Gfx942SdmaBatchExecutionFinishV1 {
+    if !closing_currentness_succeeded {
+        return Gfx942SdmaBatchExecutionFinishV1::Terminal;
+    }
+    match wait_error {
+        None => Gfx942SdmaBatchExecutionFinishV1::Success,
+        Some(ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout)) => {
+            Gfx942SdmaBatchExecutionFinishV1::RecoverableTimeout
+        }
+        Some(_) => Gfx942SdmaBatchExecutionFinishV1::Terminal,
+    }
+}
+
 #[must_use = "a recoverable buffer-transition failure returns the mapped buffer authority"]
 pub struct Gfx942SdmaBufferTransitionFailureV1 {
     error: ComputeAqlQueueSessionErrorV1,
@@ -1300,7 +1350,7 @@ pub struct ComputeAqlQueueSessionV1 {
     detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     detached_next_insertion_index: Option<usize>,
     exception: Option<QueueExceptionStateV1>,
-    sdma: Option<Gfx942SdmaQueueOwnerV1>,
+    sdma: Option<Gfx942SdmaQueueSetV1>,
     sdma_outstanding_buffers: usize,
     sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
     sdma_pool_reuse_count: u64,
@@ -2103,11 +2153,78 @@ impl ComputeAqlQueueSessionV1 {
         }
         let key = self.key;
         let created = self.with_live_queue_memory_model(|memory| {
-            Gfx942SdmaQueueOwnerV1::create(memory, key).map_err(Into::into)
+            Gfx942SdmaQueueSetV1::create_generic(memory, key).map_err(Into::into)
         });
         match created {
             Ok(owner) => {
-                let observation = owner.observation();
+                let observation = owner
+                    .generic_observation()
+                    .expect("created generic SDMA queue set");
+                self.sdma = Some(owner);
+                Ok(observation)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Adds the exact gfx942 directional SDMA profile to this session.
+    ///
+    /// Admission requires exactly two ordinary SDMA engines with eight queues
+    /// per engine. KFD engine index 1 handles H2D and index 0 handles D2H, as
+    /// observed in the pinned ROCr gfx94x policy.
+    pub fn enable_gfx942_directional_sdma_copy_engines(
+        &mut self,
+    ) -> Result<Gfx942DirectionalSdmaQueueObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "SDMA copy engine is already enabled",
+            ));
+        }
+        let key = self.key;
+        let created = self.with_live_queue_memory_model(|memory| {
+            Gfx942SdmaQueueSetV1::create_directional(memory, key).map_err(Into::into)
+        });
+        match created {
+            Ok(owner) => {
+                let observation = owner
+                    .directional_observation()
+                    .expect("created directional SDMA queue set");
+                self.sdma = Some(owner);
+                Ok(observation)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Adds one exact gfx942 SDMA queue targeted by KFD engine index.
+    ///
+    /// This diagnostic control admits only index 0 or 1 after observing the
+    /// exact two-engine/eight-queues-per-engine topology profile. The index is
+    /// not the public HSA engine bit mask.
+    pub fn enable_gfx942_sdma_copy_engine_on_engine_index(
+        &mut self,
+        engine_index: u32,
+    ) -> Result<Gfx942SdmaQueueObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "SDMA copy engine is already enabled",
+            ));
+        }
+        let key = self.key;
+        let created = self.with_live_queue_memory_model(|memory| {
+            Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index).map_err(Into::into)
+        });
+        match created {
+            Ok(owner) => {
+                let observation = owner
+                    .generic_observation()
+                    .expect("created targeted single SDMA queue set");
                 self.sdma = Some(owner);
                 Ok(observation)
             }
@@ -2385,7 +2502,7 @@ impl ComputeAqlQueueSessionV1 {
             let owner_poisoned = self
                 .sdma
                 .as_ref()
-                .is_none_or(Gfx942SdmaQueueOwnerV1::is_poisoned);
+                .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
             let post = self.with_sdma_owner_memory(|_, memory| {
                 memory
                     .check_queue_operational_currentness()
@@ -2450,15 +2567,6 @@ impl ComputeAqlQueueSessionV1 {
                 recovered: None,
             });
         }
-        let mut tickets = Vec::new();
-        if tickets.try_reserve_exact(requests.len()).is_err() {
-            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "SDMA ticket roster allocation failed",
-                ),
-                recovered: Some(requests),
-            });
-        }
         if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
             memory
                 .check_queue_operational_currentness()
@@ -2470,54 +2578,45 @@ impl ComputeAqlQueueSessionV1 {
                 recovered: None,
             });
         }
-        let preflight = self.with_sdma_owner_memory(|owner, memory| {
-            owner.ensure_batch_capacity(memory, requests.len())?;
-            for request in &requests {
-                owner.preflight_recoverable(
-                    memory,
-                    &request.source,
-                    request.source_offset,
-                    &request.destination,
-                    request.destination_offset,
-                    request.copy_bytes,
-                )?;
+        let prepared = match self.with_sdma_owner_memory(|owner, memory| {
+            Ok(owner.prepare_batch_recoverable(memory, requests))
+        }) {
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err((error, recovered))) => {
+                let error = error.into();
+                let owner_poisoned = self
+                    .sdma
+                    .as_ref()
+                    .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
+                let post = self.with_sdma_owner_memory(|_, memory| {
+                    memory
+                        .check_queue_operational_currentness()
+                        .map_err(Into::into)
+                });
+                if owner_poisoned || post.is_err() {
+                    self.poison_terminal();
+                    return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                        error: post.err().unwrap_or(error),
+                        recovered: None,
+                    });
+                }
+                return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                    error,
+                    recovered: Some(recovered),
+                });
             }
-            Ok(())
-        });
-        if let Err(error) = preflight {
-            let owner_poisoned = self
-                .sdma
-                .as_ref()
-                .is_none_or(Gfx942SdmaQueueOwnerV1::is_poisoned);
-            let post = self.with_sdma_owner_memory(|_, memory| {
-                memory
-                    .check_queue_operational_currentness()
-                    .map_err(Into::into)
-            });
-            if owner_poisoned || post.is_err() {
+            Err(error) => {
                 self.poison_terminal();
                 return Err(Gfx942SdmaBatchSubmissionFailureV1 {
-                    error: post.err().unwrap_or(error),
+                    error,
                     recovered: None,
                 });
             }
-            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
-                error,
-                recovered: Some(requests),
-            });
-        }
+        };
         let result = self.with_sdma_owner_memory(|owner, memory| {
-            for request in requests {
-                tickets.push(owner.submit(
-                    memory,
-                    request.source,
-                    request.source_offset,
-                    request.destination,
-                    request.destination_offset,
-                    request.copy_bytes,
-                )?);
-            }
-            Ok(())
+            owner
+                .submit_prepared_batch(memory, prepared)
+                .map_err(Into::into)
         });
         let post = self.with_sdma_owner_memory(|_, memory| {
             memory
@@ -2525,12 +2624,143 @@ impl ComputeAqlQueueSessionV1 {
                 .map_err(Into::into)
         });
         match (result, post) {
-            (Ok(()), Ok(())) => Ok(tickets),
-            (Err(error), _) | (Ok(()), Err(error)) => {
+            (Ok(tickets), Ok(())) => Ok(tickets),
+            (Err(error), _) | (Ok(_), Err(error)) => {
                 self.poison_terminal();
                 Err(Gfx942SdmaBatchSubmissionFailureV1 {
                     error,
                     recovered: None,
+                })
+            }
+        }
+    }
+
+    /// Submits and completes one homogeneous batch inside one currentness envelope.
+    ///
+    /// This is the checked low-latency path: one operational-currentness check
+    /// precedes every mapped read/write and packet publication, and one follows
+    /// observed completion. A timeout returns the still-valid tickets after the
+    /// closing check so the caller can continue waiting.
+    pub fn execute_sdma_copy_batch_for(
+        &mut self,
+        requests: Vec<Gfx942SdmaCopyRequestV1>,
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, Gfx942SdmaBatchExecutionFailureV1> {
+        if requests.iter().any(|request| {
+            !request.source.belongs_to(self.key) || !request.destination.belongs_to(self.key)
+        }) {
+            return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                recovery: Some(Gfx942SdmaBatchExecutionRecoveryV1::Requests(requests)),
+            });
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                error,
+                recovery: None,
+            });
+        }
+        if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        }) {
+            self.poison_terminal();
+            return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                error,
+                recovery: None,
+            });
+        }
+        let prepared = match self.with_sdma_owner_memory(|owner, memory| {
+            Ok(owner.prepare_batch_recoverable(memory, requests))
+        }) {
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err((error, recovered))) => {
+                let error = error.into();
+                let owner_poisoned = self
+                    .sdma
+                    .as_ref()
+                    .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
+                let post = self.with_sdma_owner_memory(|_, memory| {
+                    memory
+                        .check_queue_operational_currentness()
+                        .map_err(Into::into)
+                });
+                if owner_poisoned || post.is_err() {
+                    self.poison_terminal();
+                    return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                        error: post.err().unwrap_or(error),
+                        recovery: None,
+                    });
+                }
+                return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                    error,
+                    recovery: Some(Gfx942SdmaBatchExecutionRecoveryV1::Requests(recovered)),
+                });
+            }
+            Err(error) => {
+                self.poison_terminal();
+                return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                    error,
+                    recovery: None,
+                });
+            }
+        };
+        let tickets = match self.with_sdma_owner_memory(|owner, memory| {
+            owner
+                .submit_prepared_batch(memory, prepared)
+                .map_err(Into::into)
+        }) {
+            Ok(tickets) => tickets,
+            Err(error) => {
+                let post = self.with_sdma_owner_memory(|_, memory| {
+                    memory
+                        .check_queue_operational_currentness()
+                        .map_err(Into::into)
+                });
+                self.poison_terminal();
+                return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                    error: post.err().unwrap_or(error),
+                    recovery: None,
+                });
+            }
+        };
+        let result = self.with_sdma_owner_memory(|owner, memory| {
+            owner
+                .wait_many_for_in_current_scope(memory, &tickets, timeout)
+                .map_err(Into::into)
+        });
+        let post = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        });
+        match classify_sdma_batch_execution_finish(result.as_ref().err(), post.is_ok()) {
+            Gfx942SdmaBatchExecutionFinishV1::Success => match result {
+                Ok(completed) => Ok(completed),
+                Err(_) => unreachable!("success classification requires a successful wait"),
+            },
+            Gfx942SdmaBatchExecutionFinishV1::RecoverableTimeout => {
+                let Err(error) = result else {
+                    unreachable!("timeout classification requires a timeout error")
+                };
+                Err(Gfx942SdmaBatchExecutionFailureV1 {
+                    error,
+                    recovery: Some(Gfx942SdmaBatchExecutionRecoveryV1::PendingTickets(tickets)),
+                })
+            }
+            Gfx942SdmaBatchExecutionFinishV1::Terminal => {
+                self.poison_terminal();
+                let error = match post {
+                    Err(error) => error,
+                    Ok(()) => match result {
+                        Err(error) => error,
+                        Ok(_) => unreachable!("terminal classification requires a failure"),
+                    },
+                };
+                Err(Gfx942SdmaBatchExecutionFailureV1 {
+                    error,
+                    recovery: None,
                 })
             }
         }
@@ -4532,7 +4762,10 @@ impl ComputeAqlQueueSessionV1 {
             authority,
             shadow_release,
         )?;
-        let released_sdma = self.sdma.is_some();
+        let released_sdma_resources = self
+            .sdma
+            .as_ref()
+            .map_or(0, Gfx942SdmaQueueSetV1::additional_resource_count);
         if let Some(sdma) = self.sdma.take() {
             sdma.release_resources(
                 &mut self
@@ -4585,7 +4818,7 @@ impl ComputeAqlQueueSessionV1 {
         let callback_result = after_queue_destroyed(memory)?;
         let destroyed = ComputeAqlQueueDestroyedV1 {
             queue_id: self.observation.queue_id,
-            released_resources: if released_sdma { 8 } else { 5 },
+            released_resources: 5 + released_sdma_resources,
         };
         let Some((dispatch_generation, data)) = returned_dispatch else {
             return Ok((QueueDestroyOutcomeV1::Released(destroyed), callback_result));
@@ -4672,7 +4905,7 @@ impl ComputeAqlQueueSessionV1 {
     fn with_sdma_owner_memory<R>(
         &mut self,
         operation: impl FnOnce(
-            &mut Gfx942SdmaQueueOwnerV1,
+            &mut Gfx942SdmaQueueSetV1,
             &mut SharedGttMemorySessionV1,
         ) -> Result<R, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
@@ -5137,6 +5370,33 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_sdma_finish_recovers_only_timeout_after_closing_currentness() {
+        let timeout = ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout);
+        let terminal = ComputeAqlQueueSessionErrorV1::Contract("SDMA wait failure");
+
+        assert_eq!(
+            classify_sdma_batch_execution_finish(None, true),
+            Gfx942SdmaBatchExecutionFinishV1::Success
+        );
+        assert_eq!(
+            classify_sdma_batch_execution_finish(Some(&timeout), true),
+            Gfx942SdmaBatchExecutionFinishV1::RecoverableTimeout
+        );
+        assert_eq!(
+            classify_sdma_batch_execution_finish(Some(&timeout), false),
+            Gfx942SdmaBatchExecutionFinishV1::Terminal
+        );
+        assert_eq!(
+            classify_sdma_batch_execution_finish(None, false),
+            Gfx942SdmaBatchExecutionFinishV1::Terminal
+        );
+        assert_eq!(
+            classify_sdma_batch_execution_finish(Some(&terminal), true),
+            Gfx942SdmaBatchExecutionFinishV1::Terminal
+        );
+    }
 
     #[test]
     fn barrier_probe_backings_have_stable_distinct_contracts() {

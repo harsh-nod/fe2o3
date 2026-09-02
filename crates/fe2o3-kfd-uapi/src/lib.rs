@@ -39,7 +39,7 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID: &str =
     "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2";
 
 /// Stable name of the additive classic SDMA queue-input profile.
-pub const KFD_SDMA_QUEUE_SCHEMA_ID: &str = "linux-kfd-sdma-queue-1.18-generic-ioc-v1";
+pub const KFD_SDMA_QUEUE_SCHEMA_ID: &str = "linux-kfd-sdma-queue-1.18-generic-ioc-v2";
 
 /// Stable name of the reviewed gfx942 CREATE_QUEUE output-observation schema.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v2";
@@ -405,23 +405,23 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
 /// packet execution and the kernel-returned queue resources remain separate
 /// adapter and hardware obligations.
 pub const KFD_SDMA_QUEUE_SCHEMA_MANIFEST: &str = concat!(
-    "schema_id=linux-kfd-sdma-queue-1.18-generic-ioc-v1\n",
+    "schema_id=linux-kfd-sdma-queue-1.18-generic-ioc-v2\n",
     "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
     "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119\n",
     "target=linux-x86_64-generic-ioc\n",
     "source_header=include/uapi/linux/kfd_ioctl.h\n",
     "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
     "kfd_uapi=1.18\n",
-    "queue_type=sdma:00000001,sdma_xgmi_known_not_admitted:00000003\n",
-    "create_profile=ring_write_read_nonzero,doorbell_sentinel_u64_max,queue_id_sentinel_u32_max,eop_zero,cwsr_zero,sdma_engine_id_zero,pad_zero\n",
-    "bounds=ring_power_of_two_and_at_least_1024,percentage:0..100,priority:0..15\n",
+    "queue_type=sdma:00000001,sdma_xgmi_known_not_admitted:00000003,sdma_by_engine_id:00000004\n",
+    "create_profile=generic-sdma-engine-placeholder-zero-or-targeted-gfx942-engine-index-0..1,ring_write_read_nonzero,doorbell_sentinel_u64_max,queue_id_sentinel_u32_max,eop_zero,cwsr_zero,pad_zero\n",
+    "bounds=ring_power_of_two_and_at_least_1024,percentage:0..100,priority:0..15,gfx942-ordinary-sdma-engines:2,queues-per-engine:8\n",
     "outputs=shared_gfx942_queue_resource_observation_only\n",
     "authority=no-queue,no-doorbell,no-packet,no-firmware-or-hardware-execution\n",
 );
 
 /// SHA-256 of [`KFD_SDMA_QUEUE_SCHEMA_MANIFEST`].
 pub const KFD_SDMA_QUEUE_SCHEMA_MANIFEST_SHA256: &str =
-    "bd862d85fcf5c4c3ae972e109777079fd22ade9f00dcc779415031605c998baf";
+    "f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b";
 
 /// Canonical manifest for reviewed gfx942 CREATE_QUEUE output observations.
 ///
@@ -552,6 +552,42 @@ pub const KFD_IOC_QUEUE_TYPE_COMPUTE_AQL: u32 = 0x2;
 /// XGMI-specialized packetized DMA queue. The initial R7 builder records this
 /// value for ABI parity but does not construct this queue type.
 pub const KFD_IOC_QUEUE_TYPE_SDMA_XGMI: u32 = 0x3;
+
+/// SDMA queue targeted to the exact engine in `sdma_engine_id`.
+pub const KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID: u32 = 0x4;
+
+/// Exact ordinary SDMA inventory in the admitted MI300X gfx942 profile.
+pub const KFD_GFX942_SDMA_ENGINE_COUNT_V1: u32 = 2;
+pub const KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1: u32 = 8;
+
+/// One ordinary SDMA engine admitted by the exact gfx942 two-engine profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdGfx942SdmaEngineId(u32);
+
+impl KfdGfx942SdmaEngineId {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdGfx942SdmaEngineIdError {
+    pub engine_id: u32,
+    pub engine_count: u32,
+}
+
+pub const fn admit_kfd_gfx942_sdma_engine_id(
+    engine_id: u32,
+) -> Result<KfdGfx942SdmaEngineId, KfdGfx942SdmaEngineIdError> {
+    if engine_id >= KFD_GFX942_SDMA_ENGINE_COUNT_V1 {
+        return Err(KfdGfx942SdmaEngineIdError {
+            engine_id,
+            engine_count: KFD_GFX942_SDMA_ENGINE_COUNT_V1,
+        });
+    }
+    Ok(KfdGfx942SdmaEngineId(engine_id))
+}
 
 /// Maximum low-byte queue percentage accepted by the active driver.
 pub const KFD_MAX_QUEUE_PERCENTAGE: u32 = 100;
@@ -1168,6 +1204,21 @@ impl KfdIoctlCreateQueueArgs {
             sdma_engine_id: 0,
             pad: 0,
         }
+    }
+
+    /// Builds the exact gfx942 targeted-engine SDMA input profile.
+    pub const fn new_sdma_on_engine(
+        buffers: KfdSdmaQueueBuffers,
+        ring_size: KfdAqlQueueRingSize,
+        gpu_id: u32,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+        engine_id: KfdGfx942SdmaEngineId,
+    ) -> Self {
+        let mut args = Self::new_sdma(buffers, ring_size, gpu_id, queue_percentage, queue_priority);
+        args.queue_type = KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID;
+        args.sdma_engine_id = engine_id.value();
+        args
     }
 }
 

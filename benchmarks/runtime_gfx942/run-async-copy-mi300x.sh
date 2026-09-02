@@ -10,6 +10,7 @@ readonly bytes="${FE2O3_ASYNC_COPY_BYTES:-1048576}"
 readonly depths="${FE2O3_ASYNC_COPY_DEPTHS:-1 16}"
 readonly warmups="${FE2O3_ASYNC_COPY_WARMUPS:-10}"
 readonly samples="${FE2O3_ASYNC_COPY_SAMPLES:-30}"
+readonly kfd_profile="${FE2O3_ASYNC_COPY_KFD_PROFILE:-directional}"
 readonly max_busy="${FE2O3_ASYNC_COPY_MAX_BUSY_PERCENT:-5}"
 readonly phase_timeout="${FE2O3_ASYNC_COPY_PHASE_TIMEOUT_SECONDS:-120}"
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-async-copy-gfx942.XXXXXX")"
@@ -77,11 +78,18 @@ done
   exit 2
 }
 for depth in ${depths}; do
-  if ! [[ "${depth}" =~ ^[1-9][0-9]*$ ]] || ((depth > 64)); then
-    printf 'every depth must be in 1 through 64\n' >&2
+  if ! [[ "${depth}" =~ ^[1-9][0-9]*$ ]] || ((depth > 63)); then
+    printf 'every depth must be in 1 through 63\n' >&2
     exit 2
   fi
 done
+case "${kfd_profile}" in
+  generic|directional|engine0|engine1) ;;
+  *)
+    printf 'KFD profile must be generic, directional, engine0, or engine1\n' >&2
+    exit 2
+    ;;
+esac
 [[ -z "$(git -C "${repo_root}" status --porcelain=v1 --untracked-files=all --ignore-submodules=none)" ]] || {
   printf 'async-copy qualification requires a clean checkout\n' >&2
   exit 2
@@ -122,10 +130,10 @@ g++ -std=c++17 -O3 -Wall -Wextra -Werror \
 
 rocm_version=unknown
 [[ ! -r "${rocm_path}/.info/version" ]] || IFS= read -r rocm_version < "${rocm_path}/.info/version"
-printf 'context schema=fe2o3.async-copy-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s sdma_manifest_sha256=a1a2f3cb07b67e8f66d89578d278853d5750b1a0ad862f0edd27c2fb1ef7b4ec\n' \
+printf 'context schema=fe2o3.async-copy-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s kfd_profile=%s max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s sdma_manifest_sha256=e794d249b2d4a585a30cb4f22caa39931319784b824df344627560d4248ef914\n' \
   "$(git rev-parse HEAD)" "${gpu_index}" "${second_gpu_index}" \
   "${unique_id}" "${second_unique_id}" "${bytes}" \
-  "${depths// /,}" "${warmups}" "${samples}" "${max_busy}" "${phase_timeout}" \
+  "${depths// /,}" "${warmups}" "${samples}" "${kfd_profile}" "${max_busy}" "${phase_timeout}" \
   "${rocm_version}" "$(rustc --version | tr ' ' '_')"
 
 for depth in ${depths}; do
@@ -133,7 +141,7 @@ for depth in ${depths}; do
   printf 'context phase=kfd depth=%s gpu_busy_start_percent=%s\n' "${depth}" "${busy_start}"
   result="$(timeout --foreground --signal=TERM --kill-after=5s "${phase_timeout}s" \
     "${build_dir}/target/release/examples/kfd-sdma-copy-benchmark" \
-    "${unique_id}" "${bytes}" "${depth}" "${warmups}" "${samples}")"
+    "${unique_id}" "${bytes}" "${depth}" "${warmups}" "${samples}" "${kfd_profile}")"
   busy_end="$(require_idle_gpu "${gpu_index}")"
   printf 'context phase=kfd depth=%s gpu_busy_end_percent=%s\n%s\n' \
     "${depth}" "${busy_end}" "${result}"

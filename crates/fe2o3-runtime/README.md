@@ -3,11 +3,13 @@
 `fe2o3-runtime` is the sole public composition boundary for fe2o3 runtime
 backends. `RuntimeContextV1` owns one backend instance and multiplexes its
 devices, streams, allocations, modules, typed kernels, events, asynchronous
-submissions, and peer copies through context-local stable handles. Backend
+submissions, optional same-device copies, and peer copies through context-local stable handles. Backend
 capabilities are explicit, so unsupported operations reject before native
 mutation rather than being inferred from the build host.
 
-`RuntimeBackendV1` is the backend SPI. It carries only numeric sealed handles,
+`RuntimeBackendV1` is the base backend SPI. `RuntimeAsyncCopyBackendV1` is an
+additive same-device copy extension that leaves the Worker V3 wire contract
+unchanged. Both carry only numeric sealed handles,
 address-free argument images, allocation-relative bindings, explicit event
 dependencies, and monotonic deadlines. KFD, HSA, and worker-backed adapters can
 implement the same contract without exposing raw addresses or native resource
@@ -60,16 +62,28 @@ cached at resolution. Logical KFD allocations are capped at 256 MiB each and 1
 GiB per backend context; budget and allocator exhaustion return `Capacity`
 before native publication. `KfdMultiDeviceRuntimeBackendV1` admits every
 selected physical device before any queue exists, routes independent child
-backends, and advertises a bounded synchronous host-staged peer copy. This is
-not native XGMI transfer. Applications must explicitly shut down the router;
+backends, and advertises a bounded host-staged peer copy. Submission performs
+no child read or write; each read/write `poll` issues one child range request of
+at most 64 KiB and `wait` repeatedly drives the same cooperative state machine
+to its deadline. A child may first reconcile allocation-wide native-dirty or
+copy-on-write state, so this is not a strict host-work or latency bound. Pending
+copy staging is capped at 1 GiB per router and released at conclusive
+completion. Destination storage and both allocation handles stay inaccessible
+through the router until terminal completion. This is neither background DMA
+nor native XGMI transfer, and fairness requires the caller to poll or wait.
+Applications must explicitly shut down the router;
 it tears down pristine child backends in reverse admission order and latches
 terminal after any ambiguous child failure. The lower-level KFD session separately exposes a
 classic gfx942 SDMA queue and pooled host/HBM buffers; that backend-specific API
-is not yet part of `RuntimeBackendV1`. The HSA adapter admits one correlated
+is not yet wired to persistent compute allocations. The direct KFD backend
+therefore implements the async-copy extension as an explicit `Unsupported`
+rejection. The HSA adapter admits one correlated
 gfx942 or gfx950 device and host-visible memory. Same-device concurrent KFD
-compute dispatches, native peer copy, atomics, and collectives remain
-unsupported; atomics and collectives have no general V1 facade operation. This
-is not HIP/HSA parity. See
+compute dispatches and native peer copy remain unsupported. A separate
+authority-free gfx942 model checks the reviewed integer-atomic and collective
+semantic declarations against exact runtime resources, but atomics and
+collectives have no general V1 facade operation and no authenticated
+code-object refinement. This is not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
 Feature `hardware-qualification` exposes a repository-owned, SHA-pinned gfx942

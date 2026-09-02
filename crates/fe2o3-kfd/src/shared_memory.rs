@@ -1725,6 +1725,36 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         B::fetch_add_aql_write(mapping, requested, increment)
     }
 
+    fn publish_sdma_write_release_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        expected: u64,
+        new: u64,
+    ) -> Result<(), MemorySessionError> {
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        B::publish_sdma_write_release(mapping, requested, expected, new)
+    }
+
+    fn write_sdma_slot_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        B::write_sdma_slot(mapping, requested, slot_index, packet)
+    }
+
     fn write_aql_slot<P: MutableGpuGttProfileV1>(
         &mut self,
         token: &mut SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
@@ -2658,6 +2688,24 @@ impl SharedGttMemorySessionV1 {
         self.engine.retained_device_memory_bytes
     }
 
+    pub(crate) fn gfx942_sdma_engine_inventory(&self) -> (Option<u32>, Option<u32>) {
+        self.engine.backend.sdma_engine_inventory()
+    }
+
+    pub(crate) fn check_gfx942_sdma_topology_capability_currentness(
+        &mut self,
+    ) -> Result<(), MemorySessionError> {
+        self.engine.require_active()?;
+        if let Err(error) = self
+            .engine
+            .backend
+            .check_gfx942_sdma_topology_capability_currentness()
+        {
+            return self.engine.quarantine(error);
+        }
+        Ok(())
+    }
+
     /// Allocates uninitialized writable device-local VRAM/HBM.
     ///
     /// The resulting lease is not GPU mapped and carries no numeric address.
@@ -3533,6 +3581,34 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<u64, MemorySessionError> {
         self.engine
             .fetch_add_aql_write_in_current_scope(&mut authority.token, increment)
+    }
+
+    pub(crate) fn publish_sdma_control_write_release_in_current_scope(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlControlResourceRoleV1,
+            UserptrAqlControlGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        expected: u64,
+        new: u64,
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .publish_sdma_write_release_in_current_scope(&mut authority.token, expected, new)
+    }
+
+    pub(crate) fn write_sdma_ring_slot_in_current_scope<P: MutableGpuGttProfileV1>(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlRingResourceRoleV1,
+            P,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .write_sdma_slot_in_current_scope(&mut authority.token, slot_index, packet)
     }
 
     #[allow(dead_code)]

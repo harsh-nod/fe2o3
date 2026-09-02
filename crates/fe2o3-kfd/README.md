@@ -589,16 +589,25 @@ also does not authenticate a device copy.
 
 ### R7 gfx942 SDMA and pooled buffers
 
-An active compute session may add one classic KFD SDMA queue with a 4096-byte
-ring and at most 64 in-flight 64-byte submissions. Each submission contains one
+An active compute session may add either one generic classic KFD SDMA queue or
+an exact two-queue directional profile with a 4096-byte ring and at most 63
+in-flight 64-byte submissions per queue. Directional admission requires a
+fresh, generation-consistent observation of exactly two ordinary SDMA engines
+and eight queues per engine before and after targeted queue creation and
+destruction. KFD engine index 1 carries H2D and index 0 carries D2H; these are
+indices, not the public HSA engine bit masks. Each submission contains one
 reviewed gfx942 linear-copy packet and one system-memory completion fence.
 Move-only host-coherent and HBM buffers retain the exact queue owner and a
 concrete pool generation, and remain in queue custody until the exact slot
 generation is observed. Copy tickets bind that same non-reused queue occurrence
 in addition to the native queue ID, ring slot, and slot generation. Cross-queue
 recycle and submission are rejected before mutation. Nonblocking submit, poll,
-deadline wait, and batch forms are public; batches keep one
-operational-currentness envelope while publishing and waiting.
+deadline wait, and batch forms are public. A batch writes complete packet
+images while the visible write pointer is unchanged, then performs one release
+write-pointer publication and one final release doorbell. The split API uses one
+operational-currentness envelope for submission and another for waiting; the
+checked combined API uses one envelope from preparation through observed
+completion.
 
 The session also owns a best-fit pool keyed by buffer kind, physical bytes, and
 alignment. Recycling is explicit, is possible only after buffer authority has
@@ -606,15 +615,25 @@ returned from completion, and advances the concrete generation before reuse.
 Pool trim releases every free allocation before queue teardown. Outstanding or
 pooled buffers block destruction. SDMA queue
 destruction precedes compute queue destruction, followed by explicit unmap and
-release of the copy ring, control page, and completion arena.
+release of the copy ring, control page, and completion arena. A partial
+directional create or destroy failure returns no retryable state: native and
+mapped custody is terminally retained for process teardown.
 
-`GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema, reviewed ROCr
-revision and packet sources, packet bytes, bounds, currentness, failure, and
-teardown contracts. Verus proves only the separate abstract R7 lease-generation,
+`GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
+capability sidecar, reviewed ROCr revision, direction policy and packet sources,
+packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves
+only the separate abstract R7 lease-generation,
 retention, quarantine, dependency, and device-coordinate theorems. It does not
 refine this Rust code. Ioctl truth, doorbell MMIO, CPU/GPU coherence, firmware
 consumption, completion, liveness, and performance remain contracted or
 measured.
+
+The [R8 native-feature boundary](docs/r8-native-xgmi-atomics-collectives-boundary-v1.md)
+defines the checked model support and the remaining native gates for direct
+XGMI peer copies, system-scope atomics, and wave/subgroup/workgroup
+collectives. In particular, KFD atomics and collectives are code-object
+semantics rather than standalone ioctls, and the current topology snapshot
+retains link counts but not exact directional link records.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
