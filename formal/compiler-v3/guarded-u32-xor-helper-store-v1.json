@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "claim_version": 3,
+  "claim_name": "guarded-u32-xor-helper-store-v1",
+  "word_bits": 32,
+  "byte_width": 4,
+  "byte_order": "little",
+  "helper_parameters": 2,
+  "branch_arms": 2,
+  "maximum_call_depth": 2,
+  "minimum_loop_trip_count": 1,
+  "maximum_loop_trip_count": 4,
+  "readonly_accesses": 2,
+  "disjoint_writes": 1,
+  "dynamic_extent": true,
+  "scalar_operations": [
+    "bitxor",
+    "checked-add",
+    "truncate",
+    "unsigned-equal",
+    "unsigned-less-than",
+    "wrapping-add",
+    "zero-extend"
+  ]
+}

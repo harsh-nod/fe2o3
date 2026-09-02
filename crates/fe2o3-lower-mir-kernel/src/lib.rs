@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod formal_compiler_v3_spec_generated;
 mod production_correspondence_evidence_v4;
 mod production_formal_memory_evidence_v4;
 mod production_formal_memory_v1;
@@ -12,6 +13,7 @@ mod production_semantic_kir_v1;
 mod production_source_mir_kir_composition_v2;
 pub use production_semantic_kir_v1::ProductionMemoryDischargeFailureV1;
 
+pub use formal_compiler_v3_spec_generated::*;
 pub use production_correspondence_evidence_v4::*;
 pub use production_formal_memory_evidence_v4::*;
 pub use production_formal_memory_v1::*;
