@@ -147,13 +147,17 @@ impl Error for EngineeringHsacoErrorV1 {}
 
 impl From<WorkerProtocolError> for EngineeringHsacoErrorV1 {
     fn from(error: WorkerProtocolError) -> Self {
-        Self(format!("engineering worker protocol rejected input: {error}"))
+        Self(format!(
+            "engineering worker protocol rejected input: {error}"
+        ))
     }
 }
 
 impl From<WorkerRequestConstructionError> for EngineeringHsacoErrorV1 {
     fn from(error: WorkerRequestConstructionError) -> Self {
-        Self(format!("engineering worker request rejected input: {error}"))
+        Self(format!(
+            "engineering worker request rejected input: {error}"
+        ))
     }
 }
 
@@ -165,7 +169,9 @@ impl From<WorkerExecutionError> for EngineeringHsacoErrorV1 {
 
 impl From<FinalizationError> for EngineeringHsacoErrorV1 {
     fn from(error: FinalizationError) -> Self {
-        Self(format!("engineering HSACO inspection/finalization failed: {error}"))
+        Self(format!(
+            "engineering HSACO inspection/finalization failed: {error}"
+        ))
     }
 }
 
@@ -222,7 +228,8 @@ pub fn observe_engineering_hsaco_v1(
         handoff_identity,
         EngineeringPhaseV1::Bootstrap,
     )?;
-    let bootstrap_request_identity = ContentIdentityV1::calculate(bootstrap_request.canonical_bytes());
+    let bootstrap_request_identity =
+        ContentIdentityV1::calculate(bootstrap_request.canonical_bytes());
     let bootstrap = worker.execute_v2(&bootstrap_request, limits)?;
     let bootstrap_response = bootstrap.response();
     let bootstrap_response_identity =
@@ -230,7 +237,10 @@ pub fn observe_engineering_hsaco_v1(
     let bootstrap_output = bootstrap_response.output().ok_or_else(|| {
         EngineeringHsacoErrorV1("engineering bootstrap produced no HSACO".to_owned())
     })?;
-    if !bootstrap_output.identity().matches(bootstrap_output.bytes()) {
+    if !bootstrap_output
+        .identity()
+        .matches(bootstrap_output.bytes())
+    {
         return Err(EngineeringHsacoErrorV1(
             "engineering bootstrap output identity does not match its bytes".to_owned(),
         ));
@@ -268,8 +278,7 @@ pub fn observe_engineering_hsaco_v1(
     })?;
     if bootstrap_derivation != replay_derivation
         || bootstrap_derivation.hsaco() != bootstrap_output.identity()
-        || bootstrap_response.device_library_provider()
-            != replay_response.device_library_provider()
+        || bootstrap_response.device_library_provider() != replay_response.device_library_provider()
     {
         return Err(EngineeringHsacoErrorV1(
             "engineering bootstrap/replay derivation evidence differs".to_owned(),
