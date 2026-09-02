@@ -41,9 +41,20 @@ pub mod __hardware_test {
     use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
     use crate::{
-        AllocationProvenance, ArgumentAccess, ArgumentAccessMode, GeneratedSliceArgumentPairV1,
-        ObservedContext,
+        AllocationProvenance, ArgumentAccess, ArgumentAccessMode,
+        CompilerGeneratedKernelExpectationRosterEntryV1,
+        CompilerGeneratedKernelExpectationRosterV1, GeneratedSliceArgumentPairV1, ObservedContext,
     };
+
+    /// Inert one-entry roster for Cargo's strict inherited-handoff integration fixture.
+    pub struct ApplicationHandoffVecAddRosterFixtureV1;
+
+    impl CompilerGeneratedKernelExpectationRosterV1 for ApplicationHandoffVecAddRosterFixtureV1 {
+        const ENTRIES: &'static [CompilerGeneratedKernelExpectationRosterEntryV1] =
+            &[CompilerGeneratedKernelExpectationRosterEntryV1::from_parts(
+                "vecadd", "vecadd", [0xa1; 32], [0xb2; 32],
+            )];
+    }
 
     /// Constructs inert device facts for a descriptor-handoff integration fixture.
     pub fn application_handoff_observed_context_fixture_v1(target: &str) -> ObservedContext {
@@ -94,14 +105,14 @@ pub mod __hardware_test {
 }
 
 #[cfg(target_os = "linux")]
+pub use application_descriptor_handoff::{
+    ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+};
+#[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use application_descriptor_handoff::{
     consume_inherited_worker_v3_application_handoff_v1,
     consume_inherited_worker_v3_application_roster_handoff_v1,
-};
-#[cfg(target_os = "linux")]
-pub use application_descriptor_handoff::{
-    ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 #[doc(hidden)]
@@ -248,7 +259,9 @@ pub use worker_v3_verification_admission::{
     WorkerV3ProtectedRosterVerificationEvidenceV1, WorkerV3ProtectedRosterVerifierAdapterV1,
     WorkerV3ProtectedRosterVerifierBackendV1, WorkerV3ProtectedVerificationEvidenceV1,
     WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
-    WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterEntryErrorV1, WorkerV3RosterLoadEnvelopeEvidenceViewV1,
+    WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterVerificationAuthenticationFailureV1,
     WorkerV3RosterVerificationChallengeIdentityV1, WorkerV3RosterVerificationDecisionErrorV1,
     WorkerV3RosterVerificationDecisionV1, WorkerV3RosterVerificationRequestV1,
     WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1, WorkerV3VerificationAuditErrorV1,

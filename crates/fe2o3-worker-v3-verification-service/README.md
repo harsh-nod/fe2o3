@@ -41,6 +41,12 @@ current-record session. No provider default exists. Provider implementations rem
 entropy, uniqueness, atomic reservation, durable replay exclusion across covered service restarts,
 and expiry; the generic service cannot prove those properties.
 
+`begin_worker_v3_verification_session_until_v2` accepts one exact caller-created monotonic
+`Instant` and retains it unchanged through Begin, current-record receipt, and the terminal send. The
+compatible timeout entrypoint computes the deadline once and delegates to the absolute-deadline
+entrypoint. Pre-expired deadlines fail before the service receives the queued request or its
+descriptors.
+
 The pending state receives one exact fixed-size current-record frame with matching kernel-stamped
 credentials and no other ancillary data, then requires client write-half EOF. It strictly decodes
 the separate verification and attestation, checks nested byte equality, and correlates the Begin,

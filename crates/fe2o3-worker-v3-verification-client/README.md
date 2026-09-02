@@ -18,6 +18,11 @@ challenge and a pending client session. The challenge can be consumed directly i
 `CompilerExecutionCurrentRecordChallengeV1`; the pending session privately retains the same bytes
 and opaque reservation identity only for later correlation.
 
+`WorkerV3VerificationClientV2::admit_until` accepts an exact caller-created monotonic `Instant` and
+retains it unchanged for Begin, current-record submission, terminal receipt, and EOF. The compatible
+`admit` timeout entrypoint computes one deadline and delegates to `admit_until`; it does not restart
+the timeout after admission work.
+
 The pending session accepts only the exact fixed-size current-record verification and attestation
 arrays, sends their canonical V2 frame, closes the write half, and accepts one bounded terminal
 packet followed by exact peer EOF. Phase packets cannot carry descriptors or other ancillary data.

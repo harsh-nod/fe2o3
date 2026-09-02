@@ -22,5 +22,6 @@ pub use service_v2::{
     WorkerV3VerificationBeginOutcomeV2, WorkerV3VerificationChallengeReservationProviderV2,
     WorkerV3VerificationCurrentRecordOutcomeV2, WorkerV3VerificationRejectedSendFailureV2,
     WorkerV3VerificationRejectionReasonV2, WorkerV3VerificationServiceErrorV2,
-    WorkerV3VerificationTerminalSendFailureV2, begin_worker_v3_verification_session_v2,
+    WorkerV3VerificationTerminalSendFailureV2, begin_worker_v3_verification_session_until_v2,
+    begin_worker_v3_verification_session_v2,
 };

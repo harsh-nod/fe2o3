@@ -143,6 +143,36 @@ where
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or(WorkerV3VerificationServiceErrorV2::DeadlineOverflow)?;
+    begin_worker_v3_verification_session_until_v2(
+        control,
+        deadline,
+        policy_resolver,
+        measurement_resolver,
+        replay_guard,
+        challenge_provider,
+    )
+}
+
+/// Begins one multi-phase V2 session under one exact caller-supplied deadline.
+///
+/// The monotonic deadline is retained unchanged for Begin admission, current-record receipt, and
+/// the terminal send. An already expired or unrepresentable deadline fails before any packet or
+/// descriptor is received from `control`.
+pub fn begin_worker_v3_verification_session_until_v2<P, M, R, C>(
+    control: OwnedFd,
+    deadline: Instant,
+    policy_resolver: &mut P,
+    measurement_resolver: &mut M,
+    replay_guard: &mut R,
+    challenge_provider: &mut C,
+) -> Result<WorkerV3VerificationBeginOutcomeV2, WorkerV3VerificationServiceErrorV2>
+where
+    P: WorkerV3VerificationPolicyResolverV1,
+    M: WorkerV3VerificationMeasurementResolverV1,
+    R: WorkerV3VerificationChallengeReplayGuardV1,
+    C: WorkerV3VerificationChallengeReservationProviderV2,
+{
+    require_deadline(deadline)?;
     validate_control(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
     require_passcred(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
     let caller = caller_identity(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
@@ -391,6 +421,11 @@ impl PendingWorkerV3VerificationCurrentRecordSessionV2 {
         &self.reservation
     }
 
+    /// Returns the exact service admission deadline retained across all remaining phases.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
     pub fn payload(
         &self,
         kind: WorkerV3VerificationFdPayloadKindV1,
@@ -504,6 +539,11 @@ impl PendingWorkerV3VerificationTerminalSessionV2 {
 
     pub const fn reservation(&self) -> &WorkerV3VerificationChallengeReservationV2 {
         &self.session.reservation
+    }
+
+    /// Returns the exact service admission deadline used by the terminal send.
+    pub fn deadline(&self) -> Instant {
+        self.session.deadline
     }
 
     pub fn current_record(&self) -> &WorkerV3VerificationCurrentRecordFrameV2 {
@@ -623,6 +663,11 @@ impl PendingRejectedWorkerV3VerificationTerminalSessionV2 {
 
     pub const fn request(&self) -> &WorkerV3VerificationRequestV1 {
         &self.session.request
+    }
+
+    /// Returns the exact service admission deadline used by the rejection send.
+    pub fn deadline(&self) -> Instant {
+        self.session.deadline
     }
 
     pub fn payload(
@@ -914,6 +959,18 @@ fn phase_input_is_queued(control: &OwnedFd) -> Result<bool, WorkerV3Verification
             source: source.into(),
         }),
     }
+}
+
+fn require_deadline(deadline: Instant) -> Result<(), WorkerV3VerificationServiceErrorV2> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(WorkerV3VerificationServiceErrorV2::V1(
+            WorkerV3VerificationServiceErrorV1::Timeout,
+        ));
+    }
+    i64::try_from(remaining.as_secs())
+        .map(|_| ())
+        .map_err(|_| WorkerV3VerificationServiceErrorV2::DeadlineOverflow)
 }
 
 /// Stable V2 setup or transport failure.
