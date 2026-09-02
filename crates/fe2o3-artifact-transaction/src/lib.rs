@@ -170,6 +170,7 @@ pub use durable_published_claim::{
     DurablePublishedClaimCodecErrorV3, DurablePublishedClaimReacquisitionErrorV3,
     DurablePublishedClaimReceiptFieldV3, DurablePublishedClaimWorkerV3BindingFieldV1,
     DurablePublishedHsacoClaimV3, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3,
+    reacquire_current_hsaco_publication_lease_from_retained_directory_v3,
     reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_rustc_invocation::{
@@ -234,6 +235,7 @@ pub use worker_v3_load_readiness::{
     WorkerV3LoadReadinessOptionsV1, WorkerV3LoadReadinessOutcomeV1, WorkerV3LoadReadinessReceiptV1,
     WorkerV3LoadReadinessResultV1, discover_worker_v3_load_readiness_attempts_v1,
     publish_worker_v3_load_readiness_v1, publish_worker_v3_load_readiness_v1_with_options,
+    recover_worker_v3_load_readiness_for_attempt_from_retained_directory_v1,
     recover_worker_v3_load_readiness_for_attempt_v1, recover_worker_v3_load_readiness_v1,
     scavenge_superseded_worker_v3_load_readiness_v1,
 };
@@ -3793,6 +3795,13 @@ struct PinnedOutput {
     device: u64,
     inode: u64,
     path_guard: Option<FilesystemPathGuardDomain>,
+    identity_revalidation: OutputIdentityRevalidationV1,
+}
+
+#[derive(Clone, Copy)]
+enum OutputIdentityRevalidationV1 {
+    Path,
+    RetainedServiceDescriptor { service_uid: u32 },
 }
 
 struct FilesystemPathGuardDomain {
@@ -3976,16 +3985,39 @@ impl PinnedOutput {
             device: stat.st_dev,
             inode: stat.st_ino,
             path_guard,
+            identity_revalidation: OutputIdentityRevalidationV1::Path,
         })
     }
 
     fn verify_path_identity(&self) -> Result<(), EmitError> {
-        let reopened = open_directory_walk(&self.display_path, false)?;
-        let stat = fstat(&reopened).map_err(std::io::Error::from)?;
-        if stat.st_dev != self.device || stat.st_ino != self.inode {
-            return Err(EmitError::OutputDirectoryChanged {
-                path: self.display_path.clone(),
-            });
+        match self.identity_revalidation {
+            OutputIdentityRevalidationV1::Path => {
+                let reopened = open_directory_walk(&self.display_path, false)?;
+                let stat = fstat(&reopened).map_err(std::io::Error::from)?;
+                if stat.st_dev != self.device || stat.st_ino != self.inode {
+                    return Err(EmitError::OutputDirectoryChanged {
+                        path: self.display_path.clone(),
+                    });
+                }
+            }
+            OutputIdentityRevalidationV1::RetainedServiceDescriptor { service_uid } => {
+                let flags = rustix::io::fcntl_getfd(&self.fd).map_err(std::io::Error::from)?;
+                let stat = fstat(&self.fd).map_err(std::io::Error::from)?;
+                if !flags.contains(rustix::io::FdFlags::CLOEXEC)
+                    || FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                    || stat.st_uid != service_uid
+                    || stat.st_mode & 0o777 != 0o700
+                    || stat.st_nlink == 0
+                    || stat.st_dev != self.device
+                    || stat.st_ino != self.inode
+                {
+                    return Err(EmitError::InvalidArtifactDestination {
+                        path: self.display_path.clone(),
+                        reason: "retained service directory identity or metadata changed"
+                            .to_owned(),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -4001,6 +4033,7 @@ impl PinnedOutput {
                 .as_ref()
                 .map(FilesystemPathGuardDomain::try_clone)
                 .transpose()?,
+            identity_revalidation: self.identity_revalidation,
         })
     }
 

@@ -3,9 +3,13 @@
     feature = "worker-v3-envelope-integration-test-only"
 ))]
 
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+
 use ed25519_dalek::SigningKey;
 use fe2o3_artifact_transaction::{
-    CompilerModuleHandoffSlotV3, InertCompilerExecutionSubjectV1,
+    CompilerModuleHandoffSlotV3, InertCompilerExecutionSubjectV1, RetainedDurableDirectoryV1,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_runtime_protocol::{
@@ -18,7 +22,8 @@ use fe2o3_runtime_protocol::{
     WORKER_V3_LOAD_ENVELOPE_MAGIC_V2, WorkerV3LoadEnvelopeBindingFieldV2,
     WorkerV3LoadEnvelopeCodecBudgetV2, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeErrorV2,
     WorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeWireV1, WorkerV3LoadEnvelopeWireV2,
-    recover_worker_v3_load_envelope_v1, recover_worker_v3_load_envelope_v2,
+    recover_worker_v3_load_envelope_from_retained_directory_v2, recover_worker_v3_load_envelope_v1,
+    recover_worker_v3_load_envelope_v2,
 };
 
 #[path = "fixtures/worker_v3_hsaco_admission.rs"]
@@ -267,6 +272,15 @@ fn receipt_bearing_envelope_persists_retires_and_recovers_exactly() {
     assert_eq!(recovered.receipt(), readiness_receipt);
     assert_eq!(recovered.exact_artifact_bytes(), expected_artifact);
     assert_eq!(recovered.wire().encode_canonical().unwrap(), canonical);
+    let evidence = recovered.canonical_evidence_view();
+    assert_eq!(evidence.exact_canonical_bytes(), canonical);
+    assert_eq!(evidence.binding(), readiness_receipt.envelope_binding());
+    assert!(!evidence.grants_authority());
+    assert!(!evidence.grants_verification_authority());
+    assert!(!evidence.grants_publication_authority());
+    assert!(!evidence.grants_currentness_authority());
+    assert!(!evidence.grants_load_authority());
+    assert!(!evidence.grants_launch_authority());
     assert_eq!(
         recovered.wire().compiler_execution_receipt(),
         &expected_carriage
@@ -287,6 +301,192 @@ fn receipt_bearing_envelope_persists_retires_and_recovers_exactly() {
     assert!(!recovered.authenticates_compiler_origin());
     assert!(!recovered.grants_load_authority());
     assert!(!recovered.grants_launch_authority());
+}
+
+#[test]
+fn retained_directory_recovery_is_path_free_and_keeps_descriptor_currentness_custody() {
+    let worker_v3_fixture::PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    } = worker_v3_fixture::published_worker_v3_fixture();
+    let subject = published.compiler_execution_subject_v1().unwrap();
+    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        published,
+        carriage_for_subject(&subject, 0x62),
+    )
+    .unwrap();
+    let intent = envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let canonical = envelope.encode_canonical().unwrap();
+    let readiness = envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &producer,
+        attempt,
+        intent,
+        readiness.receipt(),
+    )
+    .unwrap();
+    drop(envelope);
+
+    let legacy = recover_worker_v3_load_envelope_v2(&directory.0, attempt).unwrap();
+    assert_eq!(
+        legacy.canonical_evidence_view().exact_canonical_bytes(),
+        canonical
+    );
+    drop(legacy);
+
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let retained =
+        RetainedDurableDirectoryV1::admit_service_owned(File::open(&directory.0).unwrap().into())
+            .unwrap();
+    let displaced = directory.0.with_extension("retained-root-displaced");
+    fs::rename(&directory.0, &displaced).unwrap();
+
+    let recovered =
+        recover_worker_v3_load_envelope_from_retained_directory_v2(&retained, attempt).unwrap();
+    assert_eq!(
+        recovered.canonical_evidence_view().exact_canonical_bytes(),
+        canonical
+    );
+    drop(retained);
+    let current = recovered
+        .current_publication_lease()
+        .acquire_current_token()
+        .unwrap();
+    assert_eq!(
+        current.exact_artifact_bytes(),
+        recovered.exact_artifact_bytes()
+    );
+    drop(current);
+    drop(recovered);
+
+    fs::rename(&displaced, &directory.0).unwrap();
+    let legacy_again = recover_worker_v3_load_envelope_v2(&directory.0, attempt).unwrap();
+    assert_eq!(
+        legacy_again
+            .canonical_evidence_view()
+            .exact_canonical_bytes(),
+        canonical
+    );
+}
+
+#[test]
+fn retained_directory_recovery_rejects_root_mode_and_trailing_envelope_mutation() {
+    let worker_v3_fixture::PublishedWorkerV3Fixture {
+        directory,
+        producer,
+        attempt,
+        published,
+    } = worker_v3_fixture::published_worker_v3_fixture();
+    let subject = published.compiler_execution_subject_v1().unwrap();
+    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        published,
+        carriage_for_subject(&subject, 0x63),
+    )
+    .unwrap();
+    let intent = envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let readiness = envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    let envelope_path = readiness.envelope_path().to_owned();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &producer,
+        attempt,
+        intent,
+        readiness.receipt(),
+    )
+    .unwrap();
+    drop(envelope);
+
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let retained =
+        RetainedDurableDirectoryV1::admit_service_owned(File::open(&directory.0).unwrap().into())
+            .unwrap();
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o750)).unwrap();
+    assert!(
+        recover_worker_v3_load_envelope_from_retained_directory_v2(&retained, attempt).is_err()
+    );
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+
+    OpenOptions::new()
+        .append(true)
+        .open(&envelope_path)
+        .unwrap()
+        .write_all(&[0xa5])
+        .unwrap();
+    assert!(
+        recover_worker_v3_load_envelope_from_retained_directory_v2(&retained, attempt).is_err()
+    );
+}
+
+#[test]
+fn retained_directory_recovery_rejects_substitution_stale_currentness_and_unlinked_roots() {
+    let directory = worker_v3_fixture::TestDirectory::new();
+    let first = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x64);
+    let first_subject = first.published.compiler_execution_subject_v1().unwrap();
+    let first_envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
+        first.published,
+        carriage_for_subject(&first_subject, 0x64),
+    )
+    .unwrap();
+    let first_intent = first_envelope
+        .wire()
+        .replay()
+        .publication_intent_record()
+        .identity();
+    let first_readiness = first_envelope
+        .persist_durable_replay_custody_v2(&directory.0)
+        .unwrap();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &first.producer,
+        first.attempt,
+        first_intent,
+        first_readiness.receipt(),
+    )
+    .unwrap();
+    drop(first_envelope);
+
+    let second = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x65);
+    drop(second.published);
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let retained =
+        RetainedDurableDirectoryV1::admit_service_owned(File::open(&directory.0).unwrap().into())
+            .unwrap();
+    assert!(
+        recover_worker_v3_load_envelope_from_retained_directory_v2(&retained, first.attempt)
+            .is_err()
+    );
+
+    let other = worker_v3_fixture::TestDirectory::new();
+    fs::set_permissions(&other.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let substituted =
+        RetainedDurableDirectoryV1::admit_service_owned(File::open(&other.0).unwrap().into())
+            .unwrap();
+    assert!(
+        recover_worker_v3_load_envelope_from_retained_directory_v2(&substituted, first.attempt)
+            .is_err()
+    );
+
+    fs::remove_dir_all(&other.0).unwrap();
+    assert!(
+        recover_worker_v3_load_envelope_from_retained_directory_v2(&substituted, first.attempt)
+            .is_err()
+    );
+    std::mem::forget(other);
 }
 
 #[test]
