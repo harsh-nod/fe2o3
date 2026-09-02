@@ -24,7 +24,7 @@ const TARGET: &str = "gfx942:xnack-";
 const CARGO_TARGET: &str = "amdgcn-amd-amdhsa";
 const CODE_OBJECT_VERSION: u8 = 6;
 const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_TOOL_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_RUSTC_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 const CONTENT_ID_DOMAIN: &[u8] = b"FE2O3/ENGINEERING-HSACO-OBSERVATION-CONTENT/V1\0";
 
