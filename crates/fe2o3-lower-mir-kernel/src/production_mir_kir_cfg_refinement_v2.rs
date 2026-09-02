@@ -292,6 +292,16 @@ impl InertMirKirCfgRefinementEvidenceV2 {
         {
             return Err(MirKirCfgRefinementErrorV2::UnsupportedShape);
         }
+        if semantic
+            .roots()
+            .iter()
+            .map(|root| root.index())
+            .collect::<Vec<_>>()
+            != [root_id]
+            || owner.module().kernels.len() != 1
+        {
+            return Err(MirKirCfgRefinementErrorV2::UnsupportedShape);
+        }
 
         let helper_argument = unique_local_with_role(helper, |role| {
             matches!(role, SemanticLocalRoleV1::Argument(0))
@@ -363,6 +373,14 @@ impl InertMirKirCfgRefinementEvidenceV2 {
         }
 
         let correspondence = owner.correspondence();
+        if correspondence.lowered_functions().len() != 2
+            || correspondence.blocks().len() != 6
+            || correspondence.statement_operation_spans().len() != 2
+            || correspondence.terminator_operation_spans().len() != 6
+            || correspondence.parameter_bindings().len() != 2
+        {
+            return Err(MirKirCfgRefinementErrorV2::Correspondence);
+        }
         let root_binding = correspondence
             .lowered_functions()
             .iter()
