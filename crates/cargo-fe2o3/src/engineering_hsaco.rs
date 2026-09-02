@@ -397,9 +397,9 @@ fn parse_cargo_git_source(value: &OsStr) -> Result<CargoGitSource, String> {
         .ok_or_else(|| "--cargo-git-source must have the form https://URL@40-hex-rev".to_owned())?;
     if !url.starts_with("https://")
         || url.len() > 1024
-        || url
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || matches!(byte, b'"' | b'\\' | b'?' | b'#' | b'@'))
+        || url.bytes().any(|byte| {
+            byte.is_ascii_control() || matches!(byte, b'"' | b'\\' | b'?' | b'#' | b'@')
+        })
     {
         return Err("--cargo-git-source URL is not a canonical safe HTTPS URL".to_owned());
     }
@@ -408,7 +408,9 @@ fn parse_cargo_git_source(value: &OsStr) -> Result<CargoGitSource, String> {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
-        return Err("--cargo-git-source revision must be 40 lowercase hexadecimal bytes".to_owned());
+        return Err(
+            "--cargo-git-source revision must be 40 lowercase hexadecimal bytes".to_owned(),
+        );
     }
     Ok(CargoGitSource {
         url: url.to_owned(),
@@ -757,9 +759,7 @@ fn pin_vendor_tree(path: &Path) -> Result<crate::rustc_lib_tree::PinnedRustcLibT
 }
 
 fn cargo_vendor_config(sources: &[CargoGitSource]) -> String {
-    let mut config = String::from(
-        "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n",
-    );
+    let mut config = String::from("[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n");
     for source in sources {
         config.push_str(&format!(
             "[source.\"git+{}?rev={}\"]\ngit = \"{}\"\nrev = \"{}\"\nreplace-with = \"vendored-sources\"\n\n",
