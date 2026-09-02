@@ -166,6 +166,15 @@ for the component commands, exact-KIR fixture, debugger, and cleanup behavior.
 
 ## GPU evaluation status
 
+For compiler engineering only, `cargo fe2o3 engineering hsaco` can extract one
+explicitly selected device crate and run its inert handoff twice through an
+exactly measured native worker. It writes only a fresh
+`fe2o3-engineering-v1/<content-id>/` observation with `"authority":"none"`.
+This command does not contact the production compiler-execution supervisor and
+its output cannot be adopted as a production generation, publication, load, or
+launch owner. Run `cargo fe2o3 engineering hsaco --help` for the explicit tool,
+provider, target, COV, resource-bound, and Cargo-selection arguments.
+
 There is currently no supported copy-and-paste source-to-GPU quick start.
 `cargo fe2o3 build` enters the production compiler transaction, but ordinary
 example applications still lack the production Worker V3 verifier and release
