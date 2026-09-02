@@ -151,7 +151,11 @@ client requests are hostile. Admission must reject:
 
 Cleanup owns and terminates only processes and queue suspensions acquired by
 the session. A failed identity revalidation poisons the stateful operation and
-cannot be cleared by retrying with a new caller assertion.
+cannot be cleared by retrying with a new caller assertion. The current
+`hardware` and `live-kfd` launchers acquire only the directly launched process
+leader: their pidfd and leader-only `PTRACE_O_EXITKILL` do not establish a
+fresh session or process group, descendant adoption, or process-tree
+containment.
 
 ### Variant regression evidence
 
