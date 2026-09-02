@@ -103,6 +103,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-mir-model
   fe2o3-pliron
   fe2o3-pliron-conformance
+  fe2o3-process-identity
   fe2o3-proof-contracts
   fe2o3-rustc-front
   fe2o3-rustc-invocation

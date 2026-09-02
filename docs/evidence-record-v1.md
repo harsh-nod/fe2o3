@@ -148,8 +148,9 @@ pin A's exact commit and tree, the complete upstream LLVM/LLD and device-library
 inputs, Cargo/rustc and their offline closures, runtime DSOs, Worker/probe
 outputs, and the real retained HSACO. A compliant B requires the operator to
 supply the reviewed manifest digest from outside the checkout, and release
-evidence requires two fresh replays with identical outputs. See
-[testing.md](testing.md#row-softmax-v1-llvm-22-release-gate).
+evidence requires two fresh replays with identical outputs. The executable
+testing section was retired with that backend route; this paragraph now
+documents only the archived record contract.
 
 A compliant B plus two fresh replays establishes only operator-selected
 integrity. Its unkeyed SHA-256 values are not a signature, origin

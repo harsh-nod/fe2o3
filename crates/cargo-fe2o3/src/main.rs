@@ -3444,11 +3444,13 @@ fn configure_pinned_rustc_child(command: &mut Command, rustc: &PinnedRustc) -> R
     image
         .set_permissions(std::fs::Permissions::from_mode(0o500))
         .map_err(|error| format!("failed to make sealed rustc image executable: {error}"))?;
-    rustix::fs::fcntl_add_seals(
+    // A same-UID observer can transiently retain a writable `/proc` alias. A
+    // bounded wait is safe here because the sealed bytes are independently
+    // reauthenticated against the parent pin immediately below.
+    fe2o3_process_identity::seal_immutable_memfd_v1(
         &image,
-        rustix::fs::SealFlags::WRITE | rustix::fs::SealFlags::GROW | rustix::fs::SealFlags::SHRINK,
+        fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
     )
-    .and_then(|()| rustix::fs::fcntl_add_seals(&image, rustix::fs::SealFlags::SEAL))
     .map_err(|error| format!("failed to seal pinned rustc image: {error}"))?;
     image
         .seek(SeekFrom::Start(0))

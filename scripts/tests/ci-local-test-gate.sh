@@ -538,6 +538,11 @@ fi
     'raw CPU tests omitted the reusable source/ISA observation protocol suite' >&2
   exit 1
 }
+[[ " ${cpu_command} " == *" -p fe2o3-process-identity "* ]] || {
+  printf '%s\n' \
+    'raw CPU tests omitted the process-identity and immutable-memfd suite' >&2
+  exit 1
+}
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   printf 'generic CPU tests mixed %s into the shared Cargo process\n' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}" >&2

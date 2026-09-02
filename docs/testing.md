@@ -204,15 +204,35 @@ hardware harness, and optional parity shard have since been deleted. Those
 observations remain historical evidence and their commands are intentionally
 not current test instructions.
 
-Current host coverage uses the generic Worker V3 contract:
+Current feature-free host coverage uses the generic Worker V3 contract and the
+direct-KFD composition boundary:
 
 ```text
-cargo test --locked -p fe2o3-host --all-targets --all-features
+cargo test --locked -p fe2o3-host
 cargo test --locked -p fe2o3-host --test generated_spi_ui
-cargo test --locked -p fe2o3-host --test hsa_executable_lifecycle_ui
 cargo test --locked -p fe2o3-host --test worker_v3_verification_admission_ui
 cargo test --locked -p fe2o3-host --test production_application_handoff_ui
 cargo test --locked -p fe2o3-macros --test typed_kernel_fixtures
+```
+
+The deprecated HIP-buffer/HSA-lifecycle surface is retained only for explicit
+qualification and differential coverage. It is absent from the default host
+dependency graph and must be selected by name:
+
+```text
+FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+  cargo test --locked -p fe2o3-host \
+    --features qualification-legacy-hip-hsa
+FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+  cargo test --locked -p fe2o3-host \
+    --features qualification-legacy-hip-hsa \
+    --test hsa_executable_lifecycle_ui
+```
+
+With a configured ROCm development installation, compile the native legacy
+runtime hooks without executing them:
+
+```text
 cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-hooks --no-run
 ```
 
@@ -332,11 +352,14 @@ authority closure. A retained hardware claim now requires the ordinary generic
 Worker V3 inherited application and KFD route.
 
 The host crate enforces the same split. Its feature-free build exposes the
-Worker V3 application, admission, verification, private joined KFD invocation,
-and HSA-backed generated migration route. Worker V2 application recovery,
-embedded-artifact loading,
-direct HIP module/function loading, raw parameter packing, cooperative launch,
-and workload-specific host adapters are deleted in every feature configuration.
+Worker V3 application, admission, verification, and private joined KFD
+invocation. The HSA-backed generated migration route is available only through
+the explicitly named deprecated qualification feature and cannot provide
+production launch authority. Worker V2 application recovery, embedded-artifact
+loading, direct HIP module/function loading, raw parameter packing, cooperative
+launch, and workload-specific host adapters are absent from the feature-free
+production host surface. `fe2o3-core` retains a separately named deprecated
+unsafe-launch feature strictly for qualification.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
 and runtime imports, including the retired embedded artifact contract, raw HIP
 surface, and generated vecadd `Kernel`, to guard that public API boundary. The macro fixture also
