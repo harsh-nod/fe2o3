@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Production Rust -> gfx950 HSACO -> HSA numerical verification for one advanced
-# kernel. The systems dispatcher reuses this fail-closed implementation.
+# Production Rust -> gfx950 HSACO -> deprecated HSA qualification-oracle
+# verification for one advanced kernel. The systems dispatcher reuses this
+# fail-closed implementation.
 
 if [[ $# -ne 1 ]]; then
     printf 'usage: %s <kernel feature>\n' "$0" >&2
@@ -439,10 +440,10 @@ SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
     FE2O3_GFX950_ADVANCED_SOURCE_TREE=$SOURCE_TREE \
     CARGO_TARGET_DIR=$ROOT_TARGET_DIR \
         "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" test --locked \
-        -p fe2o3-hsa-runtime --features hardware-test-hooks \
+        -p fe2o3-hsa-runtime --features hardware-qualification \
         --test gfx950_advanced_hardware "$TEST" -- --ignored --exact --nocapture
 )
 
-printf 'PASS %s production Rust gfx950 build and numerical run\n' "$SYMBOL"
+printf 'PASS %s production Rust gfx950 build and qualification-oracle numerical run\n' "$SYMBOL"
 printf 'Binding: %s\nLLVM:   %s\nHSACO:  %s\nSHA256: %s\nISA:    %s\n' \
     "$CRATE_BINDING" "$LLVM_IR" "$HSACO" "$HSACO_SHA256" "$DISASSEMBLY"

@@ -1,0 +1,61 @@
+name: Feature request
+description: Propose a user-facing capability or general kernel workflow.
+title: "[Feature]: "
+labels: [enhancement]
+assignees: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete workflow or limitation, not only a proposed API.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed capability
+      description: Explain expected behavior and the user-visible contract.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Compiler or kernel language
+        - Direct-KFD runtime
+        - CPU simulator
+        - Debugger
+        - Profiler
+        - Verification or evidence
+        - Developer tooling
+        - Documentation or tutorials
+        - Community or release engineering
+    validations:
+      required: true
+  - type: textarea
+    id: generality
+    attributes:
+      label: Generality
+      description: Explain how the capability applies across kernel types and what target-specific pieces remain isolated.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Compatibility and trust boundaries
+      description: Note effects on KIR, artifacts, authority, direct KFD, hardware admission, security, and existing users.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and roadmap documents for this capability.
+          required: true
+        - label: The request does not rely on a kernel-specific production one-off.
+          required: true

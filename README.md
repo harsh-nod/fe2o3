@@ -1,42 +1,75 @@
-# fe2o3
+# fe2o3 GPU
 
-`fe2o3` is an experimental single-source Rust GPU stack for AMD GPUs. The goal
-is to let kernel authors write Rust, keep explicit compiler/runtime evidence for
-what was accepted, and connect bounded kernel behavior to source models and
-Verus-facing contracts.
+`fe2o3` is a developer-preview GPU programming stack for writing kernels in
+Rust, compiling them through a typed intermediate representation, and building
+a direct-KFD runtime for AMD GPUs.
 
-This repository contains the implementation: compiler crates, runtime crates,
-examples, proof models, evidence records, debugger/profiler tools, and hardware
-qualification lanes. The public learning path lives in `fe2o3-kernels`.
+The project is investigating a deliberately integrated model: source
+semantics, compiler evidence, artifacts, runtime authority, deterministic CPU
+simulation, and debugger/profiler observations all carry explicit identities
+instead of being joined by filenames or convention.
 
-## Start Here
+> **Developer Preview**
+>
+> fe2o3 is under active development. It is not ready for production workloads,
+> does not yet provide a supported source-to-GPU first-run experience, and makes
+> no API, wire-format, or compatibility stability promise before the first
+> preview release. Current direct-KFD qualification is bounded to MI300X
+> `gfx942:xnack-` lanes. See [What works](#what-works) and
+> [Known limitations](#known-limitations) before evaluating it.
 
-If you are new to `fe2o3`, start with the kernel learning workbench:
+The project currently ships only from a source checkout and makes no crates.io
+installation promise. The first developer-preview release remains blocked on
+the conditions in the [release process](docs/release-process.md) and
+[launch issue #267](https://github.com/harsh-nod/fe2o3/issues/267).
 
-- Deployed guide: <https://harsh-nod.github.io/fe2o3-kernels/>
-- Source repo: <https://github.com/harsh-nod/fe2o3-kernels>
+## Why fe2o3
 
-`fe2o3-kernels` is the authoritative guide to runnable bounded `fe2o3`
-kernels. Every kernel lesson should identify the exact source, reference or
-oracle, runner command, target, evidence status, and non-claims.
+- **Single-source Rust kernels.** Kernel functions use ordinary Rust syntax,
+  typed kernel arguments, and explicit device APIs.
+- **Direct KFD.** The production runtime direction is the Linux KFD interface;
+  HIP and HSA are not fallback execution paths.
+- **Typed compiler contracts.** Source, semantic MIR, Pliron, Kernel IR,
+  LLVM, artifact, and runtime boundaries are represented explicitly and fail
+  closed when a required association is unavailable.
+- **CPU simulation without a GPU.** A deterministic Kernel IR V7 simulator can
+  execute the supported semantic subset and expose logical work-item, wave,
+  workgroup, memory, atomic, fence, and barrier observations. It does not
+  predict GPU performance.
+- **Semantic debugging and profiling.** Agent-facing JSONL protocols preserve
+  provenance and distinguish declared, observed, inferred, and unavailable
+  facts. CPU replay supports reverse navigation and structured diagnosis;
+  bounded ROCgdb control and rocprofv3 planning/import workflows are
+  implemented. Admitted stopped-GPU state, protected real-dispatch capture, and
+  ATT decoding remain incomplete.
+- **Evidence-aware verification.** Formal contracts and qualification evidence
+  are kept separate from compiler, publication, load, and dispatch authority.
 
-Use this repository when you are ready to inspect or change the implementation.
-When adding a kernel, keep the source, reference, runner, and evidence shape in
-`fe2o3-kernels` synchronized with the implementation here.
+## Kernel example
 
-## What Works Today
+This is the complete kernel body from
+[`examples/fill`](examples/fill/src/lib.rs):
 
-The community launch surface is a set of runnable bounded examples. These are
-real kernels with explicit boundaries, not broad library or serving claims.
+```rust
+use fe2o3_device::{DisjointSlice, kernel, thread};
 
-| Kernel family | Community status | Boundary |
-| --- | --- | --- |
-| Fill / Vecadd | Runnable bounded starter examples | Introductory shapes and typed host paths |
-| Row softmax / GEMM / FlashAttention / MoE | Runnable bounded operator examples with evidence labels | Specific shapes, targets, and runners |
-| gfx950 KDA/GDN | Runnable bounded gfx950 attention examples | Teaching decode/prefill slices, not a full model layer |
-| Kimi K3 KDA | Runnable bounded decode-core example | Not full Kimi K3 serving, batching, cache plumbing, or full-model equivalence |
-| GPT-OSS layer tile | Runnable bounded layer-tile example | Not a complete GPT-OSS layer or whole-model decode |
-| Debugger / simulator | Bounded CPU and live-host tools | They report unsupported capabilities instead of inferring success |
+#[kernel(
+    typed,
+    namespace = "3f959016b22cc527afdf32bf2ed9b043947c2147348f1ab939488dab760220e5",
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+pub fn fill(mut out: DisjointSlice<f32>) {
+    let idx = thread::index_1d();
+    let Some(value) = out.get_mut(idx) else {
+        return;
+    };
+    *value = 42.5;
+}
+```
+
+`DisjointSlice` makes the output partition explicit. `thread::index_1d()` is a
+typed logical index, and the bounds check remains part of the admitted kernel
+semantics.
 
 ## Why Write Kernels In fe2o3
 
@@ -59,107 +92,167 @@ numerical error replay, LLVM/ISA behavior, launch, hardware execution,
 performance, and full-model integration still fail closed unless a specific
 evidence record says otherwise.
 
-## Production Compiler Status
+## CPU quick start
 
-The runnable examples above do not mean the full production compiler is done.
-That is a different claim.
+### Requirements
 
-The full production compiler is incomplete because `fe2o3` does not yet accept a
-broad Rust GPU kernel surface and carry every accepted program through one
-general, authenticated, evidence-bearing path from source to safe launch.
+- x86-64 Linux with Bash and GNU `realpath`
+- Git
+- `rustup`; the repository pins `nightly-2026-04-03` and its required
+  components in [`rust-toolchain.toml`](rust-toolchain.toml)
+- Enough disk space for a Rust compiler workspace build
 
-The remaining work is mainly:
+Clone the repository and run the source-to-CPU quick start:
 
-- General source coverage for more Rust control flow, memory patterns, layouts,
-  synchronization, math, and model-kernel shapes.
-- General lowering from Rust/MIR through semantic IR, Kernel IR, LLVM, and HSACO
-  without workload-specific admission.
-- Source-to-machine authority that connects accepted source, proof/model facts,
-  generated artifacts, and machine code for each promoted kernel.
-- One protected publication, currentness, load, and launch chain for ordinary
-  safe application use.
-- Production verifier or attestor paths that replace qualification-only,
-  historical, or test-issued records.
-- Library and serving integration for arbitrary shapes, performance tuning, and
-  model-scale execution.
-
-So the launch message is precise: `fe2o3-kernels` contains runnable bounded
-examples; `fe2o3` is still completing the general production compiler and
-authority path.
-
-## Quick Start
-
-For the guided path, use `fe2o3-kernels` first. To run the generic validation
-lane in this repository:
-
-```bash
-git clone https://github.com/harsh-nod/fe2o3
+```console
+git clone https://github.com/harsh-nod/fe2o3.git
 cd fe2o3
-scripts/ci-local.sh generic
+bash scripts/quickstart.sh no-gpu
 ```
 
-Useful local commands:
+The command exports the ordinary Rust `fill` kernel through the production
+source/MIR/KIR stages, creates a temporary authority-free simulation bundle,
+executes its embedded KIR on the CPU, and removes the bundle. The result is
+deterministic JSON with `"status":"ok"`, copied-back argument bytes, execution
+counts, and an explicit statement that no hardware was observed or validated.
 
-```bash
-cargo run -p cargo-fe2o3 -- doctor
-cargo run -p cargo-fe2o3 -- inspect target/fe2o3/kernel.hsaco
-cargo run -p cargo-fe2o3 -- clean --dry-run
+Bundle export and simulation do not load a GPU, silently fall back from a
+hardware command, authenticate compiler execution, or establish equivalence
+with GPU execution. See the [getting-started guide](docs/getting-started.md)
+for the component commands, exact-KIR fixture, debugger, and cleanup behavior.
+
+## GPU evaluation status
+
+There is currently no supported copy-and-paste source-to-GPU quick start.
+`cargo fe2o3 build` enters the production compiler transaction, but ordinary
+example applications still lack the production Worker V3 verifier and release
+deployment needed to authorize load and dispatch. For example,
+`fe2o3-vecadd` and `fe2o3-fill` intentionally fail closed before dispatch.
+
+Hardware development and CI exercise bounded direct-KFD mechanics and exact
+`gfx942:xnack-` qualification lanes on MI300X. These tests demonstrate specific
+compiler/runtime properties; they are not a supported general application
+workflow. Publishing a clean-checkout source-to-MI300X example is a blocker for
+a future GPU-ready preview, not a claim made by this source/simulator preview.
+
+## What works
+
+| Area | Current developer-preview state |
+| --- | --- |
+| Rust kernel surface | Typed kernels, device indexing, checked buffer views, bounded scalar/control/memory subsets |
+| Compiler | Source/MIR through typed Pliron and verified KIR; bounded `gfx942` LLVM/HSACO vertical slices |
+| CPU simulation | Deterministic execution of admitted canonical KIR V7, including supported helpers, barriers, workgroup memory, atomics, fences, floating point, and seeded schedule exploration |
+| CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
+| Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
+| Profiling | Bounded rocprofv3 dispatch import with strict JSON/CSV admission and agent-facing observation queries; real-dispatch and ATT coverage remains incomplete |
+| Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
+| Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
+
+The [support matrix](docs/support-matrix.md) separates implemented,
+qualified, experimental, and unsupported combinations. Detailed historical
+milestones are retained in the [project status archive](docs/project-status.md).
+
+## Known limitations
+
+- The only currently qualified production direct-KFD profile is the bounded
+  MI300X `gfx942:xnack-` profile. Other AMD targets are not implied.
+- An ordinary external project cannot yet compile and dispatch a general Rust
+  kernel through one supported public command.
+- The simulator accepts a defined KIR V7 semantic subset. Unsupported types and
+  operations fail closed; CPU results are not timing or performance predictions.
+- CPU logical waves model semantic collectives and visualization partitions,
+  not physical GPU wave scheduling or `EXEC` state.
+- Live KFD debugging does not yet expose general wave/lane PC, registers,
+  target memory, source stepping, or breakpoints.
+- ROCgdb integration is bounded by what the installed debugger exposes and is
+  not a source of fe2o3 compiler or runtime authority.
+- Profiler import has not completed a protected real GPU-dispatch rocprofv3
+  round trip. ATT decoding is unavailable without a mutation-proof decoder.
+- Multi-GPU distributed kernels and communication/computation overlap are not
+  a supported execution surface.
+- The compiler and protocols are evolving. Do not treat crate APIs, KIR, bundle,
+  debugger, profiler, receipt, or evidence formats as stable unless a document
+  explicitly freezes a version.
+
+## Architecture
+
+The intended production flow is:
+
+```text
+Rust source
+  -> semantic MIR
+  -> typed Pliron
+  -> verified Kernel IR
+  -> AMDGPU LLVM / HSACO
+  -> authenticated artifact publication
+  -> direct-KFD load and dispatch
 ```
 
-GPU compile and hardware lanes require a ROCm/KFD-capable AMD host and explicit
-target selection. The exact runnable kernel commands are documented in
-`fe2o3-kernels`.
+CPU simulation branches after verified Kernel IR and never becomes runtime or
+hardware evidence. Debugger and profiler services join observations through
+content identities and typed provenance rather than native paths, descriptors,
+or addresses.
 
-## Repository Map
+Start with the [architecture overview](docs/architecture-v2.md), then use the
+[documentation index](docs/README.md) to find compiler, runtime, debugger,
+profiler, simulator, verification, and evidence contracts.
 
-- `crates/`: compiler, runtime, host API, verifier, debugger, protocol, and
-  evidence crates.
-- `examples/`: runnable kernel examples and bounded operator slices.
-- `docs/`: architecture, evidence, roadmap, parity, runtime, and verification
-  design documents.
-- `scripts/`: local validation, ROCm compile lanes, proof lanes, parity tools,
-  and hardware evidence helpers.
-- `perf-evidence/`: benchmark and performance-evidence scripts.
-- `deployment/`: service and deployment notes for protected components.
+## Repository layout
 
-## Evidence Model
+| Path | Purpose |
+| --- | --- |
+| `crates/fe2o3-device` | Kernel-facing Rust APIs and types |
+| `crates/rustc-codegen-fe2o3` | rustc integration, production lowering, and source-to-simulator export |
+| `crates/cargo-fe2o3` | Cargo orchestration, inspection, debug, and profile commands |
+| `crates/fe2o3-kfd` | Direct Linux KFD boundary |
+| `crates/fe2o3-kir-sim*` | Deterministic CPU simulator and CLI |
+| `crates/fe2o3-debug-*` | Debug protocol, simulator debugger, and live-tool adapters |
+| `examples/` | Kernel source, host-boundary, proof, and qualification examples |
+| `docs/` | Architecture, contracts, evidence policy, testing, and status |
+| `scripts/` | CI and qualification entry points |
 
-`fe2o3` uses evidence labels to avoid overclaiming:
+## Development
 
-- Runnable means there is a command for a bounded slice.
-- Bounded means the shape, target, runner, and assumptions are explicit.
-- GPU-observed means a particular hardware run was recorded.
-- Source-model verified means a model or proof covers the stated source-level
-  property.
-- Production authority means the compiler, artifact, currentness, load, and
-  launch chain grants safe application use.
+Run the bounded contributor preflight before opening a pull request:
 
-These labels compose only when the corresponding records compose. A runnable
-kernel is not automatically a verified kernel. A verified source model is not
-automatically machine-code refinement. A GPU observation is not automatically a
-performance or full-library claim.
+```console
+cargo fmt --all -- --check
+bash scripts/tests/quickstart.sh
+bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
+```
 
-## Contributing Kernels
+Compiler, runtime, proof, and trust-policy changes must also run their
+applicable broader lanes, including `bash scripts/ci-local.sh generic-core`
+where required. The full validation matrix adds codegen shards, policy checks,
+Verus, compile-only AMDGPU checks, and hardware lanes. See
+[testing](docs/testing.md) for trust boundaries and required environments.
 
-For community-facing kernel work, include:
+External contributions are welcome once they satisfy the repository's
+fail-closed authority and evidence boundaries. Read
+[`CONTRIBUTING.md`](CONTRIBUTING.md), the
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and
+[`SECURITY.md`](SECURITY.md) before submitting work. Support expectations are
+documented in [`SUPPORT.md`](SUPPORT.md); maintainer and decision ownership is
+documented in [`MAINTAINERS.md`](MAINTAINERS.md).
 
-- The exact Rust source path.
-- A reference implementation or oracle.
-- A runner command and required target.
-- Evidence records or tests for the claimed status.
-- Explicit non-claims.
-- A matching `fe2o3-kernels` lesson or operator-cookbook update.
+## Project resources
 
-Do not promote a status claim without the matching implementation and evidence
-record in this repository.
-
-## Canonical Docs
-
-- [Architecture](docs/architecture-v2.md)
+- [Getting started](docs/getting-started.md)
+- [Support matrix](docs/support-matrix.md)
+- [Documentation index](docs/README.md)
+- [Debugger and profiler tutorial](https://harsh-nod.github.io/fe2o3-kernels/#/debugger/profiler-import)
 - [Implementation roadmap](docs/implementation-roadmap-v2.md)
-- [Testing guide](docs/testing.md)
-- [CUDA-Oxide parity matrix](docs/cuda-oxide-parity-matrix.md)
-- [Evidence-backed parity dashboard](docs/generated/cuda-oxide-parity-dashboard.md)
-- [Debugger/profiler architecture](docs/debugger-profiler-architecture-v1.md)
-- [Verification model](docs/verification-model.md)
-- [GPU safety contract](docs/gpu-safety-contract-v1.md)
+- [Current parity dashboard](docs/generated/cuda-oxide-parity-dashboard.md)
+- [Issue tracker](https://github.com/harsh-nod/fe2o3/issues)
+
+## License
+
+Except for third-party-derived or file-specific material identified in
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md), fe2o3-authored source is
+licensed under either of
+
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE)), or
+- MIT License ([`LICENSE-MIT`](LICENSE-MIT))
+
+at your option. Contributions are accepted under the same dual license unless
+explicitly stated otherwise.

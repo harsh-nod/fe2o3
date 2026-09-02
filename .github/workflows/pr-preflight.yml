@@ -1,0 +1,77 @@
+name: PR preflight
+
+on:
+  merge_group:
+    types: [checks_requested]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-preflight-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Fork-safe preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/pr-preflight
+      FE2O3_HIP_SYS_DISABLE: "1"
+      FE2O3_HSA_RUNTIME_DISABLE: "1"
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record pinned Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc -Vv
+          cargo -V
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check DCO sign-offs
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: >-
+          python3 -I scripts/check-dco-range.py
+          --base "${BASE_SHA}"
+          --head "${HEAD_SHA}"
+          --repo "${REPOSITORY}"
+
+      - name: Check quick-start command contracts
+        run: |
+          bash scripts/tests/quickstart.sh
+          bash scripts/tests/community-release-metadata.sh
+          bash scripts/tests/release-archive-attributes.sh
+          bash scripts/tests/release-mirror.sh
+          bash scripts/tests/check-dco-range.sh
+
+      - name: Test KFD-first doctor
+        run: |
+          cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 doctor::tests
+          cargo test --locked -p cargo-fe2o3 --test doctor_cli
+
+      - name: Check ordinary source onboarding
+        run: scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
+
+      # Full generic core, codegen shards, formal checks, and hardware-gated
+      # qualification remain separate. This candidate-controlled job has no
+      # secrets, write permission, OIDC, or GPU.

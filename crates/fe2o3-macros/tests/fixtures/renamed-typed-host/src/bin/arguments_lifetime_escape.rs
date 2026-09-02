@@ -1,7 +1,5 @@
 use gpu_device::{DisjointSlice, kernel};
-use gpu_host::__generated::{
-    DeviceBuffer, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, ObservedContext,
-};
+use gpu_host::__generated::{GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice};
 
 #[kernel(
     typed,
@@ -12,12 +10,11 @@ pub fn retained(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
 }
 
 fn escape<'short>(
-    observed: &ObservedContext,
-    input: &'short DeviceBuffer<f32>,
-    output: &'short mut DeviceBuffer<f32>,
+    input: &'short [f32],
+    output: &'short mut [f32],
 ) -> retained_gpu::Arguments<'static> {
-    let input = GeneratedReadDeviceSlice::new(observed, input).unwrap();
-    let output = GeneratedReadWriteDeviceSlice::new(observed, output).unwrap();
+    let input = GeneratedKfdReadSlice::new(input);
+    let output = GeneratedKfdReadWriteSlice::new(output);
     retained_gpu::Arguments::new(1.0, input, output)
 }
 

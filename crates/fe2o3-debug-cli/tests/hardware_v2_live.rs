@@ -107,6 +107,7 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
         .arg(target)
         .args(["--exact", "hardware_v2_live_target", "--nocapture"])
         .env(TARGET_ENV, "1")
+        .env_remove("RUST_MIN_STACK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -132,8 +133,13 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
     });
     let child = ChildGuard(Some(child));
 
-    let mut runtime_enabled = false;
-    for request_id in 1..20 {
+    let runtime_deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let mut request_id = 1;
+    loop {
+        assert!(
+            Instant::now() < runtime_deadline,
+            "target runtime transition was not observed"
+        );
         let state = exchange(
             &mut input,
             &receiver,
@@ -143,7 +149,8 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
                 expected_control_revision: 0,
             },
         );
-        runtime_enabled = matches!(
+        request_id += 1;
+        if matches!(
             state,
             HardwareDebugResponseV2::Ok {
                 session: HardwareSessionViewV2 {
@@ -153,24 +160,22 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
                 },
                 ..
             }
-        );
-        if runtime_enabled {
+        ) {
             break;
         }
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(
-        runtime_enabled,
-        "target runtime transition was not observed"
-    );
 
-    let mut queue = None;
-    let mut device_capable = false;
-    for request_id in 20..40 {
-        let devices = exchange(
+    let discovery_deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let (queue, suspended) = loop {
+        assert!(
+            Instant::now() < discovery_deadline,
+            "debugger did not observe one complete target queue snapshot"
+        );
+        let queues = exchange(
             &mut input,
             &receiver,
-            HardwareDebugRequestV2::InspectHardwareDevices {
+            HardwareDebugRequestV2::InspectHardwareQueues {
                 schema: HardwareRequestSchemaV2::V2,
                 request_id,
                 expected_control_revision: 0,
@@ -181,70 +186,151 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
                 },
             },
         );
-        if let HardwareDebugResponseV2::Ok {
-            result: HardwareDebugResultV2::Devices { items, .. },
-            ..
-        } = devices
-        {
-            device_capable = items.iter().any(|device| device.trap_debug_supported);
-        }
-        let queues = exchange(
+        request_id += 1;
+        let candidate = match queues {
+            HardwareDebugResponseV2::Ok {
+                session:
+                    HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Running,
+                        runtime_enabled: true,
+                        ..
+                    },
+                result:
+                    HardwareDebugResultV2::Queues {
+                        generation,
+                        items,
+                        next_start: 0,
+                    },
+                ..
+            } if items.len() == 1
+                && items[0].ring_bytes == 4096
+                && items[0].context_save_area_bytes > 0
+                && !items[0].suspended_by_session =>
+            {
+                Some((generation, items[0]))
+            }
+            HardwareDebugResponseV2::Error {
+                session:
+                    HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Poisoned | HardwareSessionStateV2::Terminated,
+                        ..
+                    },
+                error,
+                ..
+            } => panic!("debugger became terminal during queue discovery: {error:?}"),
+            _ => None,
+        };
+        let Some((generation, candidate)) = candidate else {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+
+        let devices = exchange(
             &mut input,
             &receiver,
-            HardwareDebugRequestV2::InspectHardwareQueues {
+            HardwareDebugRequestV2::InspectHardwareDevices {
                 schema: HardwareRequestSchemaV2::V2,
-                request_id: request_id + 100,
+                request_id,
                 expected_control_revision: 0,
                 page: HardwarePageRequestV2 {
-                    expected_generation: 0,
+                    expected_generation: generation,
                     start: 0,
                     limit: 16,
                 },
             },
         );
-        if let HardwareDebugResponseV2::Ok {
-            result: HardwareDebugResultV2::Queues { items, .. },
-            ..
-        } = queues
-        {
-            queue = items.first().map(|item| item.id);
+        request_id += 1;
+        let device = match devices {
+            HardwareDebugResponseV2::Ok {
+                session:
+                    HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Running,
+                        runtime_enabled: true,
+                        ..
+                    },
+                result:
+                    HardwareDebugResultV2::Devices {
+                        generation: device_generation,
+                        items,
+                        next_start: 0,
+                    },
+                ..
+            } if device_generation == generation => items
+                .into_iter()
+                .find(|device| device.id == candidate.device),
+            HardwareDebugResponseV2::Error {
+                session:
+                    HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Poisoned | HardwareSessionStateV2::Terminated,
+                        ..
+                    },
+                error,
+                ..
+            } => panic!("debugger became terminal during device discovery: {error:?}"),
+            _ => None,
+        };
+        let Some(device) = device else {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        assert_eq!(device.gfx_target_version, 90_402);
+        assert_eq!(device.xcc_count, 8);
+        if !device.trap_debug_supported {
+            eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
+            terminate(&mut input, &receiver, request_id, 0);
+            drop(input);
+            child.finish();
+            return;
         }
-        if queue.is_some() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    let queue = queue.expect("debugger did not observe the real target queue");
-    if !device_capable {
-        eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
-        terminate(&mut input, &receiver, 200, 0);
-        drop(input);
-        child.finish();
-        return;
-    }
 
-    let suspended = exchange(
-        &mut input,
-        &receiver,
-        HardwareDebugRequestV2::SuspendQueues {
-            schema: HardwareRequestSchemaV2::V2,
-            request_id: 201,
-            expected_control_revision: 0,
-            queues: vec![queue],
-            grace_period: 0,
-        },
-    );
+        let suspended = exchange(
+            &mut input,
+            &receiver,
+            HardwareDebugRequestV2::SuspendQueues {
+                schema: HardwareRequestSchemaV2::V2,
+                request_id,
+                expected_control_revision: 0,
+                queues: vec![candidate.id],
+                grace_period: 0,
+            },
+        );
+        request_id += 1;
+        if matches!(
+            suspended,
+            HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Running,
+                    control_revision: 0,
+                    runtime_enabled: true,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    stage: HardwareErrorStageV2::Session,
+                    code: HardwareErrorCodeV2::StaleIdentityGeneration,
+                    effect: HardwareEffectV2::None,
+                    terminal: false,
+                    ..
+                },
+                ..
+            }
+        ) {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        break (candidate.id, suspended);
+    };
     assert_control_committed(suspended, 1);
     let resumed = exchange(
         &mut input,
         &receiver,
         HardwareDebugRequestV2::ResumeQueues {
             schema: HardwareRequestSchemaV2::V2,
-            request_id: 202,
+            request_id,
             expected_control_revision: 1,
             queues: vec![queue],
         },
     );
+    request_id += 1;
     assert_control_committed(resumed, 2);
 
     let events = exchange(
@@ -252,7 +338,7 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
         &receiver,
         HardwareDebugRequestV2::QueryHardwareExceptionEvents {
             schema: HardwareRequestSchemaV2::V2,
-            request_id: 203,
+            request_id,
             expected_control_revision: 2,
             page: HardwareEventPageRequestV2 {
                 after_sequence: 0,
@@ -261,6 +347,7 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
             },
         },
     );
+    request_id += 1;
     assert!(matches!(
         events,
         HardwareDebugResponseV2::Ok {
@@ -274,7 +361,7 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
         ))
     ));
 
-    terminate(&mut input, &receiver, 204, 2);
+    terminate(&mut input, &receiver, request_id, 2);
     drop(input);
     child.finish();
 }

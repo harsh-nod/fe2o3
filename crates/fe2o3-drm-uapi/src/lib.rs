@@ -8,6 +8,11 @@
 //! `ioctl`. It describes only the x86_64 LP64 records and request encodings a
 //! later adapter needs to identify an AMDGPU render node and query immutable
 //! model information.
+//!
+//! Source provenance is frozen in the schema manifest and crate README.
+//! Third-party notices cover the transcribed DRM/AMDGPU records and constants.
+//! The fe2o3-authored encoder implements reviewed Linux `_IOC` ABI facts;
+//! its provenance is recorded separately in `THIRD_PARTY_LICENSES.md`.
 
 use core::mem::{align_of, offset_of, size_of};
 

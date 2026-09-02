@@ -5,15 +5,18 @@ the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
 contains independent safe CPU references, and `cargo test --offline` checks
 their fixed-shape numerical and selection contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion for the
-older non-KDA profiles; the matrix-state KDA evidence is production Rust only.
+older non-KDA profiles. The matrix-state KDA artifacts come from the production
+Rust compiler path, but their recorded device execution uses the deprecated
+HSA qualification oracle rather than the production direct-KFD runtime.
 
 Each `run-*-gfx950.sh` entry point selects exactly one kernel feature, invokes
 the production fe2o3 extractor, checks the compiler-published crate binding,
 links an exact gfx950:xnack- COV6 HSACO, validates its single-kernel metadata
-and symbol-scoped ISA, and runs a digest-pinned numerical HSA test. This is an
-explicit verification path; it does not grant protected artifact publication
-authority. The HIP ISA and runtime results below remain independent evidence
-only for the symbols that the HIP program implements with the same semantics.
+and symbol-scoped ISA, and runs a digest-pinned numerical test through the
+deprecated HSA qualification oracle. This is an explicit verification path; it
+does not grant protected artifact publication or production runtime authority.
+The HIP ISA and runtime results below remain independent evidence only for the
+symbols that the HIP program implements with the same semantics.
 
 This directory is a bounded educational validation suite for AMD CDNA 4
 (`gfx950`). It is not a production implementation, performance claim, model
@@ -78,7 +81,8 @@ Run the Rust source and independent CPU-reference checks:
 cargo test --offline
 ```
 
-Run the production Rust lowering and numerical verification on a gfx950 host:
+Run the production Rust lowering and deprecated HSA qualification-oracle
+numerical verification on a gfx950 host:
 
 ```bash
 ./run-kda-decode-gfx950.sh
@@ -113,13 +117,14 @@ an environment containing that checkout, PyTorch ROCm, Triton, and FLA with
 `benchmark_fla_kda_mi350.py`. Both implementations were checked against an
 independent sequential matrix-state recurrence before timing.
 
-For FP32 B=H=1, K=V=16, the median of five process medians was 4,720 ns for
-fe2o3 decode versus 39,345 ns for FLA (8.336x), and 11,400 ns for fe2o3
-two-chunk prefill versus 39,113 ns for FLA (3.431x). These are the fastest
-measured eligible implementations for this exact shape and semantics, not a
-universal KDA state-of-the-art claim. The fe2o3 and FLA device-side timers use
-different sampling granularities, which is retained as a protocol caveat in
-the evidence file.
+For FP32 B=H=1, K=V=16, the median of five process medians was 4,720 ns for the
+fe2o3 code object executed through the HSA qualification oracle versus 39,345
+ns for FLA (8.336x), and 11,400 ns for fe2o3 two-chunk prefill through that
+oracle versus 39,113 ns for FLA (3.431x). These are the fastest measured
+eligible implementations for this exact shape and semantics, not a universal
+KDA state-of-the-art claim or direct-KFD runtime measurement. The fe2o3 and FLA
+device-side timers use different sampling granularities, which is retained as
+a protocol caveat in the evidence file.
 
 The sparse and hybrid runners additionally require exactly four
 `ds_read_b64_tr_b8` instructions before one FP8
@@ -129,11 +134,12 @@ square root lowers to its target-native LLVM intrinsic. Set
 `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the documented tool and
 target-directory environment variables when validating a copied checkout.
 
-## Production Rust validation evidence
+## Production compiler and qualification-oracle evidence
 
 On 2026-09-01, the exact matrix-state KDA wrappers passed production Rust
-lowering, COV6 linking, symbol-scoped ISA inspection, and real HSA execution on
-SSH host `mi350` (`smci350-rck-g03-b19-03`) with ROCm 7.2.1, using physical GPU
+lowering, COV6 linking, symbol-scoped ISA inspection, and deprecated HSA
+qualification-oracle execution on SSH host `mi350`
+(`smci350-rck-g03-b19-03`) with ROCm 7.2.1, using physical GPU
 6 (`ROCR_VISIBLE_DEVICES=6`, `HIP_VISIBLE_DEVICES` unset). Decode maximum
 absolute errors were `1.490116119e-8` for the 256-element final state and
 `3.725290298e-9` for every replicated output. Chunkwise prefill errors were
@@ -143,7 +149,8 @@ four-token output buffers. The checked symbols use Wave16
 instructions. Final source and artifact identities are pinned by the advanced
 tutorial evidence records.
 
-On 2026-08-27, the remaining production Rust wrappers passed on the same host.
+On 2026-08-27, the remaining production-compiler wrappers passed through the
+same HSA qualification oracle on the same host.
 The largest observed absolute errors were `0` for both dense-tile attention
 kernels and AttnRes, `0` for four-branch residual, and `4.470348358e-8` for
 mHC. Sparse token IDs were checked exactly.
@@ -151,8 +158,8 @@ mHC. Sparse token IDs were checked exactly.
 On 2026-08-31, the eighth wrapper,
 `run-deepseek-sparse-attention-gfx950.sh`, passed on the same host and ROCm
 release using physical GPU 6 (`ROCR_VISIBLE_DEVICES=6`,
-`HIP_VISIBLE_DEVICES` unset). The production kernel returned maximum absolute
-errors of `2.980232239e-8` for both the 16-channel output and softmax maximum,
+`HIP_VISIBLE_DEVICES` unset). The production-compiled kernel returned maximum
+absolute errors of `2.980232239e-8` for both the 16-channel output and softmax maximum,
 and `2.384185791e-7` for the softmax normalizer, against a `5e-3` finite-value
 tolerance. Its portable namespace is
 `62a1ee5804a9926ebb929061195f2229630ebdaf5a13a19d17ce7ddb4fcbbbe3`;

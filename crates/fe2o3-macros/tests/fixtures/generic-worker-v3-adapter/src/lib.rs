@@ -58,13 +58,6 @@ pub fn mapped_output_kernel(
 }
 
 pub fn assert_generated_adapters() {
-    fn assert_adapter<'allocation, K, Arguments>()
-    where
-        K: gpu_host::__generated::CompilerGeneratedKernelExpectationV1,
-        Arguments: gpu_host::__generated::CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K>,
-    {
-    }
-
     fn assert_kfd_adapter<'allocation, K, Arguments>()
     where
         K: gpu_host::__generated::CompilerGeneratedKernelExpectationV1,
@@ -72,9 +65,9 @@ pub fn assert_generated_adapters() {
     {
     }
 
-    assert_adapter::<transform_gpu::Marker, transform_gpu::Arguments<'static>>();
-    assert_adapter::<combine_gpu::Marker, combine_gpu::Arguments<'static>>();
-    assert_adapter::<
+    assert_kfd_adapter::<transform_gpu::Marker, transform_gpu::Arguments<'static>>();
+    assert_kfd_adapter::<combine_gpu::Marker, combine_gpu::Arguments<'static>>();
+    assert_kfd_adapter::<
         multi_argument_kernel_gpu::Marker,
         multi_argument_kernel_gpu::Arguments<'static>,
     >();
@@ -113,40 +106,4 @@ pub fn mapped_kfd_arguments<'allocation>(
         gpu_host::__generated::GeneratedKfdReadSlice::new(second),
         gpu_host::__generated::GeneratedKfdReadWriteSlice::new(destination),
     )
-}
-
-pub fn prepare_transform<'loaded, 'allocation, A>(
-    executable: &'loaded mut gpu_host::LoadedWorkerV3HsaExecutableV1<transform_gpu::Marker, A>,
-    observed: &gpu_host::ObservedContext,
-    geometry: gpu_host::HsaLaunchGeometryV1,
-    arguments: transform_gpu::Arguments<'allocation>,
-) where
-    A: gpu_host::ReviewedHsaImplicitKernargAdapterV1,
-{
-    let _prepared = arguments.prepare_worker_v3(executable, observed, geometry);
-}
-
-pub fn prepare_combine<'loaded, 'allocation, A>(
-    executable: &'loaded mut gpu_host::LoadedWorkerV3HsaExecutableV1<combine_gpu::Marker, A>,
-    observed: &gpu_host::ObservedContext,
-    geometry: gpu_host::HsaLaunchGeometryV1,
-    arguments: combine_gpu::Arguments<'allocation>,
-) where
-    A: gpu_host::ReviewedHsaImplicitKernargAdapterV1,
-{
-    let _prepared = arguments.prepare_worker_v3(executable, observed, geometry);
-}
-
-pub fn prepare_multi_argument<'loaded, 'allocation, A>(
-    executable: &'loaded mut gpu_host::LoadedWorkerV3HsaExecutableV1<
-        multi_argument_kernel_gpu::Marker,
-        A,
-    >,
-    observed: &gpu_host::ObservedContext,
-    geometry: gpu_host::HsaLaunchGeometryV1,
-    arguments: multi_argument_kernel_gpu::Arguments<'allocation>,
-) where
-    A: gpu_host::ReviewedHsaImplicitKernargAdapterV1,
-{
-    let _prepared = arguments.prepare_worker_v3(executable, observed, geometry);
 }

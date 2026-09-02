@@ -1,12 +1,17 @@
 [package]
 name = "fe2o3-hip-sys"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 links = "amdhip64"
-description = "Minimal raw HIP runtime bindings used by fe2o3."
+description = "Deprecated raw HIP bindings retained for explicit fe2o3 qualification."
+
+[features]
+default = []
+qualification-legacy-native-hip = []
 
 [lib]
 name = "fe2o3_hip_sys"

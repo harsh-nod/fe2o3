@@ -1,6 +1,7 @@
 [package]
 name = "fe2o3-host"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,15 +9,25 @@ rust-version.workspace = true
 description = "Host-side launch helpers for fe2o3."
 
 [features]
-hardware-test-hooks = ["dep:rmpv", "fe2o3-artifact-transaction/test-hooks"]
+hardware-test-hooks = [
+    "dep:rmpv",
+    "fe2o3-artifact-transaction/test-hooks",
+    "qualification-legacy-hip-hsa",
+]
 worker-v3-verifier-test-support = []
+# Retains the deprecated HIP-buffer/HSA-lifecycle qualification surface. New
+# applications and generated bindings use the direct-KFD path.
+qualification-legacy-hip-hsa = [
+    "dep:fe2o3-core",
+    "fe2o3-core/qualification-legacy-hip-runtime",
+]
 
 [dependencies]
 fe2o3-aql.workspace = true
 fe2o3-amd-target.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-artifacts.workspace = true
-fe2o3-core.workspace = true
+fe2o3-core = { workspace = true, optional = true }
 fe2o3-compiler-ffi.workspace = true
 fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true
@@ -43,7 +54,6 @@ fe2o3-service-host.workspace = true
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
-fe2o3-core.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
 fe2o3-rustc-invocation.workspace = true
 rmpv = { version = "1.3.1", default-features = false }
@@ -53,3 +63,38 @@ trybuild = "1"
 
 [lib]
 name = "fe2o3_host"
+
+[[test]]
+name = "argument_alias_ui"
+path = "tests/argument_alias_ui.rs"
+required-features = ["qualification-legacy-hip-hsa"]
+
+[[test]]
+name = "artifact_binding_ui"
+path = "tests/artifact_binding_ui.rs"
+required-features = ["qualification-legacy-hip-hsa"]
+
+[[test]]
+name = "gfx942_tile_interop_hardware"
+path = "tests/gfx942_tile_interop_hardware.rs"
+required-features = ["qualification-legacy-hip-hsa"]
+
+[[test]]
+name = "hsa_executable_lifecycle_ui"
+path = "tests/hsa_executable_lifecycle_ui.rs"
+required-features = ["qualification-legacy-hip-hsa"]
+
+[[test]]
+name = "prepared_launch_ui"
+path = "tests/prepared_launch_ui.rs"
+required-features = ["qualification-legacy-hip-hsa"]
+
+[[test]]
+name = "published_direct_link_ui"
+path = "tests/published_direct_link_ui.rs"
+required-features = ["qualification-legacy-hip-hsa"]
+
+[[test]]
+name = "tile_interop_ui"
+path = "tests/tile_interop_ui.rs"
+required-features = ["qualification-legacy-hip-hsa"]

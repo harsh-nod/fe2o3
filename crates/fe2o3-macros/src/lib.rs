@@ -2037,7 +2037,7 @@ fn generated_general_typed_arguments_v1(
                 GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
                     let scalar = scalar.rust_type_tokens();
                     quote!(
-                        __fe2o3_kernel_host::__generated::GeneratedReadDeviceSlice<
+                        __fe2o3_kernel_host::__generated::GeneratedKfdReadSlice<
                             'allocation,
                             #scalar
                         >
@@ -2047,7 +2047,7 @@ fn generated_general_typed_arguments_v1(
                 | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, _) => {
                     let scalar = scalar.rust_type_tokens();
                     quote!(
-                        __fe2o3_kernel_host::__generated::GeneratedWriteDeviceSlice<
+                        __fe2o3_kernel_host::__generated::GeneratedKfdWriteSlice<
                             'allocation,
                             #scalar
                         >
@@ -2056,7 +2056,7 @@ fn generated_general_typed_arguments_v1(
                 GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
                     let scalar = scalar.rust_type_tokens();
                     quote!(
-                        __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                        __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
                             'allocation,
                             #scalar
                         >
@@ -2065,7 +2065,7 @@ fn generated_general_typed_arguments_v1(
                 GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
                     let scalar = scalar.rust_type_tokens();
                     quote!(
-                        __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                        __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
                             'allocation,
                             #scalar
                         >
@@ -2121,7 +2121,7 @@ fn generated_general_typed_arguments_v1(
                     'allocation,
                     T: __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1,
                 > {
-                    region: __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                    region: __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
                         'allocation,
                         T,
                     >,
@@ -2133,7 +2133,7 @@ fn generated_general_typed_arguments_v1(
                 > GlobalMut<'allocation, T> {
                     /// Checks and retains one exact global mutable object.
                     pub fn new(
-                        region: __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                        region: __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
                             'allocation,
                             T,
                         >,
@@ -2321,29 +2321,6 @@ fn generated_worker_v3_adapter_v1(
             }
         })
         .collect::<Vec<_>>();
-    let scalar_inputs = model
-        .arguments
-        .iter()
-        .zip(&fields)
-        .enumerate()
-        .filter(|(_, (argument, _))| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
-        .map(|(index, (_, field))| quote!(plan.scalar(#index, self.#field)?))
-        .collect::<Vec<_>>();
-    let memory_arguments = model
-        .arguments
-        .iter()
-        .zip(&fields)
-        .enumerate()
-        .filter(|(_, (argument, _))| {
-            matches!(
-                argument,
-                GeneralTypedArgumentKindV1::SharedSlice(_)
-                    | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
-                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
-            )
-        })
-        .map(|(index, (_, field))| quote!(self.#field.bind_argument_pair(plan, #index)?))
-        .collect::<Vec<_>>();
     let kfd_scalar_inputs = model
         .arguments
         .iter()
@@ -2426,123 +2403,12 @@ fn generated_worker_v3_adapter_v1(
                 | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
         )
     });
-    let has_mapped_slice = model.arguments.iter().any(|argument| {
-        matches!(
-            argument,
-            GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
-                | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
-        )
-    });
-    let arguments_type = if retains_borrows {
-        quote!(Arguments<'allocation>)
-    } else {
-        quote!(Arguments)
-    };
     let kfd_arguments_type = if retains_borrows {
         quote!(Arguments<'allocation, #(#kfd_memory_types),*>)
     } else {
         quote!(Arguments)
     };
-    let prepare_impl = if has_mapped_slice {
-        quote! {}
-    } else if retains_borrows {
-        quote! {
-            impl<'allocation> Arguments<'allocation> {
-                /// Prepares this exact verified Worker V3 invocation for one-shot dispatch.
-                #[allow(clippy::type_complexity)]
-                pub fn prepare_worker_v3<'loaded, A>(
-                    self,
-                    executable: &'loaded mut __fe2o3_kernel_host::LoadedWorkerV3HsaExecutableV1<Marker, A>,
-                    observed: &__fe2o3_kernel_host::ObservedContext,
-                    geometry: __fe2o3_kernel_host::HsaLaunchGeometryV1,
-                ) -> Result<
-                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PreparedInvocationV1<
-                        'loaded,
-                        'allocation,
-                        Marker,
-                        A,
-                        Self,
-                    >,
-                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PrepareErrorV1,
-                >
-                where
-                    A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
-                {
-                    executable.prepare_generated_worker_v3_v1(observed, geometry, self)
-                }
-            }
-        }
-    } else {
-        quote! {
-            impl Arguments {
-                /// Prepares this exact verified Worker V3 invocation for one-shot dispatch.
-                #[allow(clippy::type_complexity)]
-                pub fn prepare_worker_v3<'loaded, A>(
-                    self,
-                    executable: &'loaded mut __fe2o3_kernel_host::LoadedWorkerV3HsaExecutableV1<Marker, A>,
-                    observed: &__fe2o3_kernel_host::ObservedContext,
-                    geometry: __fe2o3_kernel_host::HsaLaunchGeometryV1,
-                ) -> Result<
-                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PreparedInvocationV1<
-                        'loaded,
-                        'static,
-                        Marker,
-                        A,
-                        Self,
-                    >,
-                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3PrepareErrorV1,
-                >
-                where
-                    A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
-                {
-                    executable.prepare_generated_worker_v3_v1(observed, geometry, self)
-                }
-            }
-        }
-    };
-    let hsa_adapter = if has_mapped_slice {
-        quote! {}
-    } else {
-        quote! {
-        // SAFETY: the implementation is generated from the same parsed signature, canonical ABI,
-        // and marker as the compiler-visible V3 registration. Memory inputs and access records are
-        // emitted together by retained, non-forgeable capabilities.
-        unsafe impl<'allocation>
-            __fe2o3_kernel_host::__generated::CompilerGeneratedWorkerV3ArgumentsV1<
-                'allocation,
-                Marker,
-            > for #arguments_type
-        {
-            fn generated_argument_layout_v1() -> Result<
-                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
-                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
-            > {
-                #layout
-            }
-
-            fn bind_arguments_v1(
-                &self,
-                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
-            ) -> Result<
-                __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1<'allocation>,
-                __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
-            > {
-                let scalar_inputs = [#(#scalar_inputs),*].into_iter().collect();
-                let memory_arguments = [#(#memory_arguments),*].into_iter().collect();
-                Ok(
-                    __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1::
-                        from_compiler_generated_parts_v1(scalar_inputs, memory_arguments),
-                )
-            }
-        }
-
-        #prepare_impl
-        }
-    };
-
     quote! {
-        #hsa_adapter
-
         // SAFETY: this implementation is emitted from the same parsed signature, canonical ABI,
         // marker, and effect model as the compiler registration. KFD capabilities produce owned
         // address-free buffers and zero pointer placeholders together with their exact fixups.
@@ -5356,11 +5222,9 @@ mod tests {
         .unwrap()
         .to_string();
 
-        assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
         assert!(expansion.contains("CompilerGeneratedKfdArguments"));
         assert!(expansion.contains("GeneratedKfdReadSlice"));
         assert!(expansion.contains("GeneratedKfdReadWriteSlice"));
-        assert!(expansion.contains("prepare_worker_v3"));
         assert!(expansion.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
         assert!(expansion.contains("pub struct Arguments"));
         for retired in [
@@ -5369,6 +5233,8 @@ mod tests {
             "GeneratedVecAddKernelV1",
             "GeneratedVecAddPreparedV1",
             "qualification_worker_v2",
+            "CompilerGeneratedWorkerV3ArgumentsV1",
+            "prepare_worker_v3",
         ] {
             assert!(!expansion.contains(retired), "retained `{retired}`");
         }
@@ -5503,7 +5369,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_general_arguments_generate_typed_worker_v3_dispatch() {
+    fn canonical_general_arguments_generate_typed_kfd_dispatch() {
         let input: ItemFn = parse_quote! {
             pub fn mixed(
                 scale: f64,
@@ -5516,12 +5382,11 @@ mod tests {
         let generated = generated_worker_v3_adapter_v1(&input, &model).to_string();
 
         for expected in [
-            "CompilerGeneratedWorkerV3ArgumentsV1",
-            "prepare_worker_v3",
+            "CompilerGeneratedKfdArguments",
             "plan . scalar (0usize , self . scale)",
-            "self . input . bind_argument_pair (plan , 1usize)",
-            "self . output . bind_argument_pair (plan , 2usize)",
-            "GeneratedWorkerV3ArgumentBindingV1",
+            "self . input . bind_argument (plan , 1usize)",
+            "self . output . bind_argument (plan , 2usize)",
+            "GeneratedKfdArgumentBinding",
             "ScalarType :: F64",
             "element_size : 2u64",
             "element_size : 4u64",
@@ -5578,7 +5443,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_only_worker_v3_arguments_use_a_static_allocation_lifetime() {
+    fn scalar_only_kfd_arguments_do_not_add_a_struct_lifetime() {
         let input: ItemFn = parse_quote! {
             pub fn scalar(value: u32) {}
         };
@@ -5587,7 +5452,7 @@ mod tests {
         let generated = generated_worker_v3_adapter_v1(&input, &model).to_string();
 
         assert!(generated.contains("for Arguments"));
-        assert!(generated.contains("'static , Marker , A , Self"));
+        assert!(generated.contains("CompilerGeneratedKfdArguments < 'allocation , Marker"));
         assert!(!generated.contains("for Arguments < 'allocation >"));
     }
 
@@ -5851,15 +5716,12 @@ mod tests {
             assert!(!expansion.contains("__fe2o3_semantic_witness_v1_"));
             assert!(!expansion.contains("fn semantic_witness_v1"));
             assert!(!expansion.contains("semantic_witness_from_backend_v1"));
-            assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
             assert!(expansion.contains("CompilerGeneratedKfdArguments"));
             assert!(expansion.contains("GeneratedKfdReadSlice"));
             assert!(expansion.contains("GeneratedKfdReadWriteSlice"));
-            assert!(expansion.contains("pub fn prepare_worker_v3"));
-            assert!(expansion.contains("prepare_generated_worker_v3_v1"));
             assert!(!expansion.contains("KernelId :: from_bytes"));
             assert!(expansion.contains("CompilerGeneratedArgumentLayoutV1 :: new"));
-            assert!(expansion.contains("from_compiler_generated_parts_v1"));
+            assert!(expansion.contains("from_compiler_generated_parts"));
             assert!(!expansion.contains("plan . slice"));
             assert!(!expansion.contains("from_raw"));
             assert!(!expansion.contains("CompilerGeneratedKernelContractV1"));
@@ -5888,8 +5750,7 @@ mod tests {
         assert_eq!(transform_binding, changed_signature_binding);
         assert_ne!(transform_contract, changed_signature_contract);
         let changed_signature_expansion = changed_signature_expansion.to_string();
-        assert!(changed_signature_expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
-        assert!(changed_signature_expansion.contains("pub fn prepare_worker_v3"));
+        assert!(changed_signature_expansion.contains("CompilerGeneratedKfdArguments"));
 
         let renamed: ItemFn = parse_quote! {
             pub fn renamed(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {}
@@ -5898,8 +5759,7 @@ mod tests {
         assert_ne!(transform_binding, renamed_binding);
         assert_ne!(transform_contract, renamed_contract);
         let renamed_expansion = renamed_expansion.to_string();
-        assert!(renamed_expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
-        assert!(renamed_expansion.contains("pub fn prepare_worker_v3"));
+        assert!(renamed_expansion.contains("CompilerGeneratedKfdArguments"));
 
         let other_crate_binding = derive_crate_binding_id_v1("fixture", ["other-binding"]);
         let (_, rebound_binding, rebound_contract) = expand(transform, other_crate_binding);
@@ -6010,10 +5870,9 @@ mod tests {
         )
         .unwrap()
         .to_string();
-        assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
-        assert!(expansion.contains("prepare_worker_v3"));
-        assert!(expansion.contains("GeneratedReadDeviceSlice"));
-        assert!(expansion.contains("GeneratedReadWriteDeviceSlice"));
+        assert!(expansion.contains("CompilerGeneratedKfdArguments"));
+        assert!(expansion.contains("GeneratedKfdReadSlice"));
+        assert!(expansion.contains("GeneratedKfdReadWriteSlice"));
         assert_eq!(model.generated_host_contract_identity.as_bytes().len(), 32);
     }
 
@@ -6677,7 +6536,7 @@ mod tests {
         let generated = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
         for marker in [
             "pub struct GlobalMut",
-            "GeneratedReadWriteDeviceSlice",
+            "GeneratedKfdReadWriteSlice",
             "region . len () != 1",
             "GlobalMut < 'allocation , u32 >",
         ] {

@@ -1,6 +1,7 @@
 [package]
 name = "rustc-codegen-fe2o3"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -48,6 +49,7 @@ pliron.workspace = true
 [dev-dependencies]
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
+fe2o3-host.workspace = true
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
 rmpv = { version = "1.3.1", default-features = false }
 

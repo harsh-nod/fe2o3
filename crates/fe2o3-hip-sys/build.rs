@@ -1,10 +1,13 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+const LEGACY_NATIVE_HIP_FEATURE_ENV: &str = "CARGO_FEATURE_QUALIFICATION_LEGACY_NATIVE_HIP";
+
 fn main() {
     println!("cargo:rerun-if-env-changed=ROCM_PATH");
     println!("cargo:rerun-if-env-changed=HIP_PATH");
     println!("cargo:rerun-if-env-changed=FE2O3_HIP_SYS_DISABLE");
+    println!("cargo:rerun-if-env-changed={LEGACY_NATIVE_HIP_FEATURE_ENV}");
     println!("cargo:rerun-if-changed=native/device_properties.c");
     println!("cargo:rerun-if-changed=native/device_properties.h");
     println!("cargo:rerun-if-changed=native/cooperative_peer_abi.c");
@@ -13,6 +16,10 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_cooperative_peer)");
     println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_memory_topology)");
     println!("cargo:rustc-check-cfg=cfg(fe2o3_hip_runtime)");
+
+    if env::var_os(LEGACY_NATIVE_HIP_FEATURE_ENV).is_none() {
+        return;
+    }
 
     let rocm_path = find_rocm_path();
     if let Some(rocm_path) = &rocm_path {

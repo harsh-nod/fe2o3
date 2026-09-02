@@ -46,7 +46,12 @@ mkdir -p -- "${FE2O3_EVIDENCE_OUTPUT_DIR}"
 printf 'ci-local\t%s\t%s\t%s\n' "$1" "${CARGO_TARGET_DIR}" "${TMPDIR}" \
   >>"${FE2O3_EVIDENCE_OUTPUT_DIR}/invocations.tsv"
 case "$1" in
-  workspace-test | verus | rocm-compile) ;;
+  workspace-test | rocm-compile) ;;
+  verus)
+    printf 'verus-environment\t%s\t%s\n' \
+      "${FE2O3_RUNTIME_MODEL_VERUS:-}" "${VERUS:-}" \
+      >>"${FE2O3_EVIDENCE_OUTPUT_DIR}/invocations.tsv"
+    ;;
   *) exit 90 ;;
 esac
 EOF
@@ -99,7 +104,12 @@ EOF
 #!/usr/bin/env bash
 exit 0
 EOF
-  chmod 755 "${directory}/cargo" "${directory}/verus"
+  cat >"${directory}/runtime-model-verus" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod 755 "${directory}/cargo" "${directory}/verus" \
+    "${directory}/runtime-model-verus"
 }
 
 readonly FIXTURE_REPO="${TEST_ROOT}/repo"
@@ -272,8 +282,32 @@ expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
   --gfx942-compile --llvm-link-worker /retired/worker
 assert_contains 'unknown option: --llvm-link-worker'
 
+expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q7 \
+  --verus "${PASS_BIN}/verus"
+assert_contains 'Q7 requires --runtime-model-verus with an absolute executable path'
+
 OUTPUT="$(${RUNNER} dry-run "${common_args[@]}" --shard Q7 \
+  --runtime-model-verus "${PASS_BIN}/runtime-model-verus" \
   --verus "${PASS_BIN}/verus")"
+assert_contains $'environment\tQ7\tFE2O3_RUNTIME_MODEL_VERUS\t'"$(hex_encode "${PASS_BIN}/runtime-model-verus")"
+assert_contains $'environment\tQ7\tVERUS\t'"$(hex_encode "${PASS_BIN}/verus")"
+assert_contains $'tool\tQ7\truntime-model-verus'
 assert_contains $'tool\tQ7\tverus'
+
+"${RUNNER}" run "${common_args[@]}" --shard Q7 \
+  --runtime-model-verus "${PASS_BIN}/runtime-model-verus" \
+  --verus "${PASS_BIN}/verus" >/dev/null
+readonly Q7_INVOCATIONS="${ARCHIVE}/work/q7/output/invocations.tsv"
+readonly Q7_RECORD="${ARCHIVE}/records/q7.tsv"
+grep -Fq $'verus-environment\t'"${PASS_BIN}/runtime-model-verus"$'\t'"${PASS_BIN}/verus" \
+  "${Q7_INVOCATIONS}" || fail 'Q7 did not execute with both exact Verus paths'
+grep -Fq $'environment\tFE2O3_RUNTIME_MODEL_VERUS\t' \
+  "${Q7_RECORD}" || fail 'Q7 record omitted the runtime-model Verus environment'
+grep -Fq $'environment\tVERUS\t' \
+  "${Q7_RECORD}" || fail 'Q7 record omitted the MIR/PLIRON Verus environment'
+grep -Fq $'tool\truntime-model-verus\t' \
+  "${Q7_RECORD}" || fail 'Q7 record omitted the runtime-model Verus tool binding'
+grep -Fq $'tool\tverus\t' \
+  "${Q7_RECORD}" || fail 'Q7 record omitted the MIR/PLIRON Verus tool binding'
 
 printf 'PASS: parity snapshot orchestration is isolated, deterministic, and fail closed\n'

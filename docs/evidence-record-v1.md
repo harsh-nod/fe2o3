@@ -78,8 +78,8 @@ scripts/run-parity-snapshot.sh list
 
 Every other mode requires an existing archive outside a clean detached
 checkout. With no `--shard`, the seven Q shards are selected in order. Q7 also
-requires an exact Verus executable. Optional gfx942 lanes are never selected
-implicitly.
+requires the exact runtime-model and MIR/PLIRON Verus executables. Optional
+gfx942 lanes are never selected implicitly.
 
 ```bash
 mkdir -p /evidence/snapshot-001
@@ -88,12 +88,14 @@ git switch --detach <commit>
 scripts/run-parity-snapshot.sh dry-run \
   --repo "$PWD" \
   --archive-root /evidence/snapshot-001 \
-  --verus /absolute/path/to/verus
+  --runtime-model-verus /absolute/path/to/runtime-model/verus \
+  --verus /absolute/path/to/mir-pliron/verus
 
 scripts/run-parity-snapshot.sh run \
   --repo "$PWD" \
   --archive-root /evidence/snapshot-001 \
-  --verus /absolute/path/to/verus
+  --runtime-model-verus /absolute/path/to/runtime-model/verus \
+  --verus /absolute/path/to/mir-pliron/verus
 ```
 
 `dry-run` emits a deterministic canonical plan containing the commit, archive
@@ -146,8 +148,9 @@ pin A's exact commit and tree, the complete upstream LLVM/LLD and device-library
 inputs, Cargo/rustc and their offline closures, runtime DSOs, Worker/probe
 outputs, and the real retained HSACO. A compliant B requires the operator to
 supply the reviewed manifest digest from outside the checkout, and release
-evidence requires two fresh replays with identical outputs. See
-[testing.md](testing.md#row-softmax-v1-llvm-22-release-gate).
+evidence requires two fresh replays with identical outputs. The executable
+testing section was retired with that backend route; this paragraph now
+documents only the archived record contract.
 
 A compliant B plus two fresh replays establishes only operator-selected
 integrity. Its unkeyed SHA-256 values are not a signature, origin

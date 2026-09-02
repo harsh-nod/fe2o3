@@ -1,21 +1,35 @@
 # fe2o3-hsa-runtime
 
-This crate contains two reviewed surfaces over the AMD HSA runtime: the public
-`RuntimeBackendV1` implementation and the legacy profile-specific Worker V2
+> **Deprecated qualification surface.** Production fe2o3 applications use the
+> direct-KFD runtime. HSA and HIP are not fallback execution paths.
+
+The default crate is an inert compatibility marker. It exports
+`HSA_RUNTIME_AVAILABLE = false`, does not expose an HSA adapter, does not depend
+on `fe2o3-host` or `fe2o3-core`, and never probes the build host for ROCm.
+
+Feature `qualification-legacy-hsa-runtime` restores the former reviewed HSA/HIP
+API for compatibility testing during its deprecation window. That surface
+contains a `RuntimeBackendV1` implementation and the profile-specific Worker V2
 adapter. Both load already-finalized AMDHSA code objects and submit AQL directly.
 They do not compile or link code and have no COMGR or command-line tool path.
 
-## Public Runtime Backend
+## Deprecated Qualification Backend
 
-The default build is a deterministic stub backend. It never probes the build
-host for ROCm and fails closed at adapter construction. Native HSA support must
-be selected explicitly with Cargo feature `native-hsa`:
+The deterministic non-native qualification backend is selected explicitly with:
+
+```text
+FE2O3_HIP_SYS_DISABLE=1 cargo test -p fe2o3-hsa-runtime \
+  --features qualification-legacy-hsa-runtime
+```
+
+Native HSA support must be selected explicitly with Cargo feature `native-hsa`.
+That feature implies `qualification-legacy-hsa-runtime`:
 
 ```text
 cargo build -p fe2o3-hsa-runtime --features native-hsa
 ```
 
-When selected, the build requires matching HSA and HIP headers plus
+When `native-hsa` is selected, the build requires matching HSA and HIP headers plus
 `libhsa-runtime64` and `libamdhip64`. The ROCm root is taken from `ROCM_PATH`,
 then `HIP_PATH`, and otherwise the unversioned `/opt/rocm` location. Both `lib`
 and `lib64` layouts are accepted. An incomplete explicitly selected backend is

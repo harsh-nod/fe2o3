@@ -198,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_child_installation_uses_fd_202_and_exact_bytes() {
+    fn canonical_child_installation_reserves_fd_202_and_exact_bytes() {
         let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let expected = policy(7);
         let path = std::env::temp_dir().join(format!(
@@ -216,6 +216,24 @@ mod tests {
             ))
             .arg(&path);
         capability.inherit_for_child(&mut command).unwrap();
+
+        let flags = unsafe { libc::fcntl(COMPILER_EXECUTION_POLICY_CHILD_FD_V1, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        assert_eq!(
+            fs::read(format!(
+                "/proc/self/fd/{COMPILER_EXECUTION_POLICY_CHILD_FD_V1}"
+            ))
+            .unwrap(),
+            fs::read(&path).unwrap(),
+        );
+
+        let unrelated = File::open("/dev/null").unwrap();
+        let allocation =
+            rustix::io::fcntl_dupfd_cloexec(&unrelated, COMPILER_EXECUTION_POLICY_CHILD_FD_V1)
+                .unwrap();
+        assert!(allocation.as_raw_fd() > COMPILER_EXECUTION_POLICY_CHILD_FD_V1);
+
         drop(capability);
         assert!(command.status().unwrap().success());
         fs::remove_file(path).unwrap();

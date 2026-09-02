@@ -1,13 +1,13 @@
-error[E0200]: the trait `fe2o3_host::CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K>` requires an `unsafe impl` declaration
-  --> tests/ui/worker_v3_verification_admission/generated_arguments_trait_requires_unsafe_impl.rs:10:1
+error[E0200]: the trait `fe2o3_host::CompilerGeneratedKfdArguments<'allocation, K>` requires an `unsafe impl` declaration
+  --> tests/ui/worker_v3_verification_admission/generated_arguments_trait_requires_unsafe_impl.rs:9:1
    |
-10 | / impl<'allocation, K> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K> for SafeArguments
-11 | | where
-12 | |     K: CompilerGeneratedKernelExpectationV1,
+ 9 | / impl<'allocation, K> CompilerGeneratedKfdArguments<'allocation, K> for SafeArguments
+10 | | where
+11 | |     K: CompilerGeneratedKernelExpectationV1,
    | |____________________________________________^
    |
-   = note: the trait `fe2o3_host::CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K>` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+   = note: the trait `fe2o3_host::CompilerGeneratedKfdArguments<'allocation, K>` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
 help: add `unsafe` to this trait implementation
    |
-10 | unsafe impl<'allocation, K> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K> for SafeArguments
+ 9 | unsafe impl<'allocation, K> CompilerGeneratedKfdArguments<'allocation, K> for SafeArguments
    | ++++++

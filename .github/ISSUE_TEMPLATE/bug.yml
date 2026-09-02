@@ -1,0 +1,93 @@
+name: Bug report
+description: Report a reproducible defect in fe2o3.
+title: "[Bug]: "
+labels: [bug]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. For a suspected vulnerability, stop and use the private security report link instead.
+  - type: input
+    id: revision
+    attributes:
+      label: fe2o3 revision
+      description: Provide the full commit SHA or developer-preview tag.
+      placeholder: Full 40-character commit SHA
+    validations:
+      required: true
+  - type: input
+    id: toolchain
+    attributes:
+      label: Rust toolchain
+      description: Paste the active toolchain from `rustup show active-toolchain`.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, architecture, GPU model, GFX target, kernel, and KFD access as relevant. Redact host and device identifiers.
+      placeholder: |
+        OS: Ubuntu 24.04
+        Architecture: x86_64
+        GPU/GFX target: MI300X / gfx942 (or no GPU)
+        Kernel/KFD: ...
+    validations:
+      required: true
+  - type: dropdown
+    id: execution
+    attributes:
+      label: Execution mode
+      options:
+        - Generic or CPU-only
+        - KIR simulator
+        - Compile-only AMD GPU path
+        - Direct-KFD hardware execution
+        - Debugger or profiler integration
+        - Other or unknown
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Provide exact commands and the smallest source or KIR input that reproduces the problem.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include deterministic diagnostics and exit status when available.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or artifacts
+      description: Attach only minimal, non-sensitive output. Do not attach proprietary kernels or unredacted profiler captures.
+      render: text
+  - type: textarea
+    id: qualification
+    attributes:
+      label: Validation already attempted
+      description: State which generic, simulator, compile-only, or hardware checks were run and their exact results.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and reduced this to a reproducible case.
+          required: true
+        - label: I removed secrets, proprietary data, hostnames, and device identifiers.
+          required: true
+        - label: This report does not describe an undisclosed security vulnerability.
+          required: true

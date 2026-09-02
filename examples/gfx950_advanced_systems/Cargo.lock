@@ -140,16 +140,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "cc"
-version = "1.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
-dependencies = [
- "find-msvc-tools",
- "shlex",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -491,25 +481,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-completion"
-version = "0.1.0"
-dependencies = [
- "sha2 0.11.0",
-]
-
-[[package]]
 name = "fe2o3-contracts"
 version = "0.1.0"
-
-[[package]]
-name = "fe2o3-core"
-version = "0.1.0"
-dependencies = [
- "fe2o3-amd-target",
- "fe2o3-completion",
- "fe2o3-hip-sys",
- "fe2o3-macros",
-]
 
 [[package]]
 name = "fe2o3-device"
@@ -548,13 +521,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-hip-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "fe2o3-host"
 version = "0.1.0"
 dependencies = [
@@ -565,7 +531,6 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
- "fe2o3-core",
  "fe2o3-device",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
@@ -610,6 +575,7 @@ dependencies = [
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
+ "fe2o3-process-identity",
  "fe2o3-source-isa-observation",
  "object",
  "reserved-fe2o3-symbols",
@@ -744,6 +710,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-process-identity"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-rustc-invocation",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
 
@@ -852,12 +829,6 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
-
-[[package]]
-name = "find-msvc-tools"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "foldhash"
@@ -1276,12 +1247,6 @@ dependencies = [
  "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
-
-[[package]]
-name = "shlex"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "signature"

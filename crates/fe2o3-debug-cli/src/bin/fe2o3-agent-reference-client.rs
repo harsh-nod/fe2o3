@@ -2986,6 +2986,24 @@ mod tests {
         assert!(!path.exists(), "owned producer PID {pid} survived cleanup");
     }
 
+    fn descriptor_count_for_object(object: (u64, u64, u64)) -> io::Result<usize> {
+        let mut count = 0_usize;
+        for entry in fs::read_dir("/proc/self/fd")? {
+            let entry = entry?;
+            let metadata = match fs::metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            if (metadata.dev(), metadata.ino(), metadata.len()) == object {
+                count = count
+                    .checked_add(1)
+                    .ok_or_else(|| io::Error::other("descriptor count overflow"))?;
+            }
+        }
+        Ok(count)
+    }
+
     fn page_response(
         capture: &Value,
         dispatch: &str,
@@ -3326,19 +3344,17 @@ mod tests {
     fn sealed_debug_input_rejects_alias_and_closes_without_named_cleanup() {
         let input = SealedInputV1::new("test input", b"exact input bytes").unwrap();
         let descriptor = input.file.as_raw_fd();
-        let retained = input.file.try_clone().unwrap();
         let object = input.object;
+        let witness = input.file.try_clone().unwrap();
         assert!(fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok());
+        assert_eq!(descriptor_count_for_object(object).unwrap(), 2);
         assert!(input.file.write_all_at(b"x", 0).is_err());
         assert!(input.file.set_len(0).is_err());
         let mut command = Command::new("/bin/false");
         assert!(inherit_sealed_inputs_v1(&mut command, &input, &input).is_err());
         drop(input);
-        match fs::metadata(format!("/proc/self/fd/{descriptor}")) {
-            Ok(metadata) => assert_ne!((metadata.dev(), metadata.ino(), metadata.len()), object),
-            Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
-        }
-        drop(retained);
+        assert_eq!(descriptor_count_for_object(object).unwrap(), 1);
+        drop(witness);
     }
 
     #[test]
