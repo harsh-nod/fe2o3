@@ -210,8 +210,10 @@ It does not prove the Rust implementation or native hardware. Frozen UAPI and
 SDMA manifests plus executable tests provide separate checked evidence. Native
 correctness and performance require a retained, commit-identified MI300X result
 artifact before they are described as measured. The current bounded result is
-[`async-copy-mi300x-2026-09-01.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-01.md);
-it reports a correctness pass but not KFD copy-performance parity.
+[`async-copy-mi300x-2026-09-02.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-02.md);
+the immutable R7 baseline remains in
+[`async-copy-mi300x-2026-09-01.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-01.md).
+The R8 result reports a correctness pass but not KFD copy-performance parity.
 
 The additive `RuntimeAsyncCopyBackendV1` SPI and typed `copy_async` facade are
 implemented. The router can drive same-device and cross-device host-staged
@@ -231,6 +233,7 @@ result remains `ModelOnly`; this is Checked admission evidence, not proof of
 the loaded instructions, GPU coherence, or execution.
 
 Still open: multiple simultaneous compute dispatches on one KFD device,
+checked multi-queue SDMA striping and same-device bidirectional overlap,
 persistent compute allocations shared with the KFD SDMA engine, native XGMI
 peer mapping and copy, authenticated code-object semantic refinement, native
 system-coherence evidence, and broader atomic/collective language support.

@@ -72,8 +72,10 @@ benchmarks/runtime_gfx942/run-async-copy-mi300x.sh
 ```
 
 The retained release measurement is
-[`results/async-copy-mi300x-2026-09-01.md`](results/async-copy-mi300x-2026-09-01.md),
-with the exact raw runner output linked from that record.
+[`results/async-copy-mi300x-2026-09-02.md`](results/async-copy-mi300x-2026-09-02.md),
+with the prior R7 baseline retained at
+[`results/async-copy-mi300x-2026-09-01.md`](results/async-copy-mi300x-2026-09-01.md).
+Each record links its exact raw runner output.
 
 The default profile transfers 1 MiB at depths 1 and 16, with 10 warmups and 30
 samples. `FE2O3_ASYNC_COPY_GPU_INDEX` and
