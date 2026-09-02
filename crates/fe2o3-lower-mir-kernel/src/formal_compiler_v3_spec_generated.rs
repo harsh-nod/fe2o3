@@ -14,6 +14,10 @@ pub const FORMAL_COMPILER_V3_BYTE_WIDTH: u8 = 4;
 pub const FORMAL_COMPILER_V3_HELPER_PARAMETERS: u8 = 2;
 /// Exact helper branch-arm count.
 pub const FORMAL_COMPILER_V3_BRANCH_ARMS: u8 = 2;
+/// The helper branches on whether the XOR result equals zero.
+pub const FORMAL_COMPILER_V3_HELPER_BRANCHES_ON_XOR_ZERO: bool = true;
+/// The helper's nonzero arm returns an arbitrary `u32` fallback.
+pub const FORMAL_COMPILER_V3_NONZERO_RETURNS_FALLBACK_U32: bool = true;
 /// Exact stack-frame count in the production-connected root/helper claim.
 pub const FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES: u8 = 2;
 /// Exact loop count in the production-connected claim.
@@ -28,6 +32,14 @@ pub const FORMAL_COMPILER_V3_MODELED_MAXIMUM_LOOP_TRIP_COUNT: u8 = 4;
 pub const FORMAL_COMPILER_V3_READONLY_ACCESSES: u8 = 2;
 /// Exact disjoint write count in the composed kernel fragment.
 pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = 1;
+/// Exact allocation count covered by the conjunction guard.
+pub const FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS: u8 = 3;
+/// Every modeled access must be in bounds for the guarded path to execute.
+pub const FORMAL_COMPILER_V3_GUARDS_ALL_ACCESSES: bool = true;
+/// Every access byte offset is `gid * byte_width`.
+pub const FORMAL_COMPILER_V3_USES_GID_TIMES_BYTE_WIDTH: bool = true;
+/// The three modeled allocations must be pairwise disjoint.
+pub const FORMAL_COMPILER_V3_REQUIRES_PAIRWISE_DISJOINT_ALLOCATIONS: bool = true;
 /// The formal byte codec is little endian.
 pub const FORMAL_COMPILER_V3_USES_LITTLE_ENDIAN: bool = true;
 /// The composed access theorem binds a runtime extent value.

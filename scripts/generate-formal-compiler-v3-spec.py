@@ -24,6 +24,8 @@ EXPECTED_KEYS = {
     "byte_order",
     "helper_parameters",
     "branch_arms",
+    "helper_branch_predicate",
+    "helper_nonzero_result",
     "production_stack_frames",
     "production_loop_trip_count",
     "modeled_maximum_stack_frames",
@@ -31,6 +33,10 @@ EXPECTED_KEYS = {
     "modeled_maximum_loop_trip_count",
     "readonly_accesses",
     "disjoint_writes",
+    "guarded_allocations",
+    "guard_semantics",
+    "byte_offset_semantics",
+    "allocation_relation",
     "dynamic_extent",
     "production_scalar_operations",
     "modeled_only_scalar_operations",
@@ -54,6 +60,7 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         "modeled_maximum_loop_trip_count",
         "readonly_accesses",
         "disjoint_writes",
+        "guarded_allocations",
     )
     if any(type(value[key]) is not int or value[key] <= 0 for key in integers):
         raise ValueError("V3 integer fields must be positive integers")
@@ -67,6 +74,17 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         raise ValueError("word width must equal the byte width")
     if value["byte_order"] != "little" or value["dynamic_extent"] is not True:
         raise ValueError("V3 closes byte order and extent mode")
+    closed_semantics = {
+        "helper_branch_predicate": "xor-equals-zero",
+        "helper_nonzero_result": "fallback-u32",
+        "guard_semantics": "all-accesses-in-bounds",
+        "byte_offset_semantics": "gid-times-byte-width",
+        "allocation_relation": "pairwise-disjoint",
+    }
+    if any(value[key] != expected for key, expected in closed_semantics.items()):
+        raise ValueError("V3 semantic axes must match the closed production claim")
+    if value["guarded_allocations"] != value["readonly_accesses"] + value["disjoint_writes"]:
+        raise ValueError("every V3 allocation must be represented in the guard")
     if type(value["production_loop_trip_count"]) is not int:
         raise ValueError("V3 production loop trip count must be an integer")
     if value["production_loop_trip_count"] != 0:
@@ -116,6 +134,10 @@ pub const FORMAL_COMPILER_V3_BYTE_WIDTH: u8 = {spec["byte_width"]};
 pub const FORMAL_COMPILER_V3_HELPER_PARAMETERS: u8 = {spec["helper_parameters"]};
 /// Exact helper branch-arm count.
 pub const FORMAL_COMPILER_V3_BRANCH_ARMS: u8 = {spec["branch_arms"]};
+/// The helper branches on whether the XOR result equals zero.
+pub const FORMAL_COMPILER_V3_HELPER_BRANCHES_ON_XOR_ZERO: bool = true;
+/// The helper's nonzero arm returns an arbitrary `u32` fallback.
+pub const FORMAL_COMPILER_V3_NONZERO_RETURNS_FALLBACK_U32: bool = true;
 /// Exact stack-frame count in the production-connected root/helper claim.
 pub const FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES: u8 = {spec["production_stack_frames"]};
 /// Exact loop count in the production-connected claim.
@@ -130,6 +152,14 @@ pub const FORMAL_COMPILER_V3_MODELED_MAXIMUM_LOOP_TRIP_COUNT: u8 = {spec["modele
 pub const FORMAL_COMPILER_V3_READONLY_ACCESSES: u8 = {spec["readonly_accesses"]};
 /// Exact disjoint write count in the composed kernel fragment.
 pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = {spec["disjoint_writes"]};
+/// Exact allocation count covered by the conjunction guard.
+pub const FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS: u8 = {spec["guarded_allocations"]};
+/// Every modeled access must be in bounds for the guarded path to execute.
+pub const FORMAL_COMPILER_V3_GUARDS_ALL_ACCESSES: bool = true;
+/// Every access byte offset is `gid * byte_width`.
+pub const FORMAL_COMPILER_V3_USES_GID_TIMES_BYTE_WIDTH: bool = true;
+/// The three modeled allocations must be pairwise disjoint.
+pub const FORMAL_COMPILER_V3_REQUIRES_PAIRWISE_DISJOINT_ALLOCATIONS: bool = true;
 /// The formal byte codec is little endian.
 pub const FORMAL_COMPILER_V3_USES_LITTLE_ENDIAN: bool = true;
 /// The composed access theorem binds a runtime extent value.
@@ -165,6 +195,8 @@ pub open spec fn formal_compiler_v3_word_bits() -> nat {{ {spec["word_bits"]} }}
 pub open spec fn formal_compiler_v3_byte_width() -> nat {{ {spec["byte_width"]} }}
 pub open spec fn formal_compiler_v3_helper_parameters() -> nat {{ {spec["helper_parameters"]} }}
 pub open spec fn formal_compiler_v3_branch_arms() -> nat {{ {spec["branch_arms"]} }}
+pub open spec fn formal_compiler_v3_helper_branches_on_xor_zero() -> bool {{ true }}
+pub open spec fn formal_compiler_v3_nonzero_returns_fallback_u32() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_production_stack_frames() -> nat {{ {spec["production_stack_frames"]} }}
 pub open spec fn formal_compiler_v3_production_loop_trip_count() -> nat {{ {spec["production_loop_trip_count"]} }}
 pub open spec fn formal_compiler_v3_modeled_maximum_stack_frames() -> nat {{ {spec["modeled_maximum_stack_frames"]} }}
@@ -172,6 +204,10 @@ pub open spec fn formal_compiler_v3_modeled_minimum_loop_trip_count() -> nat {{ 
 pub open spec fn formal_compiler_v3_modeled_maximum_loop_trip_count() -> nat {{ {spec["modeled_maximum_loop_trip_count"]} }}
 pub open spec fn formal_compiler_v3_readonly_accesses() -> nat {{ {spec["readonly_accesses"]} }}
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat {{ {spec["disjoint_writes"]} }}
+pub open spec fn formal_compiler_v3_guarded_allocations() -> nat {{ {spec["guarded_allocations"]} }}
+pub open spec fn formal_compiler_v3_guards_all_accesses() -> bool {{ true }}
+pub open spec fn formal_compiler_v3_uses_gid_times_byte_width() -> bool {{ true }}
+pub open spec fn formal_compiler_v3_requires_pairwise_disjoint_allocations() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_operation_count() -> nat {{ {operation_count} }}
 pub open spec fn formal_compiler_v3_production_operation_count() -> nat {{ {production_operation_count} }}
 pub open spec fn formal_compiler_v3_operation_is_closed(tag: nat) -> bool {{

@@ -9,6 +9,8 @@ pub open spec fn formal_compiler_v3_word_bits() -> nat { 32 }
 pub open spec fn formal_compiler_v3_byte_width() -> nat { 4 }
 pub open spec fn formal_compiler_v3_helper_parameters() -> nat { 2 }
 pub open spec fn formal_compiler_v3_branch_arms() -> nat { 2 }
+pub open spec fn formal_compiler_v3_helper_branches_on_xor_zero() -> bool { true }
+pub open spec fn formal_compiler_v3_nonzero_returns_fallback_u32() -> bool { true }
 pub open spec fn formal_compiler_v3_production_stack_frames() -> nat { 2 }
 pub open spec fn formal_compiler_v3_production_loop_trip_count() -> nat { 0 }
 pub open spec fn formal_compiler_v3_modeled_maximum_stack_frames() -> nat { 2 }
@@ -16,6 +18,10 @@ pub open spec fn formal_compiler_v3_modeled_minimum_loop_trip_count() -> nat { 1
 pub open spec fn formal_compiler_v3_modeled_maximum_loop_trip_count() -> nat { 4 }
 pub open spec fn formal_compiler_v3_readonly_accesses() -> nat { 2 }
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat { 1 }
+pub open spec fn formal_compiler_v3_guarded_allocations() -> nat { 3 }
+pub open spec fn formal_compiler_v3_guards_all_accesses() -> bool { true }
+pub open spec fn formal_compiler_v3_uses_gid_times_byte_width() -> bool { true }
+pub open spec fn formal_compiler_v3_requires_pairwise_disjoint_allocations() -> bool { true }
 pub open spec fn formal_compiler_v3_operation_count() -> nat { 7 }
 pub open spec fn formal_compiler_v3_production_operation_count() -> nat { 3 }
 pub open spec fn formal_compiler_v3_operation_is_closed(tag: nat) -> bool {

@@ -62,6 +62,21 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
         reversed_loop["modeled_minimum_loop_trip_count"] = 5
         self.assert_rejected(reversed_loop)
 
+    def test_guard_address_helper_and_allocation_semantics_are_closed(self) -> None:
+        for key, replacement in [
+            ("helper_branch_predicate", "xor-not-equal-zero"),
+            ("helper_nonzero_result", "xor-u32"),
+            ("guard_semantics", "any-access-in-bounds"),
+            ("byte_offset_semantics", "gid-plus-byte-width"),
+            ("allocation_relation", "may-alias"),
+        ]:
+            changed = dict(self.spec)
+            changed[key] = replacement
+            self.assert_rejected(changed)
+        missing_guard = dict(self.spec)
+        missing_guard["guarded_allocations"] = 2
+        self.assert_rejected(missing_guard)
+
     def test_operation_roster_must_be_sorted_unique_and_nonempty(self) -> None:
         duplicate = dict(self.spec)
         duplicate["production_scalar_operations"] = ["bitxor", "bitxor"]
