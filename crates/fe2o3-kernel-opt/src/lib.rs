@@ -9,5 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod optimization_v1;
+mod optimization_v2;
 
 pub use optimization_v1::*;
+pub use optimization_v2::*;

@@ -11,7 +11,9 @@ workspace. It provides:
 - byte- and tree-guarded textual operation import that requires exact
   end-of-input and recursive verification before returning an owner handle;
 - owner-scoped dialect-registration services with bounded typed actions;
-- deterministic, bounded pass plans over real Pliron `Pass` values.
+- deterministic, bounded pass plans over real Pliron `Pass` values;
+- a sealed, owner-authenticated executor for the audited optimization set; and
+- a typed canonical-KIR-V9 bridge for the executable `gpu.*` subset.
 
 The context identity and typed dialect-registration primitives are implemented
 once in the lower-level `fe2o3-pliron-owner-core` crate. Admitted dialect
@@ -69,9 +71,9 @@ private delimiter syntax. A deployment that adds a parser must audit or
 process-contain it independently; the public registration action limit does
 not make parser execution bounded. Consequently this API makes no resource
 containment claim for an open third-party parser registry.
-This bridge is transitional: a production compiler path that depends on a
-printer/text round trip remains unsupported until it uses an owner-held typed
-dialect construction service.
+Text import remains transitional and is not used by the optimizer. The
+canonical-KIR bridge constructs typed operations directly in an owner-held
+session and extracts them without using Pliron printer text as an identity.
 The corresponding upstream `Ptr<Operation>` remains in the private session
 registry. Every query or erase authenticates the context anchor, owner, live
 registry entry, and upstream pointee in that order. Erasure removes the
@@ -79,10 +81,13 @@ registry entry, so cloned stale handles cannot be revived by later arena
 allocation. Handle identities and their debug representations are not
 canonical data.
 
-The crate does not execute a generic pass plan. Although an authenticated root
-now exists, invoking an arbitrary caller-provided Pliron `Pass` would give that
-pass a contextless pointer and `&mut Context`. Generic execution remains
-disabled until compiler transformations use a sealed owner-aware service.
+The crate does not execute a generic caller-provided pass plan. Its sealed V1
+executor accepts only a closed enum whose implementations are constructed
+inside this crate, authenticates an owner-held root, recursively verifies the
+graph at every pass boundary, reconciles erased handles, and poisons the
+session after any post-mutation failure. The older open `PassPlan` remains
+metadata-only. Adding a pass to the executable set requires a source change
+and review here.
 Hook and upstream diagnostic text is not copied into stable diagnostics; the
 shell emits fixed fe2o3 codes and messages instead. Hook and upstream unwinds
 remain contained by the session-construction boundary.
@@ -161,18 +166,20 @@ owner-authenticated handles.
 - `Dialect::register` is idempotent upstream. This shell preflights the complete
   registration list and rejects duplicate fe2o3 dialect declarations before
   constructing a context or invoking any hook.
-- D0 plans only a flat list of leaf passes. Nested pass-manager values are
+- The legacy D0 planner accepts only a flat list of leaf passes. Nested pass-manager values are
   rejected because their hidden children would evade the shell's pass-count
   bound. Pass name and manager inspection panics poison the plan and return a
-  typed error. The plan is metadata only and cannot be executed through this
-  crate.
+  typed error. That open plan is metadata only; executable optimization uses
+  the separate closed `PlironOptimizationPlanV1`.
 - Pliron arena pointers and diagnostic display values are context-internal and
   are not suitable canonical identities. They are absent from manifests
   produced here.
 - The v0.17.0 pass API has neither owner-aware operation handles nor a
-  cooperative work or cancellation budget. fe2o3 now authenticates roots in
-  its own session registry, but restoring execution still requires sealed pass
-  access plus pass-work accounting or process containment.
+  cooperative work or cancellation budget. fe2o3 supplies owner
+  authentication, a sealed pass set, graph caps, deterministic structural work
+  accounting, and post-pass verification. These controls do not meter every
+  internal upstream worklist step; hard CPU containment still requires audited
+  complexity, upstream budget hooks, or process containment.
 - Upstream, hook, registration-input, pointer-access, and test-context callback
   unwinds are converted to typed errors under unwind-enabled builds. The
   registration action bound does not bound arbitrary computation inside a
