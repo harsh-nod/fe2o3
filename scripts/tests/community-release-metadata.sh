@@ -47,8 +47,14 @@ grep -F -- '--tree "${release_tree}"' "${release_workflow}" >/dev/null
 # shellcheck disable=SC2016
 grep -F -- '[[ "${run_head_branch}" != main ]]' \
   "${ROOT}/.github/workflows/release.yml" >/dev/null
-grep -F -- '    branches:' "${ROOT}/.github/workflows/ci.yml" >/dev/null
-grep -F -- '      - "**"' "${ROOT}/.github/workflows/ci.yml" >/dev/null
+readonly generic_workflow="${ROOT}/.github/workflows/ci.yml"
+readonly push_trigger="$({
+  sed -n '/^  push:$/,/^  pull_request:$/p' "${generic_workflow}"
+})"
+[[ "${push_trigger}" == $'  push:\n  pull_request:' ]] || {
+  grep -F -- '    branches:' "${generic_workflow}" >/dev/null
+  grep -F -- '      - "**"' "${generic_workflow}" >/dev/null
+}
 grep -F -- 'THIRD_PARTY_LICENSES.md' "${ROOT}/README.md" >/dev/null
 grep -F -- 'scripts/canonical-release-controls.sh verify' \
   "${ROOT}/docs/release-process.md" >/dev/null
