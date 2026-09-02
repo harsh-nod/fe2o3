@@ -21,12 +21,20 @@ use sha2::{Digest, Sha256};
 
 const NAMESPACE: &str = "fe2o3-engineering-v1";
 const MANIFEST_SCHEMA: &str = "EngineeringHsacoObservationV1";
-const TARGET: &str = "gfx942:xnack-";
-const CARGO_TARGET: &str = "amdgcn-amd-amdhsa";
+const PROFILE: fe2o3_amd_target::ProductionAmdTargetProfileV1 =
+    fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
+const TARGET: &str = PROFILE.device_target();
+const CARGO_TARGET: &str = PROFILE.rustc_target();
 const CODE_OBJECT_VERSION: u8 = 6;
 const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
 const EXTRACTOR_CHILD_FD: std::os::fd::RawFd = 205;
+const VENDOR_CHILD_FD: std::os::fd::RawFd = 206;
+const _: () = assert!(EXTRACTOR_CHILD_FD != VENDOR_CHILD_FD);
+const _: () = assert!(EXTRACTOR_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(EXTRACTOR_CHILD_FD != crate::RUSTC_CHILD_FD);
+const _: () = assert!(VENDOR_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(VENDOR_CHILD_FD != crate::RUSTC_CHILD_FD);
 const CONTENT_ID_DOMAIN: &[u8] = b"FE2O3/ENGINEERING-HSACO-OBSERVATION-CONTENT/V1\0";
 
 pub(crate) fn command(args: &[OsString]) -> ExitCode {
@@ -54,6 +62,8 @@ struct Options {
     worker: FileClaim,
     cargo: FileClaim,
     rustc: FileClaim,
+    cargo_vendor: Option<PathBuf>,
+    cargo_git_sources: Vec<CargoGitSource>,
     worker_build_identity: String,
     llvm_build_identity: String,
     providers: Vec<ProviderClaim>,
@@ -75,6 +85,12 @@ struct ProviderClaim {
     sha256: [u8; 32],
 }
 
+#[derive(Debug, Serialize)]
+struct CargoGitSource {
+    url: String,
+    rev: String,
+}
+
 fn run(args: &[OsString]) -> Result<PathBuf, String> {
     reject_conflicting_environment()?;
     let current_dir = env::current_dir()
@@ -93,6 +109,11 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         executable: pinned_rustc_source,
         lib_tree: crate::RustcLibTree::Authority(rustc_lib_tree),
     };
+    let cargo_vendor = options
+        .cargo_vendor
+        .as_ref()
+        .map(|path| pin_vendor_tree(path))
+        .transpose()?;
     let extractor_bytes = read_claimed_file("extractor", &options.extractor, MAX_TOOL_BYTES, true)?;
     let extractor_backend_bytes = read_claimed_file(
         "extractor backend",
@@ -134,11 +155,15 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         &options,
         &pinned_cargo,
         &pinned_rustc,
+        cargo_vendor.as_ref(),
         &pinned_extractor,
         &handoff_path,
         &scratch.path,
     )?;
     captured_tool_tree.revalidate()?;
+    if let Some(vendor) = cargo_vendor.as_ref() {
+        vendor.revalidate()?;
+    }
     let handoff = read_bounded_regular_file(&handoff_path, MAX_HANDOFF_BYTES, false)?;
 
     let mut providers = Vec::new();
@@ -185,6 +210,7 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
             pinned_rustc.executable.size(),
         ),
         rustc_lib_tree_sha256,
+        cargo_vendor.as_ref().map(|vendor| *vendor.sha256()),
         &extractor_bytes,
         &extractor_backend_bytes,
     )?;
@@ -207,6 +233,8 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     let mut cargo_sha256 = None;
     let mut rustc = None;
     let mut rustc_sha256 = None;
+    let mut cargo_vendor = None;
+    let mut cargo_git_sources = Vec::new();
     let mut worker_build_identity = None;
     let mut llvm_build_identity = None;
     let mut target = None;
@@ -245,6 +273,8 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--cargo-sha256" => set_once_digest(&mut cargo_sha256, value, argument)?,
             "--rustc" => set_once_path(&mut rustc, value, argument)?,
             "--rustc-sha256" => set_once_digest(&mut rustc_sha256, value, argument)?,
+            "--cargo-vendor" => set_once_path(&mut cargo_vendor, value, argument)?,
+            "--cargo-git-source" => cargo_git_sources.push(parse_cargo_git_source(value)?),
             "--worker-build-id" => set_once_string(&mut worker_build_identity, value, argument)?,
             "--llvm-build-id" => set_once_string(&mut llvm_build_identity, value, argument)?,
             "--target" => set_once_string(&mut target, value, argument)?,
@@ -293,6 +323,9 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         ));
     }
     reject_cargo_override_args(&cargo_args)?;
+    if cargo_vendor.is_none() && !cargo_git_sources.is_empty() {
+        return Err("--cargo-git-source requires --cargo-vendor".to_owned());
+    }
     validate_build_identity(
         worker_build_identity
             .as_deref()
@@ -344,12 +377,42 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--rustc",
             "--rustc-sha256",
         )?,
+        cargo_vendor: cargo_vendor.map(|path| absolute_path(current_dir, path)),
+        cargo_git_sources,
         worker_build_identity: worker_build_identity.expect("validated required worker build ID"),
         llvm_build_identity: llvm_build_identity.expect("validated required LLVM build ID"),
         providers,
         timeout: Duration::from_secs(timeout_seconds),
         max_output_bytes,
         cargo_args,
+    })
+}
+
+fn parse_cargo_git_source(value: &OsStr) -> Result<CargoGitSource, String> {
+    let value = value
+        .to_str()
+        .ok_or_else(|| "--cargo-git-source must be valid UTF-8".to_owned())?;
+    let (url, rev) = value
+        .rsplit_once('@')
+        .ok_or_else(|| "--cargo-git-source must have the form https://URL@40-hex-rev".to_owned())?;
+    if !url.starts_with("https://")
+        || url.len() > 1024
+        || url
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'"' | b'\\' | b'?' | b'#' | b'@'))
+    {
+        return Err("--cargo-git-source URL is not a canonical safe HTTPS URL".to_owned());
+    }
+    if rev.len() != 40
+        || !rev
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err("--cargo-git-source revision must be 40 lowercase hexadecimal bytes".to_owned());
+    }
+    Ok(CargoGitSource {
+        url: url.to_owned(),
+        rev: rev.to_owned(),
     })
 }
 
@@ -589,6 +652,7 @@ fn run_extraction(
     options: &Options,
     cargo: &crate::pinned_executable::PinnedExecutable,
     rustc: &crate::PinnedRustc,
+    cargo_vendor: Option<&crate::rustc_lib_tree::PinnedRustcLibTree>,
     extractor: &crate::pinned_executable::PinnedExecutable,
     handoff: &Path,
     scratch: &Path,
@@ -599,10 +663,21 @@ fn run_extraction(
         .mode(0o700)
         .create(&cargo_home)
         .map_err(|error| format!("cannot create isolated Cargo home: {error}"))?;
+    if let Some(vendor) = cargo_vendor {
+        let config = cargo_vendor_config(&options.cargo_git_sources);
+        write_new_file(&cargo_home.join("config.toml"), config.as_bytes(), 0o600)?;
+    }
     let tool_directory = scratch.join("tool-images");
     let loader_path =
         env::join_paths([tool_directory.as_path(), Path::new("/proc/self/fd/193")])
             .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
+    let extraction_rustflags = format!(
+        // MIR extraction intentionally uses O0 and disables MIR inlining; target identity and
+        // feature spelling still come from the single canonical gfx942 profile.
+        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu={} -Ctarget-feature={}",
+        PROFILE.cpu(),
+        PROFILE.rustc_features()
+    );
     let mut command = cargo
         .command()
         .map_err(|error| format!("cannot prepare pinned Cargo executable: {error}"))?;
@@ -612,6 +687,11 @@ fn run_extraction(
     extractor
         .inherit_for_child_at(command.as_command_mut(), EXTRACTOR_CHILD_FD)
         .map_err(|error| format!("cannot inherit sealed extractor: {error}"))?;
+    if let Some(vendor) = cargo_vendor {
+        vendor
+            .directory()
+            .inherit_for_child_at(command.as_command_mut(), VENDOR_CHILD_FD)?;
+    }
     command
         .as_command_mut()
         .env_clear()
@@ -633,15 +713,11 @@ fn run_extraction(
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", &extractor_path)
         .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &extractor_path)
-        .env("LD_LIBRARY_PATH", loader_path)
         .env("FE2O3_HIP_SYS_DISABLE", "1")
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
         .env("FE2O3_EXTRACT_CRATE_V1", &options.crate_name)
         .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", handoff)
-        .env(
-            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
-        )
+        .env(PROFILE.cargo_rustflags_env(), extraction_rustflags)
         .stdin(Stdio::null());
     command
         .as_command_mut()
@@ -662,7 +738,38 @@ fn run_extraction(
         return Err("Cargo succeeded without producing the compiler handoff".to_owned());
     }
     rustc.revalidate_lib_tree()?;
+    if let Some(vendor) = cargo_vendor {
+        vendor.revalidate()?;
+    }
     Ok(())
+}
+
+fn pin_vendor_tree(path: &Path) -> Result<crate::rustc_lib_tree::PinnedRustcLibTree, String> {
+    require_canonical_absolute_path(path, "Cargo vendor directory")?;
+    if !path.is_dir() {
+        return Err("--cargo-vendor must name a directory".to_owned());
+    }
+    let directory = crate::project::PinnedDirectory::open_existing(
+        path.to_path_buf(),
+        "engineering Cargo vendor directory",
+    )?;
+    crate::rustc_lib_tree::PinnedRustcLibTree::pin(directory)
+}
+
+fn cargo_vendor_config(sources: &[CargoGitSource]) -> String {
+    let mut config = String::from(
+        "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n",
+    );
+    for source in sources {
+        config.push_str(&format!(
+            "[source.\"git+{}?rev={}\"]\ngit = \"{}\"\nrev = \"{}\"\nreplace-with = \"vendored-sources\"\n\n",
+            source.url, source.rev, source.url, source.rev
+        ));
+    }
+    config.push_str(&format!(
+        "[source.vendored-sources]\ndirectory = \"/proc/self/fd/{VENDOR_CHILD_FD}\"\n"
+    ));
+    config
 }
 
 fn pin_claimed_executable(
@@ -841,9 +948,16 @@ struct Tools<'a> {
     cargo: Identity,
     rustc: Identity,
     rustc_lib_tree_sha256: String,
+    cargo_vendor: Option<CargoVendor<'a>>,
     extractor: Identity,
     extractor_backend: Identity,
     worker: Worker<'a>,
+}
+
+#[derive(Serialize)]
+struct CargoVendor<'a> {
+    tree_sha256: String,
+    git_sources: &'a [CargoGitSource],
 }
 
 #[derive(Serialize)]
@@ -897,6 +1011,7 @@ fn canonical_manifest(
     cargo: ContentIdentityV1,
     rustc: ContentIdentityV1,
     rustc_lib_tree_sha256: [u8; 32],
+    cargo_vendor_sha256: Option<[u8; 32]>,
     extractor: &[u8],
     extractor_backend: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -922,6 +1037,10 @@ fn canonical_manifest(
             cargo: identity(cargo),
             rustc: identity(rustc),
             rustc_lib_tree_sha256: hex(&rustc_lib_tree_sha256),
+            cargo_vendor: cargo_vendor_sha256.map(|tree| CargoVendor {
+                tree_sha256: hex(&tree),
+                git_sources: &options.cargo_git_sources,
+            }),
             extractor: identity(ContentIdentityV1::calculate(extractor)),
             extractor_backend: identity(ContentIdentityV1::calculate(extractor_backend)),
             worker: Worker {
@@ -1250,7 +1369,7 @@ fn remove_retained_directory_contents(directory: &File) -> Result<(), String> {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> [--cargo-vendor <absolute-directory> [--cargo-git-source <https://URL@40-hex-rev>]...] [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
 }
 
 #[cfg(test)]
@@ -1381,6 +1500,108 @@ mod tests {
         let mut override_target = base_args(&root);
         override_target.push("--target=gfx950".into());
         assert!(parse(&override_target, &root).is_err());
+
+        for hostile in ["-rFfeature", "@/tmp/response", "--", "-Zconfig-include"] {
+            let mut args = base_args(&root);
+            args.push(hostile.into());
+            assert!(parse(&args, &root).is_err(), "accepted {hostile}");
+        }
+
+        let mut source_without_vendor = base_args(&root);
+        source_without_vendor.splice(
+            source_without_vendor.len() - 3..source_without_vendor.len() - 3,
+            [
+                "--cargo-git-source".into(),
+                format!(
+                    "https://github.com/example/dependency.git@{}",
+                    "a".repeat(40)
+                )
+                .into(),
+            ],
+        );
+        assert!(parse(&source_without_vendor, &root).is_err());
+    }
+
+    #[test]
+    fn rejects_loader_and_cargo_selection_environment() {
+        for name in [
+            "LD_PRELOAD",
+            "LD_AUDIT",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "GLIBC_TUNABLES",
+            "RUSTC",
+            "RUSTDOC",
+            "CARGO_BUILD_TARGET",
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_LINKER",
+            "CARGO_PROFILE_DEV_OPT_LEVEL",
+            "RUSTC_BOOTSTRAP",
+        ] {
+            assert!(
+                conflicting_environment_name(OsStr::new(name)),
+                "accepted {name}"
+            );
+        }
+        assert!(!conflicting_environment_name(OsStr::new("LANG")));
+    }
+
+    #[test]
+    fn vendor_configuration_is_closed_and_injection_resistant() {
+        let source = parse_cargo_git_source(OsStr::new(&format!(
+            "https://github.com/example/dependency.git@{}",
+            "a".repeat(40)
+        )))
+        .unwrap();
+        let config = cargo_vendor_config(&[source]);
+        assert!(config.contains("replace-with = \"vendored-sources\""));
+        assert!(config.contains("directory = \"/proc/self/fd/206\""));
+        for hostile in [
+            "https://example.com/x?branch=main@0123456789012345678901234567890123456789",
+            "https://example.com/x\"@0123456789012345678901234567890123456789",
+            "ssh://example.com/x@0123456789012345678901234567890123456789",
+        ] {
+            assert!(parse_cargo_git_source(OsStr::new(hostile)).is_err());
+        }
+    }
+
+    #[test]
+    fn claimed_executable_path_swap_cannot_change_executed_bytes() {
+        let root = env::temp_dir().join(format!(
+            "fe2o3-engineering-executable-swap-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let executable = root.join("cargo");
+        fs::write(&executable, b"#!/bin/sh\nprintf original").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let bytes = fs::read(&executable).unwrap();
+        let claim = FileClaim {
+            path: fs::canonicalize(&executable).unwrap(),
+            sha256: Sha256::digest(&bytes).into(),
+        };
+        let pinned = pin_claimed_executable("test tool", &claim).unwrap();
+        fs::rename(&executable, root.join("original")).unwrap();
+        fs::write(&executable, b"#!/bin/sh\nprintf substituted").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let output = pinned.command().unwrap().output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"original");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn substituted_scratch_path_is_never_removed() {
+        let scratch = ScratchDirectory::new().unwrap();
+        let selected = scratch.path.clone();
+        let parked = selected.with_extension("parked");
+        fs::rename(&selected, &parked).unwrap();
+        fs::create_dir(&selected).unwrap();
+        fs::write(selected.join("foreign"), b"leave-me").unwrap();
+        drop(scratch);
+        assert_eq!(fs::read(selected.join("foreign")).unwrap(), b"leave-me");
+        fs::remove_dir_all(selected).unwrap();
+        fs::remove_dir_all(parked).unwrap();
     }
 
     #[test]
