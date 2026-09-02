@@ -548,7 +548,9 @@ fn make_response(
     ))
 }
 
-fn validate_control(control: &OwnedFd) -> Result<(), WorkerV3VerificationServiceErrorV1> {
+pub(crate) fn validate_control(
+    control: &OwnedFd,
+) -> Result<(), WorkerV3VerificationServiceErrorV1> {
     let descriptor_flags = rustix::io::fcntl_getfd(control)
         .map_err(|source| io_error("inspect control descriptor flags", source.into()))?;
     let status = rustix::fs::fcntl_getfl(control)
@@ -585,7 +587,7 @@ fn validate_control(control: &OwnedFd) -> Result<(), WorkerV3VerificationService
     Ok(())
 }
 
-fn caller_identity(
+pub(crate) fn caller_identity(
     control: &OwnedFd,
 ) -> Result<WorkerV3VerificationCallerV1, WorkerV3VerificationServiceErrorV1> {
     let credentials = rustix::net::sockopt::socket_peercred(control)
@@ -616,7 +618,9 @@ pub fn prepare_worker_v3_verification_receiver_v1(
     require_passcred(control)
 }
 
-fn require_passcred(control: &impl AsFd) -> Result<(), WorkerV3VerificationServiceErrorV1> {
+pub(crate) fn require_passcred(
+    control: &impl AsFd,
+) -> Result<(), WorkerV3VerificationServiceErrorV1> {
     if !rustix::net::sockopt::socket_passcred(control)
         .map_err(|source| io_error("confirm control SO_PASSCRED", source.into()))?
     {
@@ -627,7 +631,7 @@ fn require_passcred(control: &impl AsFd) -> Result<(), WorkerV3VerificationServi
     Ok(())
 }
 
-fn receive_request(
+pub(crate) fn receive_request(
     control: &OwnedFd,
     caller: WorkerV3VerificationCallerV1,
     deadline: Instant,
@@ -700,7 +704,7 @@ fn receive_request(
     }
 }
 
-fn require_peer_write_eof(
+pub(crate) fn require_peer_write_eof(
     control: &OwnedFd,
     deadline: Instant,
 ) -> Result<(), WorkerV3VerificationServiceErrorV1> {
@@ -786,7 +790,7 @@ fn wait_for_eof(
     }
 }
 
-fn object_key(descriptor: &OwnedFd) -> io::Result<(u64, u64)> {
+pub(crate) fn object_key(descriptor: &OwnedFd) -> io::Result<(u64, u64)> {
     let stat = rustix::fs::fstat(descriptor).map_err(io::Error::from)?;
     Ok((stat.st_dev, stat.st_ino))
 }
@@ -855,7 +859,7 @@ fn source_snapshot(
     })
 }
 
-fn capture_payload(
+pub(crate) fn capture_payload(
     source: OwnedFd,
     descriptor: WorkerV3VerificationFdPayloadDescriptorV1,
     caller: WorkerV3VerificationCallerV1,
@@ -962,7 +966,7 @@ fn capture_payload(
     })
 }
 
-fn send_response(
+pub(crate) fn send_response(
     control: &OwnedFd,
     bytes: &[u8],
     deadline: Instant,
@@ -978,7 +982,7 @@ fn send_response(
     }
 }
 
-fn wait_for(
+pub(crate) fn wait_for(
     control: &OwnedFd,
     wanted: PollFlags,
     deadline: Instant,

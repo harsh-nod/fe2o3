@@ -5,13 +5,14 @@ use std::mem::MaybeUninit;
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
+use fe2o3_compiler_execution_client::CompilerExecutionCurrentRecordChallengeV1;
 use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3,
     COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V3,
+    CompilerExecutionCurrentRecordVerificationErrorV3,
 };
 use fe2o3_worker_v3_verification_protocol::{
-    MAX_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2,
-    MIN_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2,
+    MAX_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2, MIN_WORKER_V3_VERIFICATION_TERMINAL_BYTES_V2,
     WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2, WorkerV3VerificationChallengeDispositionV2,
     WorkerV3VerificationChallengeFrameV2, WorkerV3VerificationChallengeReservationV2,
     WorkerV3VerificationCurrentRecordFrameV2, WorkerV3VerificationProtocolErrorV1,
@@ -159,6 +160,19 @@ impl WorkerV3VerificationCurrentRecordChallengeV2 {
     /// Consumes the move-only challenge into inert bytes for another reviewed client boundary.
     pub fn into_bytes(self) -> [u8; 32] {
         self.reservation.into_bytes().0
+    }
+
+    /// Consumes this transport token into the compiler client's move-only caller challenge.
+    ///
+    /// The conversion preserves the exact service-issued bytes. The still-pending V2 transport
+    /// privately retains the same bytes solely to correlate the later current-record frame.
+    pub fn into_compiler_execution_challenge(
+        self,
+    ) -> Result<
+        CompilerExecutionCurrentRecordChallengeV1,
+        CompilerExecutionCurrentRecordVerificationErrorV3,
+    > {
+        CompilerExecutionCurrentRecordChallengeV1::from_bytes(self.into_bytes())
     }
 
     /// Reports that receipt of a challenge grants no authority or durability guarantee.
@@ -344,7 +358,10 @@ pub enum WorkerV3VerificationClientErrorV2 {
     Snapshot(WorkerV3VerificationClientErrorV1),
     ProtocolV1(WorkerV3VerificationProtocolErrorV1),
     ProtocolV2(WorkerV3VerificationProtocolErrorV2),
-    Descriptor { operation: &'static str, source: io::Error },
+    Descriptor {
+        operation: &'static str,
+        source: io::Error,
+    },
     NotSeqpacket,
     NamedOrNonUnixPeer,
     Poll(io::Error),
@@ -355,9 +372,18 @@ pub enum WorkerV3VerificationClientErrorV2 {
     InvalidPeer,
     PeerFailed,
     PeerClosed,
-    PartialSend { expected: usize, actual: usize },
-    PacketTruncated { minimum: usize, actual: usize },
-    PacketOversize { maximum: usize, actual: usize },
+    PartialSend {
+        expected: usize,
+        actual: usize,
+    },
+    PacketTruncated {
+        minimum: usize,
+        actual: usize,
+    },
+    PacketOversize {
+        maximum: usize,
+        actual: usize,
+    },
     UnexpectedAncillaryData,
     TrailingTransfer,
     SessionMismatch,
@@ -374,7 +400,10 @@ impl fmt::Display for WorkerV3VerificationClientErrorV2 {
             Self::ProtocolV1(source) => write!(formatter, "V2 Begin framing failed: {source}"),
             Self::ProtocolV2(source) => write!(formatter, "V2 phase framing failed: {source}"),
             Self::Descriptor { operation, source } => {
-                write!(formatter, "V2 descriptor operation `{operation}` failed: {source}")
+                write!(
+                    formatter,
+                    "V2 descriptor operation `{operation}` failed: {source}"
+                )
             }
             Self::NotSeqpacket => formatter.write_str("V2 peer is not SOCK_SEQPACKET"),
             Self::NamedOrNonUnixPeer => {
@@ -389,13 +418,22 @@ impl fmt::Display for WorkerV3VerificationClientErrorV2 {
             Self::PeerFailed => formatter.write_str("V2 peer reported an error"),
             Self::PeerClosed => formatter.write_str("V2 peer closed before the required phase"),
             Self::PartialSend { expected, actual } => {
-                write!(formatter, "V2 packet send was partial: expected {expected}, got {actual}")
+                write!(
+                    formatter,
+                    "V2 packet send was partial: expected {expected}, got {actual}"
+                )
             }
             Self::PacketTruncated { minimum, actual } => {
-                write!(formatter, "V2 packet was shorter than {minimum} bytes: got {actual}")
+                write!(
+                    formatter,
+                    "V2 packet was shorter than {minimum} bytes: got {actual}"
+                )
             }
             Self::PacketOversize { maximum, actual } => {
-                write!(formatter, "V2 packet exceeded {maximum} bytes: got {actual}")
+                write!(
+                    formatter,
+                    "V2 packet exceeded {maximum} bytes: got {actual}"
+                )
             }
             Self::UnexpectedAncillaryData => {
                 formatter.write_str("V2 non-Begin packet carried ancillary data")
@@ -466,7 +504,10 @@ fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErr
     if actual != rustix::io::FdFlags::CLOEXEC {
         return Err(descriptor_error(
             "retain exact peer close-on-exec flags",
-            io::Error::other(format!("unexpected descriptor flags 0x{:08x}", actual.bits())),
+            io::Error::other(format!(
+                "unexpected descriptor flags 0x{:08x}",
+                actual.bits()
+            )),
         ));
     }
     Ok(())
@@ -549,7 +590,9 @@ fn receive_packet(
             ) {
                 Ok(received) => received,
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => continue,
-                Err(source) => return Err(WorkerV3VerificationClientErrorV2::Receive(source.into())),
+                Err(source) => {
+                    return Err(WorkerV3VerificationClientErrorV2::Receive(source.into()));
+                }
             }
         };
         if received.flags.contains(ReturnFlags::CTRUNC) || control.drain().next().is_some() {
@@ -594,7 +637,9 @@ fn require_peer_eof(
             ) {
                 Ok(received) => received,
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => continue,
-                Err(source) => return Err(WorkerV3VerificationClientErrorV2::Receive(source.into())),
+                Err(source) => {
+                    return Err(WorkerV3VerificationClientErrorV2::Receive(source.into()));
+                }
             }
         };
         if received.flags.contains(ReturnFlags::CTRUNC) || control.drain().next().is_some() {
@@ -648,4 +693,78 @@ fn descriptor_error(
     source: io::Error,
 ) -> WorkerV3VerificationClientErrorV2 {
     WorkerV3VerificationClientErrorV2::Descriptor { operation, source }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::fd::AsFd;
+
+    use rustix::net::{SocketFlags, socketpair};
+
+    fn pair() -> (OwnedFd, OwnedFd) {
+        socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn non_begin_receive_rejects_ancillary_and_oversize_packets() {
+        let (receiver, sender) = pair();
+        let pipe = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        let descriptors = [pipe.0.as_fd()];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
+        assert_eq!(
+            rustix::net::sendmsg(
+                &sender,
+                &[IoSlice::new(b"x")],
+                &mut ancillary,
+                SendFlags::NOSIGNAL,
+            )
+            .unwrap(),
+            1
+        );
+        assert!(matches!(
+            receive_packet(&receiver, 1, 1, Instant::now() + Duration::from_secs(1)),
+            Err(WorkerV3VerificationClientErrorV2::UnexpectedAncillaryData)
+        ));
+
+        let (receiver, sender) = pair();
+        assert_eq!(
+            rustix::net::send(&sender, b"xx", SendFlags::NOSIGNAL).unwrap(),
+            2
+        );
+        assert!(matches!(
+            receive_packet(&receiver, 1, 1, Instant::now() + Duration::from_secs(1)),
+            Err(WorkerV3VerificationClientErrorV2::PacketOversize {
+                maximum: 1,
+                actual: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn terminal_boundary_requires_exact_peer_eof() {
+        let (receiver, sender) = pair();
+        assert_eq!(
+            rustix::net::send(&sender, b"trailing", SendFlags::NOSIGNAL).unwrap(),
+            8
+        );
+        assert!(matches!(
+            require_peer_eof(&receiver, Instant::now() + Duration::from_secs(1)),
+            Err(WorkerV3VerificationClientErrorV2::TrailingTransfer)
+        ));
+
+        let (receiver, _sender) = pair();
+        assert!(matches!(
+            require_peer_eof(&receiver, Instant::now() + Duration::from_millis(10)),
+            Err(WorkerV3VerificationClientErrorV2::Timeout)
+        ));
+    }
 }

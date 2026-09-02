@@ -9,6 +9,7 @@ description = "Authority-free Unix client transport for Worker V3 verification f
 publish = false
 
 [dependencies]
+fe2o3-compiler-execution-client.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-worker-v3-verification-protocol.workspace = true
 rustix = { workspace = true, features = ["event", "process"] }

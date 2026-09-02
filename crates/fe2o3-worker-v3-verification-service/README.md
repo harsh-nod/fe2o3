@@ -29,3 +29,27 @@ Production resolver implementations must authenticate their policy and measureme
 production replay guard must atomically persist used challenges across every service instance and
 restart covered by the policy. The crate deliberately provides no permissive default implementation
 for any of these injected decisions.
+
+## V2 state machine
+
+`begin_worker_v3_verification_session_v2` reuses V1's exact Begin request admission, policy and
+measurement resolution, caller replay guard, credential checks, and receiver-owned immutable
+payload copies. It deliberately does not require write EOF after Begin. It rejects data queued out
+of phase, calls a required `WorkerV3VerificationChallengeReservationProviderV2`, sends the
+provider's nonzero challenge and opaque reservation identity, and returns a move-only pending
+current-record session. No provider default exists. Provider implementations remain responsible for
+entropy, uniqueness, atomic reservation, durable replay exclusion across covered service restarts,
+and expiry; the generic service cannot prove those properties.
+
+The pending state receives one exact fixed-size current-record frame with matching kernel-stamped
+credentials and no other ancillary data, then requires client write-half EOF. It strictly decodes
+the separate verification and attestation, checks nested byte equality, and correlates the Begin,
+challenge, and reservation identity before a terminal application capability can exist. Malformed
+or mismatched records produce only a custody-retaining rejection capability.
+
+Only the ready terminal capability can send one bounded opaque application response. Both ready and
+rejected capabilities can instead send a generic rejection, and send/construction failures retain
+receiver-owned payload custody where the socket result is recoverable. The response remains opaque:
+this crate does not treat application bytes, canonical compiler records, or successful transport as
+theorem, currentness, load, launch, or protected-key authority. V1 remains available and unchanged
+for its one-shot framing-only exchange.
