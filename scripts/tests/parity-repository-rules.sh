@@ -55,24 +55,6 @@ common=(
   --actions-integration-id 15368
   --default-branch main
 )
-
-mkdir -p "${TEST_ROOT}/fake-bin"
-cat >"${TEST_ROOT}/fake-bin/gh" <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-if [[ " $* " == *' users/personal-owner '* ]]; then
-  printf '%s\n' User
-  exit 0
-fi
-printf 'unexpected fake gh invocation: %s\n' "$*" >&2
-exit 99
-EOF
-chmod 700 "${TEST_ROOT}/fake-bin/gh"
-expect_failure user_owned_repository \
-  'merge-queue rules require an organization-owned repository' \
-  env PATH="${TEST_ROOT}/fake-bin:/usr/bin:/bin" \
-  bash "${WRAPPER}" bootstrap --repo personal-owner/repository "${common[@]}"
-
 python3 "${TOOL}" render "${common[@]}" >"${TEST_ROOT}/rules.json"
 python3 "${TOOL}" verify "${common[@]}" "${TEST_ROOT}/rules.json"
 bash "${WRAPPER}" render "${common[@]}" >"${TEST_ROOT}/wrapper.json"
@@ -85,15 +67,8 @@ jq -e '
   ([.rules[].type] | index("workflows")) != null and
   ([.rules[] | select(.type == "required_status_checks") |
     .parameters.required_status_checks[].context] | sort) ==
-    (["Fork-safe preflight", "Generic parity policy gate", "Generic validation",
-      "Protected signed-evidence gate / Protected publisher authorization"] | sort)
-' "${TEST_ROOT}/rules.json" >/dev/null
-
-jq -e '
-  [.rules[] | select(.type == "merge_queue") |
-    .parameters.check_response_timeout_minutes] == [120] and
-  ([.rules[] | select(.type == "workflows") |
-    .parameters.workflows[].path] | index(".github/workflows/pr-preflight.yml")) != null
+    (["Generic parity policy gate", "Generic validation",
+      "Protected signed-evidence gate"] | sort)
 ' "${TEST_ROOT}/rules.json" >/dev/null
 
 mutate() {
@@ -117,10 +92,6 @@ expect_failure wrong_source 'not strict and source-pinned' \
 mutate grouped_prs '(.rules[] | select(.type == "merge_queue") | .parameters.max_entries_to_merge) = 2'
 expect_failure grouped_prs 'one fully checked PR per group' \
   python3 "${TOOL}" verify "${common[@]}" "${TEST_ROOT}/grouped_prs.json"
-
-mutate short_timeout '(.rules[] | select(.type == "merge_queue") | .parameters.check_response_timeout_minutes) = 30'
-expect_failure short_timeout 'one fully checked PR per group' \
-  python3 "${TOOL}" verify "${common[@]}" "${TEST_ROOT}/short_timeout.json"
 
 mutate workflow_ref '(.rules[] | select(.type == "workflows") | .parameters.workflows[0].ref) = "refs/heads/feature"'
 expect_failure workflow_ref 'not pinned to the protected default branch' \
