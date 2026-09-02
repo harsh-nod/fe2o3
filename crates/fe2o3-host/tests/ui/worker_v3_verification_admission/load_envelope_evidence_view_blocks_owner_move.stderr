@@ -1,0 +1,12 @@
+error[E0505]: cannot move out of `owner` because it is borrowed
+  --> tests/ui/worker_v3_verification_admission/load_envelope_evidence_view_blocks_owner_move.rs:10:10
+   |
+ 5 | fn move_owner_while_view_is_live<R>(owner: WorkerV3RosterVerificationRequestV1<'_, R>)
+   |                                     ----- binding `owner` declared here
+...
+ 9 |     let view = owner.load_envelope_evidence_view();
+   |                ----- borrow of `owner` occurs here
+10 |     drop(owner);
+   |          ^^^^^ move out of `owner` occurs here
+11 |     let _ = view.binding();
+   |             ---- borrow later used here

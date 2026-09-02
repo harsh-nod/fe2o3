@@ -742,6 +742,27 @@ where
         request: &WorkerV3RosterVerificationRequestV1<'_, R>,
     ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
         self.calls += 1;
+        let envelope = request.load_envelope_evidence_view();
+        let exact_envelope = envelope.exact_canonical_bytes();
+        let exact_envelope_sha256: [u8; 32] = Sha256::digest(exact_envelope).into();
+        assert_eq!(
+            envelope.binding().byte_length(),
+            exact_envelope.len() as u64
+        );
+        assert_eq!(envelope.binding().sha256(), exact_envelope_sha256);
+        assert_eq!(
+            WorkerV3LoadEnvelopeWireV2::decode_canonical(exact_envelope)
+                .unwrap()
+                .encode_canonical()
+                .unwrap(),
+            exact_envelope
+        );
+        assert!(!envelope.grants_authority());
+        assert!(!envelope.grants_verification_authority());
+        assert!(!envelope.grants_publication_authority());
+        assert!(!envelope.grants_currentness_authority());
+        assert!(!envelope.grants_load_authority());
+        assert!(!envelope.grants_launch_authority());
         let mut subject = request.compiler_execution_subject_sha256();
         let mut verification_transcript = [0xc2; 32];
         match self.fault {

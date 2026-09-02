@@ -496,6 +496,31 @@ pub fn reacquire_current_hsaco_publication_lease_v3(
         .map_err(reacquisition_error_v3)
 }
 
+/// Reacquires a fresh current-publication lease through one retained service directory.
+///
+/// Unlike [`reacquire_current_hsaco_publication_lease_v3`], this operation never resolves an
+/// ambient path. The retained descriptor, its private-root metadata, the cooperative lock, every
+/// journal name, and the returned lease remain bound to the same admitted directory inode. The
+/// returned lease owns a close-on-exec duplicate of that descriptor and continues descriptor-only
+/// currentness revalidation after this borrow ends.
+pub fn reacquire_current_hsaco_publication_lease_from_retained_directory_v3(
+    directory: &crate::RetainedDurableDirectoryV1,
+    claim: &DurablePublishedHsacoClaimV3,
+) -> Result<DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV3> {
+    ClaimSchemaV3::validate(claim)
+        .map_err(DurablePublishedClaimReacquisitionErrorV3::InvalidClaim)?;
+    let output = directory
+        .pinned_output()
+        .map_err(DurablePublishedClaimReacquisitionErrorV3::Filesystem)?;
+    let lock = output
+        .try_lock()
+        .map_err(DurablePublishedClaimReacquisitionErrorV3::Filesystem)?
+        .ok_or(DurablePublishedClaimReacquisitionErrorV3::Busy)?;
+    let lease = validate_current_hsaco_publication_locked_v3(output, claim)?;
+    drop(lock);
+    Ok(lease)
+}
+
 pub(crate) fn validate_current_hsaco_publication_locked_v3(
     output: &PinnedOutput,
     claim: &DurablePublishedHsacoClaimV3,

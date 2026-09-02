@@ -1021,7 +1021,30 @@ pub fn recover_worker_v3_load_readiness_for_attempt_v1(
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.lock()?;
     output.verify_path_identity()?;
-    let attempts = read_attempt_registry(&output)?;
+    recover_worker_v3_load_readiness_for_attempt_locked_v1(&output, attempt)
+}
+
+/// Recovers terminal envelope custody through one retained service-directory descriptor.
+///
+/// This is the path-free counterpart of [`recover_worker_v3_load_readiness_for_attempt_v1`]. It
+/// resolves every protocol name relative to the retained directory inode and uses the same
+/// cooperative lock and exact terminal validation. The returned bytes remain inert and grant no
+/// compiler, publication, load, or launch authority.
+pub fn recover_worker_v3_load_readiness_for_attempt_from_retained_directory_v1(
+    directory: &crate::RetainedDurableDirectoryV1,
+    attempt: BuildAttempt,
+) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
+    let output = directory.pinned_output()?;
+    let _lock = output.lock()?;
+    output.verify_path_identity()?;
+    recover_worker_v3_load_readiness_for_attempt_locked_v1(output, attempt)
+}
+
+fn recover_worker_v3_load_readiness_for_attempt_locked_v1(
+    output: &PinnedOutput,
+    attempt: BuildAttempt,
+) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
+    let attempts = read_attempt_registry(output)?;
     let (_, record) = attempts
         .record_for_attempt(attempt)
         .ok_or(WorkerV3LoadReadinessErrorV1::AttemptState)?;
@@ -1030,22 +1053,22 @@ pub fn recover_worker_v3_load_readiness_for_attempt_v1(
         return Err(WorkerV3LoadReadinessErrorV1::AttemptState);
     };
     let names = ReadinessNames::new(backend)?;
-    cleanup_temps(&output, &names)?;
-    let actual = validate_terminal_receipt(&output, &names, attempt, backend, None)?;
+    cleanup_temps(output, &names)?;
+    let actual = validate_terminal_receipt(output, &names, attempt, backend, None)?;
     if actual != expected {
         return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
     }
-    let claim = read_validated_claim_file(&output, &names, actual)?;
+    let claim = read_validated_claim_file(output, &names, actual)?;
     if claim.plan().attempt() != attempt
         || claim.receipt() != backend
         || !actual.matches_durable_claim(&claim)?
     {
         return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
     }
-    let _publication = validate_current_hsaco_publication_locked_v3(&output, &claim)
+    let _publication = validate_current_hsaco_publication_locked_v3(output, &claim)
         .map_err(WorkerV3LoadReadinessErrorV1::Claim)?;
     result(
-        &output,
+        output,
         &names,
         WorkerV3LoadReadinessOutcomeV1::Recovered,
         actual,

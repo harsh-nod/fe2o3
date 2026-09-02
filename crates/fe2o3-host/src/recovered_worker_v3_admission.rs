@@ -195,6 +195,12 @@ impl RecoveredWorkerV3ArtifactStateV1 {
         self.envelope.wire().replay()
     }
 
+    fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.envelope.canonical_evidence_view()
+    }
+
     fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.inspection.hsaco().target()
     }
@@ -369,6 +375,12 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
         &self,
     ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
         self.artifact.finalizer_replay()
+    }
+
+    pub(crate) fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.artifact.load_envelope_evidence_view()
     }
 
     /// Exact descriptor-source association was independently checked during construction.
