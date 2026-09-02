@@ -38,6 +38,27 @@ real kernels with explicit boundaries, not broad library or serving claims.
 | GPT-OSS layer tile | Runnable bounded layer-tile example | Not a complete GPT-OSS layer or whole-model decode |
 | Debugger / simulator | Bounded CPU and live-host tools | They report unsupported capabilities instead of inferring success |
 
+## Why Write Kernels In fe2o3
+
+The unique bet in `fe2o3` is that a kernel should ship with its intended
+semantics, not just its device code. A contributor writes the GPU kernel and a
+safe Rust CPU reference or oracle for the same bounded behavior, then the stack
+records how mismatches are caught:
+
+- Proof-facing examples use Verus source models and negative fixtures to reject
+  wrong value, ownership, bounds, or frame behavior before promotion.
+- Runnable examples compare the GPU result, state, or metadata against the safe
+  CPU reference and fail the bounded runner on a mismatch.
+- Promoted compiler-time claims must go through the compiler-owned
+  `SafeReferenceMirToLivePliron` join, generated per-compilation Verus replay,
+  and PLIRON structural reconciliation before KIR lowering.
+
+That does not mean arbitrary Rust CPU and GPU semantics are equivalent at
+compile time today. Unsupported reference MIR, tensor-component replay, finite
+numerical error replay, LLVM/ISA behavior, launch, hardware execution,
+performance, and full-model integration still fail closed unless a specific
+evidence record says otherwise.
+
 ## Production Compiler Status
 
 The runnable examples above do not mean the full production compiler is done.
