@@ -11,6 +11,8 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
+/// Exact newline-terminated compact JSON size emitted by the V1 command.
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_698_338;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize =
     SimulationOperationSurfaceV1::COUNT * SimulationCapabilityProfileV1::COUNT;
 pub const SCALAR_CAPABILITY_ROWS_V1: usize = SimulationCapabilityProfileV1::COUNT
@@ -306,6 +308,7 @@ pub struct SimulationScalarCapabilityRowV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SimulationCapabilityMatrixV1 {
     pub schema: &'static str,
+    pub truth_origin: &'static str,
     pub authority: &'static str,
     pub hardware_observed: bool,
     pub performance_prediction: bool,
@@ -330,7 +333,8 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
     debug_assert_eq!(scalar_rows.len(), SCALAR_CAPABILITY_ROWS_V1);
     SimulationCapabilityMatrixV1 {
         schema: SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1,
-        authority: "observation_only",
+        truth_origin: "declared",
+        authority: "none",
         hardware_observed: false,
         performance_prediction: false,
         top_level_rows,

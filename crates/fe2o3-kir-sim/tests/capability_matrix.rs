@@ -2,15 +2,17 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 use fe2o3_kir_sim::{
-    SCALAR_CAPABILITY_ROWS_V1, SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1,
-    SimulationCapabilityDispositionV1, TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
+    SCALAR_CAPABILITY_ROWS_V1, SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
+    SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1, SimulationCapabilityDispositionV1,
+    TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
 };
 
 #[test]
 fn matrix_is_complete_unique_bounded_and_authority_free() {
     let matrix = semantic_capability_matrix_v1();
     assert_eq!(matrix.schema, SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1);
-    assert_eq!(matrix.authority, "observation_only");
+    assert_eq!(matrix.truth_origin, "declared");
+    assert_eq!(matrix.authority, "none");
     assert!(!matrix.hardware_observed);
     assert!(!matrix.performance_prediction);
     assert_eq!(matrix.top_level_rows.len(), TOP_LEVEL_CAPABILITY_ROWS_V1);
@@ -53,9 +55,11 @@ fn json_command_emits_the_same_stable_matrix() {
     assert!(first.status.success());
     assert_eq!(first.stdout, second.stdout);
     assert!(first.stderr.is_empty());
+    assert_eq!(first.stdout.len(), SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1);
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(value["schema"], SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1);
-    assert_eq!(value["authority"], "observation_only");
+    assert_eq!(value["truth_origin"], "declared");
+    assert_eq!(value["authority"], "none");
     assert_eq!(value["hardware_observed"], false);
     assert_eq!(value["performance_prediction"], false);
     assert_eq!(

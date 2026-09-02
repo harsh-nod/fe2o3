@@ -10,7 +10,10 @@ ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-grants no hardware or performance authority.
+identifies those rows as declared tool-contract facts with no authority and
+grants no hardware or performance authority. The complete newline-terminated
+compact V1 document is fixed at 4,698,338 bytes and its regression test rejects
+any unreviewed schema-size change.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
