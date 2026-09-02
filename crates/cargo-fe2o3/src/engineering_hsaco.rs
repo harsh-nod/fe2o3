@@ -49,6 +49,7 @@ struct Options {
     crate_name: String,
     output_root: PathBuf,
     extractor: FileClaim,
+    extractor_backend: FileClaim,
     worker: FileClaim,
     cargo: FileClaim,
     rustc: FileClaim,
@@ -84,6 +85,12 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
     let cargo_bytes = read_claimed_file("Cargo", &options.cargo, MAX_TOOL_BYTES, true)?;
     let rustc_bytes = read_claimed_file("rustc", &options.rustc, MAX_TOOL_BYTES, true)?;
     let extractor_bytes = read_claimed_file("extractor", &options.extractor, MAX_TOOL_BYTES, true)?;
+    let extractor_backend_bytes = read_claimed_file(
+        "extractor backend",
+        &options.extractor_backend,
+        MAX_TOOL_BYTES,
+        false,
+    )?;
     let worker_bytes = read_claimed_file(
         "native worker",
         &options.worker,
@@ -93,6 +100,8 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
 
     let pinned_extractor = scratch.path.join("fe2o3-rustc-extract");
     write_new_file(&pinned_extractor, &extractor_bytes, 0o500)?;
+    let pinned_extractor_backend = scratch.path.join("librustc_codegen_fe2o3.so");
+    write_new_file(&pinned_extractor_backend, &extractor_backend_bytes, 0o400)?;
     let handoff_path = scratch.path.join("compiler-handoff-v2");
     run_extraction(&options, &pinned_extractor, &handoff_path, &scratch.path)?;
     let handoff = read_bounded_regular_file(&handoff_path, MAX_HANDOFF_BYTES, false)?;
@@ -138,6 +147,7 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         &cargo_bytes,
         &rustc_bytes,
         &extractor_bytes,
+        &extractor_backend_bytes,
     )?;
     publish_observation(&options.output_root, &manifest, observation.hsaco_bytes())
 }
@@ -150,6 +160,8 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     let mut output_root = None;
     let mut extractor = None;
     let mut extractor_sha256 = None;
+    let mut extractor_backend = None;
+    let mut extractor_backend_sha256 = None;
     let mut worker = None;
     let mut worker_sha256 = None;
     let mut cargo = None;
@@ -184,6 +196,10 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--output-root" => set_once_path(&mut output_root, value, argument)?,
             "--extractor" => set_once_path(&mut extractor, value, argument)?,
             "--extractor-sha256" => set_once_digest(&mut extractor_sha256, value, argument)?,
+            "--extractor-backend" => set_once_path(&mut extractor_backend, value, argument)?,
+            "--extractor-backend-sha256" => {
+                set_once_digest(&mut extractor_backend_sha256, value, argument)?
+            }
             "--worker" => set_once_path(&mut worker, value, argument)?,
             "--worker-sha256" => set_once_digest(&mut worker_sha256, value, argument)?,
             "--cargo" => set_once_path(&mut cargo, value, argument)?,
@@ -260,6 +276,13 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             extractor_sha256,
             "--extractor",
             "--extractor-sha256",
+        )?,
+        extractor_backend: required_file_claim(
+            current_dir,
+            extractor_backend,
+            extractor_backend_sha256,
+            "--extractor-backend",
+            "--extractor-backend-sha256",
         )?,
         worker: required_file_claim(
             current_dir,
@@ -727,6 +750,7 @@ struct Tools<'a> {
     cargo: Identity,
     rustc: Identity,
     extractor: Identity,
+    extractor_backend: Identity,
     worker: Worker<'a>,
 }
 
@@ -781,6 +805,7 @@ fn canonical_manifest(
     cargo: &[u8],
     rustc: &[u8],
     extractor: &[u8],
+    extractor_backend: &[u8],
 ) -> Result<Vec<u8>, String> {
     let providers = observation
         .providers()
@@ -804,6 +829,7 @@ fn canonical_manifest(
             cargo: identity(ContentIdentityV1::calculate(cargo)),
             rustc: identity(ContentIdentityV1::calculate(rustc)),
             extractor: identity(ContentIdentityV1::calculate(extractor)),
+            extractor_backend: identity(ContentIdentityV1::calculate(extractor_backend)),
             worker: Worker {
                 executable: identity(worker.executable()),
                 worker_build_identity: worker.worker_build_identity(),
@@ -970,7 +996,7 @@ impl Drop for ScratchDirectory {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
 }
 
 #[cfg(test)]
@@ -991,6 +1017,10 @@ mod tests {
             "--extractor".into(),
             "/tools/extractor".into(),
             "--extractor-sha256".into(),
+            digest.clone().into(),
+            "--extractor-backend".into(),
+            "/tools/librustc_codegen_fe2o3.so".into(),
+            "--extractor-backend-sha256".into(),
             digest.clone().into(),
             "--worker".into(),
             "/tools/worker".into(),
