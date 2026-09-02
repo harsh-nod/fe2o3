@@ -74,6 +74,29 @@ Site ordinals and Kernel-IR content identities remain producer claims. The query
 surface does not resolve them to names or source locations without a future
 authenticated catalog adapter.
 
+## Direct-KFD source/ISA correlation
+
+`fe2o3-profiler-service kfd-source-isa-jsonl` provides a separate bounded,
+stateful agent protocol for joining one canonical direct-KFD runtime profile to
+one canonical Source/ISA Observation V1 collection. `open_evidence` accepts the
+exact inputs as canonical lowercase hex; subsequent `inspect_binding`,
+`list_dispatches`, and `inspect_dispatch` requests use revision checks,
+duplicate-request rejection, and capture-bound pagination cursors.
+
+The join follows observed dispatch to resolved kernel, loaded module, and exact
+artifact content identity. It returns every admitted compilation unit for that
+artifact rather than selecting one by name. Each unit retains its collection,
+frame, unit, correlation, structural-map, neutral-KIR, target-KIR, target, and
+coverage evidence. Artifact or target substitution returns a typed unavailable
+relation. An incomplete source/ISA collection remains visibly incomplete.
+
+Direct-KFD profiles do not contain an observed PC or semantic execution event,
+so the service never turns an artifact match into a source-site claim. Source,
+MIR, KIR-operation, schedule, LLVM, and ISA-interval attribution remain typed
+unavailable until independently admitted PC, ATT, or semantic-event evidence is
+joined. The service is read-only and grants no compiler, proof, load, dispatch,
+attach, or collection authority.
+
 ## Profiler capture queries
 
 The same crate provides the read-only `CaptureQuerySessionV1` protocol and

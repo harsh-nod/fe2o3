@@ -1747,8 +1747,10 @@ name = "fe2o3-semantic-query"
 version = "0.1.0"
 dependencies = [
  "fe2o3-hsaco",
+ "fe2o3-profiler-protocol",
  "fe2o3-semantic-import",
  "fe2o3-semantic-trace",
+ "fe2o3-source-isa-observation",
  "rmpv",
  "serde",
  "serde_json",
