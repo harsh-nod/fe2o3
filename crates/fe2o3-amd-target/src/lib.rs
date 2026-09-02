@@ -4,6 +4,11 @@
 
 use core::{fmt, str::FromStr};
 
+pub use fe2o3_target_spec::{
+    TargetArchitectureFamilyV1, TargetArtifactFormatV1, TargetExecutionModelV1,
+    TargetFeatureSpecV1, TargetFeatureStateV1, TargetProfileSpecV1, TargetVendorV1,
+};
+
 mod advanced_model;
 mod atomic_legalizability;
 mod capabilities;
@@ -74,6 +79,18 @@ pub const PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1: &str =
     "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS";
 /// Parent-owned rustc arguments for production gfx950 target crates.
 pub const PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Ctarget-cpu=gfx950 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
+
+const PRODUCTION_GFX942_TARGET_FEATURES_V1: &[TargetFeatureSpecV1] = &[
+    TargetFeatureSpecV1::new_unchecked("wavefrontsize32", TargetFeatureStateV1::Disabled),
+    TargetFeatureSpecV1::new_unchecked("wavefrontsize64", TargetFeatureStateV1::Enabled),
+    TargetFeatureSpecV1::new_unchecked("xnack", TargetFeatureStateV1::Disabled),
+];
+
+const PRODUCTION_GFX950_TARGET_FEATURES_V1: &[TargetFeatureSpecV1] = &[
+    TargetFeatureSpecV1::new_unchecked("wavefrontsize32", TargetFeatureStateV1::Disabled),
+    TargetFeatureSpecV1::new_unchecked("wavefrontsize64", TargetFeatureStateV1::Enabled),
+    TargetFeatureSpecV1::new_unchecked("xnack", TargetFeatureStateV1::Disabled),
+];
 
 /// One exact processor profile admitted by the production AMDGPU transaction.
 ///
@@ -150,6 +167,30 @@ impl ProductionAmdTargetProfileV1 {
             Self::Gfx942 => PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
             Self::Gfx950 => PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1,
         }
+    }
+
+    /// Target-neutral profile metadata for this AMD production profile.
+    ///
+    /// AMD target-ID parsing and AMD capability derivation remain owned by this
+    /// crate. The returned value is the portable envelope that compiler, proof,
+    /// and host layers can commit to without depending on AMD-specific types.
+    pub const fn target_profile_spec(self) -> TargetProfileSpecV1 {
+        let features = match self {
+            Self::Gfx942 => PRODUCTION_GFX942_TARGET_FEATURES_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_TARGET_FEATURES_V1,
+        };
+
+        TargetProfileSpecV1::from_static_parts(
+            TargetVendorV1::Amd,
+            TargetArchitectureFamilyV1::Amdgcn,
+            self.cpu(),
+            Some(self.rustc_target()),
+            Some(self.rustc_target()),
+            TargetArtifactFormatV1::AmdHsaCodeObject,
+            TargetExecutionModelV1::GpuGrid,
+            Some(PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1),
+            features,
+        )
     }
 }
 
@@ -753,6 +794,47 @@ mod tests {
                 ProductionAmdTargetProfileV1::from_device_target(rejected),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn production_profiles_publish_target_neutral_specs() {
+        for profile in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            let spec = profile.target_profile_spec();
+            assert_eq!(spec.validate(), Ok(()));
+            assert_eq!(spec.vendor(), TargetVendorV1::Amd);
+            assert_eq!(
+                spec.architecture_family(),
+                TargetArchitectureFamilyV1::Amdgcn
+            );
+            assert_eq!(spec.architecture(), profile.cpu());
+            assert_eq!(spec.rustc_target(), Some(profile.rustc_target()));
+            assert_eq!(spec.llvm_target(), Some(profile.rustc_target()));
+            assert_eq!(
+                spec.artifact_format(),
+                TargetArtifactFormatV1::AmdHsaCodeObject
+            );
+            assert_eq!(spec.execution_model(), TargetExecutionModelV1::GpuGrid);
+            assert_eq!(
+                spec.data_layout(),
+                Some(PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
+            );
+            assert_eq!(
+                spec.feature("wavefrontsize32").unwrap().state(),
+                TargetFeatureStateV1::Disabled
+            );
+            assert_eq!(
+                spec.feature("wavefrontsize64").unwrap().state(),
+                TargetFeatureStateV1::Enabled
+            );
+            assert_eq!(
+                spec.feature("xnack").unwrap().state(),
+                TargetFeatureStateV1::Disabled
+            );
+            assert!(spec.to_string().contains(profile.cpu()));
         }
     }
 

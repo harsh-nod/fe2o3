@@ -139,12 +139,12 @@ Canonical contracts own versioned records, stable identities, wire encodings,
 public compiler/host interfaces, target descriptions, and Pliron-independent
 models. The current boundaries include `fe2o3-mir-model`,
 `fe2o3-compiler-api`, `fe2o3-proof-contracts`, `fe2o3-service-model`,
-`fe2o3-host-api`, `fe2o3-amd-target`, and the existing artifact, descriptor,
-completion, invocation, compiler-lineage, and authority contracts listed in
-the machine-readable policy. A type in this layer may be canonical
-representation without being a durable wire format or an authenticated
-statement; each owning crate states which of those stronger contracts, if any,
-it provides.
+`fe2o3-host-api`, `fe2o3-target-spec`, `fe2o3-amd-target`, and the existing
+artifact, descriptor, completion, invocation, compiler-lineage, and authority
+contracts listed in the machine-readable policy. A type in this layer may be
+canonical representation without being a durable wire format or an
+authenticated statement; each owning crate states which of those stronger
+contracts, if any, it provides.
 
 This layer MUST remain independent of rustc implementation objects, Pliron
 handles or text, LLVM objects, Verus executors, HSA/HIP handles, process-local

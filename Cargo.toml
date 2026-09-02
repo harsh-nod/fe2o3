@@ -144,6 +144,7 @@ fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
 fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
 fe2o3-source-isa-observation = { path = "crates/fe2o3-source-isa-observation" }
+fe2o3-target-spec = { path = "crates/fe2o3-target-spec" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }
 fe2o3-worker-v3-verification-client = { path = "crates/fe2o3-worker-v3-verification-client" }
 fe2o3-worker-v3-verification-protocol = { path = "crates/fe2o3-worker-v3-verification-protocol" }
