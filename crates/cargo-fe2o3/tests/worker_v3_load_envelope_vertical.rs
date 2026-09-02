@@ -749,10 +749,7 @@ where
             envelope.binding().byte_length(),
             exact_envelope.len() as u64
         );
-        assert_eq!(
-            envelope.binding().sha256(),
-            exact_envelope_sha256
-        );
+        assert_eq!(envelope.binding().sha256(), exact_envelope_sha256);
         assert_eq!(
             WorkerV3LoadEnvelopeWireV2::decode_canonical(exact_envelope)
                 .unwrap()
