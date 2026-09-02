@@ -21,6 +21,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use sha2::{Digest, Sha256};
 
 use crate::{
+    FORMAL_COMPILER_V3_BRANCH_ARMS, FORMAL_COMPILER_V3_BYTE_WIDTH, FORMAL_COMPILER_V3_CLAIM_NAME,
+    FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS, FORMAL_COMPILER_V3_HELPER_PARAMETERS,
+    FORMAL_COMPILER_V3_PRODUCTION_LOOP_TRIP_COUNT, FORMAL_COMPILER_V3_PRODUCTION_SCALAR_OPERATIONS,
+    FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES, FORMAL_COMPILER_V3_WORD_BITS,
     MIR_KIR_CFG_REFINEMENT_PROOF_SHA256_V2, MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1,
     MIR_KIR_STRUCTURED_CFG_PROOF_SHA256_V3, ProductionCanonicalKernelIrIdentityV1,
     ProductionSemanticKirOwnerV1, SemanticKirCorrespondenceV1,
@@ -1034,6 +1038,18 @@ fn model_identity_v3() -> [u8; 32] {
     hash.update(MODEL_DOMAIN_V3);
     hash.update(MIR_KIR_XOR_CFG_POLICY_VERSION_V3.to_le_bytes());
     hash.update(MIR_KIR_XOR_CFG_THEOREM_V3.as_bytes());
+    hash.update(FORMAL_COMPILER_V3_CLAIM_NAME.as_bytes());
+    hash.update(FORMAL_COMPILER_V3_WORD_BITS.to_le_bytes());
+    hash.update(FORMAL_COMPILER_V3_BYTE_WIDTH.to_le_bytes());
+    hash.update(FORMAL_COMPILER_V3_HELPER_PARAMETERS.to_le_bytes());
+    hash.update(FORMAL_COMPILER_V3_BRANCH_ARMS.to_le_bytes());
+    hash.update(FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES.to_le_bytes());
+    hash.update(FORMAL_COMPILER_V3_PRODUCTION_LOOP_TRIP_COUNT.to_le_bytes());
+    hash.update(FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS.to_le_bytes());
+    for &(operation, tag) in FORMAL_COMPILER_V3_PRODUCTION_SCALAR_OPERATIONS {
+        hash.update(operation.as_bytes());
+        hash.update(tag.to_le_bytes());
+    }
     hash.update(MIR_KIR_STRUCTURED_CFG_PROOF_SHA256_V3);
     hash.update(MIR_KIR_CFG_REFINEMENT_PROOF_SHA256_V2);
     hash.update(MIR_KIR_SCALAR_REFINEMENT_PROOF_SHA256_V1);

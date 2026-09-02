@@ -11,11 +11,13 @@ use std::{error::Error, fmt};
 use sha2::{Digest, Sha256};
 
 /// Version of the structured machine and relation encoding.
-pub const MIR_KIR_STRUCTURED_CFG_MODEL_VERSION_V3: u16 = 3;
+pub const MIR_KIR_STRUCTURED_CFG_MODEL_VERSION_V3: u16 = crate::FORMAL_COMPILER_V3_CLAIM_VERSION;
 /// Maximum admitted counted-loop trip count.
-pub const MIR_KIR_STRUCTURED_CFG_MAX_TRIP_COUNT_V3: u8 = 4;
+pub const MIR_KIR_STRUCTURED_CFG_MAX_TRIP_COUNT_V3: u8 =
+    crate::FORMAL_COMPILER_V3_MODELED_MAXIMUM_LOOP_TRIP_COUNT;
 /// Maximum direct-call stack depth in the model: root -> helper -> leaf.
-pub const MIR_KIR_STRUCTURED_CFG_MAX_CALL_DEPTH_V3: u8 = 2;
+pub const MIR_KIR_STRUCTURED_CFG_MAX_CALL_DEPTH_V3: u8 =
+    crate::FORMAL_COMPILER_V3_MODELED_MAXIMUM_STACK_FRAMES;
 /// Stable positive Verus theorem name.
 pub const MIR_KIR_STRUCTURED_CFG_THEOREM_V3: &str = "fe2o3_mir_kir_structured_cfg_refines_v3";
 /// Digest of the exact positive Verus source accepted by the pinned runner.
@@ -713,6 +715,15 @@ pub fn mir_kir_structured_cfg_model_identity_v3() -> [u8; 32] {
     hash.update(MIR_KIR_STRUCTURED_CFG_MAX_TRIP_COUNT_V3.to_le_bytes());
     hash.update(MIR_KIR_STRUCTURED_CFG_MAX_CALL_DEPTH_V3.to_le_bytes());
     hash.update(MIR_KIR_STRUCTURED_CFG_THEOREM_V3.as_bytes());
+    hash.update(crate::FORMAL_COMPILER_V3_CLAIM_NAME.as_bytes());
+    hash.update(crate::FORMAL_COMPILER_V3_MODELED_MINIMUM_LOOP_TRIP_COUNT.to_le_bytes());
+    for &(operation, tag) in crate::FORMAL_COMPILER_V3_PRODUCTION_SCALAR_OPERATIONS
+        .iter()
+        .chain(crate::FORMAL_COMPILER_V3_MODELED_ONLY_SCALAR_OPERATIONS)
+    {
+        hash.update(operation.as_bytes());
+        hash.update(tag.to_le_bytes());
+    }
     hash.update(MIR_KIR_STRUCTURED_CFG_PROOF_SHA256_V3);
     hash.update(MIR_KIR_STRUCTURED_CFG_VERUS_SHA256_V3);
     hash.update(MIR_KIR_STRUCTURED_CFG_CLOSURE_SHA256_V3);
