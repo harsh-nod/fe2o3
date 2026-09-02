@@ -625,7 +625,7 @@ fn read_bounded_regular_file(
         return Err(format!("`{}` is not executable", path.display()));
     }
     let mut bytes = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(max_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("cannot read `{}`: {error}", path.display()))?;
@@ -1013,6 +1013,7 @@ mod tests {
             "/source/Cargo.toml".into(),
             "--lib".into(),
         ]
+        .to_vec()
     }
 
     #[test]
