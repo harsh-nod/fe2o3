@@ -83,7 +83,7 @@ criteria. It is not a closure claim.
 
 | Contract | Current evidence | Status needed for exit |
 | --- | --- | --- |
-| C0 semantics/baseline | Versioned simulator and virtual-runtime boundaries, support matrix, typed unsupported states | A maintained per-operation semantic ownership matrix is still required |
+| C0 semantics/baseline | `fe2o3-kir-sim-capabilities` derives a stable, CI-checked owner-or-typed-rejection matrix from the exhaustive admitted operation/terminator surface and exact scalar support predicates for every simulator-facing profile | Future KIR surface changes must extend the exhaustive classifier and matrix before the generic lane can pass |
 | C1 scalar interpreter | Verified KIR admission, structured CFG/calls/scalars, canonical/seeded/replay schedules, bounded errors | General failure minimization and full independent generated differential coverage remain incomplete |
 | C2 typed memory/Rust | Allocation provenance, initialization, bounds, alignment, buffer views, source/KIR diagnostics for the admitted subset | Aggregate/enum/layout coverage and complete conformance-corpus qualification remain incomplete |
 | C3 wave/workgroup | Wave32/Wave64 masks and selected collectives, LDS, barriers, integer atomics/fences, race/HB exploration | General divergence/reconvergence, matrix/MFMA, dynamic/general LDS, and remaining intrinsics stay typed unsupported |
@@ -115,6 +115,8 @@ The focused no-GPU commands are:
 
 ```text
 cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
+cargo test --locked -p fe2o3-kir-sim --test capability_matrix
+cargo run --quiet --locked -p fe2o3-kir-sim --bin fe2o3-kir-sim-capabilities
 cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --all-targets -- -D warnings
 cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --no-deps
 bash scripts/ci-local.sh workspace-policy

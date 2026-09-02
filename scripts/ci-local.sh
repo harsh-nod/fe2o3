@@ -1098,6 +1098,8 @@ run_generic_core() {
   run_backend_build
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
+  run_step kir-sim-capability-matrix \
+    cargo test --locked -p fe2o3-kir-sim --test capability_matrix
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_cpu_tests
   run_rustc_codegen_lib_tests

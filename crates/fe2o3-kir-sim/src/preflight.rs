@@ -1407,6 +1407,7 @@ fn scan_operation(
     findings: &mut UnsupportedCollectorV1,
     target: SimulationTargetV1,
 ) -> Result<(), SimulationPreflightErrorV1> {
+    let _surface = crate::capability::operation_surface_v1(&operation.kind);
     let identifier_bytes = function.id.retained_capacity_bytes();
     macro_rules! reject {
         ($feature:expr) => {
@@ -1644,6 +1645,7 @@ fn scan_terminator(
     let Some(terminator) = terminator else {
         return;
     };
+    let _surface = crate::capability::terminator_surface_v1(terminator);
     let selector = match terminator {
         Terminator::IntegerSwitch {
             selector, cases, ..

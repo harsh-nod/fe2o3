@@ -5,6 +5,13 @@ explicit subset of verified canonical Kernel IR V7. Admission consumes a
 `VerifiedCanonicalKernelIrV7`; raw in-memory modules and older wire formats are
 not execution inputs.
 
+The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
+ownership matrix as stable JSON. It covers every top-level KIR operation and
+terminator for each simulator-facing profile, plus every scalar
+unary/binary/compare/cast type combination. Rows name either the exact
+simulator owner or the typed preflight rejection; the document explicitly
+grants no hardware or performance authority.
+
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
 [`fe2o3-export-sim`](../../docs/simulation-bundle-v1.md) transaction. Bundle

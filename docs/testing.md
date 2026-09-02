@@ -39,6 +39,11 @@ remain independent of HIP, HSA, DRM, KFD device nodes, and GPU libraries. These
 tests establish model and semantic CPU behavior only; they do not increase a
 hardware or parity pass count.
 
+The generic lane also runs the focused `kir-sim-capability-matrix` test before
+the broader CPU package set. It checks the stable JSON command and requires an
+exact simulator owner or typed unsupported reason for every top-level KIR
+operation, terminator, profile, and scalar operation/type combination.
+
 The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest
 separates source-artifact inventory from explicit qualification authority. It
