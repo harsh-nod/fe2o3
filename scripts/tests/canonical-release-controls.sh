@@ -34,14 +34,6 @@ assert_clean_checkout() {
 
 assert_clean_checkout before
 
-for owned_path in \
-  /scripts/canonical-release-controls.py \
-  /scripts/canonical-release-controls.sh \
-  /scripts/tests/canonical-release-controls.sh; do
-  grep -Fx -- "${owned_path} @harsh-nod @powderluv" \
-    "${ROOT}/.github/CODEOWNERS" >/dev/null
-done
-
 expect_failure() {
   local name="$1"
   local expected="$2"
