@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `WorkerV3CompilerCurrentRecordEvidenceViewV1<'evidence>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/compiler_current_record_evidence_view_cannot_clone.rs:5:18
+  |
+5 |     let _ = view.clone();
+  |                  ^^^^^ method not found in `WorkerV3CompilerCurrentRecordEvidenceViewV1<'_>`

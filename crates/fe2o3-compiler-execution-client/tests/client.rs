@@ -9,7 +9,8 @@ use fe2o3_artifact_transaction::{
     INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1, InertCompilerExecutionSubjectV1,
 };
 use fe2o3_compiler_execution_client::{
-    CompilerExecutionClientErrorV1, CompilerExecutionClientV1, CompilerExecutionReceiptRecoveryV1,
+    CompilerExecutionClientErrorV1, CompilerExecutionClientV1,
+    CompilerExecutionCurrentRecordChallengeV1, CompilerExecutionReceiptRecoveryV1,
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
@@ -272,6 +273,41 @@ fn exact_current_verification_is_one_terminal_packet() {
 }
 
 #[test]
+fn caller_owned_current_verification_challenge_is_bound_exactly() {
+    let fixture = Fixture::new();
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    let handle = spawn_service(service, fixture.clone(), DurableStage::Published);
+    let expected_challenge_bytes = [0xa7; 32];
+    let expected_challenge =
+        CompilerExecutionCurrentRecordChallengeV1::from_bytes(expected_challenge_bytes).unwrap();
+    assert_eq!(expected_challenge.as_bytes(), &expected_challenge_bytes);
+    assert!(!expected_challenge.grants_authority());
+    let verification = CompilerExecutionClientV1::admit(client, Duration::from_secs(1))
+        .unwrap()
+        .verify_current_only_with_challenge(
+            &fixture.policy,
+            fixture.carriage.clone(),
+            expected_challenge,
+        )
+        .unwrap();
+    assert_eq!(
+        verification.attestation().challenge(),
+        expected_challenge_bytes
+    );
+    assert!(verification.authenticates_expected_challenge());
+    assert!(!verification.grants_authority());
+    assert_eq!(handle.join().unwrap(), 1);
+}
+
+#[test]
+fn caller_owned_current_verification_challenge_rejects_zero() {
+    assert!(matches!(
+        CompilerExecutionCurrentRecordChallengeV1::from_bytes([0; 32]),
+        Err(CompilerExecutionCurrentRecordVerificationErrorV3::ZeroChallenge)
+    ));
+}
+
+#[test]
 fn current_verification_carriage_substitution_fails_closed() {
     let fixture = Fixture::new();
     let substituted = Fixture::with_subject(0x21);
@@ -331,9 +367,11 @@ fn stale_current_verification_challenge_fails_closed() {
     let fixture = Fixture::new();
     let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
     let service_fixture = fixture.clone();
+    let expected_challenge_bytes = [0xa8; 32];
     let handle = thread::spawn(move || {
         let request = receive_request(&service);
         let mut stale_challenge = request.verification_challenge().unwrap();
+        assert_eq!(stale_challenge, expected_challenge_bytes);
         stale_challenge[0] ^= 0x80;
         let commit_receipt = service_fixture.anchor_receipt();
         let currentness_receipt = service_fixture.currentness_receipt(
@@ -366,7 +404,12 @@ fn stale_current_verification_challenge_fails_closed() {
     });
     let error = CompilerExecutionClientV1::admit(client, Duration::from_secs(1))
         .unwrap()
-        .verify_current_only(&fixture.policy, fixture.carriage)
+        .verify_current_only_with_challenge(
+            &fixture.policy,
+            fixture.carriage,
+            CompilerExecutionCurrentRecordChallengeV1::from_bytes(expected_challenge_bytes)
+                .unwrap(),
+        )
         .unwrap_err();
     assert!(matches!(
         error,

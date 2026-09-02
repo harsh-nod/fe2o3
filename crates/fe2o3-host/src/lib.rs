@@ -146,9 +146,11 @@ pub use authenticated_service_queue::{
 pub use compiler_execution_current_record_audit::{
     InheritedWorkerV3CompilerCurrentRecordAuditorV1,
     WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1, WorkerV3CompilerCurrentRecordAuditErrorV1,
-    WorkerV3CompilerCurrentRecordAuditV1,
+    WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordEvidenceViewV1,
 };
 pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
+#[cfg(target_os = "linux")]
+pub use fe2o3_compiler_execution_client::CompilerExecutionCurrentRecordChallengeV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 pub use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, DeviceBindingError, DeviceSelector, KfdAdapterError,
