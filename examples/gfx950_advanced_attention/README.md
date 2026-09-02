@@ -91,6 +91,36 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 ./run-mhc-sinkhorn-mix-gfx950.sh
 ```
 
+## KDA MI350 performance evidence
+
+[`kda-mi350-performance-v1.json`](kda-mi350-performance-v1.json) records the
+replicated fixed-shape KDA campaign, raw-file SHA-256 manifests, exact source
+and HSACO identities, ISA resource counts, correctness results, rejected
+variants, and the optimistic HBM-only resource floor. Recreate that aggregate
+from retained JSONL results with:
+
+```bash
+python3 summarize_kda_mi350.py \
+  --fe2o3-directory /absolute/path/to/fe2o3-jsonl \
+  --fla-directory /absolute/path/to/fla-jsonl \
+  --output /absolute/path/to/new-kda-summary.json
+```
+
+The official Flash Linear Attention comparator is
+`fla.ops.kda.fused_recurrent_kda` at commit
+`8e84ed4a6727be082c34a3855c60623fd11411e9`. Run one T=1 or T=8 process from
+an environment containing that checkout, PyTorch ROCm, Triton, and FLA with
+`benchmark_fla_kda_mi350.py`. Both implementations were checked against an
+independent sequential matrix-state recurrence before timing.
+
+For FP32 B=H=1, K=V=16, the median of five process medians was 4,720 ns for
+fe2o3 decode versus 39,345 ns for FLA (8.336x), and 11,400 ns for fe2o3
+two-chunk prefill versus 39,113 ns for FLA (3.431x). These are the fastest
+measured eligible implementations for this exact shape and semantics, not a
+universal KDA state-of-the-art claim. The fe2o3 and FLA device-side timers use
+different sampling granularities, which is retained as a protocol caveat in
+the evidence file.
+
 The sparse and hybrid runners additionally require exactly four
 `ds_read_b64_tr_b8` instructions before one FP8
 `v_mfma_f32_16x16x128_f8f6f4`. Exponential device math uses only the reviewed
