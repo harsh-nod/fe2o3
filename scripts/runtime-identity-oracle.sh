@@ -32,10 +32,11 @@ capture_git_observation() {
     printf '%s\n' 'runtime identity oracle could not capture a canonical Git HEAD' >&2
     return 2
   fi
-  (
-    ulimit -f 32
-    git status --porcelain=v1 --untracked-files=all
-  ) >"${status_file}"
+  # Git may refresh its index while answering status, so RLIMIT_FSIZE would
+  # also constrain an internal Git write. Consume every record while retaining
+  # only one bounded line: the oracle needs clean-versus-dirty, not the paths.
+  git status --porcelain=v1 --untracked-files=all |
+    awk 'NR == 1 { print substr($0, 1, 4096) }' >"${status_file}"
   if [[ -s "${status_file}" ]]; then
     printf 'head=%s\nworktree=dirty\n' "${head}" >"${output}"
   else

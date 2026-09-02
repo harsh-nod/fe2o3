@@ -167,7 +167,7 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
     }
 
     let discovery_deadline = Instant::now() + RESPONSE_TIMEOUT;
-    let (queue, device_capable) = loop {
+    let (queue, suspended) = loop {
         assert!(
             Instant::now() < discovery_deadline,
             "debugger did not observe one complete target queue snapshot"
@@ -275,28 +275,50 @@ fn mi300x_launch_runtime_snapshot_event_suspend_resume_and_cleanup() {
         };
         assert_eq!(device.gfx_target_version, 90_402);
         assert_eq!(device.xcc_count, 8);
-        break (candidate.id, device.trap_debug_supported);
-    };
-    if !device_capable {
-        eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
-        terminate(&mut input, &receiver, request_id, 0);
-        drop(input);
-        child.finish();
-        return;
-    }
+        if !device.trap_debug_supported {
+            eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
+            terminate(&mut input, &receiver, request_id, 0);
+            drop(input);
+            child.finish();
+            return;
+        }
 
-    let suspended = exchange(
-        &mut input,
-        &receiver,
-        HardwareDebugRequestV2::SuspendQueues {
-            schema: HardwareRequestSchemaV2::V2,
-            request_id,
-            expected_control_revision: 0,
-            queues: vec![queue],
-            grace_period: 0,
-        },
-    );
-    request_id += 1;
+        let suspended = exchange(
+            &mut input,
+            &receiver,
+            HardwareDebugRequestV2::SuspendQueues {
+                schema: HardwareRequestSchemaV2::V2,
+                request_id,
+                expected_control_revision: 0,
+                queues: vec![candidate.id],
+                grace_period: 0,
+            },
+        );
+        request_id += 1;
+        if matches!(
+            suspended,
+            HardwareDebugResponseV2::Error {
+                session: HardwareSessionViewV2 {
+                    state: HardwareSessionStateV2::Running,
+                    control_revision: 0,
+                    runtime_enabled: true,
+                    ..
+                },
+                error: HardwareDebugErrorV2 {
+                    stage: HardwareErrorStageV2::Session,
+                    code: HardwareErrorCodeV2::StaleIdentityGeneration,
+                    effect: HardwareEffectV2::None,
+                    terminal: false,
+                    ..
+                },
+                ..
+            }
+        ) {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        break (candidate.id, suspended);
+    };
     assert_control_committed(suspended, 1);
     let resumed = exchange(
         &mut input,

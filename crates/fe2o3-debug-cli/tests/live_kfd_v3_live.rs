@@ -369,7 +369,7 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
 
     let discovery_deadline = Instant::now() + RESPONSE_TIMEOUT;
     let mut request_id = 510;
-    let (queue, device_capable) = loop {
+    let (queue, suspended) = loop {
         assert!(
             Instant::now() < discovery_deadline,
             "debugger did not observe one complete target queue snapshot"
@@ -479,28 +479,49 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
         };
         assert_eq!(device.gfx_target_version, 90_402);
         assert_eq!(device.xcc_count, 8);
-        break (candidate.id, device.trap_debug_supported);
-    };
-    if !device_capable {
-        eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
-        terminate(&mut input, &receiver, request_id, 0);
-        drop(input);
-        child.finish();
-        return;
-    }
+        if !device.trap_debug_supported {
+            eprintln!("SKIP[device_capability_absent]: KFD reports no trap-debug device");
+            terminate(&mut input, &receiver, request_id, 0);
+            drop(input);
+            child.finish();
+            return;
+        }
 
-    let suspended = exchange(
-        &mut input,
-        &receiver,
-        LiveGpuDebugRequestV3::SuspendQueues {
-            schema: LiveGpuRequestSchemaV3::V3,
-            request_id,
-            expected_revision: 0,
-            queues: vec![queue],
-            grace_period: 0,
-        },
-    );
-    request_id += 1;
+        let suspended = exchange(
+            &mut input,
+            &receiver,
+            LiveGpuDebugRequestV3::SuspendQueues {
+                schema: LiveGpuRequestSchemaV3::V3,
+                request_id,
+                expected_revision: 0,
+                queues: vec![candidate.id],
+                grace_period: 0,
+            },
+        );
+        request_id += 1;
+        if matches!(
+            suspended,
+            LiveGpuDebugResponseV3::Error {
+                session: LiveGpuSessionViewV3 {
+                    state: LiveGpuSessionStateV3::Running,
+                    revision: 0,
+                    runtime_enabled: true,
+                    ..
+                },
+                error: LiveGpuErrorV3 {
+                    stage: LiveGpuErrorStageV3::Query,
+                    code: LiveGpuErrorCodeV3::UnknownLogicalIdentity,
+                    effect: HardwareEffectV2::None,
+                    terminal: false,
+                },
+                ..
+            }
+        ) {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        break (candidate.id, suspended);
+    };
     assert_control_committed(suspended, 1);
     let captured = exchange(
         &mut input,
