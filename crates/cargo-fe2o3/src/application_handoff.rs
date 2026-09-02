@@ -41,7 +41,7 @@ use crate::generation;
 use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 
 pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
-#[cfg(feature = "application-handoff-fault-injection-test-only")]
+#[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short-timeouts";
 #[cfg(feature = "application-handoff-fault-injection-test-only")]
 pub(crate) const RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION: &str = "3-test-scheduler-tolerant";
@@ -2431,6 +2431,26 @@ mod tests {
         );
         assert_eq!(attempts.get(), 10);
         assert_eq!(&*requested.borrow(), &[10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn ack_poll_requests_the_full_remaining_deadline_once_without_retrying() {
+        let origin = Instant::now();
+        let requested = std::cell::RefCell::new(Vec::new());
+        let result = poll_readable_with(
+            origin + Duration::from_millis(125),
+            || origin,
+            |millis| {
+                requested.borrow_mut().push(millis);
+                Ok(0)
+            },
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            "application handoff acknowledgment timed out"
+        );
+        assert_eq!(&*requested.borrow(), &[125]);
     }
 
     #[test]

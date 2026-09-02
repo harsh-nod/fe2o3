@@ -2449,38 +2449,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
                 .to_string(),
         );
     }
-    let (application_timeouts, compiler_service) = match args[0].to_str() {
-        Some(application_handoff::RUNNER_CONTEXT_VERSION) => (
-            application_handoff::ApplicationTimeouts::PRODUCTION,
-            application_handoff::ApplicationCompilerServiceExposureV1::Required,
-        ),
-        #[cfg(feature = "worker-v3-envelope-integration-test-only")]
-        Some(application_handoff::RUNNER_ENVELOPE_ONLY_TEST_CONTEXT_VERSION) => (
-            application_handoff::ApplicationTimeouts::PRODUCTION,
-            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
-        ),
-        #[cfg(feature = "application-handoff-fault-injection-test-only")]
-        Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => (
-            application_handoff::ApplicationTimeouts::TEST_SHORT,
-            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
-        ),
-        #[cfg(feature = "application-handoff-fault-injection-test-only")]
-        Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => (
-            application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT,
-            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
-        ),
-        #[cfg(feature = "application-handoff-adversarial-fixture")]
-        Some(application_handoff::RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION) => (
-            application_handoff::ApplicationTimeouts::TEST_FAST_FAILURES,
-            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
-        ),
-        _ => {
-            return Err(format!(
-                "unsupported application runner context {:?}",
-                args[0]
-            ));
-        }
-    };
+    let (application_timeouts, compiler_service) = application_runner_policy(&args[0])?;
     let artifact_path = PathBuf::from(hex_decode_os(&args[1])?);
     let artifact_device = parse_runner_u64(&args[2], "artifact directory device")?;
     let artifact_inode = parse_runner_u64(&args[3], "artifact directory inode")?;
@@ -2533,6 +2502,46 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         application_timeouts,
         compiler_service,
     )
+}
+
+fn application_runner_policy(
+    context: &OsStr,
+) -> Result<
+    (
+        application_handoff::ApplicationTimeouts,
+        application_handoff::ApplicationCompilerServiceExposureV1,
+    ),
+    String,
+> {
+    match context.to_str() {
+        Some(application_handoff::RUNNER_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::Required,
+        )),
+        #[cfg(feature = "worker-v3-envelope-integration-test-only")]
+        Some(application_handoff::RUNNER_ENVELOPE_ONLY_TEST_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        )),
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
+        Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::TEST_SHORT,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        )),
+        #[cfg(feature = "application-handoff-fault-injection-test-only")]
+        Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        )),
+        #[cfg(feature = "application-handoff-adversarial-fixture")]
+        Some(application_handoff::RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::TEST_FAST_FAILURES,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        )),
+        _ => Err(format!(
+            "unsupported application runner context {context:?}"
+        )),
+    }
 }
 
 fn run_application_with_handoff(
@@ -3596,14 +3605,15 @@ mod tests {
     use super::{
         BindingHostMode, MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1, ObserverFinishOnDropV1,
         TARGET_ENV, aggregate_post_spawn_results,
-        append_compiler_execution_profile_semantic_configuration, binding_host_target_key,
-        clear_cargo_unit_identity_names, configure_production_cargo_tool_environment,
-        configure_production_target_environment, inject_binding_host_test_custody,
-        is_cargo_target_runner_environment_name, normalize_invocation, parse_rustup_tool_path,
-        reject_authority_configured_environment, reject_authority_rustup_proxy,
-        reject_binding_test_invocation_config, reject_obsolete_codegen_pipeline,
-        selected_run_target, source_isa_collection_hex, source_isa_collection_hex_length,
-        validate_production_cargo_inputs, validate_production_compilation_environment,
+        append_compiler_execution_profile_semantic_configuration, application_runner_policy,
+        binding_host_target_key, clear_cargo_unit_identity_names,
+        configure_production_cargo_tool_environment, configure_production_target_environment,
+        inject_binding_host_test_custody, is_cargo_target_runner_environment_name,
+        normalize_invocation, parse_rustup_tool_path, reject_authority_configured_environment,
+        reject_authority_rustup_proxy, reject_binding_test_invocation_config,
+        reject_obsolete_codegen_pipeline, selected_run_target, source_isa_collection_hex,
+        source_isa_collection_hex_length, validate_production_cargo_inputs,
+        validate_production_compilation_environment,
     };
     use crate::observer_telemetry;
     use crate::pinned_executable_test_directory::TestDirectory;
@@ -3613,6 +3623,20 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static OBSERVER_FINISH_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn internal_short_timeout_runner_context_selects_short_policy() {
+        assert_eq!(
+            application_runner_policy(OsStr::new(
+                crate::application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION
+            ))
+            .unwrap(),
+            (
+                crate::application_handoff::ApplicationTimeouts::TEST_SHORT,
+                crate::application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+            )
+        );
+    }
 
     struct FailingWriter {
         bytes_before_failure: usize,
