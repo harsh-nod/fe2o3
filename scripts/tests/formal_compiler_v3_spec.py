@@ -59,19 +59,25 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
         static_extent["dynamic_extent"] = False
         self.assert_rejected(static_extent)
         reversed_loop = dict(self.spec)
-        reversed_loop["minimum_loop_trip_count"] = 5
+        reversed_loop["modeled_minimum_loop_trip_count"] = 5
         self.assert_rejected(reversed_loop)
 
     def test_operation_roster_must_be_sorted_unique_and_nonempty(self) -> None:
         duplicate = dict(self.spec)
-        duplicate["scalar_operations"] = ["bitxor", "bitxor"]
+        duplicate["production_scalar_operations"] = ["bitxor", "bitxor"]
         self.assert_rejected(duplicate)
         reordered = dict(self.spec)
-        reordered["scalar_operations"] = list(reversed(self.spec["scalar_operations"]))
+        reordered["production_scalar_operations"] = list(
+            reversed(self.spec["production_scalar_operations"])
+        )
         self.assert_rejected(reordered)
         empty = dict(self.spec)
-        empty["scalar_operations"] = []
+        empty["production_scalar_operations"] = []
         self.assert_rejected(empty)
+
+        overlap = dict(self.spec)
+        overlap["modeled_only_scalar_operations"] = ["bitxor"]
+        self.assert_rejected(overlap)
 
 
 if __name__ == "__main__":

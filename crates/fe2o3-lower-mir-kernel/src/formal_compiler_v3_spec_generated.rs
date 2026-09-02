@@ -14,12 +14,16 @@ pub const FORMAL_COMPILER_V3_BYTE_WIDTH: u8 = 4;
 pub const FORMAL_COMPILER_V3_HELPER_PARAMETERS: u8 = 2;
 /// Exact helper branch-arm count.
 pub const FORMAL_COMPILER_V3_BRANCH_ARMS: u8 = 2;
-/// Maximum depth modeled by the bounded call-stack theorem.
-pub const FORMAL_COMPILER_V3_MAXIMUM_CALL_DEPTH: u8 = 2;
-/// Minimum trip count modeled by the bounded loop theorem.
-pub const FORMAL_COMPILER_V3_MINIMUM_LOOP_TRIP_COUNT: u8 = 1;
-/// Maximum trip count modeled by the bounded loop theorem.
-pub const FORMAL_COMPILER_V3_MAXIMUM_LOOP_TRIP_COUNT: u8 = 4;
+/// Exact stack-frame count in the production-connected root/helper claim.
+pub const FORMAL_COMPILER_V3_PRODUCTION_STACK_FRAMES: u8 = 2;
+/// Exact loop count in the production-connected claim.
+pub const FORMAL_COMPILER_V3_PRODUCTION_LOOP_TRIP_COUNT: u8 = 0;
+/// Maximum stack-frame count in the non-authoritative structured model.
+pub const FORMAL_COMPILER_V3_MODELED_MAXIMUM_STACK_FRAMES: u8 = 2;
+/// Minimum trip count in the non-authoritative loop model.
+pub const FORMAL_COMPILER_V3_MODELED_MINIMUM_LOOP_TRIP_COUNT: u8 = 1;
+/// Maximum trip count in the non-authoritative loop model.
+pub const FORMAL_COMPILER_V3_MODELED_MAXIMUM_LOOP_TRIP_COUNT: u8 = 4;
 /// Exact readonly access count in the composed kernel fragment.
 pub const FORMAL_COMPILER_V3_READONLY_ACCESSES: u8 = 2;
 /// Exact disjoint write count in the composed kernel fragment.
@@ -28,13 +32,16 @@ pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = 1;
 pub const FORMAL_COMPILER_V3_USES_LITTLE_ENDIAN: bool = true;
 /// The composed access theorem binds a runtime extent value.
 pub const FORMAL_COMPILER_V3_USES_DYNAMIC_EXTENT: bool = true;
-/// Closed scalar operation vocabulary shared with the generated formal model.
-pub const FORMAL_COMPILER_V3_SCALAR_OPERATIONS: &[(&str, u8)] = &[
+/// Production-connected scalar operation vocabulary.
+pub const FORMAL_COMPILER_V3_PRODUCTION_SCALAR_OPERATIONS: &[(&str, u8)] = &[
     ("bitxor", 1),
-    ("checked-add", 2),
-    ("truncate", 3),
-    ("unsigned-equal", 4),
-    ("unsigned-less-than", 5),
+    ("unsigned-equal", 2),
+    ("unsigned-less-than", 3),
+];
+/// Additional scalar operations proved only in the non-authoritative model.
+pub const FORMAL_COMPILER_V3_MODELED_ONLY_SCALAR_OPERATIONS: &[(&str, u8)] = &[
+    ("checked-add", 4),
+    ("truncate", 5),
     ("wrapping-add", 6),
     ("zero-extend", 7),
 ];

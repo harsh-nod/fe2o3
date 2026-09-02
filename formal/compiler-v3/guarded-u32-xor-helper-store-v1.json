@@ -7,18 +7,22 @@
   "byte_order": "little",
   "helper_parameters": 2,
   "branch_arms": 2,
-  "maximum_call_depth": 2,
-  "minimum_loop_trip_count": 1,
-  "maximum_loop_trip_count": 4,
+  "production_stack_frames": 2,
+  "production_loop_trip_count": 0,
+  "modeled_maximum_stack_frames": 2,
+  "modeled_minimum_loop_trip_count": 1,
+  "modeled_maximum_loop_trip_count": 4,
   "readonly_accesses": 2,
   "disjoint_writes": 1,
   "dynamic_extent": true,
-  "scalar_operations": [
+  "production_scalar_operations": [
     "bitxor",
+    "unsigned-equal",
+    "unsigned-less-than"
+  ],
+  "modeled_only_scalar_operations": [
     "checked-add",
     "truncate",
-    "unsigned-equal",
-    "unsigned-less-than",
     "wrapping-add",
     "zero-extend"
   ]
