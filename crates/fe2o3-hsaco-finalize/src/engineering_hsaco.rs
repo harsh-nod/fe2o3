@@ -11,9 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     CompilerModuleHandoffErrorV2, ContentIdentityV1, FinalizationError, PinnedWorkerV1,
-    WorkerExecutionError,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
+    WorkerMeasurementV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     finalize_unfinalized,
     request_construction::{
         DecodedCompilerModuleHandoffV2, WorkerRequestConstructionError,
