@@ -84,6 +84,7 @@ GIT_COMMITTER_EMAIL='noreply@github.com' \
 dependabot="$(git -C "${TEST_ROOT}" rev-parse HEAD)"
 
 mkdir -p -- "${TEST_ROOT}/fake-bin"
+ln -s -- "$(command -v jq)" "${TEST_ROOT}/fake-bin/jq"
 cat >"${TEST_ROOT}/fake-bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
