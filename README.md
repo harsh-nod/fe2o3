@@ -129,8 +129,11 @@ exactly measured native worker. It writes only a fresh
 `fe2o3-engineering-v1/<content-id>/` observation with `"authority":"none"`.
 This command does not contact the production compiler-execution supervisor and
 its output cannot be adopted as a production generation, publication, load, or
-launch owner. Run `cargo fe2o3 engineering hsaco --help` for the explicit tool,
-provider, target, COV, resource-bound, and Cargo-selection arguments.
+launch owner. Non-path dependencies require an explicit `cargo vendor` tree;
+the command measures, retains, and revalidates that tree while Cargo runs with
+a fresh home, frozen resolution, no ambient configuration, and no network.
+Run `cargo fe2o3 engineering hsaco --help` for the explicit tool, provider,
+target, COV, resource-bound, vendor-source, and Cargo-selection arguments.
 
 There is currently no supported copy-and-paste source-to-GPU quick start.
 `cargo fe2o3 build` enters the production compiler transaction, but ordinary
