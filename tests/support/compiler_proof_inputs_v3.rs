@@ -52,6 +52,13 @@ pub(crate) struct CanonicalCompilerProofInputsV3 {
     formal_memory: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProductionSourceIsaKernelFamilyV1 {
+    Elementwise,
+    WorkgroupCollective,
+    Tiled,
+}
+
 impl CanonicalCompilerProofInputsV3 {
     pub(crate) fn semantic_mir(&self) -> &[u8] {
         &self.semantic_mir
@@ -97,14 +104,32 @@ pub(crate) fn canonical_compiler_proof_inputs_v4(seed: u8) -> CanonicalCompilerP
 pub(crate) fn canonical_compiler_proof_inputs_v4_with_induction(
     seed: u8,
 ) -> CanonicalCompilerProofInputsV3 {
-    canonical_compiler_proof_inputs(seed, semantic_induction_owner(seed, false), true)
+    canonical_compiler_proof_inputs(
+        seed,
+        semantic_induction_owner(seed, false, ProductionSourceIsaKernelFamilyV1::Elementwise),
+        true,
+    )
 }
 
 #[allow(dead_code, reason = "shared sourceful V4 finalizer fixture")]
 pub(crate) fn canonical_compiler_proof_inputs_v4_with_sourceful_induction(
     seed: u8,
 ) -> CanonicalCompilerProofInputsV3 {
-    canonical_compiler_proof_inputs(seed, semantic_induction_owner(seed, true), true)
+    canonical_compiler_proof_inputs_v4_with_sourceful_family(
+        seed,
+        ProductionSourceIsaKernelFamilyV1::Elementwise,
+    )
+}
+
+#[allow(
+    dead_code,
+    reason = "shared source/ISA kernel-family acceptance fixture"
+)]
+pub(crate) fn canonical_compiler_proof_inputs_v4_with_sourceful_family(
+    seed: u8,
+    family: ProductionSourceIsaKernelFamilyV1,
+) -> CanonicalCompilerProofInputsV3 {
+    canonical_compiler_proof_inputs(seed, semantic_induction_owner(seed, true, family), true)
 }
 
 fn canonical_compiler_proof_inputs(
@@ -363,9 +388,14 @@ fn semantic_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
 
 #[allow(
     dead_code,
+    clippy::too_many_lines,
     reason = "used only by the shared checked-induction V4 fixture"
 )]
-fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirOwnerV1 {
+fn semantic_induction_owner(
+    seed: u8,
+    sourceful: bool,
+    family: ProductionSourceIsaKernelFamilyV1,
+) -> ProductionSemanticMirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
     let bool_ty = SemanticTypeIdV1::from_index(2);
@@ -500,7 +530,128 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
         u32_ty,
         SemanticRvalueKindV1::Use(SemanticOperandV1::Move(field(checked_result, 0, u32_ty))),
     );
-    let blocks = vec![
+    let (exit_statements, exit_terminator, extra_blocks, extra_locals, callables) = match family {
+        ProductionSourceIsaKernelFamilyV1::Elementwise => (
+            Vec::new(),
+            SemanticTerminatorKindV1::Return,
+            Vec::new(),
+            Vec::new(),
+            vec![SemanticCallableDeclV1::defined(
+                SemanticFunctionIdV1::from_index(0),
+            )],
+        ),
+        ProductionSourceIsaKernelFamilyV1::WorkgroupCollective => {
+            let barrier_result = SemanticLocalIdV1::from_index(5);
+            let return_edge = SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::CallReturn,
+                SemanticBlockIdV1::from_index(5),
+            );
+            let barrier = SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(1),
+                Vec::new(),
+                Some(SemanticCallDestinationV1::new(
+                    place(barrier_result, unit),
+                    return_edge,
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap();
+            let callable_abi = SemanticFunctionAbiV1::from_rustc(
+                SemanticAbiIdentityV1::from_sha256(bytes(140, seed)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(250, seed)),
+                SemanticCanonAbiV1::Rust,
+                SemanticExternAbiV1::Rust,
+                false,
+                false,
+                0,
+                Vec::new(),
+                SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+            )
+            .unwrap();
+            let callable = SemanticCallableDeclV1::CompilerIntrinsic {
+                binding: SemanticNonBodyCallableBindingV1::new(
+                    SemanticFunctionIdentityV1::from_sha256(bytes(140, seed)),
+                    SemanticItemDefinitionIdentityV1::from_sha256(bytes(141, seed)),
+                    SemanticMonomorphizationIdentityV1::from_sha256(bytes(142, seed)),
+                    SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(143, seed)),
+                    SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(144, seed)),
+                    source(6),
+                    callable_abi,
+                ),
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(
+                    145, seed,
+                )),
+            };
+            (
+                Vec::new(),
+                SemanticTerminatorKindV1::Call(barrier),
+                vec![semantic_block(
+                    115,
+                    Vec::new(),
+                    SemanticTerminatorKindV1::Return,
+                )],
+                vec![SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256(bytes(146, seed)),
+                    unit,
+                    SemanticLocalRoleV1::Temporary,
+                    source(6),
+                )],
+                vec![
+                    SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+                    callable,
+                ],
+            )
+        }
+        ProductionSourceIsaKernelFamilyV1::Tiled => {
+            let tile_row = SemanticLocalIdV1::from_index(5);
+            let tile_column = SemanticLocalIdV1::from_index(6);
+            (
+                vec![
+                    assign(
+                        6,
+                        place(tile_row, u32_ty),
+                        u32_ty,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Divide,
+                            left: copy(induction, u32_ty),
+                            right: constant(16),
+                        },
+                    ),
+                    assign(
+                        7,
+                        place(tile_column, u32_ty),
+                        u32_ty,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Remainder,
+                            left: copy(induction, u32_ty),
+                            right: constant(16),
+                        },
+                    ),
+                ],
+                SemanticTerminatorKindV1::Return,
+                Vec::new(),
+                vec![
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256(bytes(147, seed)),
+                        u32_ty,
+                        SemanticLocalRoleV1::Temporary,
+                        source(6),
+                    ),
+                    SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256(bytes(148, seed)),
+                        u32_ty,
+                        SemanticLocalRoleV1::Temporary,
+                        source(7),
+                    ),
+                ],
+                vec![SemanticCallableDeclV1::defined(
+                    SemanticFunctionIdV1::from_index(0),
+                )],
+            )
+        }
+    };
+    let mut blocks = vec![
         semantic_block(
             110,
             vec![initialization],
@@ -544,8 +695,9 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
             vec![update],
             SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
         ),
-        semantic_block(114, vec![], SemanticTerminatorKindV1::Return),
+        semantic_block(114, exit_statements, exit_terminator),
     ];
+    blocks.extend(extra_blocks);
 
     let direct_u32 = SemanticAbiValueV1::new(
         u32_ty,
@@ -579,6 +731,14 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
             SemanticSourceProvenanceV1::unavailable(),
         )
     };
+    let mut locals = vec![
+        local(130, unit, SemanticLocalRoleV1::Return),
+        local(131, u32_ty, SemanticLocalRoleV1::Temporary),
+        local(132, u32_ty, SemanticLocalRoleV1::Argument(0)),
+        local(133, bool_ty, SemanticLocalRoleV1::Temporary),
+        local(134, checked_u32, SemanticLocalRoleV1::Temporary),
+    ];
+    locals.extend(extra_locals);
     let function = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256(bytes(121, seed)),
         SemanticFunctionRoleV1::KernelRoot,
@@ -588,13 +748,7 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
         SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(125, seed)),
         SemanticSourceProvenanceV1::unavailable(),
         abi,
-        vec![
-            local(130, unit, SemanticLocalRoleV1::Return),
-            local(131, u32_ty, SemanticLocalRoleV1::Temporary),
-            local(132, u32_ty, SemanticLocalRoleV1::Argument(0)),
-            local(133, bool_ty, SemanticLocalRoleV1::Temporary),
-            local(134, checked_u32, SemanticLocalRoleV1::Temporary),
-        ],
+        locals,
         SemanticBlockIdV1::from_index(0),
         blocks,
     )
@@ -616,13 +770,14 @@ fn semantic_induction_owner(seed: u8, sourceful: bool) -> ProductionSemanticMirO
         )
         .unwrap(),
     ));
-    let admitted = InertSemanticMirRequestV1::new(
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(production_target_layout_identity()),
         vec![unit_type(seed), u32_type, bool_type, checked_type],
         vec![],
         vec![],
         vec![],
         vec![function],
+        callables,
         vec![SemanticFunctionIdV1::from_index(0)],
     )
     .unwrap()

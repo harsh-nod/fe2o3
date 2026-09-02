@@ -86,3 +86,33 @@ The API therefore makes hard false claims for complete instruction coverage, a p
 live-PC ownership, semantic refinement, optimized/final LLVM custody, debugger authority, profiler
 authority, publication authority, and runtime authority. V9 production admission and V9 wire claims
 remain typed unavailable rather than inferred or admitted.
+
+## Production kernel-family acceptance
+
+The real-Worker acceptance matrix covers three independently generated canonical KIR V8 shapes:
+
+- a sourceful scalar-elementwise checked-arithmetic kernel;
+- a sourceful induction kernel with a uniform workgroup barrier; and
+- a sourceful tiled-coordinate kernel retaining divide/remainder row and column operations.
+
+Each shape retains the exact production u32-induction custody required by the current V4
+MIR-to-KIR correspondence. It is then independently built for gfx942 and gfx950 through target
+binding, semantic-anchor LLVM lowering, the pinned LLVM Worker, final-HSACO inspection, correlation
+admission, and catalog projection. This is intentionally a reusable family-case harness: family
+inputs are canonical semantic-MIR owners, not hand-authored catalog records or patched map bytes.
+
+For every admitted family/target pair the test requires at least one exact
+Source-to-MIR-to-neutral-KIR-to-target-KIR-to-compiler-handoff-LLVM-to-sparse-ISA witness and
+reverses its aligned ISA point back to the identical source record. It exercises every catalog
+query index, canonical wire re-admission, distinct family KIR identities, and fail-closed
+cross-family and cross-target substitution. Across the pinned matrix it also requires the backend
+to expose duplicated/coalesced and eliminated outcomes rather than silently reducing them to a
+one-to-one presentation. The general hostile suite separately substitutes semantic maps and final
+artifacts before admission.
+
+The matrix does not widen catalog authority. In particular, the workgroup barrier proves that the
+compiled module is a cooperative kernel family; the V1 source projection continues to cover exact
+semantic statement spans and does not invent source provenance for call terminators. Records with
+no admitted source statement remain explicit `NoSourceProvenance` observations. The matrix makes no
+claim about complete machine-instruction coverage, optimized/final LLVM custody, scheduling,
+live-PC ownership, runtime execution, or performance.

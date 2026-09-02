@@ -257,3 +257,16 @@ ordinal, debugger authority, profiler authority, complete machine coverage, sche
 state is inferred by either direction. Compiler-handoff LLVM coordinates and sparse final-HSACO
 anchors do not prove optimized/final LLVM custody, decoded ISA opcode semantics, instruction
 scheduling, execution, or performance.
+
+The ignored real-Worker acceptance
+`production_source_isa_catalog_admits_real_worker_kernel_family_matrix` rebuilds this catalog for
+sourceful scalar-elementwise, uniform workgroup-collective, and tiled-coordinate kernels on both
+gfx942 and gfx950. The fixtures enter through canonical semantic MIR, lossless MIR-to-KIR evidence,
+target binding, semantic-anchor LLVM lowering, the pinned LLVM Worker, and final HSACO admission;
+the test never constructs catalog records directly. For every family it exercises exact queries in
+both directions across source, MIR, neutral KIR, target KIR, compiler-handoff LLVM, and sparse ISA,
+re-admits the canonical catalog, rejects cross-family and cross-target catalog substitution, and
+requires observed duplicated/coalesced and eliminated mappings across the matrix. Existing hostile
+artifact and semantic-map cases in the same suite retain their typed fail-closed checks. This is a
+kernel-family acceptance matrix, not evidence of complete ISA coverage, optimized/final LLVM
+custody, a production schedule, live-PC ownership, or debugger/profiler/runtime authority.
