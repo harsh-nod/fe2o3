@@ -31,6 +31,9 @@ The runtime:
 - blocks host reads, snapshots, and writes while a prepared or ambiguous
   dispatch retains an allocation;
 - rejects early release through the unchanged canonical runtime-model state;
+- cancels only prepared work through the canonical pre-publication abort
+  transition, releases its retained resources exactly once, and propagates the
+  terminal failure to dependent dispatches;
 - propagates failed dependencies without executing dependent kernels; and
 - invalidates every potentially written byte when completion becomes ambiguous,
   requires explicit queue quiescence before settling it, and never promotes
@@ -97,7 +100,7 @@ criteria. It is not a closure claim.
 | C1 scalar interpreter | Verified KIR admission, structured CFG/calls/scalars, canonical/seeded/replay schedules, bounded errors, plus generated wrapping-`i32` cases translated into KIR and compared lane-by-lane with an independent evaluator; failures are reduced deterministically within their typed failure class and encoded responses fail closed above 1 MiB | Differential coverage of the remaining scalar widths, floating-point modes, structured control flow, calls, and memory families remains incomplete |
 | C2 typed memory/Rust | Allocation provenance, initialization, bounds, alignment, buffer views, source/KIR diagnostics for the admitted subset | Aggregate/enum/layout coverage and complete conformance-corpus qualification remain incomplete |
 | C3 wave/workgroup | Wave32/Wave64 masks and selected collectives, LDS, barriers, integer atomics/fences, race/HB exploration | General divergence/reconvergence, matrix/MFMA, dynamic/general LDS, and remaining intrinsics stay typed unsupported |
-| C4 virtual runtime | This crate and CLI cover bounded allocation/copy/queue/dependency/dispatch/completion plus early-release and ambiguous-completion recovery | Normal generated host-interface integration, cancellation/timeout/reset, and #182-defined multi-device plans remain open |
+| C4 virtual runtime | This crate and CLI cover bounded allocation/copy/queue/dependency/dispatch/completion plus pre-publication cancellation, early-release, and ambiguous-completion recovery | Normal generated host-interface integration, explicit timeout/reset workflows, and #182-defined multi-device plans remain open |
 | C5 debugger/agent | Bounded JSONL simulator debugger, semantic scopes, replay/reverse inspection, race and source evidence | End-to-end seeded reduction and all requested query families are not complete |
 | C6 differential | The bounded generated wrapping-`i32` harness binds exact case, KIR, and output sequences and emits reduced machine-readable reproducers; hardware tests remain separate evidence | No exact simulator-versus-physical KFD matrix covers every supported semantic family |
 

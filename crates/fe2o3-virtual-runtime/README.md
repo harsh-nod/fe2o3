@@ -3,7 +3,8 @@
 `fe2o3-virtual-runtime` composes the deterministic KIR V7 CPU simulator with
 the syscall-free runtime lifecycle model. It provides bounded virtual
 allocations, host copies, queues, dependency-ordered dispatches, completions,
-and explicit ambiguous-completion recovery without requiring a GPU. Submitted
+pre-publication cancellation, and explicit ambiguous-completion recovery
+without requiring a GPU. Submitted
 views are validated and storage-bounded before preparation. Host access remains
 blocked while a dispatch retains an allocation, and ambiguous writable ranges
 remain uninitialized after quiesced settlement.

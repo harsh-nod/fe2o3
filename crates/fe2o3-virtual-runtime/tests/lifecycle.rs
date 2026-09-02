@@ -247,6 +247,76 @@ fn dynamic_failure_aborts_dependents_without_fabricating_completion() {
 }
 
 #[test]
+fn cancellation_before_publication_is_terminal_and_releases_resources() {
+    let mut runtime = runtime(15);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[3; 4]).unwrap();
+    let cancelled = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+
+    runtime.cancel_completion(cancelled).unwrap();
+    assert_eq!(
+        runtime.completion_state(cancelled).unwrap(),
+        VirtualCompletionStateV1::Cancelled
+    );
+    assert!(runtime.completion_summary(cancelled).unwrap().is_none());
+    assert!(matches!(
+        runtime.cancel_completion(cancelled),
+        Err(VirtualRuntimeErrorV1::CompletionNotPrepared { ordinal })
+            if ordinal == cancelled.ordinal()
+    ));
+    assert!(matches!(
+        runtime.run_next().unwrap(),
+        VirtualRunProgressV1::Idle
+    ));
+    let mut output = [0; 4];
+    runtime.copy_to_host(buffer, 0, &mut output).unwrap();
+    assert_eq!(output, [3; 4]);
+    runtime.release_buffer(buffer).unwrap();
+    runtime.release_module(module).unwrap();
+    runtime.release_queue(queue).unwrap();
+}
+
+#[test]
+fn cancellation_aborts_dependents_without_executing_them() {
+    let mut runtime = runtime(16);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[5; 4]).unwrap();
+    let cancelled = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+    let dependent = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![cancelled]))
+        .unwrap();
+
+    runtime.cancel_completion(cancelled).unwrap();
+    assert!(matches!(
+        runtime.run_next().unwrap(),
+        VirtualRunProgressV1::AbortedDependency { completion, dependency }
+            if completion == dependent && dependency == cancelled
+    ));
+    assert_eq!(
+        runtime.completion_state(dependent).unwrap(),
+        VirtualCompletionStateV1::AbortedDependency
+    );
+    let mut output = [0; 4];
+    runtime.copy_to_host(buffer, 0, &mut output).unwrap();
+    assert_eq!(output, [5; 4]);
+    runtime.release_buffer(buffer).unwrap();
+    runtime.release_module(module).unwrap();
+    runtime.release_queue(queue).unwrap();
+}
+
+#[test]
 fn early_release_is_rejected_atomically_until_completion() {
     let mut runtime = runtime(3);
     let module = runtime.register_module(admitted_fill()).unwrap();

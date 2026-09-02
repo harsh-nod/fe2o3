@@ -252,6 +252,7 @@ pub struct VirtualDispatchRequestV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VirtualCompletionStateV1 {
     Prepared,
+    Cancelled,
     Completed,
     AbortedDependency,
     AbortedSimulation,
@@ -1008,6 +1009,25 @@ impl VirtualRuntimeV1 {
         Ok(self.dispatch(completion)?.summary.as_ref())
     }
 
+    /// Cancels work that has not crossed the modeled publication boundary.
+    pub fn cancel_completion(
+        &mut self,
+        completion: VirtualCompletionHandleV1,
+    ) -> Result<(), VirtualRuntimeErrorV1> {
+        let index = self.dispatch_index(completion)?;
+        if self.dispatches[index].state != VirtualCompletionStateV1::Prepared {
+            return Err(VirtualRuntimeErrorV1::CompletionNotPrepared {
+                ordinal: completion.ordinal,
+            });
+        }
+        self.model = self.model.next(RuntimeTransitionV1::AbortPrepared {
+            completion: self.dispatches[index].model_completion,
+        })?;
+        self.dispatches[index].state = VirtualCompletionStateV1::Cancelled;
+        self.release_dispatch_buffer_retention(index);
+        Ok(())
+    }
+
     /// Injects the model's explicit publication-with-unknown-completion boundary.
     pub fn mark_completion_ambiguous(
         &mut self,
@@ -1369,7 +1389,8 @@ impl VirtualRuntimeV1 {
                 .state;
             match state {
                 VirtualCompletionStateV1::Completed => {}
-                VirtualCompletionStateV1::AbortedDependency
+                VirtualCompletionStateV1::Cancelled
+                | VirtualCompletionStateV1::AbortedDependency
                 | VirtualCompletionStateV1::AbortedSimulation
                 | VirtualCompletionStateV1::FailedQuiescent => {
                     return DependencyReadinessV1::Failed(*dependency);
