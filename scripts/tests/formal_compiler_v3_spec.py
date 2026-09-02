@@ -47,6 +47,9 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
         missing = dict(self.spec)
         del missing["byte_order"]
         self.assert_rejected(missing)
+        injected = dict(self.spec)
+        injected["claim_name"] = 'claim"; pub const INJECTED: bool = true;'
+        self.assert_rejected(injected)
 
     def test_width_extent_and_loop_substitutions_are_rejected(self) -> None:
         wrong_width = dict(self.spec)

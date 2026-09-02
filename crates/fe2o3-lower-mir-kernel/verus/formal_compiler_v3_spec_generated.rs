@@ -14,5 +14,16 @@ pub open spec fn formal_compiler_v3_minimum_loop_trip_count() -> nat { 1 }
 pub open spec fn formal_compiler_v3_maximum_loop_trip_count() -> nat { 4 }
 pub open spec fn formal_compiler_v3_readonly_accesses() -> nat { 2 }
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat { 1 }
+pub open spec fn formal_compiler_v3_operation_count() -> nat { 7 }
+pub open spec fn formal_compiler_v3_operation_is_closed(tag: nat) -> bool {
+    1 <= tag && tag <= formal_compiler_v3_operation_count()
+}
+pub open spec fn formal_compiler_v3_bitxor_tag() -> nat { 1 }
+pub open spec fn formal_compiler_v3_checked_add_tag() -> nat { 2 }
+pub open spec fn formal_compiler_v3_truncate_tag() -> nat { 3 }
+pub open spec fn formal_compiler_v3_unsigned_equal_tag() -> nat { 4 }
+pub open spec fn formal_compiler_v3_unsigned_less_than_tag() -> nat { 5 }
+pub open spec fn formal_compiler_v3_wrapping_add_tag() -> nat { 6 }
+pub open spec fn formal_compiler_v3_zero_extend_tag() -> nat { 7 }
 
 }

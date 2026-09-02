@@ -29,12 +29,12 @@ pub const FORMAL_COMPILER_V3_USES_LITTLE_ENDIAN: bool = true;
 /// The composed access theorem binds a runtime extent value.
 pub const FORMAL_COMPILER_V3_USES_DYNAMIC_EXTENT: bool = true;
 /// Closed scalar operation vocabulary shared with the generated formal model.
-pub const FORMAL_COMPILER_V3_SCALAR_OPERATIONS: &[&str] = &[
-    "bitxor",
-    "checked-add",
-    "truncate",
-    "unsigned-equal",
-    "unsigned-less-than",
-    "wrapping-add",
-    "zero-extend",
+pub const FORMAL_COMPILER_V3_SCALAR_OPERATIONS: &[(&str, u8)] = &[
+    ("bitxor", 1),
+    ("checked-add", 2),
+    ("truncate", 3),
+    ("unsigned-equal", 4),
+    ("unsigned-less-than", 5),
+    ("wrapping-add", 6),
+    ("zero-extend", 7),
 ];
