@@ -665,7 +665,7 @@ fn run_extraction(
         .mode(0o700)
         .create(&cargo_home)
         .map_err(|error| format!("cannot create isolated Cargo home: {error}"))?;
-    if let Some(vendor) = cargo_vendor {
+    if cargo_vendor.is_some() {
         let config = cargo_vendor_config(&options.cargo_git_sources);
         write_new_file(&cargo_home.join("config.toml"), config.as_bytes(), 0o600)?;
     }
@@ -1131,13 +1131,9 @@ fn publish_observation(root: &Path, manifest: &[u8], hsaco: &[u8]) -> Result<Pat
             .ok_or_else(|| "created engineering content directory disappeared".to_owned())?;
         write_new_file_at(content.file(), "observation.hsaco", hsaco, 0o600)?;
         write_new_file_at(content.file(), "observation.json", manifest, 0o600)?;
-        content
-            .file()
-            .sync_all()
+        sync_directory(content.file())
             .map_err(|error| format!("cannot sync engineering content directory: {error}"))?;
-        namespace
-            .file()
-            .sync_all()
+        sync_directory(namespace.file())
             .map_err(|error| format!("cannot sync engineering namespace: {error}"))?;
         namespace.validate_path("engineering namespace")?;
         content.validate_path("engineering content directory")?;
@@ -1147,6 +1143,16 @@ fn publish_observation(root: &Path, manifest: &[u8], hsaco: &[u8]) -> Result<Pat
         rollback_observation(&parent, &namespace, &content_id);
     }
     result
+}
+
+fn sync_directory(directory: &File) -> std::io::Result<()> {
+    let descriptor = rustix::fs::openat(
+        directory,
+        ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    File::from(descriptor).sync_all()
 }
 
 fn rollback_observation(
@@ -1573,7 +1579,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         let executable = root.join("cargo");
-        fs::write(&executable, b"#!/bin/sh\nprintf original").unwrap();
+        fs::copy("/bin/true", &executable).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let bytes = fs::read(&executable).unwrap();
         let claim = FileClaim {
@@ -1582,11 +1588,11 @@ mod tests {
         };
         let pinned = pin_claimed_executable("test tool", &claim).unwrap();
         fs::rename(&executable, root.join("original")).unwrap();
-        fs::write(&executable, b"#!/bin/sh\nprintf substituted").unwrap();
+        fs::copy("/bin/false", &executable).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let output = pinned.command().unwrap().output().unwrap();
         assert!(output.status.success());
-        assert_eq!(output.stdout, b"original");
+        assert!(output.stdout.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
