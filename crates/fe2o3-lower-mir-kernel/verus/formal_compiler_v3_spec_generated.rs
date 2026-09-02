@@ -19,6 +19,7 @@ pub open spec fn formal_compiler_v3_modeled_maximum_loop_trip_count() -> nat { 4
 pub open spec fn formal_compiler_v3_readonly_accesses() -> nat { 2 }
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat { 1 }
 pub open spec fn formal_compiler_v3_guarded_allocations() -> nat { 3 }
+pub open spec fn formal_compiler_v3_dynamic_extents() -> nat { 3 }
 pub open spec fn formal_compiler_v3_guards_all_accesses() -> bool { true }
 pub open spec fn formal_compiler_v3_uses_gid_times_byte_width() -> bool { true }
 pub open spec fn formal_compiler_v3_requires_pairwise_disjoint_allocations() -> bool { true }

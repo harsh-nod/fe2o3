@@ -34,6 +34,8 @@ pub const FORMAL_COMPILER_V3_READONLY_ACCESSES: u8 = 2;
 pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = 1;
 /// Exact allocation count covered by the conjunction guard.
 pub const FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS: u8 = 3;
+/// Exact ordered runtime-extent count; extents are not assumed equal.
+pub const FORMAL_COMPILER_V3_DYNAMIC_EXTENTS: u8 = 3;
 /// Every modeled access must be in bounds for the guarded path to execute.
 pub const FORMAL_COMPILER_V3_GUARDS_ALL_ACCESSES: bool = true;
 /// Every access byte offset is `gid * byte_width`.

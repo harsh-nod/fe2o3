@@ -34,6 +34,7 @@ EXPECTED_KEYS = {
     "readonly_accesses",
     "disjoint_writes",
     "guarded_allocations",
+    "dynamic_extents",
     "guard_semantics",
     "byte_offset_semantics",
     "allocation_relation",
@@ -61,6 +62,7 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         "readonly_accesses",
         "disjoint_writes",
         "guarded_allocations",
+        "dynamic_extents",
     )
     if any(type(value[key]) is not int or value[key] <= 0 for key in integers):
         raise ValueError("V3 integer fields must be positive integers")
@@ -85,6 +87,8 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         raise ValueError("V3 semantic axes must match the closed production claim")
     if value["guarded_allocations"] != value["readonly_accesses"] + value["disjoint_writes"]:
         raise ValueError("every V3 allocation must be represented in the guard")
+    if value["dynamic_extents"] != value["guarded_allocations"]:
+        raise ValueError("every V3 guarded allocation must retain its own dynamic extent")
     if type(value["production_loop_trip_count"]) is not int:
         raise ValueError("V3 production loop trip count must be an integer")
     if value["production_loop_trip_count"] != 0:
@@ -154,6 +158,8 @@ pub const FORMAL_COMPILER_V3_READONLY_ACCESSES: u8 = {spec["readonly_accesses"]}
 pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = {spec["disjoint_writes"]};
 /// Exact allocation count covered by the conjunction guard.
 pub const FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS: u8 = {spec["guarded_allocations"]};
+/// Exact ordered runtime-extent count; extents are not assumed equal.
+pub const FORMAL_COMPILER_V3_DYNAMIC_EXTENTS: u8 = {spec["dynamic_extents"]};
 /// Every modeled access must be in bounds for the guarded path to execute.
 pub const FORMAL_COMPILER_V3_GUARDS_ALL_ACCESSES: bool = true;
 /// Every access byte offset is `gid * byte_width`.
@@ -205,6 +211,7 @@ pub open spec fn formal_compiler_v3_modeled_maximum_loop_trip_count() -> nat {{ 
 pub open spec fn formal_compiler_v3_readonly_accesses() -> nat {{ {spec["readonly_accesses"]} }}
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat {{ {spec["disjoint_writes"]} }}
 pub open spec fn formal_compiler_v3_guarded_allocations() -> nat {{ {spec["guarded_allocations"]} }}
+pub open spec fn formal_compiler_v3_dynamic_extents() -> nat {{ {spec["dynamic_extents"]} }}
 pub open spec fn formal_compiler_v3_guards_all_accesses() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_uses_gid_times_byte_width() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_requires_pairwise_disjoint_allocations() -> bool {{ true }}

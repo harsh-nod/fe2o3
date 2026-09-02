@@ -76,6 +76,9 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
         missing_guard = dict(self.spec)
         missing_guard["guarded_allocations"] = 2
         self.assert_rejected(missing_guard)
+        collapsed_extents = dict(self.spec)
+        collapsed_extents["dynamic_extents"] = 1
+        self.assert_rejected(collapsed_extents)
 
     def test_operation_roster_must_be_sorted_unique_and_nonempty(self) -> None:
         duplicate = dict(self.spec)

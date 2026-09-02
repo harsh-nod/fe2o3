@@ -17,6 +17,7 @@
   "readonly_accesses": 2,
   "disjoint_writes": 1,
   "guarded_allocations": 3,
+  "dynamic_extents": 3,
   "guard_semantics": "all-accesses-in-bounds",
   "byte_offset_semantics": "gid-times-byte-width",
   "allocation_relation": "pairwise-disjoint",
