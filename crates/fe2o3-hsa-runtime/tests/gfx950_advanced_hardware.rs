@@ -111,6 +111,8 @@ const RUN_ENV: &str = "FE2O3_RUN_GFX950_ADVANCED_HARDWARE";
 #[cfg(feature = "hardware-test-hooks")]
 const HSACO_ENV: &str = "FE2O3_GFX950_ADVANCED_HSACO";
 #[cfg(feature = "hardware-test-hooks")]
+const WORKGROUP_X_ENV: &str = "FE2O3_GFX950_ADVANCED_WORKGROUP_X";
+#[cfg(feature = "hardware-test-hooks")]
 const SHA256_ENV: &str = "FE2O3_GFX950_ADVANCED_SHA256";
 #[cfg(feature = "hardware-test-hooks")]
 const HSA_KERNARG_ALIGNMENT: u64 = 16;
@@ -2602,7 +2604,20 @@ fn profile_plan(
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn run_case(case: AdvancedCase) -> Result<(), BoxError> {
+fn run_case(mut case: AdvancedCase) -> Result<(), BoxError> {
+    let plan_case = case;
+    if let Some(value) = std::env::var_os(WORKGROUP_X_ENV) {
+        let value = value
+            .to_str()
+            .ok_or_else(|| format!("{WORKGROUP_X_ENV} must be valid text"))?
+            .parse::<u32>()
+            .map_err(|_| format!("{WORKGROUP_X_ENV} must be an unsigned decimal integer"))?;
+        require(
+            value != 0 && value <= 1024,
+            format!("{WORKGROUP_X_ENV} is outside 1..=1024"),
+        )?;
+        case.workgroup_x = value;
+    }
     let (bytes, digest) = read_pinned_hsaco()?;
     inspect_profile(case, &bytes)?;
     let context = GpuContext::new(0)?;
@@ -2613,11 +2628,11 @@ fn run_case(case: AdvancedCase) -> Result<(), BoxError> {
                 == Some(FeatureState::Disabled),
         format!("{} requires a gfx950:xnack- physical device", case.label),
     )?;
-    for plan in plans_for(case)? {
+    for plan in plans_for(plan_case)? {
         execute_plan(case, &mut adapter, &bytes, digest, plan)?;
     }
     if let Some(config) = PerformanceConfig::from_environment()? {
-        for plan in plans_for(case)? {
+        for plan in plans_for(plan_case)? {
             profile_plan(case, &mut adapter, &bytes, digest, plan, &config)?;
         }
     }

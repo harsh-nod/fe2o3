@@ -2,13 +2,13 @@
 
 #![allow(missing_docs)] // The kernel macro emits an undocumented helper module.
 
-use fe2o3_device::{DeviceMath, DisjointSlice, thread};
 #[cfg(target_arch = "amdgpu")]
 use fe2o3_device::{
-    Gfx950F32AccumulatorFragment, Gfx950Fp8E4M3, Gfx950Fp8MfmaAMatrix, Gfx950LdsTransposeTile,
-    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D, KernelError, KernelResult,
-    StridedReadView2D, Wave64, WaveLane, kernel,
+    kernel, Gfx950F32AccumulatorFragment, Gfx950Fp8E4M3, Gfx950Fp8MfmaAMatrix,
+    Gfx950LdsTransposeTile, Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D,
+    KernelError, KernelResult, StridedReadView2D, Wave64, WaveLane,
 };
+use fe2o3_device::{thread, DeviceMath, DisjointSlice};
 #[cfg(not(target_arch = "amdgpu"))]
 use fe2o3_device::{GridExclusive, GridLeader};
 
@@ -170,291 +170,8 @@ fn write_u32_v1(
     };
     *slot = value;
 }
-
 #[cfg(target_arch = "amdgpu")]
-macro_rules! kda_sum_key_groups_v2 {
-    ($subgroup:expr, $value_column:expr, $partial:expr) => {{
-        let local_partial = $partial;
-        let source = $value_column as u32;
-        $subgroup.broadcast_f32::<64>(local_partial, source)
-            + $subgroup.broadcast_f32::<64>(local_partial, source.wrapping_add(16))
-            + $subgroup.broadcast_f32::<64>(local_partial, source.wrapping_add(32))
-            + $subgroup.broadcast_f32::<64>(local_partial, source.wrapping_add(48))
-    }};
-}
-
-// Specializes Kimi Linear's C=4 WY/UT chunk equations. Q/K and alpha/beta are
-// already normalized/activated at the kernel boundary, so every alpha product
-// below is a stable exp(G_r-G_j) without division.
-#[cfg(target_arch = "amdgpu")]
-macro_rules! kda_chunk_wy_v2 {
-    ($base:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
-     $subgroup:ident, $value_column:ident, $key0:ident, $key1:ident, $key2:ident, $key3:ident,
-     $state0:ident, $state1:ident, $state2:ident, $state3:ident,
-     $output0:ident, $output1:ident, $output2:ident, $output3:ident) => {{
-        let token0 = $base;
-        let token1 = $base + 1;
-        let token2 = $base + 2;
-        let token3 = $base + 3;
-
-        let q00 = 0.25 * $query.load_or(token0, $key0, 0.0);
-        let q01 = 0.25 * $query.load_or(token0, $key1, 0.0);
-        let q02 = 0.25 * $query.load_or(token0, $key2, 0.0);
-        let q03 = 0.25 * $query.load_or(token0, $key3, 0.0);
-        let q10 = 0.25 * $query.load_or(token1, $key0, 0.0);
-        let q11 = 0.25 * $query.load_or(token1, $key1, 0.0);
-        let q12 = 0.25 * $query.load_or(token1, $key2, 0.0);
-        let q13 = 0.25 * $query.load_or(token1, $key3, 0.0);
-        let q20 = 0.25 * $query.load_or(token2, $key0, 0.0);
-        let q21 = 0.25 * $query.load_or(token2, $key1, 0.0);
-        let q22 = 0.25 * $query.load_or(token2, $key2, 0.0);
-        let q23 = 0.25 * $query.load_or(token2, $key3, 0.0);
-        let q30 = 0.25 * $query.load_or(token3, $key0, 0.0);
-        let q31 = 0.25 * $query.load_or(token3, $key1, 0.0);
-        let q32 = 0.25 * $query.load_or(token3, $key2, 0.0);
-        let q33 = 0.25 * $query.load_or(token3, $key3, 0.0);
-
-        let k00 = $key.load_or(token0, $key0, 0.0);
-        let k01 = $key.load_or(token0, $key1, 0.0);
-        let k02 = $key.load_or(token0, $key2, 0.0);
-        let k03 = $key.load_or(token0, $key3, 0.0);
-        let k10 = $key.load_or(token1, $key0, 0.0);
-        let k11 = $key.load_or(token1, $key1, 0.0);
-        let k12 = $key.load_or(token1, $key2, 0.0);
-        let k13 = $key.load_or(token1, $key3, 0.0);
-        let k20 = $key.load_or(token2, $key0, 0.0);
-        let k21 = $key.load_or(token2, $key1, 0.0);
-        let k22 = $key.load_or(token2, $key2, 0.0);
-        let k23 = $key.load_or(token2, $key3, 0.0);
-        let k30 = $key.load_or(token3, $key0, 0.0);
-        let k31 = $key.load_or(token3, $key1, 0.0);
-        let k32 = $key.load_or(token3, $key2, 0.0);
-        let k33 = $key.load_or(token3, $key3, 0.0);
-
-        let a00 = $alpha.load_or(token0, $key0, 0.0);
-        let a01 = $alpha.load_or(token0, $key1, 0.0);
-        let a02 = $alpha.load_or(token0, $key2, 0.0);
-        let a03 = $alpha.load_or(token0, $key3, 0.0);
-        let a10 = $alpha.load_or(token1, $key0, 0.0);
-        let a11 = $alpha.load_or(token1, $key1, 0.0);
-        let a12 = $alpha.load_or(token1, $key2, 0.0);
-        let a13 = $alpha.load_or(token1, $key3, 0.0);
-        let a20 = $alpha.load_or(token2, $key0, 0.0);
-        let a21 = $alpha.load_or(token2, $key1, 0.0);
-        let a22 = $alpha.load_or(token2, $key2, 0.0);
-        let a23 = $alpha.load_or(token2, $key3, 0.0);
-        let a30 = $alpha.load_or(token3, $key0, 0.0);
-        let a31 = $alpha.load_or(token3, $key1, 0.0);
-        let a32 = $alpha.load_or(token3, $key2, 0.0);
-        let a33 = $alpha.load_or(token3, $key3, 0.0);
-
-        let c00 = a00;
-        let c01 = a01;
-        let c02 = a02;
-        let c03 = a03;
-        let c10 = a00 * a10;
-        let c11 = a01 * a11;
-        let c12 = a02 * a12;
-        let c13 = a03 * a13;
-        let c20 = c10 * a20;
-        let c21 = c11 * a21;
-        let c22 = c12 * a22;
-        let c23 = c13 * a23;
-        let c30 = c20 * a30;
-        let c31 = c21 * a31;
-        let c32 = c22 * a32;
-        let c33 = c23 * a33;
-
-        let h0 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c00 * k00 * $state0 + c01 * k01 * $state1 + c02 * k02 * $state2 + c03 * k03 * $state3
-        );
-        let h1 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c10 * k10 * $state0 + c11 * k11 * $state1 + c12 * k12 * $state2 + c13 * k13 * $state3
-        );
-        let h2 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c20 * k20 * $state0 + c21 * k21 * $state1 + c22 * k22 * $state2 + c23 * k23 * $state3
-        );
-        let h3 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c30 * k30 * $state0 + c31 * k31 * $state1 + c32 * k32 * $state2 + c33 * k33 * $state3
-        );
-
-        let beta0 = $beta.load_or(0, token0, 0.0);
-        let beta1 = $beta.load_or(0, token1, 0.0);
-        let beta2 = $beta.load_or(0, token2, 0.0);
-        let beta3 = $beta.load_or(0, token3, 0.0);
-        let l10 = beta1
-            * kda_sum_key_groups_v2!(
-                $subgroup,
-                $value_column,
-                a10 * k10 * k00 + a11 * k11 * k01 + a12 * k12 * k02 + a13 * k13 * k03
-            );
-        let l20 = beta2
-            * kda_sum_key_groups_v2!(
-                $subgroup,
-                $value_column,
-                a10 * a20 * k20 * k00
-                    + a11 * a21 * k21 * k01
-                    + a12 * a22 * k22 * k02
-                    + a13 * a23 * k23 * k03
-            );
-        let l21 = beta2
-            * kda_sum_key_groups_v2!(
-                $subgroup,
-                $value_column,
-                a20 * k20 * k10 + a21 * k21 * k11 + a22 * k22 * k12 + a23 * k23 * k13
-            );
-        let l30 = beta3
-            * kda_sum_key_groups_v2!(
-                $subgroup,
-                $value_column,
-                a10 * a20 * a30 * k30 * k00
-                    + a11 * a21 * a31 * k31 * k01
-                    + a12 * a22 * a32 * k32 * k02
-                    + a13 * a23 * a33 * k33 * k03
-            );
-        let l31 = beta3
-            * kda_sum_key_groups_v2!(
-                $subgroup,
-                $value_column,
-                a20 * a30 * k30 * k10
-                    + a21 * a31 * k31 * k11
-                    + a22 * a32 * k32 * k12
-                    + a23 * a33 * k33 * k13
-            );
-        let l32 = beta3
-            * kda_sum_key_groups_v2!(
-                $subgroup,
-                $value_column,
-                a30 * k30 * k20 + a31 * k31 * k21 + a32 * k32 * k22 + a33 * k33 * k23
-            );
-
-        let z0 = beta0 * ($value.load_or(token0, $value_column, 0.0) - h0);
-        let z1 = beta1 * ($value.load_or(token1, $value_column, 0.0) - h1) - l10 * z0;
-        let z2 = beta2 * ($value.load_or(token2, $value_column, 0.0) - h2) - l20 * z0 - l21 * z1;
-        let z3 = beta3 * ($value.load_or(token3, $value_column, 0.0) - h3)
-            - l30 * z0
-            - l31 * z1
-            - l32 * z2;
-
-        let base0 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c00 * q00 * $state0 + c01 * q01 * $state1 + c02 * q02 * $state2 + c03 * q03 * $state3
-        );
-        let base1 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c10 * q10 * $state0 + c11 * q11 * $state1 + c12 * q12 * $state2 + c13 * q13 * $state3
-        );
-        let base2 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c20 * q20 * $state0 + c21 * q21 * $state1 + c22 * q22 * $state2 + c23 * q23 * $state3
-        );
-        let base3 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            c30 * q30 * $state0 + c31 * q31 * $state1 + c32 * q32 * $state2 + c33 * q33 * $state3
-        );
-
-        let r00 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            q00 * k00 + q01 * k01 + q02 * k02 + q03 * k03
-        );
-        let r10 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            a10 * q10 * k00 + a11 * q11 * k01 + a12 * q12 * k02 + a13 * q13 * k03
-        );
-        let r11 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            q10 * k10 + q11 * k11 + q12 * k12 + q13 * k13
-        );
-        let r20 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            a10 * a20 * q20 * k00
-                + a11 * a21 * q21 * k01
-                + a12 * a22 * q22 * k02
-                + a13 * a23 * q23 * k03
-        );
-        let r21 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            a20 * q20 * k10 + a21 * q21 * k11 + a22 * q22 * k12 + a23 * q23 * k13
-        );
-        let r22 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            q20 * k20 + q21 * k21 + q22 * k22 + q23 * k23
-        );
-        let r30 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            a10 * a20 * a30 * q30 * k00
-                + a11 * a21 * a31 * q31 * k01
-                + a12 * a22 * a32 * q32 * k02
-                + a13 * a23 * a33 * q33 * k03
-        );
-        let r31 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            a20 * a30 * q30 * k10
-                + a21 * a31 * q31 * k11
-                + a22 * a32 * q32 * k12
-                + a23 * a33 * q33 * k13
-        );
-        let r32 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            a30 * q30 * k20 + a31 * q31 * k21 + a32 * q32 * k22 + a33 * q33 * k23
-        );
-        let r33 = kda_sum_key_groups_v2!(
-            $subgroup,
-            $value_column,
-            q30 * k30 + q31 * k31 + q32 * k32 + q33 * k33
-        );
-
-        $output0 = base0 + r00 * z0;
-        $output1 = base1 + r10 * z0 + r11 * z1;
-        $output2 = base2 + r20 * z0 + r21 * z1 + r22 * z2;
-        $output3 = base3 + r30 * z0 + r31 * z1 + r32 * z2 + r33 * z3;
-
-        $state0 = c30 * $state0
-            + a10 * a20 * a30 * k00 * z0
-            + a20 * a30 * k10 * z1
-            + a30 * k20 * z2
-            + k30 * z3;
-        $state1 = c31 * $state1
-            + a11 * a21 * a31 * k01 * z0
-            + a21 * a31 * k11 * z1
-            + a31 * k21 * z2
-            + k31 * z3;
-        $state2 = c32 * $state2
-            + a12 * a22 * a32 * k02 * z0
-            + a22 * a32 * k12 * z1
-            + a32 * k22 * z2
-            + k32 * z3;
-        $state3 = c33 * $state3
-            + a13 * a23 * a33 * k03 * z0
-            + a23 * a33 * k13 * z1
-            + a33 * k23 * z2
-            + k33 * z3;
-    }};
-}
-
-#[cfg(target_arch = "amdgpu")]
-macro_rules! kda_chunk_wy_v3 {
+macro_rules! kda_chunk_wy_v1 {
     ($base:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
      $subgroup:ident, $key_index:ident, $value_column:ident, $state:ident,
      $output0:ident, $output1:ident, $output2:ident, $output3:ident) => {{
@@ -522,10 +239,14 @@ macro_rules! kda_chunk_wy_v3 {
 }
 
 /// Evaluates one exact matrix-state Kimi Delta Attention decode step.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-decode"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-kda-decode",
+    not(feature = "kernel-kda-decode-baseline-v1")
+))]
 #[kernel(
     typed,
-    namespace = "d1782f1adc5ab27a123e99a81db150a6062c28f6404804282ed7210b350c8498",
+    namespace = "e249ff03f475aa75595229ee6a68e816a2a9ad395940c495ad874c54c0e9b0ad",
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_decode(
@@ -567,21 +288,28 @@ pub fn gfx950_kda_decode(
     let Ok(state) = StridedReadView2D::from_shared_slice(initial_state, 0, 16, 16, 16) else {
         return;
     };
-    let linear = thread::index_1d().get();
-    let key_index = linear & 15;
-    let value_column = linear >> 4;
-    let subgroup = Gfx950Subgroup::current();
-    let decay = alpha.load_or(0, key_index, 0.0) * state.load_or(value_column, key_index, 0.0);
-    let prediction = subgroup.reduce_sum_f32::<16>(key.load_or(0, key_index, 0.0) * decay);
-    let error = value.load_or(0, value_column, 0.0) - prediction;
-    let step = beta.load_or(0, 0, 0.0);
-    let updated = decay + step * key.load_or(0, key_index, 0.0) * error;
-    let result = subgroup.reduce_sum_f32::<16>(0.25 * query.load_or(0, key_index, 0.0) * updated);
-    if let Some(slot) = final_state.get_mut(thread::index_1d()) {
-        *slot = updated;
-    }
-    if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = result;
+    #[cfg(not(feature = "kernel-kda-decode-baseline-v1"))]
+    {
+        let linear = thread::index_1d().get();
+        let key_index = linear & 15;
+        let value_column = linear >> 4;
+        let subgroup = Gfx950Subgroup::current();
+        let query_value = query.load_or(0, key_index, 0.0);
+        let key_value = key.load_or(0, key_index, 0.0);
+        let alpha_value = alpha.load_or(0, key_index, 0.0);
+        let value_input = value.load_or(0, value_column, 0.0);
+        let step = beta.load_or(0, 0, 0.0);
+        let decay = alpha_value * state.load_or(value_column, key_index, 0.0);
+        let prediction = subgroup.reduce_sum_f32::<16>(key_value * decay);
+        let error = value_input - prediction;
+        let updated = decay + step * key_value * error;
+        let result = subgroup.reduce_sum_f32::<16>(0.25 * query_value * updated);
+        if let Some(slot) = final_state.get_mut(thread::index_1d()) {
+            *slot = updated;
+        }
+        if let Some(slot) = output.get_mut(thread::index_1d()) {
+            *slot = result;
+        }
     }
 }
 
@@ -619,11 +347,15 @@ pub fn gfx950_kda_decode(
     }
 }
 
-/// Evaluates two exact four-token WY/UT KDA chunks with one state carry.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-prefill"))]
+/// Evaluates two exact four-token WY/UT KDA chunks with one register state carry.
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-kda-prefill",
+    not(feature = "kernel-kda-prefill-baseline-v1")
+))]
 #[kernel(
     typed,
-    namespace = "4888a0b175bcc5b2897ba0594f0641acd700468c5302376a24463ba56eb49a56",
+    namespace = "673210266e41c1a545820dbc0baec859659b5c1cf4d5e3e8ac6b5e542b4028d3",
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_chunkwise_prefill(
@@ -673,11 +405,11 @@ pub fn gfx950_kda_chunkwise_prefill(
     let value_column = linear >> 4;
     let subgroup = Gfx950Subgroup::current();
     let mut state = initial_state.load_or(value_column, key_index, 0.0);
-    let mut chunk0_output0 = 0.0;
-    let mut chunk0_output1 = 0.0;
-    let mut chunk0_output2 = 0.0;
-    let mut chunk0_output3 = 0.0;
-    kda_chunk_wy_v3!(
+    let mut c00 = 0.0;
+    let mut c01 = 0.0;
+    let mut c02 = 0.0;
+    let mut c03 = 0.0;
+    kda_chunk_wy_v1!(
         0,
         query,
         key,
@@ -688,16 +420,16 @@ pub fn gfx950_kda_chunkwise_prefill(
         key_index,
         value_column,
         state,
-        chunk0_output0,
-        chunk0_output1,
-        chunk0_output2,
-        chunk0_output3
+        c00,
+        c01,
+        c02,
+        c03
     );
-    let mut chunk1_output0 = 0.0;
-    let mut chunk1_output1 = 0.0;
-    let mut chunk1_output2 = 0.0;
-    let mut chunk1_output3 = 0.0;
-    kda_chunk_wy_v3!(
+    let mut c10 = 0.0;
+    let mut c11 = 0.0;
+    let mut c12 = 0.0;
+    let mut c13 = 0.0;
+    kda_chunk_wy_v1!(
         4,
         query,
         key,
@@ -708,34 +440,34 @@ pub fn gfx950_kda_chunkwise_prefill(
         key_index,
         value_column,
         state,
-        chunk1_output0,
-        chunk1_output1,
-        chunk1_output2,
-        chunk1_output3
+        c10,
+        c11,
+        c12,
+        c13
     );
-    let selected_chunk0 = if key_index < 4 {
-        chunk0_output0
+    let selected0 = if key_index < 4 {
+        c00
     } else if key_index < 8 {
-        chunk0_output1
+        c01
     } else if key_index < 12 {
-        chunk0_output2
+        c02
     } else {
-        chunk0_output3
+        c03
     };
-    let selected_chunk1 = if key_index < 4 {
-        chunk1_output0
+    let selected1 = if key_index < 4 {
+        c10
     } else if key_index < 8 {
-        chunk1_output1
+        c11
     } else if key_index < 12 {
-        chunk1_output2
+        c12
     } else {
-        chunk1_output3
+        c13
     };
     if let Some(slot) = output_chunk0.get_mut(thread::index_1d()) {
-        *slot = selected_chunk0;
+        *slot = selected0;
     }
     if let Some(slot) = output_chunk1.get_mut(thread::index_1d()) {
-        *slot = selected_chunk1;
+        *slot = selected1;
     }
     if let Some(slot) = final_state.get_mut(thread::index_1d()) {
         *slot = state;

@@ -4,10 +4,34 @@
   "invariants": {
     "same_export_per_workload": true,
     "same_abi_inputs_and_cpu_oracle": true,
-    "workgroup": [64, 1, 1],
+    "workgroup": "KDA uses the authenticated 256-thread launch; other attention kernels use 64 threads",
     "grid": [1, 1, 1]
   },
   "admitted": [
+    {
+      "feature": "kernel-kda-decode-baseline-v1",
+      "kernel_export": "gfx950_kda_decode",
+      "production_feature": "kernel-kda-decode",
+      "role": "pre-promotion 256-thread baseline",
+      "isolated_change": "retain the original duplicate key read before explicit per-lane key reuse",
+      "shape": "one FP32 head; K=V=16; T=1; initial and final matrix state",
+      "workgroup": [256, 1, 1],
+      "unique_compulsory_global_bytes": 3332,
+      "lds_bytes": 0,
+      "pipeline_assessment": "the full state and output are resident in one workgroup; there is no streamed tile sequence for LDS multibuffering"
+    },
+    {
+      "feature": "kernel-kda-prefill-baseline-v1",
+      "kernel_export": "gfx950_kda_chunkwise_prefill",
+      "production_feature": "kernel-kda-prefill",
+      "role": "independent exact sequential-recurrence baseline",
+      "isolated_change": "unroll all eight recurrence steps directly instead of applying the production kernel's two exact C=4 WY/UT chunk transforms",
+      "shape": "one FP32 head; K=V=16; T=8 as two C=4 chunks; initial and final matrix state",
+      "workgroup": [256, 1, 1],
+      "unique_compulsory_global_bytes": 6176,
+      "lds_bytes": 0,
+      "pipeline_assessment": "the state stays in registers, but every token depends on the preceding updated state; the production WY/UT transform exposes independent within-chunk reductions"
+    },
     {
       "feature": "kernel-content-sparse-attention-reciprocal-reuse-v1",
       "kernel_export": "gfx950_content_sparse_attention",
@@ -68,6 +92,27 @@
     }
   ],
   "rejected": [
+    {
+      "variant": "kda-wg64-four-value-column-coarsening-v1",
+      "kernel_export": "gfx950_kda_decode and gfx950_kda_chunkwise_prefill",
+      "status": "correctness-passed-performance-rejected",
+      "reason": "Blocked<Index1D,64,4> ownership compiled and passed the same CPU oracle, but extra per-lane live state and serial Wave16 reductions increased measured latency",
+      "retained_conclusion": "keep four Wave64s and one state element per lane; the measured campaign retains the slower 64-lane result as a negative ablation"
+    },
+    {
+      "variant": "kda-active-128-value-pair-tile-v1",
+      "kernel_export": "gfx950_kda_decode and gfx950_kda_chunkwise_prefill",
+      "status": "compiler-rejected",
+      "reason": "the general typed surface admits 64- or 256-thread launches, and the 256-thread fallback could not prove subgroup convergence across a two-wave early exit or race freedom for the checked tiled output witness",
+      "retained_conclusion": "keep the authenticated 256-lane state ownership until the compiler proves this layout and convergence contract"
+    },
+    {
+      "variant": "kda-subgroup-load-coalescing-v1",
+      "kernel_export": "gfx950_kda_decode and gfx950_kda_chunkwise_prefill",
+      "status": "compiler-rejected",
+      "reason": "conditional producer lanes before Wave16/Wave64 broadcasts are not currently proven convergent by the production lowering",
+      "retained_conclusion": "do not bypass the proof surface to claim a memory-load optimization"
+    },
     {
       "variant": "content-sparse-selected-score-scalar-v1",
       "kernel_export": "gfx950_content_sparse_attention",

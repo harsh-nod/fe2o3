@@ -38,12 +38,17 @@ if [[ $SUITE == systems ]]; then
     esac
 fi
 BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
-
 case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_decode; KERNARG=128; WG=256; LDS=0; OCML=0
         TEST=gfx950_kda_decode_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
+    attention:kernel-kda-decode-baseline-v1)
+        SYMBOL=gfx950_kda_decode; KERNARG=128; WG=256; LDS=0; OCML=0
+        TEST=gfx950_kda_decode_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
     attention:kernel-kda-prefill)
+        SYMBOL=gfx950_kda_chunkwise_prefill; KERNARG=144; WG=256; LDS=0; OCML=0
+        TEST=gfx950_kda_chunkwise_prefill_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
+    attention:kernel-kda-prefill-baseline-v1)
         SYMBOL=gfx950_kda_chunkwise_prefill; KERNARG=144; WG=256; LDS=0; OCML=0
         TEST=gfx950_kda_chunkwise_prefill_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
     attention:kernel-content-sparse-attention)
@@ -426,6 +431,7 @@ SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
     FE2O3_RUN_GFX950_ADVANCED_HARDWARE=1 \
     FE2O3_GFX950_ADVANCED_HSACO=$HSACO \
     FE2O3_GFX950_ADVANCED_SHA256=$HSACO_SHA256 \
+    FE2O3_GFX950_ADVANCED_WORKGROUP_X=$WG \
     FE2O3_GFX950_ADVANCED_LLVM_SHA256=$LLVM_SHA256 \
     FE2O3_GFX950_ADVANCED_ISA_SHA256=$ISA_SHA256 \
     FE2O3_GFX950_ADVANCED_CRATE_BINDING=$CRATE_BINDING \

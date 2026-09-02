@@ -117,7 +117,7 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
     let lowercase = SOURCE.to_ascii_lowercase();
     assert!(!SOURCE.contains("unsafe"));
     assert!(!SOURCE.contains("include!"));
-    assert_eq!(SOURCE.matches("macro_rules!").count(), 5);
+    assert_eq!(SOURCE.matches("macro_rules!").count(), 3);
     assert!(
         SOURCE.contains(
             "#[cfg(any(target_arch = \"amdgpu\", test))]\nmacro_rules! decode_fp8_e4m3_v1"
@@ -133,7 +133,6 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
     assert!(!lowercase.contains("std::process"));
     for marker in [
         "KDA_STATE_ELEMENTS_V1",
-        "KDA_CHUNK_TOKENS_V1",
         "PREFILL_TOKENS_V1",
         "ATTENTION_TOKENS_V1",
         "HEAD_DIMENSION_V1",
@@ -148,9 +147,8 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
         "multiply_accumulate_fp8",
         "reduce_sum_f32::<16>",
         "broadcast_f32::<16>",
-        "broadcast_f32::<64>",
         "final_state.get_mut(thread::index_1d())",
-        "kda_chunk_wy_v3!",
+        "kda_chunk_wy_v1!",
     ] {
         assert!(
             SOURCE.contains(marker),
@@ -185,6 +183,8 @@ fn package_states_the_production_source_and_evidence_boundary() {
     }
 
     for variant in [
+        "kernel-kda-decode-baseline-v1",
+        "kernel-kda-prefill-baseline-v1",
         "kernel-content-sparse-attention-reciprocal-reuse-v1",
         "kernel-compressed-hybrid-attention-division-baseline-v1",
         "kernel-attnres-aggregate-explicit-reuse-v1",
