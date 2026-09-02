@@ -111,6 +111,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-rustc-invocation
   fe2o3-service-host
   fe2o3-service-model
+  fe2o3-sim-differential
   fe2o3-source-isa-observation
   fe2o3-semantic-import
   fe2o3-semantic-query
@@ -776,7 +777,8 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
       --root fe2o3-virtual-runtime \
-      --root fe2o3-virtual-runtime-cli
+      --root fe2o3-virtual-runtime-cli \
+      --root fe2o3-sim-differential
   run_step virtual-runtime-no-gpu-build \
     env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
       cargo build --locked -p fe2o3-virtual-runtime-cli \
@@ -785,6 +787,14 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-virtual-runtime"
+  run_step sim-differential-no-gpu-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-sim-differential \
+        --bin fe2o3-sim-differential
+  run_step sim-differential-no-gpu-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential"
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
@@ -1100,6 +1110,9 @@ run_generic_core() {
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
+  run_step kir-sim-scalar-differential \
+    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
+      --seed-start 0 --cases 256
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_cpu_tests
   run_rustc_codegen_lib_tests

@@ -145,6 +145,7 @@ fe2o3-virtual-runtime = { path = "crates/fe2o3-virtual-runtime" }
 fe2o3-virtual-runtime-cli = { path = "crates/fe2o3-virtual-runtime-cli" }
 fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
+fe2o3-sim-differential = { path = "crates/fe2o3-sim-differential" }
 fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
 fe2o3-source-isa-observation = { path = "crates/fe2o3-source-isa-observation" }
 fe2o3-target-spec = { path = "crates/fe2o3-target-spec" }

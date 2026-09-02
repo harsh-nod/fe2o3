@@ -93,13 +93,13 @@ criteria. It is not a closure claim.
 
 | Contract | Current evidence | Status needed for exit |
 | --- | --- | --- |
-| C0 semantics/baseline | `fe2o3-kir-sim-capabilities` derives a stable, CI-checked owner-or-typed-rejection matrix from the exhaustive admitted operation/terminator surface and exact scalar support predicates for every simulator-facing profile | Future KIR surface changes must extend the exhaustive classifier and matrix before the generic lane can pass |
-| C1 scalar interpreter | Verified KIR admission, structured CFG/calls/scalars, canonical/seeded/replay schedules, bounded errors | General failure minimization and full independent generated differential coverage remain incomplete |
+| C0 semantics/baseline | `fe2o3-kir-sim-capabilities` derives a stable, CI-checked owner-or-typed-rejection matrix from the exhaustive admitted operation/terminator surface and exact scalar support predicates for every simulator-facing profile; its declared, authority-free compact JSON is fixed at 4,698,338 bytes | Future KIR surface changes must extend the exhaustive classifier and matrix before the generic lane can pass |
+| C1 scalar interpreter | Verified KIR admission, structured CFG/calls/scalars, canonical/seeded/replay schedules, bounded errors, plus generated wrapping-`i32` cases translated into KIR and compared lane-by-lane with an independent evaluator; failures are reduced deterministically within their typed failure class and encoded responses fail closed above 1 MiB | Differential coverage of the remaining scalar widths, floating-point modes, structured control flow, calls, and memory families remains incomplete |
 | C2 typed memory/Rust | Allocation provenance, initialization, bounds, alignment, buffer views, source/KIR diagnostics for the admitted subset | Aggregate/enum/layout coverage and complete conformance-corpus qualification remain incomplete |
 | C3 wave/workgroup | Wave32/Wave64 masks and selected collectives, LDS, barriers, integer atomics/fences, race/HB exploration | General divergence/reconvergence, matrix/MFMA, dynamic/general LDS, and remaining intrinsics stay typed unsupported |
 | C4 virtual runtime | This crate and CLI cover bounded allocation/copy/queue/dependency/dispatch/completion plus early-release and ambiguous-completion recovery | Normal generated host-interface integration, cancellation/timeout/reset, and #182-defined multi-device plans remain open |
 | C5 debugger/agent | Bounded JSONL simulator debugger, semantic scopes, replay/reverse inspection, race and source evidence | End-to-end seeded reduction and all requested query families are not complete |
-| C6 differential | Existing bounded independent oracles and hardware tests are separate evidence | No exact simulator-versus-physical KFD matrix covers every supported semantic family |
+| C6 differential | The bounded generated wrapping-`i32` harness binds exact case, KIR, and output sequences and emits reduced machine-readable reproducers; hardware tests remain separate evidence | No exact simulator-versus-physical KFD matrix covers every supported semantic family |
 
 The initial acceptance cases currently have these honest dispositions:
 
@@ -115,7 +115,7 @@ The initial acceptance cases currently have these honest dispositions:
 | 8 unsupported operation | Implemented as typed rejection; unsupported operations are never approximated |
 
 Therefore issue #216 cannot yet truthfully close on this milestone alone. The
-remaining C0-C3/C5 semantic breadth, generated-host integration, C6 physical
+remaining C1-C3/C5 semantic breadth, generated-host integration, C6 physical
 differential qualification, and #182-dependent multi-device work remain
 independent gates.
 
@@ -127,15 +127,18 @@ The focused no-GPU commands are:
 cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
 cargo test --locked -p fe2o3-kir-sim --test capability_matrix
 cargo run --quiet --locked -p fe2o3-kir-sim --bin fe2o3-kir-sim-capabilities
-cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --all-targets -- -D warnings
-cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --no-deps
+cargo test --locked -p fe2o3-sim-differential
+cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
+cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --all-targets -- -D warnings
+cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --no-deps
 bash scripts/ci-local.sh workspace-policy
 bash scripts/ci-local.sh runtime-policy
 ```
 
 The packages are also members of the generic CPU test list. Runtime policy
-audits both roots against an exact package/source allowlist, rejects HIP, HSA,
-DRM, and dynamic-loader authority, and scans the final ELF for device paths as
-defense in depth. This is a dependency and linked-binary policy check, not a
-general proof that arbitrary future source cannot issue a syscall; source and
-review controls remain part of the trust boundary.
+audits both virtual-runtime roots and the scalar differential command against
+an exact package/source allowlist, rejects HIP, HSA, DRM, and dynamic-loader
+authority, and scans the final ELF for device paths as defense in depth. This
+is a dependency and linked-binary policy check, not a general proof that
+arbitrary future source cannot issue a syscall; source and review controls
+remain part of the trust boundary.

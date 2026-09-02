@@ -28,21 +28,34 @@ The issue #216 virtual-runtime slice has focused no-GPU coverage:
 
 ```text
 cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
-cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --all-targets -- -D warnings
-cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --no-deps
+cargo test --locked -p fe2o3-sim-differential
+cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
+cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --all-targets -- -D warnings
+cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --no-deps
 scripts/ci-local.sh workspace-policy
 scripts/ci-local.sh runtime-policy
 ```
 
-The runtime-policy lane checks both virtual-runtime package closures. It must
-remain independent of HIP, HSA, DRM, KFD device nodes, and GPU libraries. These
-tests establish model and semantic CPU behavior only; they do not increase a
-hardware or parity pass count.
+The runtime-policy lane checks both virtual-runtime package closures and the
+scalar differential command's closure and ELF. They must remain independent of
+HIP, HSA, DRM, KFD device nodes, and GPU libraries. These tests establish model
+and semantic CPU behavior only; they do not increase a hardware or parity pass
+count.
 
 The generic lane also runs the focused `kir-sim-capability-matrix` test before
 the broader CPU package set. It checks the stable JSON command and requires an
 exact simulator owner or typed unsupported reason for every top-level KIR
-operation, terminator, profile, and scalar operation/type combination.
+operation, terminator, profile, and scalar operation/type combination. The
+matrix marks these as declared tool-contract facts with `authority: none`; its
+newline-terminated compact JSON is fixed at 4,698,338 bytes.
+
+The generic lane also translates 256 deterministic wrapping-`i32` programs
+from the independent `fe2o3-differential` model into admitted KIR V7, executes
+them in the simulator, and compares every lane. Its stable JSON digest binds
+the generator configuration, exact cases, KIR identities, and observations.
+Failures retain a deterministic, class-preserving reduced reproducer. This is
+model agreement with `authority: none`, not physical-GPU parity or performance
+evidence. Encoded responses fail closed above the compiled 1 MiB limit.
 
 The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest

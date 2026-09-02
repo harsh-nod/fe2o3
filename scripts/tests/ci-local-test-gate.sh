@@ -702,6 +702,13 @@ for core_step in \
   standalone-flash-attention-general-host-check \
   backend-build \
   backend-all-features-build \
+  virtual-runtime-no-gpu-metadata \
+  virtual-runtime-no-gpu-build \
+  virtual-runtime-no-gpu-elf \
+  sim-differential-no-gpu-build \
+  sim-differential-no-gpu-elf \
+  kir-sim-capability-matrix \
+  kir-sim-scalar-differential \
   ci-local-test-gate \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
@@ -779,6 +786,26 @@ assert_equals \
   'env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p fe2o3-core --test production_runtime_surface_ui' \
   "$(step_command core-production-runtime-surface-ui)" \
   'generic core did not retain the default-feature raw launch rejection UI'
+assert_equals \
+  'cargo test --locked -p fe2o3-kir-sim --test capability_matrix' \
+  "$(step_command kir-sim-capability-matrix)" \
+  'generic core did not retain the exact simulator capability-matrix gate'
+assert_equals \
+  'cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256' \
+  "$(step_command kir-sim-scalar-differential)" \
+  'generic core did not retain the exact independent scalar differential gate'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} metadata --cargo --root fe2o3-virtual-runtime --root fe2o3-virtual-runtime-cli --root fe2o3-sim-differential" \
+  "$(step_command virtual-runtime-no-gpu-metadata)" \
+  'generic core did not audit every issue 216 no-GPU dependency closure'
+assert_equals \
+  "env CARGO_TARGET_DIR=${RUNTIME_PURE_RUST_TARGET_DIR} cargo build --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential" \
+  "$(step_command sim-differential-no-gpu-build)" \
+  'generic core did not build the scalar differential command for ELF audit'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} elf --input ${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential" \
+  "$(step_command sim-differential-no-gpu-elf)" \
+  'generic core did not audit the scalar differential ELF closure'
 assert_equals \
   0 \
   "$(step_count cpu-tests-cargo-fe2o3-bootstrap)" \
