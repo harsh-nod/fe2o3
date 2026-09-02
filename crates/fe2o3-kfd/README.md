@@ -23,7 +23,7 @@ The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the
 exact correlated render descriptor plus a prospective KFD whole-GPU reset-event
-descriptor, owns a process-global fe2o3 admission lease, requires KFD 1.18 and
+descriptor, runs under a process-serialized admission transaction, requires KFD 1.18 and
 AMDGPU DRM 3.64.0, compares the DRM identity prefix with topology/sysfs,
 establishes a disabled-XNACK no-queue barrier, checks the complete bounded
 process-aperture inventory, and repeats process, descriptor, topology, XNACK,
@@ -68,8 +68,9 @@ refinement proof, nor a
 `ProductionDeviceAuthorityV1` implementation. No R1 API grants VM, allocation,
 mapping, queue, event, code, or dispatch authority. It does not enumerate
 cache, memory-bank, or link subtrees or prove their reported counts. The
-process-global lease excludes other fe2o3 R1 admissions, not arbitrary raw KFD
-users in the process. Ancestor traversal, mount-namespace integrity, sysfs
+admission transaction excludes concurrent fe2o3 R1 commits, not other live
+checked physical-device tokens or arbitrary raw KFD users in the process.
+Ancestor traversal, mount-namespace integrity, sysfs
 truth, cross-file snapshot semantics, KFD/DRM ioctl behavior, firmware meaning,
 and absence of an ABA reset remain named external contracts. KFD does not expose
 a sequence snapshot for the prospective subscription, does not report every
@@ -576,17 +577,44 @@ batch, signal slot and generation, and last packet. Production deliberately has
 no constructor for that token, so neither public data, an internal descriptor,
 nor a boolean can mint initialized memory.
 
-This is a prerequisite state machine, not a device-copy implementation. The
-pinned KFD UAPI exposes no admitted memcpy or SDMA submission operation. The
-queue can now return its real mapped C3 set only after exact C4 recycle and
-confirmed destruction, but that return path is deliberately not connected to
-the content state machine. The next integration must authenticate an exact
-copy-kernel artifact and semantics and consume its exact C2 publication and C4
-completed batch to construct the opaque tokens above. Until those are
-composed, C6 provides no Linux copy backend, actual copy, or
-copy-completion-derived initialized lease. The independent public-VRAM CPU
-initialization path above does not authenticate a device copy. Neither path
-currently supplies a public read-dispatch premise or hardware evidence.
+This remains a prerequisite content-authentication state machine, not the
+device-copy implementation described below. The queue can return its real
+mapped C3 set only after exact C4 recycle and confirmed destruction, but that
+return path is deliberately not connected to the content state machine. The R7
+SDMA engine moves bytes and observes its own completion generation; it does not
+authenticate source semantics or construct the opaque C6 initialized-content
+token. A later composition must join exact content identity with exact copy
+publication and completion. The independent public-VRAM CPU initialization path
+also does not authenticate a device copy.
+
+### R7 gfx942 SDMA and pooled buffers
+
+An active compute session may add one classic KFD SDMA queue with a 4096-byte
+ring and at most 64 in-flight 64-byte submissions. Each submission contains one
+reviewed gfx942 linear-copy packet and one system-memory completion fence.
+Move-only host-coherent and HBM buffers retain the exact queue owner and a
+concrete pool generation, and remain in queue custody until the exact slot
+generation is observed. Copy tickets bind that same non-reused queue occurrence
+in addition to the native queue ID, ring slot, and slot generation. Cross-queue
+recycle and submission are rejected before mutation. Nonblocking submit, poll,
+deadline wait, and batch forms are public; batches keep one
+operational-currentness envelope while publishing and waiting.
+
+The session also owns a best-fit pool keyed by buffer kind, physical bytes, and
+alignment. Recycling is explicit, is possible only after buffer authority has
+returned from completion, and advances the concrete generation before reuse.
+Pool trim releases every free allocation before queue teardown. Outstanding or
+pooled buffers block destruction. SDMA queue
+destruction precedes compute queue destruction, followed by explicit unmap and
+release of the copy ring, control page, and completion arena.
+
+`GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema, reviewed ROCr
+revision and packet sources, packet bytes, bounds, currentness, failure, and
+teardown contracts. Verus proves only the separate abstract R7 lease-generation,
+retention, quarantine, dependency, and device-coordinate theorems. It does not
+refine this Rust code. Ioctl truth, doorbell MMIO, CPU/GPU coherence, firmware
+consumption, completion, liveness, and performance remain contracted or
+measured.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,

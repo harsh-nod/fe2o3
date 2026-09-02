@@ -1,7 +1,8 @@
 # Runtime model verification
 
-This directory contains the initial issue #137 Verus specifications. The
-authenticated runner proves forty-eight obligations over finite abstract values
+This directory contains the issue #137 Verus specifications and the additive R7
+asynchronous-resource model. The authenticated runner proves fifty-seven
+obligations over finite abstract values
 and traces. The materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
 lengths are not bounded by these proofs.
@@ -173,6 +174,28 @@ The two-step theorem proves linearity only along one supplied mathematical
 successor chain. It does not establish uniqueness among independently
 constructed Rust values, counter truth, completion, liveness, or performance.
 
+`r7_async_resources_v1.rs` proves eight abstract asynchronous-resource,
+memory-pool, and multi-device obligations:
+
+1. leasing an eligible free block retains its exact pool, device, block, and
+   generation coordinates and makes the block non-reusable;
+2. submitting an exact leased block moves it to in-flight custody without
+   changing its storage identity;
+3. exact completion followed by release advances the lease generation and
+   prevents the old lease from matching the free block;
+4. a stale generation cannot submit a reused block;
+5. two retained blocks in a valid roster cannot name the same storage;
+6. an admitted peer copy retains its exact source and destination generations
+   and executes on the destination device coordinate;
+7. an incomplete dependency frontier leaves a reserved peer copy unpublished;
+   and
+8. quarantined storage is retained and never reusable.
+
+These theorems do not refine `memory_pool.rs`, the KFD SDMA packet encoder,
+queue counters, mapped atomics, the multi-device router, or any native call.
+They do not prove that a hardware completion occurred or that a pool operation
+is lock-free, wait-free, or performant.
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -207,7 +230,9 @@ production-shaped copy transition substituting another source byte, and the
 production-shaped zero-first transition omitting the first zero byte, an INVALID
 packet body changed to vendor type zero, setup substitution during the modeled
 release word, reservation replay without write advance, acceptance of a
-regressed read observation, and overwrite of a full ring. The launcher
+regressed read observation, overwrite of a full ring, reuse of a released block
+without advancing its generation, and execution of a peer copy on its source
+device. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -255,6 +280,16 @@ refinement, ioctl truth or atomicity, queue-ID ownership, target resource sizes,
 doorbell mapping or arithmetic, executable AQL packet publication, completion,
 quiescence, firmware execution, liveness, or performance. Those remain adapter,
 target profile, dispatch, and hardware-refinement obligations.
+
+The R7 resource proof uses mathematical identities, phases, natural numbers,
+and finite sequences. The executable pool model separately exercises best-fit
+reuse, generation advance, completion-gated release, quarantine retention, and
+capacity rejection, but it is tested Rust rather than Verus-refined Rust. The
+native gfx942 SDMA implementation additionally freezes the reviewed queue and
+packet manifests and checks exact packet bytes. KFD ioctl truth, doorbell MMIO,
+CPU/GPU coherence, firmware consumption, native multi-device isolation,
+completion, progress, liveness, and performance remain contracted or measured,
+not proved.
 
 The R3 load-plan and materialization proofs establish only the stated
 mathematical relations over already-formed abstract values. They do not prove

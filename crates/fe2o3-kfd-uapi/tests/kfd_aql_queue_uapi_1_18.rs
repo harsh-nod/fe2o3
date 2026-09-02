@@ -16,13 +16,16 @@ use fe2o3_kfd_uapi::{
     KFD_GFX942_QUEUE_DOORBELL_SOURCE_SHA256, KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID,
     KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST, KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256,
     KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256_BYTES, KFD_IOC_QUEUE_TYPE_COMPUTE_AQL,
-    KFD_MAX_QUEUE_PERCENTAGE, KFD_MAX_QUEUE_PRIORITY, KFD_MAX_QUEUE_SLOTS_PER_PROCESS,
+    KFD_IOC_QUEUE_TYPE_SDMA, KFD_IOC_QUEUE_TYPE_SDMA_XGMI, KFD_MAX_QUEUE_PERCENTAGE,
+    KFD_MAX_QUEUE_PRIORITY, KFD_MAX_QUEUE_SLOTS_PER_PROCESS,
     KFD_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256, KFD_MIN_QUEUE_RING_SIZE,
     KFD_MMAP_GPU_ID_HASH_SHIFT, KFD_MMAP_TYPE_DOORBELL, KFD_MMAP_TYPE_SHIFT,
-    KFD_UAPI_SCHEMA_MANIFEST_SHA256, KfdAqlComputeQueueBuffers, KfdAqlQueueRingAddressError,
-    KfdAqlQueueRingSizeError, KfdGfx942CreateQueueOutputError, KfdIoctlCreateQueueArgs,
-    KfdIoctlDestroyQueueArgs, KfdIoctlUpdateQueueArgs, KfdQueuePercentageError,
-    KfdQueuePriorityError, admit_kfd_aql_queue_ring_address, admit_kfd_aql_queue_ring_size,
+    KFD_SDMA_QUEUE_SCHEMA_ID, KFD_SDMA_QUEUE_SCHEMA_MANIFEST,
+    KFD_SDMA_QUEUE_SCHEMA_MANIFEST_SHA256, KFD_UAPI_SCHEMA_MANIFEST_SHA256,
+    KfdAqlComputeQueueBuffers, KfdAqlQueueRingAddressError, KfdAqlQueueRingSizeError,
+    KfdGfx942CreateQueueOutputError, KfdIoctlCreateQueueArgs, KfdIoctlDestroyQueueArgs,
+    KfdIoctlUpdateQueueArgs, KfdQueuePercentageError, KfdQueuePriorityError, KfdSdmaQueueBuffers,
+    admit_kfd_aql_queue_ring_address, admit_kfd_aql_queue_ring_size,
     admit_kfd_gfx942_create_queue_outputs, admit_kfd_queue_percentage, admit_kfd_queue_priority,
 };
 use sha2::{Digest, Sha256};
@@ -82,6 +85,25 @@ fn gfx942_output_schema_is_separate_and_composes_with_queue_schema() {
     assert_eq!(
         &digest[..],
         &KFD_GFX942_QUEUE_RESOURCE_SCHEMA_MANIFEST_SHA256_BYTES
+    );
+}
+
+#[test]
+fn sdma_queue_schema_is_additive_and_digest_pinned() {
+    assert_eq!(
+        KFD_SDMA_QUEUE_SCHEMA_ID,
+        "linux-kfd-sdma-queue-1.18-generic-ioc-v1"
+    );
+    assert!(KFD_SDMA_QUEUE_SCHEMA_MANIFEST.contains(
+        "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119"
+    ));
+    assert!(
+        KFD_SDMA_QUEUE_SCHEMA_MANIFEST
+            .contains("queue_type=sdma:00000001,sdma_xgmi_known_not_admitted:00000003")
+    );
+    assert_eq!(
+        hex(&Sha256::digest(KFD_SDMA_QUEUE_SCHEMA_MANIFEST)),
+        KFD_SDMA_QUEUE_SCHEMA_MANIFEST_SHA256
     );
 }
 
@@ -312,13 +334,49 @@ fn queue_layouts_match_active_header_oracle() {
 
 #[test]
 fn queue_constants_and_requests_match_active_header_oracle() {
+    assert_eq!(KFD_IOC_QUEUE_TYPE_SDMA, 0x1);
     assert_eq!(KFD_IOC_QUEUE_TYPE_COMPUTE_AQL, 0x2);
+    assert_eq!(KFD_IOC_QUEUE_TYPE_SDMA_XGMI, 0x3);
     assert_eq!(KFD_MAX_QUEUE_PERCENTAGE, 100);
     assert_eq!(KFD_MAX_QUEUE_PRIORITY, 15);
     assert_eq!(KFD_MIN_QUEUE_RING_SIZE, 1024);
     assert_eq!(AMDKFD_IOC_CREATE_QUEUE, 0xc060_4b02);
     assert_eq!(AMDKFD_IOC_DESTROY_QUEUE, 0xc008_4b03);
     assert_eq!(AMDKFD_IOC_UPDATE_QUEUE, 0x4018_4b07);
+}
+
+#[test]
+fn sdma_builder_fixes_type_outputs_and_compute_only_fields() {
+    let buffers = KfdSdmaQueueBuffers {
+        ring_base_address: 0x5_0000,
+        write_pointer_address: 0x6_0000,
+        read_pointer_address: 0x6_1000,
+    };
+    let args = KfdIoctlCreateQueueArgs::new_sdma(
+        buffers,
+        admit_kfd_aql_queue_ring_size(4096).unwrap(),
+        7,
+        admit_kfd_queue_percentage(100).unwrap(),
+        admit_kfd_queue_priority(15).unwrap(),
+    );
+
+    assert_eq!(args.ring_base_address, buffers.ring_base_address);
+    assert_eq!(args.write_pointer_address, buffers.write_pointer_address);
+    assert_eq!(args.read_pointer_address, buffers.read_pointer_address);
+    assert_eq!(args.ring_size, 4096);
+    assert_eq!(args.gpu_id, 7);
+    assert_eq!(args.queue_type, KFD_IOC_QUEUE_TYPE_SDMA);
+    assert_eq!(args.queue_percentage, 100);
+    assert_eq!(args.queue_priority, 15);
+    assert_eq!(args.doorbell_offset, u64::MAX);
+    assert_eq!(args.queue_id, u32::MAX);
+    assert_eq!(args.eop_buffer_address, 0);
+    assert_eq!(args.eop_buffer_size, 0);
+    assert_eq!(args.ctx_save_restore_address, 0);
+    assert_eq!(args.ctx_save_restore_size, 0);
+    assert_eq!(args.ctl_stack_size, 0);
+    assert_eq!(args.sdma_engine_id, 0);
+    assert_eq!(args.pad, 0);
 }
 
 #[test]

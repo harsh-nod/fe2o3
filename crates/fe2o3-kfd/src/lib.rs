@@ -40,6 +40,9 @@ mod queue;
 mod semantic_observation;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod sdma;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod debug_trap;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -99,13 +102,26 @@ pub use queue::{
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
     Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
     Gfx942RecycledDispatchResourcesV1, Gfx942RecycledDispatchWriteRequestV1,
-    Gfx942RepeatedByteContentV1, Gfx942TimeoutExecutionObservationV1,
-    Gfx942TimeoutSignalObservationV1, KfdTargetRuntimeDebugQueueTeardownV1,
-    KfdTargetRuntimeDebugQueueV1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    Gfx942RepeatedByteContentV1, Gfx942SdmaBatchSubmissionFailureV1,
+    Gfx942SdmaBufferTransitionFailureV1, Gfx942SdmaSubmissionFailureV1,
+    Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
+    KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1, preflight_gfx942_fixed_dispatch_replacement,
+};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use sdma::{
+    GFX942_SDMA_COPY_MANIFEST_SHA256_V1, GFX942_SDMA_COPY_MANIFEST_V1,
+    GFX942_SDMA_COPY_PACKET_BYTES_V1, GFX942_SDMA_FENCE_PACKET_BYTES_V1,
+    GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, GFX942_SDMA_RING_BYTES_V1,
+    GFX942_SDMA_SUBMISSION_BYTES_V1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
+    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
+    Gfx942SdmaCopySubmissionV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
+    Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaPacketErrorV1, Gfx942SdmaQueueObservationV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

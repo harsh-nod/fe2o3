@@ -54,6 +54,13 @@ use crate::queue_linux::{
     arm_process_global_kfd_runtime_gate_for_teardown_v1,
     permanently_poison_process_global_kfd_runtime_gate_v1,
 };
+use crate::sdma::{
+    Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1,
+    Gfx942SdmaCopyRequestV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
+    Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueOwnerV1,
+    allocate_device_buffer, allocate_host_buffer, read_host_buffer, release_buffer,
+    write_host_buffer,
+};
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
     AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
@@ -1084,6 +1091,7 @@ pub enum ComputeAqlQueueSessionErrorV1 {
     Contract(&'static str),
     Native(&'static str),
     Doorbell(String),
+    Sdma(Gfx942SdmaErrorV1),
     /// USERPTR registration or `CREATE_QUEUE` may have taken effect and exact
     /// native custody cannot be returned. The process-global runtime gate is
     /// poisoned permanently.
@@ -1136,6 +1144,84 @@ impl From<LinuxDoorbellErrorV1> for ComputeAqlQueueSessionErrorV1 {
         Self::Doorbell(value.to_string())
     }
 }
+
+impl From<Gfx942SdmaErrorV1> for ComputeAqlQueueSessionErrorV1 {
+    fn from(value: Gfx942SdmaErrorV1) -> Self {
+        Self::Sdma(value)
+    }
+}
+
+#[must_use = "a recoverable failure returns both mapped buffer authorities"]
+pub struct Gfx942SdmaSubmissionFailureV1 {
+    error: ComputeAqlQueueSessionErrorV1,
+    recovered: Option<(Gfx942SdmaBufferV1, Gfx942SdmaBufferV1)>,
+}
+
+impl Gfx942SdmaSubmissionFailureV1 {
+    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Option<(Gfx942SdmaBufferV1, Gfx942SdmaBufferV1)>,
+    ) {
+        (self.error, self.recovered)
+    }
+}
+
+#[must_use = "a recoverable batch failure returns every mapped buffer authority"]
+pub struct Gfx942SdmaBatchSubmissionFailureV1 {
+    error: ComputeAqlQueueSessionErrorV1,
+    recovered: Option<Vec<Gfx942SdmaCopyRequestV1>>,
+}
+
+impl Gfx942SdmaBatchSubmissionFailureV1 {
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Option<Vec<Gfx942SdmaCopyRequestV1>>,
+    ) {
+        (self.error, self.recovered)
+    }
+}
+
+#[must_use = "a recoverable buffer-transition failure returns the mapped buffer authority"]
+pub struct Gfx942SdmaBufferTransitionFailureV1 {
+    error: ComputeAqlQueueSessionErrorV1,
+    recovered: Option<Gfx942SdmaBufferV1>,
+}
+
+impl Gfx942SdmaBufferTransitionFailureV1 {
+    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (ComputeAqlQueueSessionErrorV1, Option<Gfx942SdmaBufferV1>) {
+        (self.error, self.recovered)
+    }
+}
+
+impl fmt::Debug for Gfx942SdmaBufferTransitionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942SdmaBufferTransitionFailureV1")
+            .field("error", &self.error)
+            .field("recovered", &self.recovered.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Display for Gfx942SdmaBufferTransitionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for Gfx942SdmaBufferTransitionFailureV1 {}
 
 #[derive(Clone, Copy)]
 struct DetachedReturningDestroyPreflightV1 {
@@ -1214,6 +1300,10 @@ pub struct ComputeAqlQueueSessionV1 {
     detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     detached_next_insertion_index: Option<usize>,
     exception: Option<QueueExceptionStateV1>,
+    sdma: Option<Gfx942SdmaQueueOwnerV1>,
+    sdma_outstanding_buffers: usize,
+    sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
+    sdma_pool_reuse_count: u64,
     terminal_poisoned: bool,
     observation: ComputeAqlQueueObservationV1,
 }
@@ -1961,6 +2051,10 @@ impl ComputeAqlQueueSessionV1 {
                 event,
                 shadows,
             }),
+            sdma: None,
+            sdma_outstanding_buffers: 0,
+            sdma_pool_free: Vec::new(),
+            sdma_pool_reuse_count: 0,
             terminal_poisoned: false,
             observation: ComputeAqlQueueObservationV1 {
                 queue_id,
@@ -1993,6 +2087,505 @@ impl ComputeAqlQueueSessionV1 {
 
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
         self.observation
+    }
+
+    /// Adds one generic gfx942 SDMA queue to this session.
+    ///
+    /// Any failure is terminal because USERPTR registration or CREATE_QUEUE may
+    /// already have changed native state without returning exact custody.
+    pub fn enable_sdma_copy_engine(
+        &mut self,
+    ) -> Result<Gfx942SdmaQueueObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "SDMA copy engine is already enabled",
+            ));
+        }
+        let key = self.key;
+        let created = self.with_live_queue_memory_model(|memory| {
+            Gfx942SdmaQueueOwnerV1::create(memory, key).map_err(Into::into)
+        });
+        match created {
+            Ok(owner) => {
+                let observation = owner.observation();
+                self.sdma = Some(owner);
+                Ok(observation)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    pub fn allocate_sdma_host_buffer(
+        &mut self,
+        bytes: usize,
+    ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        let next_outstanding = self.sdma_outstanding_buffers.checked_add(1).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted"),
+        )?;
+        let owner = self.key;
+        let buffer = self.with_live_queue_memory_model(|memory| {
+            allocate_host_buffer(memory, owner, bytes).map_err(Into::into)
+        })?;
+        self.sdma_outstanding_buffers = next_outstanding;
+        Ok(buffer)
+    }
+
+    pub fn allocate_sdma_device_buffer(
+        &mut self,
+        bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        let next_outstanding = self.sdma_outstanding_buffers.checked_add(1).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted"),
+        )?;
+        let owner = self.key;
+        let buffer = self.with_live_queue_memory_model(|memory| {
+            allocate_device_buffer(memory, owner, bytes, alignment).map_err(Into::into)
+        })?;
+        self.sdma_outstanding_buffers = next_outstanding;
+        Ok(buffer)
+    }
+
+    pub fn allocate_sdma_pooled_host_buffer(
+        &mut self,
+        bytes: usize,
+    ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        let requested = u64::try_from(bytes).map_err(|_| {
+            ComputeAqlQueueSessionErrorV1::Contract("pooled host-buffer size conversion")
+        })?;
+        if let Some(mut buffer) =
+            self.checkout_sdma_pool(Gfx942SdmaBufferKindV1::HostVisibleCoherent, requested, 1)?
+        {
+            buffer.set_logical_bytes(requested);
+            return Ok(buffer);
+        }
+        self.allocate_sdma_host_buffer(bytes)
+    }
+
+    pub fn allocate_sdma_pooled_device_buffer(
+        &mut self,
+        bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        if alignment == 0 || !alignment.is_power_of_two() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "pooled device-buffer alignment",
+            ));
+        }
+        if let Some(mut buffer) =
+            self.checkout_sdma_pool(Gfx942SdmaBufferKindV1::DeviceLocal, bytes, alignment)?
+        {
+            buffer.set_logical_bytes(bytes);
+            return Ok(buffer);
+        }
+        self.allocate_sdma_device_buffer(bytes, alignment)
+    }
+
+    // Recoverable rejection returns the move-only allocation authority without
+    // a fallible recovery allocation. Terminal bookkeeping failures retain it.
+    #[allow(clippy::result_large_err)]
+    pub fn recycle_sdma_buffer(
+        &mut self,
+        mut buffer: Gfx942SdmaBufferV1,
+    ) -> Result<(), Gfx942SdmaBufferTransitionFailureV1> {
+        if !buffer.belongs_to(self.key) {
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                recovered: Some(buffer),
+            });
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        if self.sdma_outstanding_buffers == 0 {
+            self.poison_terminal();
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger underflow"),
+                recovered: None,
+            });
+        }
+        if self.sdma_pool_free.try_reserve(1).is_err() {
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA pool allocation failed"),
+                recovered: Some(buffer),
+            });
+        }
+        if let Err(error) = buffer.advance_pool_generation() {
+            self.poison_terminal();
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error: error.into(),
+                recovered: None,
+            });
+        }
+        self.sdma_outstanding_buffers -= 1;
+        self.sdma_pool_free.push(buffer);
+        Ok(())
+    }
+
+    pub fn trim_sdma_memory_pool(&mut self) -> Result<usize, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        let mut released = 0_usize;
+        while let Some(buffer) = self.sdma_pool_free.pop() {
+            let result = self.with_live_queue_memory_model(|memory| {
+                release_buffer(memory, buffer).map_err(Into::into)
+            });
+            if let Err(error) = result {
+                self.poison_terminal();
+                return Err(error);
+            }
+            released += 1;
+        }
+        Ok(released)
+    }
+
+    pub fn sdma_memory_pool_observation(
+        &self,
+    ) -> Result<Gfx942SdmaMemoryPoolObservationV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        let retained_free_bytes = self
+            .sdma_pool_free
+            .iter()
+            .try_fold(0_u64, |total, buffer| {
+                total.checked_add(buffer.physical_bytes()).ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract("SDMA pool byte accounting overflow"),
+                )
+            })?;
+        Ok(Gfx942SdmaMemoryPoolObservationV1 {
+            checked_out_buffers: self.sdma_outstanding_buffers,
+            retained_free_buffers: self.sdma_pool_free.len(),
+            retained_free_bytes,
+            reuse_count: self.sdma_pool_reuse_count,
+        })
+    }
+
+    pub fn write_sdma_host_buffer(
+        &mut self,
+        buffer: &mut Gfx942SdmaBufferV1,
+        offset: u64,
+        source: &[u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        self.with_live_queue_memory_model(|memory| {
+            write_host_buffer(memory, buffer, offset, source).map_err(Into::into)
+        })
+    }
+
+    pub fn read_sdma_host_buffer(
+        &mut self,
+        buffer: &Gfx942SdmaBufferV1,
+        offset: u64,
+        byte_len: u64,
+    ) -> Result<Box<[u8]>, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        self.with_live_queue_memory_model(|memory| {
+            read_host_buffer(memory, buffer, offset, byte_len).map_err(Into::into)
+        })
+    }
+
+    // Recoverable rejection returns the move-only allocation authority before
+    // native work. Terminal bookkeeping or native failures retain it.
+    #[allow(clippy::result_large_err)]
+    pub fn release_sdma_buffer(
+        &mut self,
+        buffer: Gfx942SdmaBufferV1,
+    ) -> Result<(), Gfx942SdmaBufferTransitionFailureV1> {
+        if !buffer.belongs_to(self.key) {
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                recovered: Some(buffer),
+            });
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        if self.sdma_outstanding_buffers == 0 {
+            self.poison_terminal();
+            return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger underflow"),
+                recovered: None,
+            });
+        }
+        let result = self.with_live_queue_memory_model(|memory| {
+            release_buffer(memory, buffer).map_err(Into::into)
+        });
+        match result {
+            Ok(()) => {
+                self.sdma_outstanding_buffers -= 1;
+                Ok(())
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(Gfx942SdmaBufferTransitionFailureV1 {
+                    error,
+                    recovered: None,
+                })
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    // The error returns both move-only allocation authorities without a
+    // fallible recovery allocation.
+    #[allow(clippy::result_large_err)]
+    pub fn submit_sdma_copy(
+        &mut self,
+        source: Gfx942SdmaBufferV1,
+        source_offset: u64,
+        destination: Gfx942SdmaBufferV1,
+        destination_offset: u64,
+        copy_bytes: u32,
+    ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942SdmaSubmissionFailureV1> {
+        if !source.belongs_to(self.key) || !destination.belongs_to(self.key) {
+            return Err(Gfx942SdmaSubmissionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                recovered: Some((source, destination)),
+            });
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaSubmissionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        }) {
+            self.poison_terminal();
+            return Err(Gfx942SdmaSubmissionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        let preflight = self.with_sdma_owner_memory(|owner, memory| {
+            owner
+                .preflight_recoverable(
+                    memory,
+                    &source,
+                    source_offset,
+                    &destination,
+                    destination_offset,
+                    copy_bytes,
+                )
+                .map_err(Into::into)
+        });
+        if let Err(error) = preflight {
+            let owner_poisoned = self
+                .sdma
+                .as_ref()
+                .is_none_or(Gfx942SdmaQueueOwnerV1::is_poisoned);
+            let post = self.with_sdma_owner_memory(|_, memory| {
+                memory
+                    .check_queue_operational_currentness()
+                    .map_err(Into::into)
+            });
+            if owner_poisoned || post.is_err() {
+                self.poison_terminal();
+                return Err(Gfx942SdmaSubmissionFailureV1 {
+                    error: post.err().unwrap_or(error),
+                    recovered: None,
+                });
+            }
+            return Err(Gfx942SdmaSubmissionFailureV1 {
+                error,
+                recovered: Some((source, destination)),
+            });
+        }
+        let result = self.with_sdma_owner_memory(|owner, memory| {
+            owner
+                .submit(
+                    memory,
+                    source,
+                    source_offset,
+                    destination,
+                    destination_offset,
+                    copy_bytes,
+                )
+                .map_err(Into::into)
+        });
+        let post = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        });
+        match (result, post) {
+            (Ok(ticket), Ok(())) => Ok(ticket),
+            (Err(error), _) | (Ok(_), Err(error)) => {
+                self.poison_terminal();
+                Err(Gfx942SdmaSubmissionFailureV1 {
+                    error,
+                    recovered: None,
+                })
+            }
+        }
+    }
+
+    pub fn submit_sdma_copy_batch(
+        &mut self,
+        requests: Vec<Gfx942SdmaCopyRequestV1>,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942SdmaBatchSubmissionFailureV1> {
+        if requests.iter().any(|request| {
+            !request.source.belongs_to(self.key) || !request.destination.belongs_to(self.key)
+        }) {
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                recovered: Some(requests),
+            });
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        let mut tickets = Vec::new();
+        if tickets.try_reserve_exact(requests.len()).is_err() {
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "SDMA ticket roster allocation failed",
+                ),
+                recovered: Some(requests),
+            });
+        }
+        if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        }) {
+            self.poison_terminal();
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        let preflight = self.with_sdma_owner_memory(|owner, memory| {
+            owner.ensure_batch_capacity(memory, requests.len())?;
+            for request in &requests {
+                owner.preflight_recoverable(
+                    memory,
+                    &request.source,
+                    request.source_offset,
+                    &request.destination,
+                    request.destination_offset,
+                    request.copy_bytes,
+                )?;
+            }
+            Ok(())
+        });
+        if let Err(error) = preflight {
+            let owner_poisoned = self
+                .sdma
+                .as_ref()
+                .is_none_or(Gfx942SdmaQueueOwnerV1::is_poisoned);
+            let post = self.with_sdma_owner_memory(|_, memory| {
+                memory
+                    .check_queue_operational_currentness()
+                    .map_err(Into::into)
+            });
+            if owner_poisoned || post.is_err() {
+                self.poison_terminal();
+                return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                    error: post.err().unwrap_or(error),
+                    recovered: None,
+                });
+            }
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error,
+                recovered: Some(requests),
+            });
+        }
+        let result = self.with_sdma_owner_memory(|owner, memory| {
+            for request in requests {
+                tickets.push(owner.submit(
+                    memory,
+                    request.source,
+                    request.source_offset,
+                    request.destination,
+                    request.destination_offset,
+                    request.copy_bytes,
+                )?);
+            }
+            Ok(())
+        });
+        let post = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        });
+        match (result, post) {
+            (Ok(()), Ok(())) => Ok(tickets),
+            (Err(error), _) | (Ok(()), Err(error)) => {
+                self.poison_terminal();
+                Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                    error,
+                    recovered: None,
+                })
+            }
+        }
+    }
+
+    pub fn poll_sdma_copy(
+        &mut self,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<Gfx942SdmaCopyPollV1, ComputeAqlQueueSessionErrorV1> {
+        let result = self
+            .with_sdma_owner_memory(|owner, memory| owner.poll(memory, ticket).map_err(Into::into));
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result
+    }
+
+    pub fn wait_sdma_copy_for(
+        &mut self,
+        ticket: Gfx942SdmaCopyTicketV1,
+        timeout: Duration,
+    ) -> Result<Gfx942SdmaCompletedCopyV1, ComputeAqlQueueSessionErrorV1> {
+        let result = self.with_sdma_owner_memory(|owner, memory| {
+            owner.wait_for(memory, ticket, timeout).map_err(Into::into)
+        });
+        if result.as_ref().is_err_and(|error| {
+            !matches!(
+                error,
+                ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout)
+            )
+        }) {
+            self.poison_terminal();
+        }
+        result
+    }
+
+    pub fn wait_sdma_copy_batch_for(
+        &mut self,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, ComputeAqlQueueSessionErrorV1> {
+        let result = self.with_sdma_owner_memory(|owner, memory| {
+            owner
+                .wait_many_for(memory, tickets, timeout)
+                .map_err(Into::into)
+        });
+        if result.as_ref().is_err_and(|error| {
+            !matches!(
+                error,
+                ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout)
+            )
+        }) {
+            self.poison_terminal();
+        }
+        result
     }
 
     /// Exact process-local queue occurrence for private debugger correlation.
@@ -3806,6 +4399,16 @@ impl ComputeAqlQueueSessionV1 {
                 "terminal queue session requires process teardown",
             ));
         }
+        if self.sdma_outstanding_buffers != 0 {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "all SDMA buffers must be released before queue destruction",
+            ));
+        }
+        if !self.sdma_pool_free.is_empty() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "the SDMA memory pool must be trimmed before queue destruction",
+            ));
+        }
         self.completion_owner.ensure_releasable()?;
         let (return_attached, detached_return) = match mode {
             QueueDestroyModeV1::Release => {
@@ -3851,6 +4454,20 @@ impl ComputeAqlQueueSessionV1 {
                 (false, Some((generation, data)))
             }
         };
+        if let Some(sdma) = self.sdma.as_mut() {
+            let memory = &mut self
+                .engine
+                .as_mut()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing queue engine",
+                ))?
+                .backend
+                .session;
+            if let Err(error) = sdma.destroy_queue(memory) {
+                self.terminal_poisoned = true;
+                return Err(error.into());
+            }
+        }
         let engine = self
             .engine
             .as_mut()
@@ -3915,6 +4532,17 @@ impl ComputeAqlQueueSessionV1 {
             authority,
             shadow_release,
         )?;
+        let released_sdma = self.sdma.is_some();
+        if let Some(sdma) = self.sdma.take() {
+            sdma.release_resources(
+                &mut self
+                    .engine
+                    .as_mut()
+                    .expect("session engine")
+                    .backend
+                    .session,
+            )?;
+        }
         let returned_dispatch = match self.dispatch.take() {
             Some(dispatch) if return_attached => {
                 let returned = dispatch.release_non_data_after_recycle(
@@ -3957,7 +4585,7 @@ impl ComputeAqlQueueSessionV1 {
         let callback_result = after_queue_destroyed(memory)?;
         let destroyed = ComputeAqlQueueDestroyedV1 {
             queue_id: self.observation.queue_id,
-            released_resources: 5,
+            released_resources: if released_sdma { 8 } else { 5 },
         };
         let Some((dispatch_generation, data)) = returned_dispatch else {
             return Ok((QueueDestroyOutcomeV1::Released(destroyed), callback_result));
@@ -3987,6 +4615,72 @@ impl ComputeAqlQueueSessionV1 {
                 "missing queue engine",
             ))?;
         engine.prepare_operation().map_err(map_native)
+    }
+
+    fn require_sdma_enabled(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            ));
+        }
+        if self.sdma.is_none() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "SDMA copy engine is not enabled",
+            ));
+        }
+        Ok(())
+    }
+
+    fn checkout_sdma_pool(
+        &mut self,
+        kind: Gfx942SdmaBufferKindV1,
+        requested_bytes: u64,
+        required_alignment: u64,
+    ) -> Result<Option<Gfx942SdmaBufferV1>, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        if requested_bytes == 0 {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "pooled buffer length must be nonzero",
+            ));
+        }
+        let best = self
+            .sdma_pool_free
+            .iter()
+            .enumerate()
+            .filter(|(_, buffer)| {
+                buffer.kind() == kind
+                    && buffer.physical_bytes() >= requested_bytes
+                    && buffer.physical_alignment() >= required_alignment
+            })
+            .min_by_key(|(_, buffer)| (buffer.physical_bytes(), buffer.physical_alignment()))
+            .map(|(index, _)| index);
+        let Some(index) = best else {
+            return Ok(None);
+        };
+        let next_outstanding = self.sdma_outstanding_buffers.checked_add(1).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger exhausted"),
+        )?;
+        let next_reuse = self.sdma_pool_reuse_count.checked_add(1).ok_or(
+            ComputeAqlQueueSessionErrorV1::Contract("SDMA pool reuse counter exhausted"),
+        )?;
+        let buffer = self.sdma_pool_free.swap_remove(index);
+        self.sdma_outstanding_buffers = next_outstanding;
+        self.sdma_pool_reuse_count = next_reuse;
+        Ok(Some(buffer))
+    }
+
+    fn with_sdma_owner_memory<R>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut Gfx942SdmaQueueOwnerV1,
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<R, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        let mut owner = self.sdma.take().expect("checked SDMA owner");
+        let result = self.with_live_queue_memory_model(|memory| operation(&mut owner, memory));
+        self.sdma = Some(owner);
+        result
     }
 
     fn with_live_queue_memory_model<R>(

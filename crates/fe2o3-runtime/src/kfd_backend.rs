@@ -2555,6 +2555,824 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RoutedHandleV1 {
+    child: usize,
+    local: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RoutedSubmissionV1 {
+    Native(RoutedHandleV1),
+    HostStagedPeer { stream: u64 },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RoutedEventV1 {
+    Native {
+        route: RoutedHandleV1,
+        submission: u64,
+    },
+    HostStagedPeer {
+        submission: u64,
+        child: usize,
+    },
+}
+
+/// Process-local multi-device KFD router.
+///
+/// Every selected device is admitted before any child lazily creates a VM or
+/// queue, satisfying KFD's process-wide no-queue XNACK barrier. Dispatches on
+/// different children can execute independently. Cross-device copies use a
+/// bounded host staging buffer in this profile; native XGMI/peer mappings are
+/// not claimed.
+#[must_use = "multi-device KFD backends must remain owned through quiescence"]
+pub struct KfdMultiDeviceRuntimeBackendV1 {
+    children: Vec<KfdRuntimeBackendV1>,
+    device_children: HashMap<u64, usize>,
+    terminal: bool,
+    next_handle: u64,
+    streams: HashMap<u64, RoutedHandleV1>,
+    allocations: HashMap<u64, RoutedHandleV1>,
+    modules: HashMap<u64, RoutedHandleV1>,
+    kernels: HashMap<u64, RoutedHandleV1>,
+    kernel_modules: HashMap<u64, u64>,
+    submissions: HashMap<u64, RoutedSubmissionV1>,
+    events: HashMap<u64, RoutedEventV1>,
+}
+
+impl fmt::Debug for KfdMultiDeviceRuntimeBackendV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KfdMultiDeviceRuntimeBackendV1")
+            .field("devices", &self.device_children.len())
+            .field("streams", &self.streams.len())
+            .field("allocations", &self.allocations.len())
+            .field("modules", &self.modules.len())
+            .field("kernels", &self.kernels.len())
+            .field("submissions", &self.submissions.len())
+            .field("events", &self.events.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl KfdMultiDeviceRuntimeBackendV1 {
+    /// Admits all selected devices before any queue can be materialized.
+    pub fn open_default(
+        devices: Vec<(u64, Box<dyn KfdRuntimeLaunchAuthorityV1>)>,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        if devices.len() < 2 {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "multi-device KFD requires at least two devices",
+            ));
+        }
+        let mut checked = Vec::new();
+        checked.try_reserve_exact(devices.len()).map_err(|_| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "multi-device checked-device roster allocation failed",
+            )
+        })?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(devices.len()).map_err(|_| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "multi-device identity-set allocation failed",
+            )
+        })?;
+        for (unique_id, authority) in devices {
+            if unique_id == 0 || !seen.insert(unique_id) {
+                return Err(KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "multi-device unique IDs must be nonzero and distinct",
+                ));
+            }
+            let opened = OpenedKfd::open_default().map_err(|error| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    error.to_string(),
+                )
+            })?;
+            let admitted = opened.admit_uapi().map_err(|error| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    error.to_string(),
+                )
+            })?;
+            let device = admitted
+                .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))
+                .map_err(|error| {
+                    KfdRuntimeBackendErrorV1::new(
+                        KfdRuntimeBackendErrorKindV1::Native,
+                        error.to_string(),
+                    )
+                })?;
+            checked.push((device, authority));
+        }
+        let mut children = Vec::new();
+        children.try_reserve_exact(checked.len()).map_err(|_| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "multi-device child roster allocation failed",
+            )
+        })?;
+        for (device, authority) in checked {
+            children.push(KfdRuntimeBackendV1::from_checked_device_with_gate(
+                device,
+                KfdRuntimeLaunchGateV1::Production(authority),
+            ));
+        }
+        Self::from_backends(children)
+    }
+
+    // Composition stays private so a caller cannot hide already-live child
+    // handles behind newly empty routing tables.
+    fn from_backends(children: Vec<KfdRuntimeBackendV1>) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        if children.len() < 2 {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "multi-device KFD requires at least two child backends",
+            ));
+        }
+        let mut device_children = HashMap::new();
+        device_children.try_reserve(children.len()).map_err(|_| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "multi-device routing-table allocation failed",
+            )
+        })?;
+        for (index, child) in children.iter().enumerate() {
+            if device_children
+                .insert(child.description.backend_device, index)
+                .is_some()
+            {
+                return Err(KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "multi-device child IDs must be distinct",
+                ));
+            }
+        }
+        Ok(Self {
+            children,
+            device_children,
+            terminal: false,
+            next_handle: 1,
+            streams: HashMap::new(),
+            allocations: HashMap::new(),
+            modules: HashMap::new(),
+            kernels: HashMap::new(),
+            kernel_modules: HashMap::new(),
+            submissions: HashMap::new(),
+            events: HashMap::new(),
+        })
+    }
+
+    /// Explicitly tears down every quiescent child in reverse admission order.
+    pub fn shutdown_native_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        if !self.streams.is_empty()
+            || !self.allocations.is_empty()
+            || !self.modules.is_empty()
+            || !self.kernels.is_empty()
+            || !self.kernel_modules.is_empty()
+            || !self.submissions.is_empty()
+            || !self.events.is_empty()
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "multi-device logical runtime resources remain live",
+            ));
+        }
+        for child in self.children.iter_mut().rev() {
+            let result = child.shutdown_native_v1();
+            if matches!(result, Err(RuntimeBackendFailureV1::Terminal(_))) {
+                self.terminal = true;
+            }
+            result?;
+        }
+        Ok(())
+    }
+
+    fn require_live(&self) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.terminal {
+            Err(RuntimeBackendFailureV1::Terminal(
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Terminal,
+                    "multi-device KFD backend is terminal",
+                ),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn latch<T>(
+        &mut self,
+        result: Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
+    ) -> Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if matches!(result, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.terminal = true;
+        }
+        result
+    }
+
+    fn next_id(&mut self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let id = self.next_handle;
+        self.next_handle = self.next_handle.checked_add(1).ok_or_else(|| {
+            KfdRuntimeBackendV1::capacity("multi-device routing handle space exhausted")
+        })?;
+        Ok(id)
+    }
+
+    fn reserve_route<T>(
+        table: &mut HashMap<u64, T>,
+        detail: &'static str,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        table
+            .try_reserve(1)
+            .map_err(|_| KfdRuntimeBackendV1::capacity(detail))
+    }
+
+    fn child_for_device(
+        &self,
+        device: u64,
+    ) -> Result<usize, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.device_children.get(&device).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "unknown multi-device KFD device",
+            )
+        })
+    }
+
+    fn route(
+        table: &HashMap<u64, RoutedHandleV1>,
+        handle: u64,
+        detail: &'static str,
+    ) -> Result<RoutedHandleV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        table.get(&handle).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(KfdRuntimeBackendErrorKindV1::UnknownHandle, detail)
+        })
+    }
+
+    fn dependency_for_child(
+        &mut self,
+        event: u64,
+        child: usize,
+    ) -> Result<Option<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        match self.events.get(&event).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD event",
+            )
+        })? {
+            RoutedEventV1::Native { route, .. } if route.child == child => Ok(Some(route.local)),
+            RoutedEventV1::Native { .. } => Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "kernel dependency belongs to another KFD device",
+            )),
+            RoutedEventV1::HostStagedPeer {
+                submission,
+                child: event_child,
+            } if event_child == child => match self.poll_v1(submission)? {
+                BackendPollV1::Succeeded => Ok(None),
+                BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "host-staged peer dependency is pending",
+                )),
+                BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    "host-staged peer dependency failed",
+                )),
+            },
+            RoutedEventV1::HostStagedPeer { .. } => Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "kernel dependency belongs to another KFD device",
+            )),
+        }
+    }
+
+    fn require_dependency_complete(
+        &mut self,
+        event: u64,
+        source_child: usize,
+        destination_child: usize,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        match self.events.get(&event).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD event",
+            )
+        })? {
+            RoutedEventV1::Native { route, submission }
+                if route.child == source_child || route.child == destination_child =>
+            {
+                match self.poll_v1(submission)? {
+                    BackendPollV1::Succeeded => Ok(()),
+                    BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::Busy,
+                        "peer-copy dependency is pending",
+                    )),
+                    BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "peer-copy dependency failed",
+                    )),
+                }
+            }
+            RoutedEventV1::HostStagedPeer { submission, child }
+                if child == source_child || child == destination_child =>
+            {
+                match self.poll_v1(submission)? {
+                    BackendPollV1::Succeeded => Ok(()),
+                    BackendPollV1::Pending => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::Busy,
+                        "peer-copy dependency is pending",
+                    )),
+                    BackendPollV1::Failed { .. } => Err(KfdRuntimeBackendV1::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        "peer-copy dependency failed",
+                    )),
+                }
+            }
+            _ => Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "peer-copy dependency belongs to an unrelated KFD device",
+            )),
+        }
+    }
+}
+
+impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    type Error = KfdRuntimeBackendErrorV1;
+
+    fn enumerate_devices_v1(
+        &mut self,
+    ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let mut descriptions = Vec::new();
+        descriptions
+            .try_reserve_exact(self.children.len())
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("multi-device description allocation failed")
+            })?;
+        for index in 0..self.children.len() {
+            let current = self.children[index].require_live();
+            self.latch(current)?;
+            let child = &self.children[index];
+            let mut description = child.description.clone();
+            description.capabilities.multi_device = true;
+            description.capabilities.peer_copy = true;
+            descriptions.push(description);
+        }
+        Ok(descriptions)
+    }
+
+    fn create_stream_v1(
+        &mut self,
+        device: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let child = self.child_for_device(device)?;
+        Self::reserve_route(
+            &mut self.streams,
+            "multi-device stream route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[child].create_stream_v1(device);
+        let local = self.latch(result)?;
+        self.streams.insert(id, RoutedHandleV1 { child, local });
+        Ok(id)
+    }
+
+    fn destroy_stream_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        let result = self.children[route.child].destroy_stream_v1(route.local);
+        self.latch(result)?;
+        self.streams.remove(&stream);
+        Ok(())
+    }
+
+    fn allocate_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let child = self.child_for_device(device)?;
+        Self::reserve_route(
+            &mut self.allocations,
+            "multi-device allocation route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[child].allocate_v1(device, kind, byte_len, alignment);
+        let local = self.latch(result)?;
+        self.allocations.insert(id, RoutedHandleV1 { child, local });
+        Ok(id)
+    }
+
+    fn release_allocation_v1(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = Self::route(
+            &self.allocations,
+            allocation,
+            "unknown multi-device KFD allocation",
+        )?;
+        let result = self.children[route.child].release_allocation_v1(route.local);
+        self.latch(result)?;
+        self.allocations.remove(&allocation);
+        Ok(())
+    }
+
+    fn write_allocation_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = Self::route(
+            &self.allocations,
+            allocation,
+            "unknown multi-device KFD allocation",
+        )?;
+        let result =
+            self.children[route.child].write_allocation_v1(route.local, byte_offset, bytes);
+        self.latch(result)
+    }
+
+    fn read_allocation_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = Self::route(
+            &self.allocations,
+            allocation,
+            "unknown multi-device KFD allocation",
+        )?;
+        let result =
+            self.children[route.child].read_allocation_v1(route.local, byte_offset, destination);
+        self.latch(result)
+    }
+
+    fn load_module_v1(
+        &mut self,
+        device: u64,
+        image: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let child = self.child_for_device(device)?;
+        Self::reserve_route(
+            &mut self.modules,
+            "multi-device module route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[child].load_module_v1(device, image);
+        let local = self.latch(result)?;
+        self.modules.insert(id, RoutedHandleV1 { child, local });
+        Ok(id)
+    }
+
+    fn unload_module_v1(
+        &mut self,
+        module: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = Self::route(&self.modules, module, "unknown multi-device KFD module")?;
+        let result = self.children[route.child].unload_module_v1(route.local);
+        self.latch(result)?;
+        self.modules.remove(&module);
+        self.kernels
+            .retain(|kernel, _| self.kernel_modules.get(kernel) != Some(&module));
+        self.kernel_modules
+            .retain(|_, retained_module| *retained_module != module);
+        Ok(())
+    }
+
+    fn resolve_kernel_v1(
+        &mut self,
+        module: u64,
+        name: &str,
+        signature: [u8; 32],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = Self::route(&self.modules, module, "unknown multi-device KFD module")?;
+        Self::reserve_route(
+            &mut self.kernels,
+            "multi-device kernel route allocation failed",
+        )?;
+        Self::reserve_route(
+            &mut self.kernel_modules,
+            "multi-device kernel-module route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[route.child].resolve_kernel_v1(route.local, name, signature);
+        let local = self.latch(result)?;
+        self.kernels.insert(
+            id,
+            RoutedHandleV1 {
+                child: route.child,
+                local,
+            },
+        );
+        self.kernel_modules.insert(id, module);
+        Ok(id)
+    }
+
+    fn submit_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let stream = Self::route(
+            &self.streams,
+            launch.stream,
+            "unknown multi-device KFD stream",
+        )?;
+        let kernel = Self::route(
+            &self.kernels,
+            launch.kernel,
+            "unknown multi-device KFD kernel",
+        )?;
+        if stream.child != kernel.child {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::WrongDevice,
+                "kernel and stream belong to different KFD devices",
+            ));
+        }
+        let mut bindings = Vec::new();
+        bindings
+            .try_reserve_exact(launch.bindings.len())
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("multi-device binding translation failed")
+            })?;
+        for binding in launch.bindings {
+            let allocation = Self::route(
+                &self.allocations,
+                binding.region.allocation,
+                "unknown multi-device KFD allocation",
+            )?;
+            if allocation.child != stream.child {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::WrongDevice,
+                    "kernel binding belongs to another KFD device",
+                ));
+            }
+            bindings.push(BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: allocation.local,
+                    access: binding.region.access,
+                    byte_offset: binding.region.byte_offset,
+                    byte_len: binding.region.byte_len,
+                },
+                kernarg_byte_offset: binding.kernarg_byte_offset,
+            });
+        }
+        let mut dependencies = Vec::new();
+        dependencies
+            .try_reserve_exact(launch.dependencies.len())
+            .map_err(|_| {
+                KfdRuntimeBackendV1::capacity("multi-device dependency translation failed")
+            })?;
+        for event in launch.dependencies {
+            if let Some(local) = self.dependency_for_child(*event, stream.child)? {
+                dependencies.push(local);
+            }
+        }
+        Self::reserve_route(
+            &mut self.submissions,
+            "multi-device submission route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[stream.child].submit_v1(BackendLaunchV1 {
+            stream: stream.local,
+            kernel: kernel.local,
+            explicit_kernarg: launch.explicit_kernarg,
+            bindings: &bindings,
+            dependencies: &dependencies,
+            geometry: launch.geometry,
+        });
+        let local = self.latch(result)?;
+        self.submissions.insert(
+            id,
+            RoutedSubmissionV1::Native(RoutedHandleV1 {
+                child: stream.child,
+                local,
+            }),
+        );
+        Ok(id)
+    }
+
+    fn poll_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        match self.submissions.get(&submission).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD submission",
+            )
+        })? {
+            RoutedSubmissionV1::Native(route) => {
+                let result = self.children[route.child].poll_v1(route.local);
+                self.latch(result)
+            }
+            RoutedSubmissionV1::HostStagedPeer { .. } => Ok(BackendPollV1::Succeeded),
+        }
+    }
+
+    fn wait_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        match self.submissions.get(&submission).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD submission",
+            )
+        })? {
+            RoutedSubmissionV1::Native(route) => {
+                let result = self.children[route.child].wait_v1(route.local, deadline);
+                self.latch(result)
+            }
+            RoutedSubmissionV1::HostStagedPeer { .. } => Ok(BackendPollV1::Succeeded),
+        }
+    }
+
+    fn release_submission_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = self.submissions.get(&submission).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD submission",
+            )
+        })?;
+        if self.events.values().any(|event| {
+            matches!(event, RoutedEventV1::HostStagedPeer { submission: retained, .. } if *retained == submission)
+        }) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "submission is retained by a multi-device event",
+            ));
+        }
+        if let RoutedSubmissionV1::Native(route) = route {
+            let result = self.children[route.child].release_submission_v1(route.local);
+            self.latch(result)?;
+        }
+        self.submissions.remove(&submission);
+        Ok(())
+    }
+
+    fn record_event_v1(
+        &mut self,
+        stream: u64,
+        submission: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        let submission_route = self.submissions.get(&submission).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD submission",
+            )
+        })?;
+        Self::reserve_route(
+            &mut self.events,
+            "multi-device event route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let routed = match submission_route {
+            RoutedSubmissionV1::Native(route) if route.child == stream_route.child => {
+                let result =
+                    self.children[route.child].record_event_v1(stream_route.local, route.local);
+                let local = self.latch(result)?;
+                RoutedEventV1::Native {
+                    route: RoutedHandleV1 {
+                        child: route.child,
+                        local,
+                    },
+                    submission,
+                }
+            }
+            RoutedSubmissionV1::HostStagedPeer {
+                stream: source_stream,
+            } if source_stream == stream => RoutedEventV1::HostStagedPeer {
+                submission,
+                child: stream_route.child,
+            },
+            _ => {
+                return Err(KfdRuntimeBackendV1::rejected(
+                    KfdRuntimeBackendErrorKindV1::WrongDevice,
+                    "submission belongs to another multi-device stream",
+                ));
+            }
+        };
+        self.events.insert(id, routed);
+        Ok(id)
+    }
+
+    fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let route = self.events.get(&event).copied().ok_or_else(|| {
+            KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown multi-device KFD event",
+            )
+        })?;
+        if let RoutedEventV1::Native { route, .. } = route {
+            let result = self.children[route.child].release_event_v1(route.local);
+            self.latch(result)?;
+        }
+        self.events.remove(&event);
+        Ok(())
+    }
+
+    fn peer_copy_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let stream_route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        let source_route = Self::route(
+            &self.allocations,
+            source.allocation,
+            "unknown source KFD allocation",
+        )?;
+        let destination_route = Self::route(
+            &self.allocations,
+            destination.allocation,
+            "unknown destination KFD allocation",
+        )?;
+        if source_route.child == destination_route.child
+            || destination_route.child != stream_route.child
+            || source.byte_len != destination.byte_len
+            || source.byte_len == 0
+            || !matches!(
+                source.access,
+                RuntimeAccessV1::Read | RuntimeAccessV1::ReadWrite
+            )
+            || !matches!(
+                destination.access,
+                RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+            )
+        {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "host-staged peer copy requires equal nonzero ranges on distinct devices and a destination stream",
+            ));
+        }
+        for event in dependencies {
+            self.require_dependency_complete(*event, source_route.child, destination_route.child)?;
+        }
+        let len = usize::try_from(source.byte_len)
+            .map_err(|_| KfdRuntimeBackendV1::capacity("peer-copy staging size overflow"))?;
+        let mut staging = try_zeroed_staging_v1(len)?;
+        Self::reserve_route(
+            &mut self.submissions,
+            "multi-device peer submission route allocation failed",
+        )?;
+        let id = self.next_id()?;
+        let result = self.children[source_route.child].read_allocation_v1(
+            source_route.local,
+            source.byte_offset,
+            &mut staging,
+        );
+        self.latch(result)?;
+        let result = self.children[destination_route.child].write_allocation_v1(
+            destination_route.local,
+            destination.byte_offset,
+            &staging,
+        );
+        self.latch(result)?;
+        self.submissions
+            .insert(id, RoutedSubmissionV1::HostStagedPeer { stream });
+        Ok(id)
+    }
+}
+
 impl Drop for KfdRuntimeBackendV1 {
     fn drop(&mut self) {
         if self.terminal || self.active.is_some() || self.terminal_memory.is_some() {
@@ -2948,5 +3766,240 @@ mod tests {
             Err(RuntimeBackendFailureV1::Rejected(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
         ));
+    }
+
+    #[test]
+    fn multi_device_router_host_stages_peer_copy_and_preserves_event_custody() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        right.description.name = "mock gfx942 right".to_owned();
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let descriptions = backend.enumerate_devices_v1().unwrap();
+        assert_eq!(descriptions.len(), 2);
+        assert!(
+            descriptions.iter().all(|device| {
+                device.capabilities.multi_device && device.capabilities.peer_copy
+            })
+        );
+
+        let left_stream = backend.create_stream_v1(7).unwrap();
+        let right_stream = backend.create_stream_v1(8).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 32, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(8, RuntimeMemoryKindV1::HostVisible, 32, 8)
+            .unwrap();
+        let expected = (1_u8..=32).collect::<Vec<_>>();
+        backend.write_allocation_v1(source, 0, &expected).unwrap();
+        let submission = backend
+            .peer_copy_v1(
+                right_stream,
+                BackendMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 32,
+                },
+                BackendMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: 32,
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        let event = backend.record_event_v1(right_stream, submission).unwrap();
+        let left_child = backend.child_for_device(7).unwrap();
+        assert!(matches!(
+            backend.dependency_for_child(event, left_child),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::WrongDevice
+        ));
+        assert!(matches!(
+            backend.release_submission_v1(submission),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        let mut observed = [0_u8; 32];
+        backend
+            .read_allocation_v1(destination, 0, &mut observed)
+            .unwrap();
+        assert_eq!(observed.as_slice(), expected);
+        backend.release_event_v1(event).unwrap();
+        backend.release_submission_v1(submission).unwrap();
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(left_stream).unwrap();
+        backend.destroy_stream_v1(right_stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn multi_device_router_latches_a_child_terminal_failure_globally() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        backend.children[0].terminal = true;
+        assert!(matches!(
+            backend.enumerate_devices_v1(),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        backend.children[0].terminal = false;
+        assert!(matches!(
+            backend.create_stream_v1(8),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        backend.terminal = false;
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn multi_device_router_rejects_invalid_peer_access_before_copy() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let stream = backend.create_stream_v1(8).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(8, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        assert!(matches!(
+            backend.peer_copy_v1(
+                stream,
+                region(source, RuntimeAccessV1::Write),
+                region(destination, RuntimeAccessV1::Read),
+                &[],
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+        ));
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn runtime_context_composes_multi_device_peer_copy_and_cleanup() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let mut context = crate::RuntimeContextV1::open(backend).unwrap();
+        let source_device = context.devices()[0].id();
+        let destination_device = context.devices()[1].id();
+        let stream = context.create_stream(destination_device).unwrap();
+        let source = context
+            .allocate(source_device, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = context
+            .allocate(destination_device, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        context
+            .write_allocation(source, 0, &[1, 2, 3, 4, 5, 6, 7, 8])
+            .unwrap();
+        let mut submission = context
+            .peer_copy(
+                stream,
+                crate::RuntimeMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                crate::RuntimeMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: 8,
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            context
+                .wait(&mut submission, Duration::from_secs(1))
+                .unwrap(),
+            crate::RuntimePollV1::Succeeded
+        );
+        let mut observed = [0_u8; 8];
+        context
+            .read_allocation(destination, 0, &mut observed)
+            .unwrap();
+        assert_eq!(observed, [1, 2, 3, 4, 5, 6, 7, 8]);
+        context.release_submission(submission).unwrap();
+        context.release_allocation(source).unwrap();
+        context.release_allocation(destination).unwrap();
+        context.destroy_stream(stream).unwrap();
+        let mut backend = context.shutdown().unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn multi_device_router_rejects_peer_copy_on_the_source_stream() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        let left_stream = backend.create_stream_v1(7).unwrap();
+        let source = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let destination = backend
+            .allocate_v1(8, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let region = |allocation, access| BackendMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        assert!(matches!(
+            backend.peer_copy_v1(
+                left_stream,
+                region(source, RuntimeAccessV1::Read),
+                region(destination, RuntimeAccessV1::Write),
+                &[],
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+        ));
+        backend.release_allocation_v1(source).unwrap();
+        backend.release_allocation_v1(destination).unwrap();
+        backend.destroy_stream_v1(left_stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn multi_device_route_exhaustion_precedes_child_mutation() {
+        let left = KfdRuntimeBackendV1::mock();
+        let mut right = KfdRuntimeBackendV1::mock();
+        right.description.backend_device = 8;
+        let mut backend = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![left, right]).unwrap();
+        backend.next_handle = u64::MAX;
+        assert!(matches!(
+            backend.create_stream_v1(7),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+        assert!(backend.streams.is_empty());
+        assert!(backend.children[0].streams.is_empty());
     }
 }

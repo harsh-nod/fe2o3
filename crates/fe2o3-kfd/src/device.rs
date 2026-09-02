@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, TryLockError};
 
 use fe2o3_drm_uapi::{
     AMDGPU_DRM_DRIVER_VERSION, AMDGPU_FAMILY_AI, DRM_UAPI_SCHEMA_MANIFEST_SHA256_BYTES,
@@ -269,9 +269,12 @@ impl DeviceBindingObservation {
 /// Checked, retained no-queue capability for the exact R1 MI300X profile.
 ///
 /// This value is not `Clone`, `Send`, or `Sync`. It owns both descriptors and
-/// the process-global fe2o3 admission lease. It establishes checked
-/// correlation under named kernel/sysfs/ioctl contracts, not a proof of the
-/// kernel, firmware, hardware, or concrete-to-model refinement.
+/// an exact active device generation. Device admission transactions are
+/// process-serialized, but the transaction lease is released after the model
+/// commit so independently admitted physical devices can remain live together.
+/// It establishes checked correlation under named kernel/sysfs/ioctl contracts,
+/// not a proof of the kernel, firmware, hardware, or concrete-to-model
+/// refinement.
 pub struct CheckedGfx942XnackMinusDevice {
     pub(super) kfd: KfdWithAdmittedUapi,
     pub(super) render_fd: OwnedFd,
@@ -286,7 +289,6 @@ pub struct CheckedGfx942XnackMinusDevice {
     pub(super) reset_fence: crate::currentness::ResetEventFence,
     pub(super) currentness_poisoned: bool,
     pub(super) retire_model_on_drop: bool,
-    _lease: MutexGuard<'static, ()>,
 }
 
 impl fmt::Debug for CheckedGfx942XnackMinusDevice {
@@ -465,7 +467,7 @@ impl KfdWithAdmittedUapi {
         self,
         selector: DeviceSelector,
     ) -> Result<CheckedGfx942XnackMinusDevice, DeviceBindingError> {
-        let lease = match DEVICE_ADMISSION_LEASE.try_lock() {
+        let _admission_transaction = match DEVICE_ADMISSION_LEASE.try_lock() {
             Ok(lease) => lease,
             Err(TryLockError::WouldBlock) => return Err(DeviceBindingError::AdmissionInProgress),
             Err(TryLockError::Poisoned(_)) => {
@@ -586,7 +588,6 @@ impl KfdWithAdmittedUapi {
             reset_fence,
             currentness_poisoned: false,
             retire_model_on_drop: true,
-            _lease: lease,
         })
     }
 }

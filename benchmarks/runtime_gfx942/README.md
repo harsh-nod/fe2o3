@@ -62,3 +62,53 @@ boundaries, and their currentness, allocation, signal, and lazy-readback
 policies still differ. Do not compute ratios across the other metric names.
 These rows do not establish general HIP/HSA parity: they cover one artifact,
 one geometry, one device, and the exact software stack printed by the runner.
+
+## Asynchronous Copy Qualification
+
+Run the matched KFD, HSA, and HIP copy-engine harness on two idle MI300X GPUs:
+
+```sh
+benchmarks/runtime_gfx942/run-async-copy-mi300x.sh
+```
+
+The default profile transfers 1 MiB at depths 1 and 16, with 10 warmups and 30
+samples. `FE2O3_ASYNC_COPY_GPU_INDEX` and
+`FE2O3_ASYNC_COPY_SECOND_GPU_INDEX` select the physical pair. The runner refuses
+to publish a result when either relevant GPU exceeds
+`FE2O3_ASYNC_COPY_MAX_BUSY_PERCENT`, which defaults to 5. Every backend phase
+also has an outer foreground timeout, controlled by
+`FE2O3_ASYNC_COPY_PHASE_TIMEOUT_SECONDS` and defaulting to 120 seconds.
+
+Single-device H2D and D2H rows include submission of the complete depth, host
+waiting for every completion, and no allocation. KFD uses one classic SDMA
+queue, HSA uses `hsa_amd_memory_async_copy`, and HIP uses one nonblocking stream
+per depth entry. The two-device rows publish both devices' work before either
+wait and report aggregate bytes over the shared wall-clock interval. These are
+aligned host submit-plus-wait boundaries and byte counts, not identical native
+mechanisms or allocation/currentness policies.
+The two-device HIP metric includes single-threaded `hipSetDevice` transitions;
+the result row records this as `host_context=single-thread-device-switching`.
+
+The allocation metrics have deliberately different names. KFD times a pooled
+host-plus-device checkout/recycle pair, HSA times one device-pool
+allocate/free pair, and HIP times one stream-ordered device
+`hipMallocAsync`/`hipFreeAsync` pair. They expose each API's supported scope and
+must not be treated as identical allocator operations.
+
+Every warmup and measured round assigns a new pattern to every slot and device,
+poisons each download buffer, and validates every returned byte. The runner
+passes each KFD unique ID to the HSA and HIP lanes: HSA requires the exact
+`GPU-%016llx` agent UUID, a `gfx942` target, and a disabled-XNACK system query.
+HIP requires the exact 16-byte ASCII UUID and a `gfx942` architecture name with
+the `xnack-` feature. The runner requests `HSA_XNACK=0` for both comparators. It
+records Git, ROCm, Rust, physical identities, load-boundary samples, and the
+frozen SDMA manifest digest. Percentiles use the nearest-rank definition over
+complete rounds.
+
+The load gate samples each selected GPU immediately before and after every
+phase and refuses the result when either boundary exceeds the configured
+threshold. It cannot detect an unrelated workload that starts and stops wholly
+inside a phase; continuous machine exclusivity remains an external benchmark
+condition. The harness does not benchmark peer copy: the implemented KFD
+facade peer operation is host staged, while HIP/HSA native peer operations
+would be a different mechanism.

@@ -23,6 +23,7 @@ mod device_local;
 mod device_projection;
 mod identity;
 mod memory_lifecycle;
+mod memory_pool;
 mod model;
 mod multi_device;
 mod queue_lifecycle;
@@ -34,6 +35,7 @@ pub use device_local::*;
 pub use device_projection::*;
 pub use identity::*;
 pub use memory_lifecycle::*;
+pub use memory_pool::*;
 pub use model::*;
 pub use multi_device::*;
 pub use queue_lifecycle::*;
@@ -49,6 +51,8 @@ mod device_local_tests;
 mod device_projection_tests;
 #[cfg(test)]
 mod memory_lifecycle_tests;
+#[cfg(test)]
+mod memory_pool_tests;
 #[cfg(test)]
 mod multi_device_tests;
 #[cfg(test)]

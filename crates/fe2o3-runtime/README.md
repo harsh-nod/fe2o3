@@ -58,10 +58,18 @@ destination. Device-local input is still host-staged, materialized per launch,
 and read-only. KFD module validation is cached at load and kernel metadata is
 cached at resolution. Logical KFD allocations are capped at 256 MiB each and 1
 GiB per backend context; budget and allocator exhaustion return `Capacity`
-before native publication. The HSA adapter admits one
-correlated gfx942 or gfx950 device and host-visible memory. Neither adapter
-currently advertises peer copy, multi-device operation, atomics, or collectives;
-atomics and collectives have no general V1 facade operation. This is not HIP/HSA parity. See
+before native publication. `KfdMultiDeviceRuntimeBackendV1` admits every
+selected physical device before any queue exists, routes independent child
+backends, and advertises a bounded synchronous host-staged peer copy. This is
+not native XGMI transfer. Applications must explicitly shut down the router;
+it tears down pristine child backends in reverse admission order and latches
+terminal after any ambiguous child failure. The lower-level KFD session separately exposes a
+classic gfx942 SDMA queue and pooled host/HBM buffers; that backend-specific API
+is not yet part of `RuntimeBackendV1`. The HSA adapter admits one correlated
+gfx942 or gfx950 device and host-visible memory. Same-device concurrent KFD
+compute dispatches, native peer copy, atomics, and collectives remain
+unsupported; atomics and collectives have no general V1 facade operation. This
+is not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
 Feature `hardware-qualification` exposes a repository-owned, SHA-pinned gfx942

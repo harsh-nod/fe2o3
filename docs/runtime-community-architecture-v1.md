@@ -60,12 +60,14 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | One admitted `gfx942:xnack-` device, one reusable native queue, multiple serialized logical streams, and one pending launch | Host-visible native storage, code, kernarg, and dispatch state persist across same-shape launches; logical host images use shared immutable snapshots and exact full-write digest reuse; device writeback is synchronized lazily on facade read or before a launch that needs host authority; `DeviceLocal` remains per-launch and read-only | Peer copy, multi-device, atomics, collectives |
+| KFD | The base backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, multiple serialized logical streams, and one pending compute launch. `KfdMultiDeviceRuntimeBackendV1` admits all devices before queue creation and routes one independent child per device. The lower-level gfx942 SDMA engine owns one additional classic copy queue per child with at most 64 in-flight copies. | Persistent compute storage is unchanged. The SDMA profile adds move-only host-coherent and HBM buffers plus per-device best-fit pools with explicit recycle and trim. The routed facade peer copy is bounded, synchronous host staging. | Same-device concurrent compute dispatches, native XGMI peer copy, integrated runtime-SPI async copy, atomics, collectives |
 | HSA | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Device-local allocation, peer copy, multi-device, atomics, collectives |
 
-The V1 facade has a peer-copy operation, but neither shipped adapter advertises
-it. Atomics and collectives are capability vocabulary only; V1 defines no
-general atomic or collective operation. These rows are not HIP/HSA parity.
+The V1 facade's multi-device KFD router advertises peer copy only because it
+implements the complete facade contract through host staging. A single-device
+KFD child and the HSA adapter do not advertise it. Atomics and collectives are
+capability vocabulary only; V1 defines no general atomic or collective
+operation. These rows are not HIP/HSA parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
 kernel metadata at resolution, and shares those immutable bytes and descriptors
@@ -106,7 +108,20 @@ result into their owned kernarg storage.
 
 Peer copies require two distinct peer-capable devices, an exact destination
 stream, equal nonempty source/destination ranges, and explicit event
-dependencies. Each copy retains a model peer-transfer contract identity.
+dependencies. Each copy retains a model peer-transfer contract identity. The
+current KFD router completes the staged copy before returning its submission
+handle; `poll` and `wait` therefore report success immediately. This is not a
+claim of asynchronous native peer DMA.
+
+The gfx942 SDMA API is backend-specific so the frozen Worker V1 protocol does
+not silently change. Batch submit is nonblocking, tickets bind queue slot and
+generation plus the non-reused queue occurrence, buffers remain owned by the
+queue until exact completion is
+observed, and batch wait uses one operational-currentness envelope. Queue-full
+and structural prepublication validation failures return the move-only buffers
+after a successful currentness check. Counter or generation divergence,
+currentness failure, and any uncertainty after preflight terminally poison the
+session and retain native custody.
 
 ## Performance Rules
 
@@ -118,6 +133,10 @@ dependencies. Each copy retains a model peer-transfer contract identity.
   operations, not hot transitions.
 - Completion waits use deadlines and a bounded spin/backoff policy. Poll counts
   are not timeout units.
+- SDMA batch submission and batch completion are linear in batch depth, bounded
+  by 64. Currentness validation is constant per batch rather than per packet;
+  ring reservation, packet publication, and doorbell notification remain one
+  bounded operation per submitted copy.
 - KFD device, VM, allocation, mapping, and queue lifecycle transitions use the
   full contracted topology/aperture currentness composite. Active mapped-memory
   and queue operations use the retained process, reset-event, descriptor, UAPI,
@@ -150,3 +169,20 @@ Native HSA support is selected explicitly by Cargo feature. A stub build is
 deterministic and has no ROCm link dependency. Enabling the native feature
 requires a configured ROCm development installation and fails the build when
 the required headers or libraries are absent.
+
+## Verification Boundary
+
+The R7 Verus file proves eight theorems over the abstract pool/lease/copy model:
+in-flight and quarantined blocks are not reusable, completion-gated release
+advances generations, stale leases cannot submit reused storage, distinct
+retained blocks cannot alias, dependency frontiers gate publication, and peer
+copies retain exact device coordinates. Expected-negative mutations demonstrate
+that generation reuse and source-device execution invalidate named theorems.
+
+Executable Rust tests cover the pool model, router route-exhaustion preflight
+and terminal latching, packet bytes, range checks, queue admission, and custody
+transitions. The frozen SDMA manifest pins the reviewed ROCr revision and packet
+sources. KFD ioctl results, MMIO, coherence, kernel and firmware behavior,
+hardware completion, progress, liveness, and performance are not formally
+proved. Native claims require a retained result artifact from an identified
+MI300X run.

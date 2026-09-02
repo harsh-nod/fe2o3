@@ -184,3 +184,32 @@ compiler enters one unselected production transaction inside
 The launch macro currently packs slice-like values as two HIP kernel arguments:
 device pointer then `usize` length. The compiler backend should generate matching
 kernel entry signatures.
+
+## Runtime R7 Status
+
+Implemented for `gfx942:xnack-`:
+
+- a classic KFD SDMA queue with nonblocking generation-tagged submission,
+  deadline polling/waiting, exact completion custody, and batches of at most 64;
+- host-to-host, host-to-HBM, and HBM-to-host linear copies through the same
+  move-only buffer API;
+- per-device best-fit host/HBM pools with completion-gated recycle, stale-lease
+  rejection in the model, observations, and explicit trim;
+- process-wide admission of multiple physical devices before any queue exists,
+  independent child queues, and mandatory explicit reverse-order qualification
+  teardown;
+- a multi-device runtime router with globally unique facade handles and bounded
+  synchronous host-staged peer copy; and
+- aligned-traffic KFD, HSA, and HIP single-device and two-device copy harnesses
+  with common host submit/wait timing boundaries.
+
+The R7 Verus proof covers abstract lease generations, non-reuse while retained,
+quarantine, dependency-gated publication, and exact cross-device coordinates.
+It does not prove the Rust implementation or native hardware. Frozen UAPI and
+SDMA manifests plus executable tests provide separate checked evidence. Native
+correctness and performance require a retained, commit-identified MI300X result
+artifact before they are described as measured.
+
+Still open: multiple simultaneous compute dispatches on one KFD device,
+compute/copy overlap through the public runtime SPI, native XGMI peer mapping and
+copy, asynchronous host-staged peer submissions, atomics, and collectives.
