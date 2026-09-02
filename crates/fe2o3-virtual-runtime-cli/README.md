@@ -14,9 +14,13 @@ fe2o3-virtual-runtime --kir-v7 kernel.kir --request request.json \
 `--repeat` is bounded to 256 and dispatch N depends on dispatch N-1. Success is
 stable `fe2o3-virtual-runtime-result-v1` JSON on stdout. Admission, misuse, and
 semantic faults are stable `fe2o3-virtual-runtime-error-v1` JSON on stderr.
+The reported runtime identity binds the selected target, optional bundle
+identity, command mode, and all runtime and simulation limits.
 `--fault early-release` attempts to release a dispatch-retained allocation and
 must fail with the canonical model's typed `resource_in_use` result.
 
 The command never compiles source, loads an artifact, dispatches a GPU, falls
 back to hardware, or predicts performance. Bundle/KIR admission remains the
 existing verified simulator trust boundary.
+The no-GPU audit is an exact dependency/source and final linked-binary policy
+check; it does not claim to prove arbitrary source syscall-free.

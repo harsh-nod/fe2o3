@@ -1,9 +1,10 @@
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, Constant, Function, IntrinsicOperation, Kernel,
     LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
-    Signature, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, WorkgroupSize,
+    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7,
+    WorkgroupSize, gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability,
 };
-use fe2o3_kir_sim::{AdmittedSimulationModuleV1, SimulationLimitsV1};
+use fe2o3_kir_sim::{AdmittedSimulationModuleV1, ScalarBitsV1, SimulationLimitsV1};
 use fe2o3_runtime_model::{IdentityDigestV1, TransitionErrorV1};
 use fe2o3_virtual_runtime::{
     VirtualArgumentV1, VirtualBufferAccessV1, VirtualCompletionStateV1, VirtualDispatchRequestV1,
@@ -16,6 +17,12 @@ fn operation(result: u32, ty: Type, kind: OperationKind) -> Operation {
 }
 
 fn admitted_fill() -> AdmittedSimulationModuleV1 {
+    admitted_fill_with_capabilities([])
+}
+
+fn admitted_fill_with_capabilities(
+    capabilities: impl IntoIterator<Item = TargetCapability>,
+) -> AdmittedSimulationModuleV1 {
     let element = Type::Scalar(ScalarType::U32);
     let pointer = Type::pointer(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
     let mut block = BasicBlock::new(BlockId(0));
@@ -59,6 +66,57 @@ fn admitted_fill() -> AdmittedSimulationModuleV1 {
     );
     kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
     let mut module = Module::new("virtual-runtime-tests::fill");
+    module.required_capabilities.extend(capabilities);
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
+    AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default()).unwrap()
+}
+
+fn admitted_alias_writes() -> AdmittedSimulationModuleV1 {
+    let element = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        operation(
+            2,
+            element.clone(),
+            OperationKind::Constant(Constant::U32(17)),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(0),
+                value: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        operation(3, element, OperationKind::Constant(Constant::U32(23))),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(1),
+                value: ValueId(3),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "alias_impl",
+        Signature::new(vec![pointer.clone(), pointer], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    let mut kernel = Kernel::new(
+        "alias",
+        "alias_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("virtual-runtime-tests::alias-writes");
     module.functions.push(entry);
     module.kernels.push(kernel);
     let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
@@ -93,6 +151,30 @@ fn fill_request(
             elements,
         }],
         dependencies,
+    }
+}
+
+fn alias_request(
+    buffer: fe2o3_virtual_runtime::VirtualBufferHandleV1,
+    first: (usize, usize),
+    second: (usize, usize),
+) -> VirtualDispatchRequestV1 {
+    VirtualDispatchRequestV1 {
+        kernel: "alias".into(),
+        grid: [1, 1, 1],
+        workgroup: [64, 1, 1],
+        arguments: [first, second]
+            .into_iter()
+            .map(|(byte_offset, elements)| VirtualArgumentV1::Buffer {
+                buffer,
+                element: ScalarType::U32,
+                access: AccessMode::ReadWrite,
+                alignment: 4,
+                byte_offset,
+                elements,
+            })
+            .collect(),
+        dependencies: vec![],
     }
 }
 
@@ -142,9 +224,9 @@ fn dynamic_failure_aborts_dependents_without_fabricating_completion() {
         .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
         .unwrap();
     runtime.copy_from_host(buffer, 0, &[0; 4]).unwrap();
-    let failing = runtime
-        .submit(queue, module, fill_request(buffer, 2, vec![]))
-        .unwrap();
+    let mut failing_request = fill_request(buffer, 1, vec![]);
+    failing_request.grid[0] = 2;
+    let failing = runtime.submit(queue, module, failing_request).unwrap();
     let dependent = runtime
         .submit(queue, module, fill_request(buffer, 1, vec![failing]))
         .unwrap();
@@ -243,5 +325,262 @@ fn foreign_handles_and_uninitialized_reads_are_typed_failures() {
     assert!(matches!(
         first.copy_from_host(local, 0, &[1]),
         Err(VirtualRuntimeErrorV1::ReleasedHandle { kind: "buffer", .. })
+    ));
+}
+
+#[test]
+fn overlapping_aliases_share_one_copyback_allocation() {
+    let mut runtime = runtime(7);
+    let module = runtime.register_module(admitted_alias_writes()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(8, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[0; 8]).unwrap();
+    let completion = runtime
+        .submit(queue, module, alias_request(buffer, (0, 1), (0, 1)))
+        .unwrap();
+
+    assert!(matches!(
+        runtime.run_next().unwrap(),
+        VirtualRunProgressV1::Completed { completion: observed, .. }
+            if observed == completion
+    ));
+    let mut output = [0; 8];
+    runtime.copy_to_host(buffer, 0, &mut output).unwrap();
+    assert_eq!(output, [23, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn ambiguity_blocks_host_access_and_invalidates_writable_alias_union() {
+    let mut runtime = runtime(8);
+    let module = runtime.register_module(admitted_alias_writes()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(16, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[1; 16]).unwrap();
+    let completion = runtime
+        .submit(queue, module, alias_request(buffer, (0, 2), (4, 2)))
+        .unwrap();
+    let mut output = [0; 1];
+    assert!(matches!(
+        runtime.copy_to_host(buffer, 0, &mut output),
+        Err(VirtualRuntimeErrorV1::HostAccessWhileRetained { .. })
+    ));
+    assert!(matches!(
+        runtime.copy_from_host(buffer, 0, &[2]),
+        Err(VirtualRuntimeErrorV1::HostAccessWhileRetained { .. })
+    ));
+    assert!(matches!(
+        runtime.buffer_snapshot(buffer),
+        Err(VirtualRuntimeErrorV1::HostAccessWhileRetained { .. })
+    ));
+
+    runtime.mark_completion_ambiguous(completion).unwrap();
+    assert!(matches!(
+        runtime.copy_to_host(buffer, 0, &mut output),
+        Err(VirtualRuntimeErrorV1::HostAccessWhileRetained { .. })
+    ));
+    runtime.quiesce_queue(queue).unwrap();
+    runtime.settle_ambiguous_completion(completion).unwrap();
+    let snapshot = runtime.buffer_snapshot(buffer).unwrap();
+    assert_eq!(&snapshot.initialized[..12], &[false; 12]);
+    assert_eq!(&snapshot.initialized[12..], &[true; 4]);
+    assert!(matches!(
+        runtime.copy_to_host(buffer, 0, &mut output),
+        Err(VirtualRuntimeErrorV1::UninitializedHostRead { offset: 0 })
+    ));
+}
+
+#[test]
+fn quiescence_rejects_sibling_prepared_work_without_stranding_it() {
+    let mut runtime = runtime(9);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[0; 4]).unwrap();
+    let first = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+    let second = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+
+    assert!(matches!(
+        runtime.mark_completion_ambiguous(first),
+        Err(VirtualRuntimeErrorV1::QueueHasPreparedDispatch {
+            completion,
+            ..
+        }) if completion == second.ordinal()
+    ));
+    assert!(matches!(
+        runtime.quiesce_queue(queue),
+        Err(VirtualRuntimeErrorV1::QueueHasPreparedDispatch {
+            completion,
+            ..
+        }) if completion == first.ordinal()
+    ));
+    assert!(matches!(
+        runtime.run_next().unwrap(),
+        VirtualRunProgressV1::Completed { completion, .. } if completion == first
+    ));
+    runtime.mark_completion_ambiguous(second).unwrap();
+    runtime.quiesce_queue(queue).unwrap();
+    runtime.settle_ambiguous_completion(second).unwrap();
+    runtime.copy_from_host(buffer, 0, &[3; 4]).unwrap();
+}
+
+#[test]
+fn malformed_views_fail_before_prepare_and_retain_nothing() {
+    let mut runtime = runtime(10);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+
+    let partial = runtime
+        .allocate_buffer(3, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(partial, 0, &[0; 3]).unwrap();
+    assert!(matches!(
+        runtime.submit(queue, module, fill_request(partial, 1, vec![])),
+        Err(VirtualRuntimeErrorV1::SimulatorBuffer(_))
+    ));
+    runtime.release_buffer(partial).unwrap();
+
+    let buffer = runtime
+        .allocate_buffer(8, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[0; 8]).unwrap();
+    let mut invalid_alignment = fill_request(buffer, 1, vec![]);
+    let VirtualArgumentV1::Buffer { alignment, .. } = &mut invalid_alignment.arguments[0] else {
+        unreachable!();
+    };
+    *alignment = 3;
+    assert!(matches!(
+        runtime.submit(queue, module, invalid_alignment),
+        Err(VirtualRuntimeErrorV1::SimulatorBuffer(_))
+    ));
+
+    let mut out_of_bounds = fill_request(buffer, 2, vec![]);
+    let VirtualArgumentV1::Buffer { byte_offset, .. } = &mut out_of_bounds.arguments[0] else {
+        unreachable!();
+    };
+    *byte_offset = 4;
+    assert!(matches!(
+        runtime.submit(queue, module, out_of_bounds),
+        Err(VirtualRuntimeErrorV1::InvalidBufferRange)
+    ));
+
+    let mut mixed = fill_request(buffer, 1, vec![]);
+    mixed.arguments.push(VirtualArgumentV1::Buffer {
+        buffer,
+        element: ScalarType::U16,
+        access: AccessMode::ReadWrite,
+        alignment: 2,
+        byte_offset: 0,
+        elements: 1,
+    });
+    assert!(matches!(
+        runtime.submit(queue, module, mixed),
+        Err(VirtualRuntimeErrorV1::SimulatorBuffer(_))
+    ));
+    runtime.release_buffer(buffer).unwrap();
+    runtime.release_module(module).unwrap();
+    runtime.release_queue(queue).unwrap();
+}
+
+#[test]
+fn dispatch_argument_and_retained_byte_limits_fail_closed() {
+    let argument_limits = VirtualRuntimeLimitsV1 {
+        max_arguments_per_dispatch: 1,
+        ..VirtualRuntimeLimitsV1::default()
+    };
+    let mut runtime = VirtualRuntimeV1::new(VirtualRuntimeConfigV1 {
+        runtime_identity: IdentityDigestV1::from_untrusted_bytes([11; 32]),
+        target: VirtualTargetProfileV1::Amdgpu64TargetNeutral,
+        runtime_limits: argument_limits,
+        simulation_limits: SimulationLimitsV1::default(),
+    })
+    .unwrap();
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let request = VirtualDispatchRequestV1 {
+        kernel: "fill".into(),
+        grid: [1, 1, 1],
+        workgroup: [64, 1, 1],
+        arguments: vec![
+            VirtualArgumentV1::Scalar(ScalarBitsV1::u32(1)),
+            VirtualArgumentV1::Scalar(ScalarBitsV1::u32(2)),
+        ],
+        dependencies: vec![],
+    };
+    assert!(matches!(
+        runtime.submit(queue, module, request),
+        Err(VirtualRuntimeErrorV1::CapacityExceeded(
+            "dispatch arguments"
+        ))
+    ));
+
+    let byte_limits = VirtualRuntimeLimitsV1 {
+        max_retained_dispatch_bytes: 1,
+        ..VirtualRuntimeLimitsV1::default()
+    };
+    let mut runtime = VirtualRuntimeV1::new(VirtualRuntimeConfigV1 {
+        runtime_identity: IdentityDigestV1::from_untrusted_bytes([12; 32]),
+        target: VirtualTargetProfileV1::Amdgpu64TargetNeutral,
+        runtime_limits: byte_limits,
+        simulation_limits: SimulationLimitsV1::default(),
+    })
+    .unwrap();
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    assert!(matches!(
+        runtime.submit(
+            queue,
+            module,
+            VirtualDispatchRequestV1 {
+                kernel: "fill".into(),
+                grid: [1, 1, 1],
+                workgroup: [64, 1, 1],
+                arguments: vec![],
+                dependencies: vec![],
+            }
+        ),
+        Err(VirtualRuntimeErrorV1::CapacityExceeded(
+            "retained dispatch bytes"
+        ))
+    ));
+}
+
+#[test]
+fn aggregate_model_capacity_and_multiple_exact_targets_are_rejected() {
+    let limits = VirtualRuntimeLimitsV1 {
+        max_user_allocations: 4_095,
+        max_modules: 1,
+        max_queues: 1,
+        ..VirtualRuntimeLimitsV1::default()
+    };
+    assert!(matches!(
+        VirtualRuntimeV1::new(VirtualRuntimeConfigV1 {
+            runtime_identity: IdentityDigestV1::from_untrusted_bytes([13; 32]),
+            target: VirtualTargetProfileV1::Amdgpu64TargetNeutral,
+            runtime_limits: limits,
+            simulation_limits: SimulationLimitsV1::default(),
+        }),
+        Err(VirtualRuntimeErrorV1::InvalidLimit(
+            "aggregate model allocations"
+        ))
+    ));
+
+    let module = admitted_fill_with_capabilities([
+        gfx942_xnack_minus_target_capability(),
+        gfx950_xnack_minus_target_capability(),
+    ]);
+    let mut runtime = runtime(14);
+    assert!(matches!(
+        runtime.register_module(module),
+        Err(VirtualRuntimeErrorV1::MultipleExactTargets { .. })
     ));
 }

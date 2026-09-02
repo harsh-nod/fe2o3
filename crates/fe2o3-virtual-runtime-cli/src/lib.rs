@@ -154,7 +154,7 @@ struct CommandErrorV1 {
 
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<SuccessV1, CommandErrorV1> {
     let command = parse(arguments)?;
-    let (input, profile, bundle_sha256) = match command.input {
+    let (input, profile, bundle_identity) = match command.input {
         InputV1::Kir(path) => {
             let admitted = load_debug_simulation_input_v1(&path, &command.request)
                 .map_err(|error| admission_error(error.stage, error.code, error.message))?;
@@ -181,44 +181,58 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<SuccessV1, CommandEr
                         admitted.bundle().target()
                     ),
                 })?;
-            let identity = admitted
-                .input()
-                .simulation_bundle_identity()
-                .map(|identity| hex(&identity));
+            let identity = admitted.input().simulation_bundle_identity();
             let (input, _) = admitted.into_parts();
             (input, profile, identity)
         }
     };
-    execute(input, profile, bundle_sha256, command.repeat, command.fault)
+    execute(
+        input,
+        profile,
+        bundle_identity,
+        command.repeat,
+        command.fault,
+    )
 }
 
 fn execute(
     input: AdmittedSimulationInputV1,
     profile: VirtualTargetProfileV1,
-    bundle_sha256: Option<String>,
+    bundle_identity: Option<[u8; 32]>,
     repeat: usize,
     fault: Option<FaultV1>,
 ) -> Result<SuccessV1, CommandErrorV1> {
     let kir_identity = *input.module.identity();
     let request_sha256 = input.request_sha256;
     let request_bytes = input.request_bytes();
-    let runtime_identity = derive_runtime_identity(&input, repeat, fault);
     let mut simulation_limits = input.simulation_limits;
     simulation_limits.max_allocation_bytes = simulation_limits.max_allocation_bytes.min(16 << 20);
     simulation_limits.max_total_bytes = simulation_limits.max_total_bytes.min(64 << 20);
     simulation_limits.max_resident_bytes = simulation_limits.max_resident_bytes.min(256 << 20);
+    let runtime_limits = VirtualRuntimeLimitsV1 {
+        max_user_allocations: 3_968,
+        max_total_user_bytes: MAX_SNAPSHOT_BYTES_V1,
+        max_modules: 1,
+        max_queues: 1,
+        max_dispatches: MAX_REPEAT,
+        max_arguments_per_dispatch: 65_536,
+        max_dependencies_per_dispatch: 1,
+        max_retained_dispatch_bytes: 64 << 20,
+        max_schedule_decisions: 1 << 20,
+    };
+    let runtime_identity = derive_runtime_identity(
+        &input,
+        profile,
+        bundle_identity,
+        repeat,
+        fault,
+        runtime_limits,
+        simulation_limits,
+    );
     let mut runtime = VirtualRuntimeV1::new(VirtualRuntimeConfigV1 {
         runtime_identity,
         target: profile,
-        runtime_limits: VirtualRuntimeLimitsV1 {
-            max_user_allocations: 3_968,
-            max_total_user_bytes: MAX_SNAPSHOT_BYTES_V1,
-            max_modules: 1,
-            max_queues: 1,
-            max_dispatches: MAX_REPEAT,
-            max_dependencies_per_dispatch: 1,
-            max_schedule_decisions: 1 << 20,
-        },
+        runtime_limits,
         simulation_limits,
     })
     .map_err(runtime_error)?;
@@ -341,7 +355,7 @@ fn execute(
         },
         request_sha256: hex(&request_sha256),
         request_bytes,
-        bundle_sha256,
+        bundle_sha256: bundle_identity.map(|identity| hex(&identity)),
         lifecycle: LifecycleV1 {
             schema: "fe2o3-virtual-runtime-lifecycle-v1",
             runtime_identity: hex(runtime_identity.as_bytes()),
@@ -521,21 +535,70 @@ fn parse_target(value: &str) -> Option<VirtualTargetProfileV1> {
 
 fn derive_runtime_identity(
     input: &AdmittedSimulationInputV1,
+    profile: VirtualTargetProfileV1,
+    bundle_identity: Option<[u8; 32]>,
     repeat: usize,
     fault: Option<FaultV1>,
+    runtime_limits: VirtualRuntimeLimitsV1,
+    simulation_limits: fe2o3_kir_sim::SimulationLimitsV1,
 ) -> IdentityDigestV1 {
     let mut digest = Sha256::new();
-    digest.update(b"FE2O3/VIRTUAL-RUNTIME/CLI-SESSION/V1\0");
+    digest.update(b"FE2O3/VIRTUAL-RUNTIME/CLI-SESSION/V2\0");
     digest.update(input.module.identity().digest());
     digest.update(input.module.identity().canonical_length().to_le_bytes());
     digest.update(input.request_sha256);
     digest.update(input.request_bytes().to_le_bytes());
+    update_identity_text(&mut digest, profile.label());
+    match bundle_identity {
+        Some(identity) => {
+            digest.update([1]);
+            digest.update(identity);
+        }
+        None => digest.update([0]),
+    }
     digest.update((repeat as u64).to_le_bytes());
     digest.update([match fault {
         None => 0,
         Some(FaultV1::EarlyRelease) => 1,
     }]);
+    for value in [
+        runtime_limits.max_user_allocations,
+        runtime_limits.max_total_user_bytes,
+        runtime_limits.max_modules,
+        runtime_limits.max_queues,
+        runtime_limits.max_dispatches,
+        runtime_limits.max_arguments_per_dispatch,
+        runtime_limits.max_dependencies_per_dispatch,
+        runtime_limits.max_retained_dispatch_bytes,
+        runtime_limits.max_schedule_decisions,
+        simulation_limits.max_canonical_bytes,
+        simulation_limits.max_reachable_functions,
+        simulation_limits.max_reachable_operations,
+        simulation_limits.max_call_depth,
+        simulation_limits.max_ssa_values,
+        simulation_limits.max_allocations,
+        simulation_limits.max_allocation_bytes,
+        simulation_limits.max_total_bytes,
+        simulation_limits.max_resident_bytes,
+        simulation_limits.max_memory_access_records,
+    ] {
+        digest.update((value as u64).to_le_bytes());
+    }
+    for value in [
+        simulation_limits.max_invocations,
+        simulation_limits.max_workgroups,
+        simulation_limits.max_scheduled_slots,
+        simulation_limits.max_steps,
+        simulation_limits.max_events,
+    ] {
+        digest.update(value.to_le_bytes());
+    }
     IdentityDigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+fn update_identity_text(digest: &mut Sha256, value: &str) {
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value.as_bytes());
 }
 
 fn schedule_name(value: fe2o3_kir_sim::SimulationScheduleIdentityV1) -> &'static str {
@@ -557,9 +620,12 @@ fn runtime_error(error: VirtualRuntimeErrorV1) -> CommandErrorV1 {
         VirtualRuntimeErrorV1::Simulation { .. } => "simulation_failed",
         VirtualRuntimeErrorV1::ForeignHandle { .. } => "foreign_handle",
         VirtualRuntimeErrorV1::UninitializedHostRead { .. } => "uninitialized_host_read",
+        VirtualRuntimeErrorV1::HostAccessWhileRetained { .. }
+        | VirtualRuntimeErrorV1::QueueHasPreparedDispatch { .. } => "resource_in_use",
         VirtualRuntimeErrorV1::Model(TransitionErrorV1::ResourceInUse(_)) => "resource_in_use",
         VirtualRuntimeErrorV1::Model(_) => "runtime_model_rejected",
-        VirtualRuntimeErrorV1::ExactTargetMismatch { .. } => "exact_target_mismatch",
+        VirtualRuntimeErrorV1::ExactTargetMismatch { .. }
+        | VirtualRuntimeErrorV1::MultipleExactTargets { .. } => "exact_target_mismatch",
         VirtualRuntimeErrorV1::CapacityExceeded(_) => "resource_limit",
         _ => "runtime_misuse",
     };

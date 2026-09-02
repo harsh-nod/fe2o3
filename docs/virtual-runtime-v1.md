@@ -15,7 +15,8 @@ quiesced failure.
 The runtime:
 
 - binds every handle to an exact caller-supplied runtime identity and monotonic
-  ordinal;
+  ordinal; the CLI identity additionally commits to the target, bundle presence
+  and identity, command mode, and all runtime/simulation limits;
 - retains exact KIR identity, target profile, simulation limits, and virtual
   runtime limits;
 - exposes allocation-relative byte copies and initialization state, never host
@@ -24,11 +25,18 @@ The runtime:
   the existing simulator subset;
 - executes ready dispatches in deterministic submission order with explicit
   earlier-completion dependencies;
-- copies simulator results back only after successful semantic execution;
+- rejects malformed or mixed-type allocation views before modeled dispatch
+  preparation and copies each shared backing exactly once only after successful
+  semantic execution;
+- blocks host reads, snapshots, and writes while a prepared or ambiguous
+  dispatch retains an allocation;
 - rejects early release through the unchanged canonical runtime-model state;
 - propagates failed dependencies without executing dependent kernels; and
-- requires explicit queue quiescence before settling an injected ambiguous
-  completion and releasing its resources.
+- invalidates every potentially written byte when completion becomes ambiguous,
+  requires explicit queue quiescence before settling it, and never promotes
+  those unknown bytes back to initialized state; and
+- refuses to quiesce a queue while it has prepared work, so teardown cannot
+  strand a dispatch that the lifecycle model can no longer publish.
 
 Semantic execution failure aborts the virtual dispatch before modeled
 publication. This is possible because no physical device has observed the
@@ -62,7 +70,9 @@ closed.
 `--repeat` is limited to 256. Dispatch N depends on the observed completion of
 dispatch N-1 and reuses the same persistent virtual allocations. The command
 caps aggregate snapshots at 16 MiB and the encoded response at 48 MiB before
-hex construction. Success uses `fe2o3-virtual-runtime-result-v1`; admission,
+hex construction. Runtime configuration also caps arguments per dispatch and
+aggregate retained dispatch-request storage. Success uses
+`fe2o3-virtual-runtime-result-v1`; admission,
 misuse, semantic, and response-bound failures use
 `fe2o3-virtual-runtime-error-v1`. The lifecycle block identifies the runtime,
 module, queue, allocations, dependency edges, completions, and terminal cleanup
@@ -124,4 +134,8 @@ bash scripts/ci-local.sh runtime-policy
 ```
 
 The packages are also members of the generic CPU test list. Runtime policy
-audits both roots and rejects HIP, HSA, DRM, or other forbidden runtime closure.
+audits both roots against an exact package/source allowlist, rejects HIP, HSA,
+DRM, and dynamic-loader authority, and scans the final ELF for device paths as
+defense in depth. This is a dependency and linked-binary policy check, not a
+general proof that arbitrary future source cannot issue a syscall; source and
+review controls remain part of the trust boundary.

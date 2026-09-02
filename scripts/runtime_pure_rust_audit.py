@@ -106,7 +106,7 @@ def _load_json(path: Path, context: str) -> dict[str, Any]:
 
 def load_policy(path: Path) -> dict[str, Any]:
     policy = _load_json(path, "policy")
-    expected = {
+    required = {
         "schema_version",
         "profile",
         "allowed_cargo_build_script_packages",
@@ -120,17 +120,20 @@ def load_policy(path: Path) -> dict[str, Any]:
         "reject_cargo_links",
         "reject_unapproved_cargo_build_scripts",
     }
-    if set(policy) != expected:
-        missing = sorted(expected - set(policy))
-        unknown = sorted(set(policy) - expected)
+    optional = {"allowed_package_identities"}
+    if not required.issubset(policy) or not set(policy).issubset(required | optional):
+        missing = sorted(required - set(policy))
+        unknown = sorted(set(policy) - required - optional)
         raise AuditInputError(
             f"policy keys differ from schema: missing={missing}, unknown={unknown}"
         )
+    policy.setdefault("allowed_package_identities", [])
     if policy["schema_version"] != 1:
         raise AuditInputError("policy schema_version must be 1")
     _require_string(policy["profile"], "policy profile")
     for key in (
         "allowed_cargo_build_script_packages",
+        "allowed_package_identities",
         "allowed_dynamic_dependencies",
         "forbidden_package_substrings",
         "forbidden_dynamic_dependency_substrings",
@@ -166,6 +169,22 @@ def load_policy(path: Path) -> dict[str, Any]:
             raise AuditInputError(
                 "policy allowed_cargo_build_script_packages entries must be "
                 "lowercase name@version identities"
+            )
+    for identity in policy["allowed_package_identities"]:
+        name_version, separator, source = identity.partition("|")
+        name, at, version = name_version.rpartition("@")
+        if (
+            separator != "|"
+            or at != "@"
+            or not name
+            or not version
+            or not source
+            or identity.lower() != identity
+            or any(character.isspace() for character in identity)
+        ):
+            raise AuditInputError(
+                "policy allowed_package_identities entries must be lowercase "
+                "name@version|source identities"
             )
     for key in ("reject_cargo_links", "reject_unapproved_cargo_build_scripts"):
         if policy[key] is not True:
@@ -275,11 +294,29 @@ def audit_metadata(
     allowed_build_script_packages = set(
         policy["allowed_cargo_build_script_packages"]
     )
+    allowed_package_identities = set(policy["allowed_package_identities"])
+    exercised_package_identities: set[str] = set()
     exercised_build_script_exceptions: set[str] = set()
     forbidden_names = policy["forbidden_package_substrings"]
     for package_id in sorted(closure):
         package = packages_by_id[package_id]
         name = _require_string(package.get("name"), f"package {package_id} name")
+        version = _require_string(package.get("version"), f"package {name} version")
+        source = package.get("source")
+        if source is None:
+            source_identity = "workspace"
+        else:
+            source_identity = _require_string(source, f"package {name} source")
+        policy_identity = f"{name}@{version}|{source_identity}"
+        exercised_package_identities.add(policy_identity)
+        if (
+            allowed_package_identities
+            and policy_identity not in allowed_package_identities
+        ):
+            violations.add(
+                "unapproved package identity in production closure: "
+                f"{policy_identity}"
+            )
         normalized_name = name.lower().replace("_", "-")
         for fragment in forbidden_names:
             if fragment in normalized_name:
@@ -295,9 +332,6 @@ def audit_metadata(
             target = _require_object(raw_target, f"target {target_index} for {name}")
             kinds = _require_list(target.get("kind"), f"target kinds for {name}")
             if "custom-build" in kinds:
-                version = _require_string(
-                    package.get("version"), f"package {name} version"
-                )
                 identity = f"{name}@{version}"
                 if identity not in allowed_build_script_packages:
                     violations.add(
@@ -311,6 +345,12 @@ def audit_metadata(
                     )
                 else:
                     exercised_build_script_exceptions.add(identity)
+
+    for identity in sorted(allowed_package_identities - exercised_package_identities):
+        violations.add(
+            "allowed package identity is absent from the production closure: "
+            f"{identity}"
+        )
 
     return sorted(violations), {
         "allowed_build_scripts": tuple(sorted(exercised_build_script_exceptions)),
@@ -634,7 +674,7 @@ def audit_elf(path: Path, policy: dict[str, Any]) -> tuple[list[str], dict[str, 
             violations.add(f"prohibited dynamic tag: {tag_name}")
     for literal in policy["forbidden_binary_literals"]:
         if literal.encode("ascii") in data.lower():
-            violations.add(f"prohibited dynamic-loader literal: {literal}")
+            violations.add(f"prohibited binary literal: {literal}")
     return sorted(violations), {
         "bytes": len(data),
         "dynamic_dependencies": len(needed),

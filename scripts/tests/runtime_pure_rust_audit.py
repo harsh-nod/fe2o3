@@ -23,6 +23,9 @@ SPEC.loader.exec_module(CHECKER)
 POLICY = CHECKER.load_policy(
     Path(__file__).resolve().parents[1] / "runtime-pure-rust-policy.json"
 )
+VIRTUAL_POLICY = CHECKER.load_policy(
+    Path(__file__).resolve().parents[1] / "virtual-runtime-no-gpu-policy.json"
+)
 
 
 def target(kind: str = "lib") -> dict:
@@ -235,6 +238,41 @@ class MetadataAuditTests(unittest.TestCase):
         )
         violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
         self.assertTrue(any("prohibited package" in item for item in violations))
+
+    def test_exact_package_allowlist_rejects_benign_named_dependency(self) -> None:
+        value = metadata(
+            [package("runtime"), package("innocent-device-bridge")],
+            [
+                node("runtime", [dependency("innocent-device-bridge")]),
+                node("innocent-device-bridge"),
+            ],
+        )
+        policy = dict(POLICY)
+        policy["allowed_package_identities"] = ("runtime@0.1.0|workspace",)
+        violations, _ = CHECKER.audit_metadata(value, ("runtime",), policy)
+        self.assertEqual(
+            [
+                "unapproved package identity in production closure: "
+                "innocent-device-bridge@0.1.0|workspace"
+            ],
+            violations,
+        )
+
+    def test_exact_package_allowlist_rejects_stale_extra_identity(self) -> None:
+        value = metadata([package("runtime")], [node("runtime")])
+        policy = dict(POLICY)
+        policy["allowed_package_identities"] = (
+            "absent@0.1.0|workspace",
+            "runtime@0.1.0|workspace",
+        )
+        violations, _ = CHECKER.audit_metadata(value, ("runtime",), policy)
+        self.assertEqual(
+            [
+                "allowed package identity is absent from the production closure: "
+                "absent@0.1.0|workspace"
+            ],
+            violations,
+        )
 
     def test_rejects_links_and_build_scripts(self) -> None:
         value = metadata(
@@ -465,7 +503,18 @@ class ElfAuditTests(unittest.TestCase):
         violations, _ = self.audit(
             synthetic_elf(hidden_literal=b"\0libamd_comgr.so.3\0")
         )
-        self.assertTrue(any("dynamic-loader literal" in item for item in violations))
+        self.assertTrue(any("binary literal" in item for item in violations))
+
+    def test_virtual_runtime_policy_rejects_direct_device_paths(self) -> None:
+        for device_path in (b"/dev/dri/renderD128", b"/dev/kfd"):
+            with self.subTest(device_path=device_path):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "runtime"
+                    path.write_bytes(synthetic_elf(hidden_literal=device_path))
+                    violations, _ = CHECKER.audit_elf(path, VIRTUAL_POLICY)
+                self.assertTrue(
+                    any("binary literal" in item for item in violations)
+                )
 
     def test_malformed_elf_fails_closed(self) -> None:
         with self.assertRaisesRegex(CHECKER.AuditInputError, "not an ELF"):

@@ -155,6 +155,47 @@ fn verified_bundle_selects_its_exact_semantic_target() {
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["target"], "gfx942:xnack-");
     assert!(result["bundle_sha256"].as_str().is_some());
+    let bundle_runtime_identity = result["lifecycle"]["runtime_identity"].as_str().unwrap();
+
+    let loose_exact = Command::new(env!("CARGO_BIN_EXE_fe2o3-virtual-runtime"))
+        .arg("--kir-v7")
+        .arg(fixture("kernel.kir"))
+        .arg("--request")
+        .arg(fixture("request.json"))
+        .arg("--target")
+        .arg("gfx942:xnack-")
+        .output()
+        .unwrap();
+    assert!(
+        loose_exact.status.success(),
+        "{}",
+        String::from_utf8_lossy(&loose_exact.stderr)
+    );
+    let loose_exact: serde_json::Value = serde_json::from_slice(&loose_exact.stdout).unwrap();
+    assert_ne!(
+        bundle_runtime_identity,
+        loose_exact["lifecycle"]["runtime_identity"]
+            .as_str()
+            .unwrap()
+    );
+
+    let loose_neutral = Command::new(env!("CARGO_BIN_EXE_fe2o3-virtual-runtime"))
+        .arg("--kir-v7")
+        .arg(fixture("kernel.kir"))
+        .arg("--request")
+        .arg(fixture("request.json"))
+        .output()
+        .unwrap();
+    assert!(
+        loose_neutral.status.success(),
+        "{}",
+        String::from_utf8_lossy(&loose_neutral.stderr)
+    );
+    let loose_neutral: serde_json::Value = serde_json::from_slice(&loose_neutral.stdout).unwrap();
+    assert_ne!(
+        loose_exact["lifecycle"]["runtime_identity"],
+        loose_neutral["lifecycle"]["runtime_identity"]
+    );
 }
 
 #[test]

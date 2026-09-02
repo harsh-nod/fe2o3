@@ -7,8 +7,10 @@
 //! produced here grants compiler, artifact, load, launch, KFD, hardware,
 //! equivalence, performance, or universal-correctness authority.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::mem::size_of;
 
 use fe2o3_kernel_ir::{AccessMode, KernelId, ScalarType, VerifiedCanonicalKernelIrIdentityV7};
 use fe2o3_kir_sim::{
@@ -22,10 +24,10 @@ use fe2o3_runtime_model::{
     AQL_PACKET_BYTES_V1, AllocationIdV1, AllocationKeyV1, CodeLoadPlanIdV1, CompletionIdV1,
     CompletionKeyV1, DeviceGenerationV1, DeviceKeyV1, DispatchIdV1, DispatchKeyV1,
     DispatchResourceV1, IdentityDigestV1, LoadedCodeIdV1, LoadedCodeKeyV1, MAX_ALLOCATIONS_V1,
-    MAX_DISPATCHES_V1, MAX_LOADED_CODE_V1, MAX_QUEUE_CAPACITY_V1, MAX_QUEUES_V1, MappingIdV1,
-    MappingKeyV1, MemoryAccessV1, PhysicalDeviceIdV1, QueueGenerationV1, QueueInstanceIdV1,
-    QueueKeyV1, QueuePlanIdV1, RuntimeArtifactIdV1, RuntimeStateV1, RuntimeTransitionV1,
-    TransitionErrorV1, VmIdV1, VmKeyV1,
+    MAX_DISPATCH_RESOURCES_V1, MAX_DISPATCHES_V1, MAX_LOADED_CODE_V1, MAX_MAPPINGS_V1,
+    MAX_QUEUE_CAPACITY_V1, MAX_QUEUES_V1, MappingIdV1, MappingKeyV1, MemoryAccessV1,
+    PhysicalDeviceIdV1, QueueGenerationV1, QueueInstanceIdV1, QueueKeyV1, QueuePlanIdV1,
+    RuntimeArtifactIdV1, RuntimeStateV1, RuntimeTransitionV1, TransitionErrorV1, VmIdV1, VmKeyV1,
 };
 
 pub const VIRTUAL_RUNTIME_SCHEMA_V1: &str = "fe2o3-virtual-runtime-v1";
@@ -34,6 +36,8 @@ pub const VIRTUAL_RUNTIME_OUTCOME_SCHEMA_V1: &str = "fe2o3-virtual-runtime-outco
 const FIRST_USER_ALLOCATION_ID: u64 = 1_024;
 const FIRST_SYNTHETIC_VA: u64 = 0x1_0000;
 const VA_ALIGNMENT: u64 = 0x1_0000;
+const HARD_MAX_ARGUMENTS_PER_DISPATCH_V1: usize = 65_536;
+const HARD_MAX_RETAINED_DISPATCH_BYTES_V1: usize = 1 << 30;
 
 /// Exact semantic target profile selected for this virtual runtime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,7 +72,9 @@ pub struct VirtualRuntimeLimitsV1 {
     pub max_modules: usize,
     pub max_queues: usize,
     pub max_dispatches: usize,
+    pub max_arguments_per_dispatch: usize,
     pub max_dependencies_per_dispatch: usize,
+    pub max_retained_dispatch_bytes: usize,
     pub max_schedule_decisions: usize,
 }
 
@@ -80,7 +86,9 @@ impl Default for VirtualRuntimeLimitsV1 {
             max_modules: 64,
             max_queues: 64,
             max_dispatches: 8_192,
+            max_arguments_per_dispatch: 65_536,
             max_dependencies_per_dispatch: 256,
+            max_retained_dispatch_bytes: 64 << 20,
             max_schedule_decisions: 1 << 20,
         }
     }
@@ -95,15 +103,23 @@ impl VirtualRuntimeLimitsV1 {
             ("max_queues", self.max_queues),
             ("max_dispatches", self.max_dispatches),
             (
+                "max_arguments_per_dispatch",
+                self.max_arguments_per_dispatch,
+            ),
+            (
                 "max_dependencies_per_dispatch",
                 self.max_dependencies_per_dispatch,
+            ),
+            (
+                "max_retained_dispatch_bytes",
+                self.max_retained_dispatch_bytes,
             ),
             ("max_schedule_decisions", self.max_schedule_decisions),
         ];
         if let Some((field, _)) = fields.into_iter().find(|(_, value)| *value == 0) {
             return Err(VirtualRuntimeErrorV1::InvalidLimit(field));
         }
-        if self.max_user_allocations > MAX_ALLOCATIONS_V1.saturating_sub(128) {
+        if self.max_user_allocations > MAX_ALLOCATIONS_V1 {
             return Err(VirtualRuntimeErrorV1::InvalidLimit("max_user_allocations"));
         }
         if self.max_modules > MAX_LOADED_CODE_V1 {
@@ -114,6 +130,28 @@ impl VirtualRuntimeLimitsV1 {
         }
         if self.max_dispatches > MAX_DISPATCHES_V1 {
             return Err(VirtualRuntimeErrorV1::InvalidLimit("max_dispatches"));
+        }
+        if self.max_arguments_per_dispatch > HARD_MAX_ARGUMENTS_PER_DISPATCH_V1 {
+            return Err(VirtualRuntimeErrorV1::InvalidLimit(
+                "max_arguments_per_dispatch",
+            ));
+        }
+        if self.max_retained_dispatch_bytes > HARD_MAX_RETAINED_DISPATCH_BYTES_V1 {
+            return Err(VirtualRuntimeErrorV1::InvalidLimit(
+                "max_retained_dispatch_bytes",
+            ));
+        }
+        let aggregate_allocations = self
+            .max_user_allocations
+            .checked_add(self.max_modules)
+            .and_then(|count| count.checked_add(self.max_queues))
+            .ok_or(VirtualRuntimeErrorV1::InvalidLimit(
+                "aggregate model allocations",
+            ))?;
+        if aggregate_allocations > MAX_ALLOCATIONS_V1 || aggregate_allocations > MAX_MAPPINGS_V1 {
+            return Err(VirtualRuntimeErrorV1::InvalidLimit(
+                "aggregate model allocations",
+            ));
         }
         Ok(self)
     }
@@ -292,6 +330,9 @@ pub enum VirtualRuntimeErrorV1 {
     InvalidBufferAccess {
         ordinal: u64,
     },
+    HostAccessWhileRetained {
+        ordinal: u64,
+    },
     DuplicateDependency {
         ordinal: u64,
     },
@@ -307,9 +348,17 @@ pub enum VirtualRuntimeErrorV1 {
     QueueNotQuiescent {
         ordinal: u64,
     },
+    QueueHasPreparedDispatch {
+        queue: u64,
+        completion: u64,
+    },
     ExactTargetMismatch {
         module_target: String,
         runtime_target: &'static str,
+    },
+    MultipleExactTargets {
+        first: String,
+        second: String,
     },
     Model(TransitionErrorV1),
     Simulation {
@@ -350,6 +399,10 @@ impl fmt::Display for VirtualRuntimeErrorV1 {
                 formatter,
                 "buffer {ordinal} does not permit requested device access"
             ),
+            Self::HostAccessWhileRetained { ordinal } => write!(
+                formatter,
+                "buffer {ordinal} is retained by an unresolved virtual dispatch"
+            ),
             Self::DuplicateDependency { ordinal } => {
                 write!(formatter, "completion {ordinal} is a duplicate dependency")
             }
@@ -365,12 +418,20 @@ impl fmt::Display for VirtualRuntimeErrorV1 {
             Self::QueueNotQuiescent { ordinal } => {
                 write!(formatter, "queue {ordinal} is not quiescent")
             }
+            Self::QueueHasPreparedDispatch { queue, completion } => write!(
+                formatter,
+                "queue {queue} still has prepared completion {completion}"
+            ),
             Self::ExactTargetMismatch {
                 module_target,
                 runtime_target,
             } => write!(
                 formatter,
                 "module exact target {module_target} does not match virtual runtime target {runtime_target}"
+            ),
+            Self::MultipleExactTargets { first, second } => write!(
+                formatter,
+                "module declares multiple exact targets {first} and {second}"
             ),
             Self::Model(error) => write!(
                 formatter,
@@ -410,6 +471,7 @@ struct BufferRecordV1 {
     access: VirtualBufferAccessV1,
     bytes: Vec<u8>,
     initialized: Vec<bool>,
+    retained_dispatches: usize,
     released: bool,
 }
 
@@ -437,6 +499,7 @@ struct DispatchRecordLocalV1 {
     queue: VirtualQueueHandleV1,
     module: VirtualModuleHandleV1,
     request: VirtualDispatchRequestV1,
+    retained_buffers: Vec<usize>,
     state: VirtualCompletionStateV1,
     summary: Option<VirtualSimulationSummaryV1>,
 }
@@ -450,6 +513,7 @@ pub struct VirtualRuntimeV1 {
     next_allocation_id: u64,
     next_va: u64,
     total_user_bytes: usize,
+    retained_dispatch_bytes: usize,
     buffers: Vec<BufferRecordV1>,
     modules: Vec<ModuleRecordV1>,
     queues: Vec<QueueRecordV1>,
@@ -488,6 +552,7 @@ impl VirtualRuntimeV1 {
             next_allocation_id: FIRST_USER_ALLOCATION_ID,
             next_va: FIRST_SYNTHETIC_VA,
             total_user_bytes: 0,
+            retained_dispatch_bytes: 0,
             buffers: Vec::new(),
             modules: Vec::new(),
             queues: Vec::new(),
@@ -551,6 +616,7 @@ impl VirtualRuntimeV1 {
             access,
             bytes,
             initialized,
+            retained_dispatches: 0,
             released: false,
         });
         Ok(handle)
@@ -562,7 +628,8 @@ impl VirtualRuntimeV1 {
         offset: usize,
         source: &[u8],
     ) -> Result<(), VirtualRuntimeErrorV1> {
-        let record = self.buffer_mut(handle)?;
+        let index = self.host_accessible_buffer_index(handle)?;
+        let record = &mut self.buffers[index];
         let end = offset
             .checked_add(source.len())
             .ok_or(VirtualRuntimeErrorV1::InvalidBufferRange)?;
@@ -586,7 +653,8 @@ impl VirtualRuntimeV1 {
         if source.len() != initialized.len() {
             return Err(VirtualRuntimeErrorV1::InvalidBufferRange);
         }
-        let record = self.buffer_mut(handle)?;
+        let index = self.host_accessible_buffer_index(handle)?;
+        let record = &mut self.buffers[index];
         let end = offset
             .checked_add(source.len())
             .ok_or(VirtualRuntimeErrorV1::InvalidBufferRange)?;
@@ -605,7 +673,8 @@ impl VirtualRuntimeV1 {
         offset: usize,
         destination: &mut [u8],
     ) -> Result<(), VirtualRuntimeErrorV1> {
-        let record = self.buffer(handle)?;
+        let index = self.host_accessible_buffer_index(handle)?;
+        let record = &self.buffers[index];
         let end = offset
             .checked_add(destination.len())
             .ok_or(VirtualRuntimeErrorV1::InvalidBufferRange)?;
@@ -629,7 +698,8 @@ impl VirtualRuntimeV1 {
         &self,
         handle: VirtualBufferHandleV1,
     ) -> Result<VirtualBufferSnapshotV1<'_>, VirtualRuntimeErrorV1> {
-        let record = self.buffer(handle)?;
+        let index = self.host_accessible_buffer_index(handle)?;
+        let record = &self.buffers[index];
         Ok(VirtualBufferSnapshotV1 {
             bytes: &record.bytes,
             initialized: &record.initialized,
@@ -772,7 +842,7 @@ impl VirtualRuntimeV1 {
         &mut self,
         queue: VirtualQueueHandleV1,
         module: VirtualModuleHandleV1,
-        request: VirtualDispatchRequestV1,
+        mut request: VirtualDispatchRequestV1,
     ) -> Result<VirtualCompletionHandleV1, VirtualRuntimeErrorV1> {
         if self.dispatches.len() >= self.config.runtime_limits.max_dispatches {
             return Err(VirtualRuntimeErrorV1::CapacityExceeded("dispatch"));
@@ -781,22 +851,26 @@ impl VirtualRuntimeV1 {
         let module_index = self.module_index(module)?;
         self.require_live_queue(queue_index)?;
         self.require_live_module(module_index)?;
+        if request.arguments.len() > self.config.runtime_limits.max_arguments_per_dispatch {
+            return Err(VirtualRuntimeErrorV1::CapacityExceeded(
+                "dispatch arguments",
+            ));
+        }
         if request.dependencies.len() > self.config.runtime_limits.max_dependencies_per_dispatch {
             return Err(VirtualRuntimeErrorV1::CapacityExceeded(
                 "dispatch dependency",
             ));
         }
         let future_ordinal = self.next_ordinal;
-        let mut dependencies = request.dependencies.clone();
-        dependencies.sort_unstable();
-        for pair in dependencies.windows(2) {
+        request.dependencies.sort_unstable();
+        for pair in request.dependencies.windows(2) {
             if pair[0] == pair[1] {
                 return Err(VirtualRuntimeErrorV1::DuplicateDependency {
                     ordinal: pair[0].ordinal,
                 });
             }
         }
-        for dependency in &dependencies {
+        for dependency in &request.dependencies {
             self.validate_handle("completion", dependency.runtime_identity)?;
             if dependency.ordinal >= future_ordinal
                 || !self
@@ -809,7 +883,22 @@ impl VirtualRuntimeV1 {
                 });
             }
         }
-        let resources = self.validate_and_collect_resources(&request.arguments)?;
+        let (resources, retained_buffers) =
+            self.validate_and_collect_resources(&request.arguments)?;
+        let retained_bytes =
+            retained_dispatch_request_bytes(&request, retained_buffers.capacity())?;
+        let next_retained_bytes = self
+            .retained_dispatch_bytes
+            .checked_add(retained_bytes)
+            .ok_or(VirtualRuntimeErrorV1::ByteLengthOverflow)?;
+        if next_retained_bytes > self.config.runtime_limits.max_retained_dispatch_bytes {
+            return Err(VirtualRuntimeErrorV1::CapacityExceeded(
+                "retained dispatch bytes",
+            ));
+        }
+        self.dispatches
+            .try_reserve(1)
+            .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch storage"))?;
         let completion = self.new_completion_handle();
         let dispatch_key = DispatchKeyV1 {
             queue: self.queues[queue_index].queue,
@@ -826,12 +915,20 @@ impl VirtualRuntimeV1 {
             resources,
         })?;
         self.model = next;
+        for &buffer_index in &retained_buffers {
+            self.buffers[buffer_index].retained_dispatches = self.buffers[buffer_index]
+                .retained_dispatches
+                .checked_add(1)
+                .expect("bounded dispatch count cannot overflow buffer retention");
+        }
+        self.retained_dispatch_bytes = next_retained_bytes;
         self.dispatches.push(DispatchRecordLocalV1 {
             completion,
             model_completion,
             queue,
             module,
             request,
+            retained_buffers,
             state: VirtualCompletionStateV1::Prepared,
             summary: None,
         });
@@ -881,6 +978,7 @@ impl VirtualRuntimeV1 {
                         completion: self.dispatches[index].model_completion,
                     })?;
                     self.dispatches[index].state = VirtualCompletionStateV1::AbortedDependency;
+                    self.release_dispatch_buffer_retention(index);
                     return Ok(VirtualRunProgressV1::AbortedDependency {
                         completion,
                         dependency,
@@ -921,6 +1019,16 @@ impl VirtualRuntimeV1 {
                 ordinal: completion.ordinal,
             });
         }
+        if let Some(sibling) = self.prepared_completion_on_queue(
+            self.dispatches[index].queue,
+            Some(self.dispatches[index].completion),
+        ) {
+            return Err(VirtualRuntimeErrorV1::QueueHasPreparedDispatch {
+                queue: self.dispatches[index].queue.ordinal,
+                completion: sibling.ordinal,
+            });
+        }
+        let writable_ranges = self.dispatch_writable_ranges(index)?;
         let model_completion = self.dispatches[index].model_completion;
         self.model = self
             .model
@@ -931,6 +1039,9 @@ impl VirtualRuntimeV1 {
                 completion: model_completion,
             })?;
         self.dispatches[index].state = VirtualCompletionStateV1::Ambiguous;
+        for (buffer_index, start, end) in writable_ranges {
+            self.buffers[buffer_index].initialized[start..end].fill(false);
+        }
         Ok(())
     }
 
@@ -940,6 +1051,12 @@ impl VirtualRuntimeV1 {
     ) -> Result<(), VirtualRuntimeErrorV1> {
         let index = self.queue_index(queue)?;
         self.require_live_queue(index)?;
+        if let Some(completion) = self.prepared_completion_on_queue(queue, None) {
+            return Err(VirtualRuntimeErrorV1::QueueHasPreparedDispatch {
+                queue: queue.ordinal,
+                completion: completion.ordinal,
+            });
+        }
         let key = self.queues[index].queue;
         self.model = self
             .model
@@ -972,6 +1089,7 @@ impl VirtualRuntimeV1 {
                 completion: self.dispatches[index].model_completion,
             })?;
         self.dispatches[index].state = VirtualCompletionStateV1::FailedQuiescent;
+        self.release_dispatch_buffer_retention(index);
         Ok(())
     }
 
@@ -981,7 +1099,13 @@ impl VirtualRuntimeV1 {
     ) -> Result<VirtualRunProgressV1, VirtualRuntimeErrorV1> {
         let completion = self.dispatches[index].completion;
         let module_index = self.module_index(self.dispatches[index].module)?;
-        let (request, backing_handles) = self.build_simulation_request(index)?;
+        let (request, backing_handles) = match self.build_simulation_request(index) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.abort_prepared_dispatch(index)?;
+                return Err(error);
+            }
+        };
         let execution = self.modules[module_index].module.simulate_scheduled(
             &request,
             self.config.target.simulation_target(),
@@ -993,10 +1117,7 @@ impl VirtualRuntimeV1 {
         let execution = match execution {
             Ok(execution) => execution,
             Err(source) => {
-                self.model = self.model.next(RuntimeTransitionV1::AbortPrepared {
-                    completion: self.dispatches[index].model_completion,
-                })?;
-                self.dispatches[index].state = VirtualCompletionStateV1::AbortedSimulation;
+                self.abort_prepared_dispatch(index)?;
                 return Err(VirtualRuntimeErrorV1::Simulation {
                     completion,
                     source: Box::new(source),
@@ -1034,23 +1155,71 @@ impl VirtualRuntimeV1 {
                 SimulationRaceAssessmentV1::Incomplete { .. } => VirtualRaceStateV1::Incomplete,
             },
         };
+        let (_, outputs) = execution.into_outputs();
+        if outputs.len() != backing_handles.len() {
+            self.abort_prepared_dispatch(index)?;
+            return Err(VirtualRuntimeErrorV1::SimulatorBuffer(
+                "simulator output backing count changed".to_owned(),
+            ));
+        }
+        let copybacks = (|| {
+            let mut copybacks = Vec::new();
+            copybacks
+                .try_reserve_exact(outputs.len())
+                .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch copyback"))?;
+            for (handle, output) in backing_handles.into_iter().zip(outputs) {
+                let mut bytes = Vec::new();
+                bytes
+                    .try_reserve_exact(output.buffer.bytes().len())
+                    .map_err(|_| {
+                        VirtualRuntimeErrorV1::CapacityExceeded("dispatch copyback bytes")
+                    })?;
+                bytes.extend_from_slice(output.buffer.bytes());
+                let mut initialized = Vec::new();
+                initialized
+                    .try_reserve_exact(output.buffer.initialized().len())
+                    .map_err(|_| {
+                        VirtualRuntimeErrorV1::CapacityExceeded("dispatch copyback initialization")
+                    })?;
+                initialized.extend_from_slice(output.buffer.initialized());
+                copybacks.push((handle, bytes, initialized));
+            }
+            Ok(copybacks)
+        })();
+        let copybacks = match copybacks {
+            Ok(copybacks) => copybacks,
+            Err(error) => {
+                self.abort_prepared_dispatch(index)?;
+                return Err(error);
+            }
+        };
         let model_completion = self.dispatches[index].model_completion;
-        self.model = self
+        let next_model = self
             .model
             .next(RuntimeTransitionV1::PublishDispatch {
                 completion: model_completion,
-            })?
-            .next(RuntimeTransitionV1::ObserveCompletion {
-                completion: model_completion,
-            })?;
-        let (_, outputs) = execution.into_outputs();
-        for (handle, output) in backing_handles.into_iter().zip(outputs) {
+            })
+            .and_then(|model| {
+                model.next(RuntimeTransitionV1::ObserveCompletion {
+                    completion: model_completion,
+                })
+            });
+        let next_model = match next_model {
+            Ok(model) => model,
+            Err(error) => {
+                self.abort_prepared_dispatch(index)?;
+                return Err(VirtualRuntimeErrorV1::Model(error));
+            }
+        };
+        self.model = next_model;
+        for (handle, bytes, initialized) in copybacks {
             let record = self.buffer_mut(handle)?;
-            record.bytes = output.buffer.bytes().to_vec();
-            record.initialized = output.buffer.initialized().to_vec();
+            record.bytes = bytes;
+            record.initialized = initialized;
         }
         self.dispatches[index].state = VirtualCompletionStateV1::Completed;
         self.dispatches[index].summary = Some(summary.clone());
+        self.release_dispatch_buffer_retention(index);
         Ok(VirtualRunProgressV1::Completed {
             completion,
             summary,
@@ -1063,16 +1232,29 @@ impl VirtualRuntimeV1 {
     ) -> Result<(SimulationRequestV1, Vec<VirtualBufferHandleV1>), VirtualRuntimeErrorV1> {
         let request = &self.dispatches[dispatch_index].request;
         let mut handles = Vec::new();
-        for argument in &request.arguments {
-            if let VirtualArgumentV1::Buffer { buffer, .. } = argument
-                && !handles.contains(buffer)
-            {
-                handles.push(*buffer);
-            }
+        handles
+            .try_reserve_exact(self.dispatches[dispatch_index].retained_buffers.len())
+            .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch buffers"))?;
+        let mut backing_by_handle = BTreeMap::new();
+        for (backing, &buffer_index) in self.dispatches[dispatch_index]
+            .retained_buffers
+            .iter()
+            .enumerate()
+        {
+            let handle = self.buffers[buffer_index].handle;
+            handles.push(handle);
+            backing_by_handle.insert(handle, BufferBackingIdV1(backing as u32));
         }
         let mut shared = Vec::new();
-        for (index, handle) in handles.iter().enumerate() {
-            let record = self.buffer(*handle)?;
+        shared
+            .try_reserve_exact(handles.len())
+            .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch buffers"))?;
+        for (index, &buffer_index) in self.dispatches[dispatch_index]
+            .retained_buffers
+            .iter()
+            .enumerate()
+        {
+            let record = &self.buffers[buffer_index];
             let mut views = request
                 .arguments
                 .iter()
@@ -1080,29 +1262,50 @@ impl VirtualRuntimeV1 {
                     VirtualArgumentV1::Buffer {
                         buffer,
                         element,
+                        access,
                         alignment,
                         ..
-                    } if buffer == handle => Some((*element, *alignment)),
+                    } if *buffer == record.handle => Some((*element, *access, *alignment)),
                     _ => None,
                 });
-            let (element, mut alignment) = views
+            let (element, first_access, mut alignment) = views
                 .next()
                 .expect("buffer handles were collected from the same arguments");
-            for (candidate, candidate_alignment) in views {
+            let mut backing_access = if first_access == AccessMode::ReadOnly {
+                AccessMode::ReadOnly
+            } else {
+                AccessMode::ReadWrite
+            };
+            for (candidate, candidate_access, candidate_alignment) in views {
                 if candidate != element {
                     return Err(VirtualRuntimeErrorV1::SimulatorBuffer(format!(
                         "buffer {} cannot be viewed with multiple scalar element types",
-                        handle.ordinal
+                        record.handle.ordinal
                     )));
                 }
                 alignment = alignment.max(candidate_alignment);
+                if candidate_access != AccessMode::ReadOnly {
+                    backing_access = AccessMode::ReadWrite;
+                }
             }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(record.bytes.len())
+                .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch buffer bytes"))?;
+            bytes.extend_from_slice(&record.bytes);
+            let mut initialized = Vec::new();
+            initialized
+                .try_reserve_exact(record.initialized.len())
+                .map_err(|_| {
+                    VirtualRuntimeErrorV1::CapacityExceeded("dispatch initialization bytes")
+                })?;
+            initialized.extend_from_slice(&record.initialized);
             let buffer = BufferArgumentV1::new(
                 element,
-                AccessMode::ReadWrite,
+                backing_access,
                 alignment,
-                record.bytes.clone(),
-                record.initialized.clone(),
+                bytes,
+                initialized,
                 self.config.target.simulation_target(),
             )
             .map_err(|error| VirtualRuntimeErrorV1::SimulatorBuffer(error.to_string()))?;
@@ -1128,12 +1331,11 @@ impl VirtualRuntimeV1 {
                     byte_offset,
                     elements,
                 } => {
-                    let backing = handles
-                        .iter()
-                        .position(|candidate| candidate == buffer)
-                        .expect("buffer handles were collected from the same arguments");
+                    let backing = *backing_by_handle
+                        .get(buffer)
+                        .expect("validated buffer has a stable backing index");
                     let view = BufferViewArgumentV1::new(
-                        BufferBackingIdV1(backing as u32),
+                        backing,
                         *element,
                         *access,
                         *alignment,
@@ -1183,38 +1385,120 @@ impl VirtualRuntimeV1 {
     fn validate_and_collect_resources(
         &self,
         arguments: &[VirtualArgumentV1],
-    ) -> Result<Vec<DispatchResourceV1>, VirtualRuntimeErrorV1> {
-        let mut resources: Vec<DispatchResourceV1> = Vec::new();
+    ) -> Result<(Vec<DispatchResourceV1>, Vec<usize>), VirtualRuntimeErrorV1> {
+        let mut buffer_indices = Vec::new();
+        let buffers_by_handle: BTreeMap<VirtualBufferHandleV1, usize> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .map(|(index, record)| (record.handle, index))
+            .collect();
+        let mut buffer_layouts: BTreeMap<VirtualBufferHandleV1, (ScalarType, MemoryAccessV1)> =
+            BTreeMap::new();
         for argument in arguments {
-            let VirtualArgumentV1::Buffer { buffer, access, .. } = argument else {
+            let VirtualArgumentV1::Buffer {
+                buffer,
+                element,
+                access,
+                alignment,
+                byte_offset,
+                elements,
+            } = argument
+            else {
                 continue;
             };
-            let record = self.buffer(*buffer)?;
+            self.validate_handle("buffer", buffer.runtime_identity)?;
+            let buffer_index =
+                *buffers_by_handle
+                    .get(buffer)
+                    .ok_or(VirtualRuntimeErrorV1::UnknownHandle {
+                        kind: "buffer",
+                        ordinal: buffer.ordinal,
+                    })?;
+            let record = &self.buffers[buffer_index];
+            if record.released {
+                return Err(VirtualRuntimeErrorV1::ReleasedHandle {
+                    kind: "buffer",
+                    ordinal: buffer.ordinal,
+                });
+            }
             if !record.access.permits(*access) {
                 return Err(VirtualRuntimeErrorV1::InvalidBufferAccess {
                     ordinal: buffer.ordinal,
                 });
             }
+            let element_bytes = virtual_scalar_bytes(*element).ok_or_else(|| {
+                VirtualRuntimeErrorV1::SimulatorBuffer(format!(
+                    "buffer {} uses unsupported element {element:?}",
+                    buffer.ordinal
+                ))
+            })?;
+            if *alignment == 0
+                || !alignment.is_power_of_two()
+                || !byte_offset.is_multiple_of(*alignment as usize)
+            {
+                return Err(VirtualRuntimeErrorV1::SimulatorBuffer(format!(
+                    "buffer {} view alignment {alignment} is invalid at byte offset {byte_offset}",
+                    buffer.ordinal
+                )));
+            }
+            if !record.bytes.len().is_multiple_of(element_bytes) {
+                return Err(VirtualRuntimeErrorV1::SimulatorBuffer(format!(
+                    "buffer {} byte length {} is not a multiple of {element_bytes}",
+                    buffer.ordinal,
+                    record.bytes.len()
+                )));
+            }
+            let view_end = elements
+                .checked_mul(element_bytes)
+                .and_then(|bytes| byte_offset.checked_add(bytes))
+                .ok_or(VirtualRuntimeErrorV1::ByteLengthOverflow)?;
+            if view_end > record.bytes.len() {
+                return Err(VirtualRuntimeErrorV1::InvalidBufferRange);
+            }
             let required_access = match access {
                 AccessMode::ReadOnly => MemoryAccessV1::Read,
                 AccessMode::WriteOnly | AccessMode::ReadWrite => MemoryAccessV1::ReadWrite,
             };
-            if let Some(existing) = resources
-                .iter_mut()
-                .find(|resource| resource.mapping == record.mapping)
-            {
+            if let Some((existing_element, existing_access)) = buffer_layouts.get_mut(buffer) {
+                if existing_element != element {
+                    return Err(VirtualRuntimeErrorV1::SimulatorBuffer(format!(
+                        "buffer {} cannot mix {existing_element:?} and {element:?} views",
+                        buffer.ordinal
+                    )));
+                }
                 if required_access == MemoryAccessV1::ReadWrite {
-                    existing.required_access = required_access;
+                    *existing_access = required_access;
                 }
             } else {
-                resources.push(DispatchResourceV1 {
-                    mapping: record.mapping,
-                    required_access,
-                });
+                if buffer_indices.len() >= MAX_DISPATCH_RESOURCES_V1 {
+                    return Err(VirtualRuntimeErrorV1::CapacityExceeded(
+                        "dispatch resources",
+                    ));
+                }
+                buffer_layouts.insert(*buffer, (*element, required_access));
+                buffer_indices
+                    .try_reserve(1)
+                    .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch buffers"))?;
+                buffer_indices.push(buffer_index);
             }
         }
-        resources.sort_unstable_by_key(|resource| resource.mapping);
-        Ok(resources)
+        buffer_indices.sort_unstable();
+        let mut resources = Vec::new();
+        resources
+            .try_reserve_exact(buffer_indices.len())
+            .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch resources"))?;
+        for &buffer_index in &buffer_indices {
+            let record = &self.buffers[buffer_index];
+            let (_, required_access) = buffer_layouts
+                .get(&record.handle)
+                .expect("collected buffer has validated access");
+            resources.push(DispatchResourceV1 {
+                mapping: record.mapping,
+                required_access: *required_access,
+            });
+        }
+        Ok((resources, buffer_indices))
     }
 
     fn validate_module_target(
@@ -1236,6 +1520,12 @@ impl VirtualRuntimeV1 {
         let Some(target) = exact.next() else {
             return Ok(());
         };
+        if let Some(second) = exact.next() {
+            return Err(VirtualRuntimeErrorV1::MultipleExactTargets {
+                first: target,
+                second,
+            });
+        }
         if target != self.config.target.label() {
             return Err(VirtualRuntimeErrorV1::ExactTargetMismatch {
                 module_target: target,
@@ -1344,20 +1634,6 @@ impl VirtualRuntimeV1 {
             })
     }
 
-    fn buffer(
-        &self,
-        handle: VirtualBufferHandleV1,
-    ) -> Result<&BufferRecordV1, VirtualRuntimeErrorV1> {
-        let index = self.buffer_index(handle)?;
-        if self.buffers[index].released {
-            return Err(VirtualRuntimeErrorV1::ReleasedHandle {
-                kind: "buffer",
-                ordinal: handle.ordinal,
-            });
-        }
-        Ok(&self.buffers[index])
-    }
-
     fn buffer_mut(
         &mut self,
         handle: VirtualBufferHandleV1,
@@ -1370,6 +1646,25 @@ impl VirtualRuntimeV1 {
             });
         }
         Ok(&mut self.buffers[index])
+    }
+
+    fn host_accessible_buffer_index(
+        &self,
+        handle: VirtualBufferHandleV1,
+    ) -> Result<usize, VirtualRuntimeErrorV1> {
+        let index = self.buffer_index(handle)?;
+        if self.buffers[index].released {
+            return Err(VirtualRuntimeErrorV1::ReleasedHandle {
+                kind: "buffer",
+                ordinal: handle.ordinal,
+            });
+        }
+        if self.buffers[index].retained_dispatches != 0 {
+            return Err(VirtualRuntimeErrorV1::HostAccessWhileRetained {
+                ordinal: handle.ordinal,
+            });
+        }
+        Ok(index)
     }
 
     fn module_index(&self, handle: VirtualModuleHandleV1) -> Result<usize, VirtualRuntimeErrorV1> {
@@ -1414,6 +1709,86 @@ impl VirtualRuntimeV1 {
         Ok(())
     }
 
+    fn prepared_completion_on_queue(
+        &self,
+        queue: VirtualQueueHandleV1,
+        except: Option<VirtualCompletionHandleV1>,
+    ) -> Option<VirtualCompletionHandleV1> {
+        self.dispatches
+            .iter()
+            .find(|record| {
+                record.queue == queue
+                    && record.state == VirtualCompletionStateV1::Prepared
+                    && Some(record.completion) != except
+            })
+            .map(|record| record.completion)
+    }
+
+    fn dispatch_writable_ranges(
+        &self,
+        dispatch_index: usize,
+    ) -> Result<Vec<(usize, usize, usize)>, VirtualRuntimeErrorV1> {
+        let arguments = &self.dispatches[dispatch_index].request.arguments;
+        let mut ranges = Vec::new();
+        ranges
+            .try_reserve_exact(arguments.len())
+            .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("dispatch ranges"))?;
+        let buffer_indices: BTreeMap<VirtualBufferHandleV1, usize> = self.dispatches
+            [dispatch_index]
+            .retained_buffers
+            .iter()
+            .map(|&index| (self.buffers[index].handle, index))
+            .collect();
+        for argument in arguments {
+            let VirtualArgumentV1::Buffer {
+                buffer,
+                element,
+                access,
+                byte_offset,
+                elements,
+                ..
+            } = argument
+            else {
+                continue;
+            };
+            if *access == AccessMode::ReadOnly {
+                continue;
+            }
+            let element_bytes =
+                virtual_scalar_bytes(*element).expect("submitted buffer element was validated");
+            let end = elements
+                .checked_mul(element_bytes)
+                .and_then(|bytes| byte_offset.checked_add(bytes))
+                .expect("submitted buffer range was validated");
+            let buffer_index = *buffer_indices
+                .get(buffer)
+                .expect("submitted buffer has a stable retained index");
+            ranges.push((buffer_index, *byte_offset, end));
+        }
+        Ok(ranges)
+    }
+
+    fn abort_prepared_dispatch(
+        &mut self,
+        dispatch_index: usize,
+    ) -> Result<(), VirtualRuntimeErrorV1> {
+        self.model = self.model.next(RuntimeTransitionV1::AbortPrepared {
+            completion: self.dispatches[dispatch_index].model_completion,
+        })?;
+        self.dispatches[dispatch_index].state = VirtualCompletionStateV1::AbortedSimulation;
+        self.release_dispatch_buffer_retention(dispatch_index);
+        Ok(())
+    }
+
+    fn release_dispatch_buffer_retention(&mut self, dispatch_index: usize) {
+        for &buffer_index in &self.dispatches[dispatch_index].retained_buffers {
+            self.buffers[buffer_index].retained_dispatches = self.buffers[buffer_index]
+                .retained_dispatches
+                .checked_sub(1)
+                .expect("terminal dispatch retained each buffer exactly once");
+        }
+    }
+
     fn dispatch_index(
         &self,
         completion: VirtualCompletionHandleV1,
@@ -1441,6 +1816,43 @@ enum DependencyReadinessV1 {
     Ready,
     Blocked,
     Failed(VirtualCompletionHandleV1),
+}
+
+fn retained_dispatch_request_bytes(
+    request: &VirtualDispatchRequestV1,
+    retained_buffer_capacity: usize,
+) -> Result<usize, VirtualRuntimeErrorV1> {
+    size_of::<VirtualDispatchRequestV1>()
+        .checked_add(request.kernel.retained_capacity_bytes())
+        .and_then(|bytes| {
+            bytes.checked_add(
+                request
+                    .arguments
+                    .capacity()
+                    .checked_mul(size_of::<VirtualArgumentV1>())?,
+            )
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(
+                request
+                    .dependencies
+                    .capacity()
+                    .checked_mul(size_of::<VirtualCompletionHandleV1>())?,
+            )
+        })
+        .and_then(|bytes| {
+            bytes.checked_add(retained_buffer_capacity.checked_mul(size_of::<usize>())?)
+        })
+        .ok_or(VirtualRuntimeErrorV1::ByteLengthOverflow)
+}
+
+fn virtual_scalar_bytes(element: ScalarType) -> Option<usize> {
+    let bits = if element == ScalarType::Index {
+        Some(64)
+    } else {
+        element.bit_width()
+    }?;
+    Some(if bits == 1 { 1 } else { usize::from(bits / 8) })
 }
 
 fn align_up(value: u64, alignment: u64) -> Result<u64, VirtualRuntimeErrorV1> {
