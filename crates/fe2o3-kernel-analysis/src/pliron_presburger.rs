@@ -14,8 +14,10 @@ use fe2o3_proof_contracts::{
     AffineBoundsCertificateErrorV1, AffineBoundsCertificateV1, AffineBoundsQueryV1,
     AffineInequalityV2, ConstrainedAffineBoundsCertificateErrorV2,
     ConstrainedAffineBoundsCertificateV2, ConstrainedAffineBoundsQueryV2,
+    DYNAMIC_AFFINE_COMPONENT_CEILING_V3, DynamicConstrainedAffineBoundsCertificateV3,
     MAX_CONSTRAINED_AFFINE_MULTIPLIER_V2, check_affine_bounds_certificate_v1,
     check_constrained_affine_bounds_certificate_v2,
+    check_dynamic_constrained_affine_bounds_certificate_v3,
 };
 
 use crate::{SparseIndexAnalysisV1, SparseIndexFactV1};
@@ -662,6 +664,59 @@ impl PresburgerMapV1 {
                 detail: "generated constrained affine certificate failed structural checking",
             }),
         }
+    }
+
+    /// Constructs a checked V3 proof of `0 <= index < runtime_extent`.
+    ///
+    /// Both outputs must be affine over the identical, nonempty constrained
+    /// domain. The V3 checker rechecks the two V2 component proofs and their
+    /// exact slack relation; generator failure has no proof meaning.
+    pub fn checked_dynamic_constrained_affine_bounds_certificate_v3(
+        &self,
+        index_output: usize,
+        extent_output: usize,
+    ) -> Result<Option<DynamicConstrainedAffineBoundsCertificateV3>, PresburgerFailureV1> {
+        let Some(PresburgerMapExprV1::Affine(index)) = self.outputs.get(index_output) else {
+            return Ok(None);
+        };
+        let Some(PresburgerMapExprV1::Affine(extent)) = self.outputs.get(extent_output) else {
+            return Ok(None);
+        };
+        let one = PresburgerAffineExprV1::constant(1, self.domain.domain().rank())?;
+        let slack = extent.checked_sub(index)?.checked_sub(&one)?;
+        let component_map = Self::new(
+            self.domain.clone(),
+            vec![
+                PresburgerMapExprV1::Affine(index.clone()),
+                PresburgerMapExprV1::Affine(slack),
+            ],
+        )?;
+        let Some(index_certificate) = component_map
+            .checked_constrained_affine_bounds_certificate_v2(
+                0,
+                DYNAMIC_AFFINE_COMPONENT_CEILING_V3,
+            )?
+        else {
+            return Ok(None);
+        };
+        let Some(slack_certificate) = component_map
+            .checked_constrained_affine_bounds_certificate_v2(
+                1,
+                DYNAMIC_AFFINE_COMPONENT_CEILING_V3,
+            )?
+        else {
+            return Ok(None);
+        };
+        let certificate = DynamicConstrainedAffineBoundsCertificateV3::new(
+            extent.constant_term(),
+            extent.coefficients().to_vec(),
+            index_certificate,
+            slack_certificate,
+        );
+        if check_dynamic_constrained_affine_bounds_certificate_v3(&certificate).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(certificate))
     }
 
     /// Constructs and checks the endpoint theorem certificate for one affine

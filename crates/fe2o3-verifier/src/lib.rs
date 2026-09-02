@@ -23,6 +23,7 @@ mod compiler_proof_binding_v3;
 mod compiler_target_lineage_v1;
 mod constrained_affine_bounds_certificate_v2;
 mod control_flow_binding;
+mod dynamic_constrained_affine_bounds_certificate_v3;
 mod executor;
 mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
@@ -119,6 +120,15 @@ pub use control_flow_binding::{
     bind_authenticated_control_flow_executable_v1, bind_control_flow_proof_request_v1,
     bind_persistently_fresh_authenticated_control_flow_executable_v1,
     derive_control_flow_functional_specification_digest_v1, reconcile_control_flow_source_v1,
+};
+pub use dynamic_constrained_affine_bounds_certificate_v3::{
+    CompilerDynamicConstrainedAffineBoundsVerificationErrorV3,
+    DYNAMIC_CONSTRAINED_AFFINE_BOUNDS_PROOF_SOURCE_SHA256_V3,
+    DYNAMIC_CONSTRAINED_AFFINE_BOUNDS_V2_DEPENDENCY_SHA256_V3,
+    DYNAMIC_CONSTRAINED_AFFINE_BOUNDS_VERUS_CLOSURE_MANIFEST_SHA256_V3,
+    DYNAMIC_CONSTRAINED_AFFINE_BOUNDS_VERUS_EXECUTABLE_SHA256_V3,
+    DynamicConstrainedAffineBoundsProofBindingV3, VerifiedCompilerDynamicConstrainedAffineBoundsV3,
+    verify_compiler_dynamic_constrained_affine_bounds_certificate_v3,
 };
 pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,

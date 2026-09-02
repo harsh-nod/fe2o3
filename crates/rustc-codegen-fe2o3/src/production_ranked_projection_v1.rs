@@ -22,7 +22,7 @@ use dialect_kernel::{
 use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
-    RankedConstrainedAffineBoundsCertificateV2,
+    RankedConstrainedAffineBoundsCertificateV2, RankedDynamicConstrainedAffineBoundsCertificateV3,
 };
 #[cfg(test)]
 use fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionReceiptV1;
@@ -92,6 +92,8 @@ const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
 const RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/PRODUCTION-RANKED-KERNEL-ROSTER-IDENTITY/V1\0";
+const DYNAMIC_AFFINE_GUARD_SOURCE_IDENTITY_DOMAIN_V3: &[u8] =
+    b"FE2O3/DYNAMIC-AFFINE-GUARD-SOURCE-IDENTITY/V3\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -109,12 +111,31 @@ struct ProjectedSemanticAccessSiteV1 {
     statement: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedSemanticGuardSiteV3 {
+    block: usize,
+    statement: usize,
+    condition_local: SemanticLocalIdV1,
+    lhs_local: SemanticLocalIdV1,
+    rhs_local: SemanticLocalIdV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedRankedGuardSourceV3 {
+    ranked_block: usize,
+    ranked_operation: usize,
+    lhs: ProductionRankedValueV1,
+    rhs: ProductionRankedValueV1,
+    semantic_site: ProjectedSemanticGuardSiteV3,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GuardedRankedAccessV1 {
     view: ProductionRankedValueIdV1,
     indices: Vec<ProductionRankedValueV1>,
     checked_success: Option<ProductionRankedValueV1>,
     comparisons: Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
+    comparison_sources: Vec<Option<ProjectedSemanticGuardSiteV3>>,
     access: AccessKindAttr,
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
@@ -124,12 +145,14 @@ struct GuardedRankedAccessV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GuardPredicateV1 {
     comparisons: Vec<(ProductionRankedValueV1, ProductionRankedValueV1)>,
+    comparison_sources: Vec<Option<ProjectedSemanticGuardSiteV3>>,
 }
 
 impl GuardPredicateV1 {
     fn for_access(access: &GuardedRankedAccessV1) -> Self {
         Self {
             comparisons: access.comparisons.clone(),
+            comparison_sources: access.comparison_sources.clone(),
         }
     }
 
@@ -138,6 +161,7 @@ impl GuardPredicateV1 {
     ) -> Self {
         Self {
             comparisons: precondition.into_iter().collect(),
+            comparison_sources: precondition.into_iter().map(|_| None).collect(),
         }
     }
 }
@@ -553,6 +577,7 @@ struct ProjectedBoundsCheckV1 {
     index_local: SemanticLocalIdV1,
     index: ProductionRankedValueV1,
     extent: ProductionRankedValueV1,
+    guard_site: ProjectedSemanticGuardSiteV3,
     must_authorize_access: bool,
 }
 
@@ -693,6 +718,7 @@ pub(crate) struct ProductionRankedRootProgramV1 {
     lowering: ProductionRankedKernelLoweringInputV1,
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
+    guard_sources_v3: Vec<ProjectedRankedGuardSourceV3>,
     executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
 }
 
@@ -764,6 +790,7 @@ pub(crate) struct ProductionRankedVerifiedRootCandidateV1 {
     lowering: ProductionRankedKernelLoweringInputV1,
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
+    guard_sources_v3: Vec<ProjectedRankedGuardSourceV3>,
     executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
     verification: AuthenticatedRankedVerificationV5,
 }
@@ -822,6 +849,7 @@ pub(crate) struct AuthenticatedRankedVerificationV5 {
     middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
     affine_bounds: Box<[AuthenticatedRankedAffineBoundsV1]>,
     constrained_affine_bounds: Box<[AuthenticatedRankedConstrainedAffineBoundsV2]>,
+    dynamic_constrained_affine_bounds: Box<[AuthenticatedRankedDynamicConstrainedAffineBoundsV3]>,
     functional: Option<AuthenticatedFunctionalVerificationV1>,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 }
@@ -845,8 +873,25 @@ struct AuthenticatedRankedConstrainedAffineBoundsV2 {
     verification: fe2o3_verifier::VerifiedCompilerConstrainedAffineBoundsV2,
 }
 
+/// Independently replayed runtime-extent theorem at one exact ranked-IR site.
+struct AuthenticatedRankedDynamicConstrainedAffineBoundsV3 {
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    access_kind: AccessKindAttr,
+    access_view: String,
+    access_index: String,
+    dynamic_extent: String,
+    semantic_block: u32,
+    semantic_statement: Option<u32>,
+    semantic_access_ordinal: u32,
+    runtime_variables: Box<[String]>,
+    guards: Box<[AuthenticatedRankedDynamicAffineGuardV3]>,
+    verification: fe2o3_verifier::VerifiedCompilerDynamicConstrainedAffineBoundsV3,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct AuthenticatedRankedAffineGuardV2 {
+pub(crate) struct AuthenticatedRankedDynamicAffineGuardV3 {
     branch_block: usize,
     branch_operation: usize,
     lhs_value: String,
@@ -856,6 +901,201 @@ struct AuthenticatedRankedAffineGuardV2 {
     accepted_successor: usize,
     accepted_on_true_edge: bool,
     normalized_constraint: AffineInequalityV2,
+    semantic_block: u32,
+    semantic_statement: u32,
+    semantic_condition_local: SemanticLocalIdV1,
+    semantic_lhs_local: SemanticLocalIdV1,
+    semantic_rhs_local: SemanticLocalIdV1,
+}
+
+#[allow(dead_code)]
+impl AuthenticatedRankedDynamicAffineGuardV3 {
+    pub(crate) const fn branch_block(&self) -> usize {
+        self.branch_block
+    }
+
+    pub(crate) const fn branch_operation(&self) -> usize {
+        self.branch_operation
+    }
+
+    pub(crate) fn lhs_value(&self) -> &str {
+        &self.lhs_value
+    }
+
+    pub(crate) fn rhs_value(&self) -> &str {
+        &self.rhs_value
+    }
+
+    pub(crate) const fn true_successor(&self) -> usize {
+        self.true_successor
+    }
+
+    pub(crate) const fn false_successor(&self) -> usize {
+        self.false_successor
+    }
+
+    pub(crate) const fn accepted_successor(&self) -> usize {
+        self.accepted_successor
+    }
+
+    pub(crate) const fn accepted_on_true_edge(&self) -> bool {
+        self.accepted_on_true_edge
+    }
+
+    pub(crate) const fn normalized_constraint(&self) -> &AffineInequalityV2 {
+        &self.normalized_constraint
+    }
+
+    pub(crate) const fn semantic_block(&self) -> u32 {
+        self.semantic_block
+    }
+
+    pub(crate) const fn semantic_statement(&self) -> u32 {
+        self.semantic_statement
+    }
+
+    pub(crate) const fn semantic_condition_local(&self) -> SemanticLocalIdV1 {
+        self.semantic_condition_local
+    }
+
+    pub(crate) const fn semantic_lhs_local(&self) -> SemanticLocalIdV1 {
+        self.semantic_lhs_local
+    }
+
+    pub(crate) const fn semantic_rhs_local(&self) -> SemanticLocalIdV1 {
+        self.semantic_rhs_local
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedRankedAffineGuardV2 {
+    branch_block: usize,
+    branch_operation: usize,
+    lhs_value: String,
+    rhs_value: String,
+    true_successor: usize,
+    false_successor: usize,
+    accepted_successor: usize,
+    accepted_on_true_edge: bool,
+    normalized_constraint: AffineInequalityV2,
+}
+
+#[allow(dead_code)]
+impl AuthenticatedRankedAffineGuardV2 {
+    pub(crate) const fn branch_block(&self) -> usize {
+        self.branch_block
+    }
+
+    pub(crate) const fn branch_operation(&self) -> usize {
+        self.branch_operation
+    }
+
+    pub(crate) fn lhs_value(&self) -> &str {
+        &self.lhs_value
+    }
+
+    pub(crate) fn rhs_value(&self) -> &str {
+        &self.rhs_value
+    }
+
+    pub(crate) const fn true_successor(&self) -> usize {
+        self.true_successor
+    }
+
+    pub(crate) const fn false_successor(&self) -> usize {
+        self.false_successor
+    }
+
+    pub(crate) const fn accepted_successor(&self) -> usize {
+        self.accepted_successor
+    }
+
+    pub(crate) const fn accepted_on_true_edge(&self) -> bool {
+        self.accepted_on_true_edge
+    }
+
+    pub(crate) const fn normalized_constraint(&self) -> &AffineInequalityV2 {
+        &self.normalized_constraint
+    }
+}
+
+/// Read-only owner-bound V3 analysis site for aggregate composition.
+#[allow(dead_code)]
+pub(crate) struct AuthenticatedRankedDynamicAffineSiteViewV3<'a> {
+    kernel_binding: &'a [u8; 32],
+    semantic_root: SemanticFunctionIdV1,
+    site: &'a AuthenticatedRankedDynamicConstrainedAffineBoundsV3,
+}
+
+#[allow(dead_code)]
+impl<'a> AuthenticatedRankedDynamicAffineSiteViewV3<'a> {
+    pub(crate) const fn kernel_binding(&self) -> &'a [u8; 32] {
+        self.kernel_binding
+    }
+
+    pub(crate) const fn semantic_root(&self) -> SemanticFunctionIdV1 {
+        self.semantic_root
+    }
+
+    pub(crate) const fn semantic_block(&self) -> u32 {
+        self.site.semantic_block
+    }
+
+    pub(crate) const fn semantic_statement(&self) -> Option<u32> {
+        self.site.semantic_statement
+    }
+
+    pub(crate) const fn semantic_access_ordinal(&self) -> u32 {
+        self.site.semantic_access_ordinal
+    }
+
+    pub(crate) const fn block(&self) -> usize {
+        self.site.block
+    }
+
+    pub(crate) const fn operation(&self) -> usize {
+        self.site.operation
+    }
+
+    pub(crate) const fn dimension(&self) -> usize {
+        self.site.dimension
+    }
+
+    pub(crate) const fn access_kind(&self) -> AccessKindAttr {
+        self.site.access_kind
+    }
+
+    pub(crate) fn access_view(&self) -> &str {
+        &self.site.access_view
+    }
+
+    pub(crate) fn access_index(&self) -> &str {
+        &self.site.access_index
+    }
+
+    pub(crate) fn dynamic_extent(&self) -> &str {
+        &self.site.dynamic_extent
+    }
+
+    pub(crate) fn runtime_variable_identities(&self) -> &[String] {
+        &self.site.runtime_variables
+    }
+
+    pub(crate) fn guards(&self) -> &[AuthenticatedRankedDynamicAffineGuardV3] {
+        &self.site.guards
+    }
+
+    pub(crate) const fn certificate(
+        &self,
+    ) -> &fe2o3_proof_contracts::DynamicConstrainedAffineBoundsCertificateV3 {
+        self.site.verification.certificate()
+    }
+
+    pub(crate) const fn proof_binding(
+        &self,
+    ) -> fe2o3_verifier::DynamicConstrainedAffineBoundsProofBindingV3 {
+        self.site.verification.proof_binding()
+    }
 }
 
 /// One canonically ordered ranked-verification owner bound to its exact root
@@ -955,6 +1195,20 @@ impl AuthenticatedRankedVerificationRootV1 {
     pub(crate) const fn verification(&self) -> &AuthenticatedRankedVerificationV5 {
         &self.verification
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn dynamic_affine_sites_v3(
+        &self,
+    ) -> impl ExactSizeIterator<Item = AuthenticatedRankedDynamicAffineSiteViewV3<'_>> {
+        self.verification
+            .dynamic_constrained_affine_bounds
+            .iter()
+            .map(|site| AuthenticatedRankedDynamicAffineSiteViewV3 {
+                kernel_binding: &self.kernel_binding,
+                semantic_root: self.semantic_root,
+                site,
+            })
+    }
 }
 
 struct AuthenticatedFunctionalVerificationV1 {
@@ -1022,6 +1276,10 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     AffineBoundsCustody,
     ConstrainedAffineBounds(fe2o3_verifier::CompilerConstrainedAffineBoundsVerificationErrorV2),
     ConstrainedAffineBoundsCustody,
+    DynamicConstrainedAffineBounds(
+        fe2o3_verifier::CompilerDynamicConstrainedAffineBoundsVerificationErrorV3,
+    ),
+    DynamicConstrainedAffineBoundsCustody,
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
     AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
@@ -1050,6 +1308,10 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::ConstrainedAffineBoundsCustody => formatter.write_str(
                 "ranked constrained affine-bounds verification no longer matches its exact report site",
             ),
+            Self::DynamicConstrainedAffineBounds(error) => error.fmt(formatter),
+            Self::DynamicConstrainedAffineBoundsCustody => formatter.write_str(
+                "ranked dynamic affine-bounds verification no longer matches its exact report site",
+            ),
             Self::SemanticContract(error) => {
                 write!(
                     formatter,
@@ -1075,13 +1337,15 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
             Self::RosterMetadata(_)
             | Self::RosterIdentity
             | Self::AffineBoundsCustody
-            | Self::ConstrainedAffineBoundsCustody => None,
+            | Self::ConstrainedAffineBoundsCustody
+            | Self::DynamicConstrainedAffineBoundsCustody => None,
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
             Self::AffineBounds(error) => Some(error),
             Self::ConstrainedAffineBounds(error) => Some(error),
+            Self::DynamicConstrainedAffineBounds(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
             Self::AggregateVerus(error) => Some(error),
@@ -1105,11 +1369,83 @@ struct RankedRosterIdentityRecordV1<'a> {
     induction_checked_additions_examined: u64,
     induction_certificate_count: u64,
     induction_work_units: u64,
+    dynamic_affine_guard_source_sha256: [u8; 32],
 }
 
 fn update_roster_identity_frame_v1(hasher: &mut Sha256, frame: &[u8]) {
     hasher.update(u64::try_from(frame.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(frame);
+}
+
+fn dynamic_affine_guard_source_identity_v3(
+    sites: &[AuthenticatedRankedDynamicConstrainedAffineBoundsV3],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(DYNAMIC_AFFINE_GUARD_SOURCE_IDENTITY_DOMAIN_V3);
+    hasher.update(u64::try_from(sites.len()).unwrap_or(u64::MAX).to_le_bytes());
+    for site in sites {
+        hasher.update(u64::try_from(site.block).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(
+            u64::try_from(site.operation)
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        hasher.update(
+            u64::try_from(site.dimension)
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        hasher.update(
+            u64::try_from(site.guards.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for guard in &site.guards {
+            hasher.update(
+                u64::try_from(guard.branch_block)
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            hasher.update(
+                u64::try_from(guard.branch_operation)
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            update_roster_identity_frame_v1(&mut hasher, guard.lhs_value.as_bytes());
+            update_roster_identity_frame_v1(&mut hasher, guard.rhs_value.as_bytes());
+            hasher.update(guard.semantic_block.to_le_bytes());
+            hasher.update(guard.semantic_statement.to_le_bytes());
+            hasher.update(guard.semantic_condition_local.index().to_le_bytes());
+            hasher.update(guard.semantic_lhs_local.index().to_le_bytes());
+            hasher.update(guard.semantic_rhs_local.index().to_le_bytes());
+            hasher.update(
+                u64::try_from(guard.true_successor)
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            hasher.update(
+                u64::try_from(guard.false_successor)
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            hasher.update(
+                u64::try_from(guard.accepted_successor)
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            hasher.update([u8::from(guard.accepted_on_true_edge)]);
+            hasher.update(guard.normalized_constraint.constant().to_le_bytes());
+            hasher.update(
+                u64::try_from(guard.normalized_constraint.coefficients().len())
+                    .unwrap_or(u64::MAX)
+                    .to_le_bytes(),
+            );
+            for coefficient in guard.normalized_constraint.coefficients() {
+                hasher.update(coefficient.to_le_bytes());
+            }
+        }
+    }
+    hasher.finalize().into()
 }
 
 fn derive_ranked_kernel_roster_identity_v1(
@@ -1184,6 +1520,7 @@ fn derive_ranked_kernel_roster_identity_v1(
             &record.induction_certificate_count.to_le_bytes(),
         );
         update_roster_identity_frame_v1(&mut hasher, &record.induction_work_units.to_le_bytes());
+        update_roster_identity_frame_v1(&mut hasher, &record.dynamic_affine_guard_source_sha256);
     }
     Ok((
         ProductionRankedKernelRosterIdentityV1(hasher.finalize().into()),
@@ -1285,15 +1622,25 @@ fn validate_ranked_roster_semantic_bindings_v1(
 
 fn authenticate_ranked_root_v5(
     semantic_owner: &ProductionSemanticMirOwnerV1,
+    semantic_root: SemanticFunctionIdV1,
     lowering: &ProductionRankedKernelLoweringInputV1,
     ranked_ir: &str,
+    access_sources: &[ProductionRankedAccessSourceV1],
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 ) -> Result<AuthenticatedRankedVerificationV5, ProductionRankedVerificationErrorV1> {
+    validate_semantic_guard_sources_v3(semantic_owner, semantic_root, guard_sources_v3)?;
     let middle_end_evidence =
         fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
             .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
     let affine_bounds = independently_verify_affine_bounds_v1(lowering)?;
     let constrained_affine_bounds = independently_verify_constrained_affine_bounds_v2(lowering)?;
+    let dynamic_constrained_affine_bounds =
+        independently_verify_dynamic_constrained_affine_bounds_v3(
+            lowering,
+            access_sources,
+            guard_sources_v3,
+        )?;
     let functional = if lowering.has_retained_policy_checked_refinement_staging() {
         let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
             lowering,
@@ -1331,6 +1678,7 @@ fn authenticate_ranked_root_v5(
         middle_end_evidence,
         affine_bounds,
         constrained_affine_bounds,
+        dynamic_constrained_affine_bounds,
         functional,
         semantic_u32_induction,
     })
@@ -1527,6 +1875,332 @@ fn authenticated_guards_match_record_v2(
             })
 }
 
+fn independently_verify_dynamic_constrained_affine_bounds_v3(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    access_sources: &[ProductionRankedAccessSourceV1],
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
+) -> Result<
+    Box<[AuthenticatedRankedDynamicConstrainedAffineBoundsV3]>,
+    ProductionRankedVerificationErrorV1,
+> {
+    let report = lowering.bounds_report();
+    let required = report.required_dynamic_constrained_affine_site_count_v3();
+    let records = report.dynamic_constrained_affine_certificates_v3();
+    if required == 0 {
+        return if records.is_empty() {
+            Ok(Vec::new().into_boxed_slice())
+        } else {
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        };
+    }
+    validate_ranked_guard_source_order_v3(guard_sources_v3)?;
+    let complete = report
+        .complete_dynamic_constrained_affine_site_roster_v3()
+        .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    if complete.len() != required {
+        return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+    }
+    let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel())?;
+    let mut sites = HashSet::with_capacity(complete.len());
+    complete
+        .iter()
+        .map(|record| {
+            if !sites.insert((record.block(), record.operation(), record.dimension())) {
+                return Err(
+                    ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+                );
+            }
+            replay.verify_dynamic_record_v3(record)?;
+            let source = exact_dynamic_affine_access_source_v3(record, access_sources)?;
+            let verification =
+                fe2o3_verifier::verify_compiler_dynamic_constrained_affine_bounds_certificate_v3(
+                    record.certificate(),
+                )
+                .map_err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBounds)?;
+            Ok(AuthenticatedRankedDynamicConstrainedAffineBoundsV3 {
+                block: record.block(),
+                operation: record.operation(),
+                dimension: record.dimension(),
+                access_kind: record.access_kind(),
+                access_view: record.access_view().to_owned(),
+                access_index: record.access_index().to_owned(),
+                dynamic_extent: record.dynamic_extent().to_owned(),
+                semantic_block: source.semantic_block(),
+                semantic_statement: source.semantic_statement(),
+                semantic_access_ordinal: source.semantic_access_ordinal(),
+                runtime_variables: record
+                    .runtime_variables()
+                    .iter()
+                    .map(|variable| variable.value_identity().to_owned())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                guards: authenticated_guards_with_sources_v3(
+                    lowering.kernel(),
+                    record,
+                    guard_sources_v3,
+                )?,
+                verification,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
+}
+
+fn exact_dynamic_affine_access_source_v3(
+    record: &RankedDynamicConstrainedAffineBoundsCertificateV3,
+    access_sources: &[ProductionRankedAccessSourceV1],
+) -> Result<ProductionRankedAccessSourceV1, ProductionRankedVerificationErrorV1> {
+    let block = u32::try_from(record.block())
+        .map_err(|_| ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    let operation = u32::try_from(record.operation())
+        .map_err(|_| ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    let mut matching = access_sources
+        .iter()
+        .copied()
+        .filter(|source| source.ranked_block() == block && source.ranked_operation() == operation);
+    let source = matching
+        .next()
+        .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    if matching.next().is_some() {
+        return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+    }
+    Ok(source)
+}
+
+fn validate_semantic_guard_sources_v3(
+    semantic_owner: &ProductionSemanticMirOwnerV1,
+    semantic_root: SemanticFunctionIdV1,
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    validate_ranked_guard_source_order_v3(guard_sources_v3)?;
+    let function = semantic_owner
+        .semantic()
+        .functions()
+        .get(semantic_root.index() as usize)
+        .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    for source in guard_sources_v3 {
+        let statement = function
+            .blocks()
+            .get(source.semantic_site.block)
+            .and_then(|block| block.statements().get(source.semantic_site.statement))
+            .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+        let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right,
+        } = assignment.value().kind()
+        else {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        };
+        if !assignment.destination().projections().is_empty()
+            || assignment.destination().local() != source.semantic_site.condition_local
+            || simple_operand_local(left) != Some(source.semantic_site.lhs_local)
+            || simple_operand_local(right) != Some(source.semantic_site.rhs_local)
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+    }
+    Ok(())
+}
+
+fn validate_ranked_guard_source_order_v3(
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    let mut ranked_sites = BTreeSet::new();
+    let mut previous_ranked_site = None;
+    for source in guard_sources_v3 {
+        let ranked_site = (source.ranked_block, source.ranked_operation);
+        if !ranked_sites.insert(ranked_site)
+            || previous_ranked_site.is_some_and(|previous| previous >= ranked_site)
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+        previous_ranked_site = Some(ranked_site);
+    }
+    Ok(())
+}
+
+fn authenticated_guards_with_sources_v3(
+    kernel: &ProductionRankedKernelV1,
+    record: &RankedDynamicConstrainedAffineBoundsCertificateV3,
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
+) -> Result<Box<[AuthenticatedRankedDynamicAffineGuardV3]>, ProductionRankedVerificationErrorV1> {
+    let mut semantic_sites = BTreeSet::new();
+    let mut previous_site = None;
+    record
+        .guards()
+        .iter()
+        .map(|guard| {
+            let source = exact_dynamic_affine_guard_source_v3(kernel, guard, guard_sources_v3)?;
+            let semantic_site = (source.semantic_site.block, source.semantic_site.statement);
+            if !semantic_sites.insert(semantic_site)
+                || previous_site.is_some_and(|previous| previous >= semantic_site)
+            {
+                return Err(
+                    ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+                );
+            }
+            previous_site = Some(semantic_site);
+            Ok(AuthenticatedRankedDynamicAffineGuardV3 {
+                branch_block: guard.branch_block(),
+                branch_operation: guard.branch_operation(),
+                lhs_value: guard.lhs_value().to_owned(),
+                rhs_value: guard.rhs_value().to_owned(),
+                true_successor: guard.true_successor(),
+                false_successor: guard.false_successor(),
+                accepted_successor: guard.accepted_successor(),
+                accepted_on_true_edge: guard.accepted_on_true_edge(),
+                normalized_constraint: guard.normalized_constraint().clone(),
+                semantic_block: u32::try_from(source.semantic_site.block).map_err(|_| {
+                    ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody
+                })?,
+                semantic_statement: u32::try_from(source.semantic_site.statement).map_err(
+                    |_| ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+                )?,
+                semantic_condition_local: source.semantic_site.condition_local,
+                semantic_lhs_local: source.semantic_site.lhs_local,
+                semantic_rhs_local: source.semantic_site.rhs_local,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Vec::into_boxed_slice)
+}
+
+fn exact_dynamic_affine_guard_source_v3(
+    kernel: &ProductionRankedKernelV1,
+    guard: &fe2o3_kernel_analysis::RankedAffineGuardProvenanceV2,
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
+) -> Result<ProjectedRankedGuardSourceV3, ProductionRankedVerificationErrorV1> {
+    let mut matching = guard_sources_v3.iter().copied().filter(|source| {
+        source.ranked_block == guard.branch_block()
+            && source.ranked_operation == guard.branch_operation()
+    });
+    let source = matching
+        .next()
+        .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    if matching.next().is_some() {
+        return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+    }
+    let block = kernel
+        .blocks()
+        .get(source.ranked_block)
+        .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+    let (lhs, rhs) = match block.terminator() {
+        ProductionRankedTerminatorV1::IndexLessThan { lhs, rhs, .. }
+        | ProductionRankedTerminatorV1::IndexLessThanArgs { lhs, rhs, .. } => (*lhs, *rhs),
+        _ => {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+    };
+    if source.ranked_operation != block.operations().len() || source.lhs != lhs || source.rhs != rhs
+    {
+        return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+    }
+    Ok(source)
+}
+
+fn revalidate_dynamic_constrained_affine_bounds_custody_v3(
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    access_sources: &[ProductionRankedAccessSourceV1],
+    guard_sources_v3: &[ProjectedRankedGuardSourceV3],
+    retained: &[AuthenticatedRankedDynamicConstrainedAffineBoundsV3],
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    let report = lowering.bounds_report();
+    let records = report.dynamic_constrained_affine_certificates_v3();
+    let required = report.required_dynamic_constrained_affine_site_count_v3();
+    if records.len() != retained.len()
+        || records.len() != required
+        || (required != 0
+            && report
+                .complete_dynamic_constrained_affine_site_roster_v3()
+                .is_none())
+        || (required == 0 && !retained.is_empty())
+    {
+        return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+    }
+    if required == 0 {
+        return Ok(());
+    }
+    validate_ranked_guard_source_order_v3(guard_sources_v3)?;
+    let mut replay = ProductionConstrainedAffineReplayV2::new(lowering.kernel())?;
+    let mut sites = HashSet::with_capacity(records.len());
+    for (record, retained) in records.iter().zip(retained) {
+        let source = exact_dynamic_affine_access_source_v3(record, access_sources)?;
+        let reauthenticated_guards =
+            authenticated_guards_with_sources_v3(lowering.kernel(), record, guard_sources_v3)?;
+        if !sites.insert((record.block(), record.operation(), record.dimension()))
+            || record.block() != retained.block
+            || record.operation() != retained.operation
+            || record.dimension() != retained.dimension
+            || record.access_kind() != retained.access_kind
+            || record.access_view() != retained.access_view
+            || record.access_index() != retained.access_index
+            || record.dynamic_extent() != retained.dynamic_extent
+            || source.semantic_block() != retained.semantic_block
+            || source.semantic_statement() != retained.semantic_statement
+            || source.semantic_access_ordinal() != retained.semantic_access_ordinal
+            || record
+                .runtime_variables()
+                .iter()
+                .map(|variable| variable.value_identity())
+                .ne(retained.runtime_variables.iter().map(String::as_str))
+            || record.guards().len() != retained.guards.len()
+            || reauthenticated_guards.as_ref() != retained.guards.as_ref()
+            || !record
+                .guards()
+                .iter()
+                .zip(&retained.guards)
+                .all(|(record, retained)| {
+                    let Ok(source) = exact_dynamic_affine_guard_source_v3(
+                        lowering.kernel(),
+                        record,
+                        guard_sources_v3,
+                    ) else {
+                        return false;
+                    };
+                    record.branch_block() == retained.branch_block
+                        && record.branch_operation() == retained.branch_operation
+                        && record.lhs_value() == retained.lhs_value
+                        && record.rhs_value() == retained.rhs_value
+                        && record.true_successor() == retained.true_successor
+                        && record.false_successor() == retained.false_successor
+                        && record.accepted_successor() == retained.accepted_successor
+                        && record.accepted_on_true_edge() == retained.accepted_on_true_edge
+                        && record.normalized_constraint() == &retained.normalized_constraint
+                        && u32::try_from(source.semantic_site.block).ok()
+                            == Some(retained.semantic_block)
+                        && u32::try_from(source.semantic_site.statement).ok()
+                            == Some(retained.semantic_statement)
+                })
+            || record.certificate() != retained.verification.certificate()
+            || !retained
+                .verification
+                .establishes_nonempty_domain_and_dynamic_bound()
+            || retained
+                .verification
+                .grants_race_lowering_or_launch_authority()
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+        replay.verify_dynamic_record_v3(record)?;
+        replay.verify_authenticated_dynamic_record_v3(retained)?;
+        let rechecked =
+            fe2o3_verifier::verify_compiler_dynamic_constrained_affine_bounds_certificate_v3(
+                record.certificate(),
+            )
+            .map_err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBounds)?;
+        if rechecked.certificate() != retained.verification.certificate()
+            || rechecked.proof_binding() != retained.verification.proof_binding()
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+    }
+    Ok(())
+}
+
 const MAX_CONSTRAINED_AFFINE_REPLAY_DEPTH_V2: usize = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1591,6 +2265,7 @@ impl ProductionAffineExpressionV2 {
 #[derive(Clone, Copy)]
 enum ProductionAffineDefinitionV2 {
     Constant(u64),
+    RuntimeUnknown,
     Invocation {
         dimension: u32,
         launch_extent: u64,
@@ -1624,6 +2299,7 @@ struct ProductionConstrainedAffineReplayV2<'a> {
     launch_extents: Vec<u64>,
     definitions: HashMap<ProductionRankedValueIdV1, ProductionAffineDefinitionV2>,
     view_shapes: HashMap<ProductionRankedValueIdV1, &'a [u64]>,
+    view_dynamic_extents: HashMap<ProductionRankedValueIdV1, &'a [ProductionRankedValueV1]>,
     successors: Vec<Vec<usize>>,
     reachable: Vec<bool>,
     cut_reachability: HashMap<(usize, usize), Vec<bool>>,
@@ -1635,6 +2311,7 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
     ) -> Result<Self, ProductionRankedVerificationErrorV1> {
         let mut definitions = HashMap::new();
         let mut view_shapes = HashMap::new();
+        let mut view_dynamic_extents = HashMap::new();
         let mut declared_extents = Vec::<Option<u64>>::new();
         let mut operation_count = 0_usize;
         if kernel.blocks().is_empty() || kernel.blocks().len() > MAX_RANKED_BOUNDS_BLOCKS {
@@ -1651,6 +2328,9 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
                 let definition = match operation {
                     ProductionRankedOperationV1::IndexConstant { result, value } => {
                         Some((*result, ProductionAffineDefinitionV2::Constant(*value)))
+                    }
+                    ProductionRankedOperationV1::IndexUnknown { result } => {
+                        Some((*result, ProductionAffineDefinitionV2::RuntimeUnknown))
                     }
                     ProductionRankedOperationV1::InvocationIndex {
                         result,
@@ -1707,9 +2387,27 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
                             dimension: *dimension,
                         },
                     )),
-                    ProductionRankedOperationV1::View { result, shape, .. }
-                    | ProductionRankedOperationV1::ViewInSpace { result, shape, .. } => {
+                    ProductionRankedOperationV1::View {
+                        result,
+                        shape,
+                        dynamic_extents,
+                        ..
+                    }
+                    | ProductionRankedOperationV1::ViewInSpace {
+                        result,
+                        shape,
+                        dynamic_extents,
+                        ..
+                    } => {
                         if view_shapes.insert(*result, shape.as_slice()).is_some() {
+                            return Err(
+                                ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody,
+                            );
+                        }
+                        if view_dynamic_extents
+                            .insert(*result, dynamic_extents.as_slice())
+                            .is_some()
+                        {
                             return Err(
                                 ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody,
                             );
@@ -1759,6 +2457,7 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
             launch_extents,
             definitions,
             view_shapes,
+            view_dynamic_extents,
             successors,
             reachable,
             cut_reachability: HashMap::new(),
@@ -1793,6 +2492,231 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
             record.certificate(),
             &guards,
         )
+    }
+
+    fn verify_dynamic_record_v3(
+        &mut self,
+        record: &RankedDynamicConstrainedAffineBoundsCertificateV3,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let variables = record
+            .runtime_variables()
+            .iter()
+            .map(|variable| variable.value_identity())
+            .collect::<Vec<_>>();
+        self.verify_dynamic_site_v3(
+            record.block(),
+            record.operation(),
+            record.dimension(),
+            record.access_kind(),
+            record.access_view(),
+            record.access_index(),
+            record.dynamic_extent(),
+            &variables,
+            record.guards(),
+            record.certificate(),
+        )
+    }
+
+    fn verify_authenticated_dynamic_record_v3(
+        &mut self,
+        retained: &AuthenticatedRankedDynamicConstrainedAffineBoundsV3,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let guards = retained
+            .guards
+            .iter()
+            .map(|guard| ReplayGuardRefV2 {
+                branch_block: guard.branch_block,
+                branch_operation: guard.branch_operation,
+                lhs_value: &guard.lhs_value,
+                rhs_value: &guard.rhs_value,
+                true_successor: guard.true_successor,
+                false_successor: guard.false_successor,
+                accepted_successor: guard.accepted_successor,
+                accepted_on_true_edge: guard.accepted_on_true_edge,
+                normalized_constraint: &guard.normalized_constraint,
+            })
+            .collect::<Vec<_>>();
+        self.verify_dynamic_site_with_guards_v3(
+            retained.block,
+            retained.operation,
+            retained.dimension,
+            retained.access_kind,
+            &retained.access_view,
+            &retained.access_index,
+            &retained.dynamic_extent,
+            &retained
+                .runtime_variables
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            &guards,
+            retained.verification.certificate(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_dynamic_site_v3(
+        &mut self,
+        block: usize,
+        operation: usize,
+        dimension: usize,
+        access_kind: AccessKindAttr,
+        access_view: &str,
+        access_index: &str,
+        dynamic_extent: &str,
+        runtime_variable_identities: &[&str],
+        guards: &[fe2o3_kernel_analysis::RankedAffineGuardProvenanceV2],
+        certificate: &fe2o3_proof_contracts::DynamicConstrainedAffineBoundsCertificateV3,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let guards = guards
+            .iter()
+            .map(|guard| ReplayGuardRefV2 {
+                branch_block: guard.branch_block(),
+                branch_operation: guard.branch_operation(),
+                lhs_value: guard.lhs_value(),
+                rhs_value: guard.rhs_value(),
+                true_successor: guard.true_successor(),
+                false_successor: guard.false_successor(),
+                accepted_successor: guard.accepted_successor(),
+                accepted_on_true_edge: guard.accepted_on_true_edge(),
+                normalized_constraint: guard.normalized_constraint(),
+            })
+            .collect::<Vec<_>>();
+        self.verify_dynamic_site_with_guards_v3(
+            block,
+            operation,
+            dimension,
+            access_kind,
+            access_view,
+            access_index,
+            dynamic_extent,
+            runtime_variable_identities,
+            &guards,
+            certificate,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_dynamic_site_with_guards_v3(
+        &mut self,
+        block: usize,
+        operation: usize,
+        dimension: usize,
+        access_kind: AccessKindAttr,
+        access_view: &str,
+        access_index: &str,
+        dynamic_extent: &str,
+        runtime_variable_identities: &[&str],
+        guards: &[ReplayGuardRefV2<'_>],
+        certificate: &fe2o3_proof_contracts::DynamicConstrainedAffineBoundsCertificateV3,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        let runtime_values = self.runtime_values_v3(runtime_variable_identities)?;
+        let query = certificate.index_certificate().query();
+        let rank = self
+            .launch_extents
+            .len()
+            .checked_add(runtime_values.len())
+            .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+        if guards.len() < 2
+            || runtime_values.is_empty()
+            || guards.len() != query.constraints().len()
+            || query.lower().len() != rank
+            || query.upper_exclusive().len() != rank
+            || !query.lower().iter().all(|lower| *lower == 0)
+            || query.upper_exclusive()[..self.launch_extents.len()]
+                .iter()
+                .copied()
+                .ne(self.launch_extents.iter().copied().map(i128::from))
+            || !query.upper_exclusive()[self.launch_extents.len()..]
+                .iter()
+                .all(|upper| *upper == i128::from(u64::MAX) + 1)
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+        let access_block =
+            self.kernel.blocks().get(block).ok_or(
+                ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+            )?;
+        let access_operation = access_block
+            .operations()
+            .get(operation)
+            .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+        let (actual_kind, view, indices) = production_ranked_access_v3(access_operation)
+            .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+        let index = *indices
+            .get(dimension)
+            .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+        let extent = self
+            .dynamic_view_extent_v3(view, dimension)
+            .ok_or(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)?;
+        if actual_kind != access_kind
+            || self.pliron_value_identity_v3(view)? != access_view
+            || self.pliron_value_identity_v3(index)? != access_index
+            || self.pliron_value_identity_v3(extent)? != dynamic_extent
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+        let index_expression = self.affine_expression_with_runtime_v3(index, &runtime_values)?;
+        let extent_expression = self.affine_expression_with_runtime_v3(extent, &runtime_values)?;
+        if index_expression.constant != query.constant()
+            || index_expression.coefficients != query.coefficients()
+            || extent_expression.constant != certificate.extent_constant()
+            || extent_expression.coefficients != certificate.extent_coefficients()
+        {
+            return Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody);
+        }
+        let mut origins = HashSet::with_capacity(guards.len());
+        for (guard, constraint) in guards.iter().zip(query.constraints()) {
+            if !origins.insert((guard.branch_block, guard.branch_operation)) {
+                return Err(
+                    ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+                );
+            }
+            self.verify_guard_with_runtime_v3(*guard, constraint, block, &runtime_values)?;
+        }
+        Ok(())
+    }
+
+    fn runtime_values_v3(
+        &self,
+        identities: &[&str],
+    ) -> Result<Vec<ProductionRankedValueV1>, ProductionRankedVerificationErrorV1> {
+        let mut values = Vec::with_capacity(identities.len());
+        for identity in identities {
+            let argument = (0..self.kernel.argument_count())
+                .filter_map(|argument| u32::try_from(argument).ok())
+                .map(ProductionRankedValueV1::Argument)
+                .find(|value| {
+                    self.pliron_value_identity_v3(*value)
+                        .is_ok_and(|candidate| candidate == *identity)
+                });
+            let unknown = self
+                .definitions
+                .iter()
+                .filter_map(|(local, definition)| {
+                    matches!(definition, ProductionAffineDefinitionV2::RuntimeUnknown)
+                        .then_some(ProductionRankedValueV1::Local(*local))
+                })
+                .find(|value| {
+                    self.pliron_value_identity_v3(*value)
+                        .is_ok_and(|candidate| candidate == *identity)
+                });
+            let value = match (argument, unknown) {
+                (Some(value), None) | (None, Some(value)) => value,
+                (None, None) | (Some(_), Some(_)) => {
+                    return Err(
+                        ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+                    );
+                }
+            };
+            if values.contains(&value) {
+                return Err(
+                    ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody,
+                );
+            }
+            values.push(value);
+        }
+        Ok(values)
     }
 
     fn verify_authenticated_record(
@@ -1863,8 +2787,8 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
         let index = *indices
             .get(dimension)
             .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
-        if ranked_value_pliron_identity_v2(view) != access_view
-            || ranked_value_pliron_identity_v2(index) != access_index
+        if self.pliron_value_identity_v3(view)? != access_view
+            || self.pliron_value_identity_v3(index)? != access_index
             || self.static_view_extent(view, dimension) != Some(query.extent())
         {
             return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
@@ -1890,6 +2814,16 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
         guard: ReplayGuardRefV2<'_>,
         query_constraint: &AffineInequalityV2,
         access_block: usize,
+    ) -> Result<(), ProductionRankedVerificationErrorV1> {
+        self.verify_guard_with_runtime_v3(guard, query_constraint, access_block, &[])
+    }
+
+    fn verify_guard_with_runtime_v3(
+        &mut self,
+        guard: ReplayGuardRefV2<'_>,
+        query_constraint: &AffineInequalityV2,
+        access_block: usize,
+        runtime_values: &[ProductionRankedValueV1],
     ) -> Result<(), ProductionRankedVerificationErrorV1> {
         if !guard.accepted_on_true_edge
             || guard.accepted_successor != guard.true_successor
@@ -1923,21 +2857,21 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
                 return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
             }
         };
-        if ranked_value_pliron_identity_v2(lhs) != guard.lhs_value
-            || ranked_value_pliron_identity_v2(rhs) != guard.rhs_value
+        if self.pliron_value_identity_v3(lhs)? != guard.lhs_value
+            || self.pliron_value_identity_v3(rhs)? != guard.rhs_value
             || usize::try_from(true_block).ok() != Some(guard.true_successor)
             || usize::try_from(false_block).ok() != Some(guard.false_successor)
         {
             return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
         }
-        let lhs = self.affine_expression(lhs)?;
-        let rhs = self.affine_expression(rhs)?;
+        let lhs = self.affine_expression_with_runtime_v3(lhs, runtime_values)?;
+        let rhs = self.affine_expression_with_runtime_v3(rhs, runtime_values)?;
         let normalized = lhs
             .checked_sub(&rhs)
             .and_then(|row| {
                 row.checked_add(&ProductionAffineExpressionV2::constant(
                     1,
-                    self.launch_extents.len(),
+                    self.launch_extents.len() + runtime_values.len(),
                 ))
             })
             .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?;
@@ -1970,12 +2904,27 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
         &self,
         value: ProductionRankedValueV1,
     ) -> Result<ProductionAffineExpressionV2, ProductionRankedVerificationErrorV1> {
-        self.affine_expression_inner(value, &mut HashMap::new(), &mut HashSet::new(), 0)
+        self.affine_expression_with_runtime_v3(value, &[])
+    }
+
+    fn affine_expression_with_runtime_v3(
+        &self,
+        value: ProductionRankedValueV1,
+        runtime_values: &[ProductionRankedValueV1],
+    ) -> Result<ProductionAffineExpressionV2, ProductionRankedVerificationErrorV1> {
+        self.affine_expression_inner(
+            value,
+            runtime_values,
+            &mut HashMap::new(),
+            &mut HashSet::new(),
+            0,
+        )
     }
 
     fn affine_expression_inner(
         &self,
         value: ProductionRankedValueV1,
+        runtime_values: &[ProductionRankedValueV1],
         memo: &mut HashMap<ProductionRankedValueV1, ProductionAffineExpressionV2>,
         visiting: &mut HashSet<ProductionRankedValueV1>,
         depth: usize,
@@ -1989,9 +2938,12 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
         let result = (|| -> Option<ProductionAffineExpressionV2> {
             match value {
                 ProductionRankedValueV1::Local(identity) => match self.definitions.get(&identity) {
-                    Some(ProductionAffineDefinitionV2::Constant(value)) => Some(
-                        ProductionAffineExpressionV2::constant(*value, self.launch_extents.len()),
-                    ),
+                    Some(ProductionAffineDefinitionV2::Constant(value)) => {
+                        Some(ProductionAffineExpressionV2::constant(
+                            *value,
+                            self.launch_extents.len() + runtime_values.len(),
+                        ))
+                    }
                     Some(ProductionAffineDefinitionV2::Invocation {
                         dimension,
                         launch_extent,
@@ -2000,7 +2952,8 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
                         if self.launch_extents.get(dimension) != Some(launch_extent) {
                             None
                         } else {
-                            let mut coefficients = vec![0; self.launch_extents.len()];
+                            let mut coefficients =
+                                vec![0; self.launch_extents.len() + runtime_values.len()];
                             coefficients[dimension] = 1;
                             Some(ProductionAffineExpressionV2 {
                                 constant: 0,
@@ -2010,10 +2963,22 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
                     }
                     Some(ProductionAffineDefinitionV2::Binary { kind, lhs, rhs }) => {
                         let lhs = self
-                            .affine_expression_inner(*lhs, memo, visiting, depth + 1)
+                            .affine_expression_inner(
+                                *lhs,
+                                runtime_values,
+                                memo,
+                                visiting,
+                                depth + 1,
+                            )
                             .ok()?;
                         let rhs = self
-                            .affine_expression_inner(*rhs, memo, visiting, depth + 1)
+                            .affine_expression_inner(
+                                *rhs,
+                                runtime_values,
+                                memo,
+                                visiting,
+                                depth + 1,
+                            )
                             .ok()?;
                         match kind {
                             IndexBinaryKindAttr::Add => lhs.checked_add(&rhs),
@@ -2034,14 +2999,37 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
                             .map(|extent| {
                                 ProductionAffineExpressionV2::constant(
                                     extent,
-                                    self.launch_extents.len(),
+                                    self.launch_extents.len() + runtime_values.len(),
                                 )
                             })
                     }
+                    Some(ProductionAffineDefinitionV2::RuntimeUnknown) => runtime_values
+                        .iter()
+                        .position(|candidate| *candidate == value)
+                        .map(|symbol| {
+                            let rank = self.launch_extents.len() + runtime_values.len();
+                            let mut coefficients = vec![0; rank];
+                            coefficients[self.launch_extents.len() + symbol] = 1;
+                            ProductionAffineExpressionV2 {
+                                constant: 0,
+                                coefficients,
+                            }
+                        }),
                     None => None,
                 },
-                ProductionRankedValueV1::Argument(_)
-                | ProductionRankedValueV1::BlockArgument { .. } => None,
+                ProductionRankedValueV1::Argument(_) => runtime_values
+                    .iter()
+                    .position(|candidate| *candidate == value)
+                    .map(|symbol| {
+                        let mut coefficients =
+                            vec![0; self.launch_extents.len() + runtime_values.len()];
+                        coefficients[self.launch_extents.len() + symbol] = 1;
+                        ProductionAffineExpressionV2 {
+                            constant: 0,
+                            coefficients,
+                        }
+                    }),
+                ProductionRankedValueV1::BlockArgument { .. } => None,
             }
         })();
         visiting.remove(&value);
@@ -2060,6 +3048,49 @@ impl<'a> ProductionConstrainedAffineReplayV2<'a> {
             .get(dimension)
             .copied()
             .filter(|extent| *extent != DYNAMIC_EXTENT)
+    }
+
+    fn dynamic_view_extent_v3(
+        &self,
+        view: ProductionRankedValueV1,
+        dimension: usize,
+    ) -> Option<ProductionRankedValueV1> {
+        let ProductionRankedValueV1::Local(view) = view else {
+            return None;
+        };
+        let shape = self.view_shapes.get(&view)?;
+        if shape.get(dimension).copied()? != DYNAMIC_EXTENT {
+            return None;
+        }
+        let dynamic_ordinal = shape[..dimension]
+            .iter()
+            .filter(|extent| **extent == DYNAMIC_EXTENT)
+            .count();
+        self.view_dynamic_extents
+            .get(&view)?
+            .get(dynamic_ordinal)
+            .copied()
+    }
+
+    fn pliron_value_identity_v3(
+        &self,
+        value: ProductionRankedValueV1,
+    ) -> Result<String, ProductionRankedVerificationErrorV1> {
+        let ordinal = match value {
+            ProductionRankedValueV1::Argument(argument) => usize::try_from(argument)
+                .map_err(|_| ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?,
+            ProductionRankedValueV1::Local(local) => self
+                .kernel
+                .argument_count()
+                .checked_add(usize::try_from(local.get()).map_err(|_| {
+                    ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody
+                })?)
+                .ok_or(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody)?,
+            ProductionRankedValueV1::BlockArgument { .. } => {
+                return Err(ProductionRankedVerificationErrorV1::ConstrainedAffineBoundsCustody);
+            }
+        };
+        Ok(format!("v{ordinal}"))
     }
 }
 
@@ -2141,13 +3172,38 @@ fn production_ranked_access_operands_v2(
     }
 }
 
-fn ranked_value_pliron_identity_v2(value: ProductionRankedValueV1) -> String {
-    match value {
-        ProductionRankedValueV1::Local(identity) => format!("v{}", identity.get()),
-        ProductionRankedValueV1::Argument(argument) => format!("arg{argument}"),
-        ProductionRankedValueV1::BlockArgument { block, argument } => {
-            format!("bb{block}_arg{argument}")
+fn production_ranked_access_v3(
+    operation: &ProductionRankedOperationV1,
+) -> Option<(
+    AccessKindAttr,
+    ProductionRankedValueV1,
+    &[ProductionRankedValueV1],
+)> {
+    match operation {
+        ProductionRankedOperationV1::Access {
+            kind,
+            view,
+            indices,
         }
+        | ProductionRankedOperationV1::ValueAccess {
+            kind,
+            view,
+            indices,
+            ..
+        }
+        | ProductionRankedOperationV1::AtomicAccess {
+            kind,
+            view,
+            indices,
+            ..
+        }
+        | ProductionRankedOperationV1::AtomicValueAccess {
+            kind,
+            view,
+            indices,
+            ..
+        } => Some((*kind, *view, indices)),
+        _ => None,
     }
 }
 
@@ -2182,6 +3238,9 @@ fn ranked_roster_identity_records_v1(
                 induction_certificate_count: u64::try_from(induction.certificates().len())
                     .unwrap_or(u64::MAX),
                 induction_work_units: u64::try_from(induction.work_units()).unwrap_or(u64::MAX),
+                dynamic_affine_guard_source_sha256: dynamic_affine_guard_source_identity_v3(
+                    &root.verification.dynamic_constrained_affine_bounds,
+                ),
             }
         })
         .collect()
@@ -2269,6 +3328,17 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 &root.lowering,
                 &root.verification.constrained_affine_bounds,
             )?;
+            validate_semantic_guard_sources_v3(
+                &self.semantic_owner,
+                root.semantic_root,
+                &root.guard_sources_v3,
+            )?;
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &root.lowering,
+                &root.access_sources,
+                &root.guard_sources_v3,
+                &root.verification.dynamic_constrained_affine_bounds,
+            )?;
             validate_ranked_root_induction_custody_v1(&self.semantic_owner, root)?;
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
@@ -2308,6 +3378,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 lowering,
                 ranked_ir,
                 access_sources,
+                guard_sources_v3: _,
                 executable_effect_sources,
                 verification,
             } = root;
@@ -2423,12 +3494,16 @@ impl ProductionRankedSemanticProgramV1 {
                 lowering,
                 ranked_ir,
                 access_sources,
+                guard_sources_v3,
                 executable_effect_sources,
             } = root;
             let verification = authenticate_ranked_root_v5(
                 &semantic_owner,
+                semantic_root,
                 &lowering,
                 &ranked_ir,
+                &access_sources,
+                &guard_sources_v3,
                 semantic_u32_induction,
             )?;
             verified_roots.push(ProductionRankedVerifiedRootCandidateV1 {
@@ -2441,6 +3516,7 @@ impl ProductionRankedSemanticProgramV1 {
                 lowering,
                 ranked_ir,
                 access_sources,
+                guard_sources_v3,
                 executable_effect_sources,
                 verification,
             });
@@ -3817,7 +4893,7 @@ fn project_and_verify_ranked_root_v1(
             "a concurrent memory effect before exact invocation-index projection is available",
         );
     }
-    let (blocks, sources, executable_effect_sources) = build_ranked_cfg(
+    let (blocks, sources, guard_sources_v3, executable_effect_sources) = build_ranked_cfg(
         semantic.types(),
         function,
         semantic.callables(),
@@ -3896,6 +4972,7 @@ fn project_and_verify_ranked_root_v1(
         lowering,
         ranked_ir,
         access_sources,
+        guard_sources_v3,
         executable_effect_sources,
     })
 }
@@ -4873,9 +5950,14 @@ fn project_rust_bounds_checks(
                 "a Rust bounds-check length not derived from one exact slice",
             ),
         )?;
-        if exact_less_than_definition_v1(block, condition_local)
-            != Some((index_local, length_local))
-        {
+        let Some((guard_statement, exact_index, exact_length)) =
+            exact_less_than_definition_with_site_v3(block, condition_local)
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a Rust bounds-check message not backed by its exact index < length condition",
+            ));
+        };
+        if (exact_index, exact_length) != (index_local, length_local) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds-check message not backed by its exact index < length condition",
             ));
@@ -4918,6 +6000,13 @@ fn project_rust_bounds_checks(
             index_local,
             index: unknown_for(index_local)?,
             extent: unknown_for(length_local)?,
+            guard_site: ProjectedSemanticGuardSiteV3 {
+                block: block_index,
+                statement: guard_statement,
+                condition_local,
+                lhs_local: index_local,
+                rhs_local: length_local,
+            },
             must_authorize_access,
         });
     }
@@ -4931,25 +6020,41 @@ fn exact_less_than_definition_v1(
     block: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
     condition_local: SemanticLocalIdV1,
 ) -> Option<(SemanticLocalIdV1, SemanticLocalIdV1)> {
-    block.statements().iter().rev().find_map(|statement| {
-        let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-            return None;
-        };
-        if !assignment.destination().projections().is_empty()
-            || assignment.destination().local() != condition_local
-        {
-            return None;
-        }
-        let SemanticRvalueKindV1::Binary {
-            operation: SemanticBinaryOpV1::LessThan,
-            left,
-            right,
-        } = assignment.value().kind()
-        else {
-            return None;
-        };
-        Some((simple_operand_local(left)?, simple_operand_local(right)?))
-    })
+    exact_less_than_definition_with_site_v3(block, condition_local).map(|(_, lhs, rhs)| (lhs, rhs))
+}
+
+fn exact_less_than_definition_with_site_v3(
+    block: &fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1,
+    condition_local: SemanticLocalIdV1,
+) -> Option<(usize, SemanticLocalIdV1, SemanticLocalIdV1)> {
+    block
+        .statements()
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(statement_index, statement)| {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                return None;
+            };
+            if !assignment.destination().projections().is_empty()
+                || assignment.destination().local() != condition_local
+            {
+                return None;
+            }
+            let SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left,
+                right,
+            } = assignment.value().kind()
+            else {
+                return None;
+            };
+            Some((
+                statement_index,
+                simple_operand_local(left)?,
+                simple_operand_local(right)?,
+            ))
+        })
 }
 
 fn project_authenticated_capabilities_v1(
@@ -5489,6 +6594,7 @@ fn project_strided_read_effects_v1(
             indices: vec![row, column],
             checked_success: None,
             comparisons: vec![(row, rows), (column, columns)],
+            comparison_sources: vec![None, None],
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
@@ -7698,6 +8804,7 @@ fn project_intrinsic_contracts(
                         ProductionRankedValueV1::Local(result),
                         ProductionRankedValueV1::Local(one),
                     )],
+                    comparison_sources: vec![None],
                 });
                 grid_leaders[destination] = Some(ProjectedGridLeaderV1 {
                     grid_leader: *grid_leader,
@@ -8689,11 +9796,13 @@ fn project_intrinsic_contracts(
             comparisons.push(precondition);
         }
         comparisons.push((index, ProductionRankedValueV1::Argument(0)));
+        let comparison_sources = vec![None; comparisons.len()];
         let access = GuardedRankedAccessV1 {
             view,
             indices: vec![index],
             checked_success,
             comparisons,
+            comparison_sources,
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
@@ -8728,8 +9837,8 @@ fn project_intrinsic_contracts(
     }
 
     let mut direct_switch_predicates = vec![None; local_count];
-    for block in function.blocks() {
-        for statement in block.statements() {
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -8750,6 +9859,7 @@ fn project_intrinsic_contracts(
             {
                 continue;
             }
+            let semantic_operands = simple_operand_local(left).zip(simple_operand_local(right));
             let Some(lhs) = project_uniform_switch_operand_v1(
                 left,
                 constants,
@@ -8782,6 +9892,15 @@ fn project_intrinsic_contracts(
                 )?,
                 GuardPredicateV1 {
                     comparisons: vec![(lhs, rhs)],
+                    comparison_sources: vec![semantic_operands.map(|(lhs_local, rhs_local)| {
+                        ProjectedSemanticGuardSiteV3 {
+                            block: block_index,
+                            statement: statement_index,
+                            condition_local: assignment.destination().local(),
+                            lhs_local,
+                            rhs_local,
+                        }
+                    })],
                 },
             )?;
         }
@@ -16756,6 +17875,7 @@ fn build_ranked_cfg(
     (
         Vec<ProductionRankedBlockV1>,
         Vec<ProjectedAccessSourceV1>,
+        Vec<ProjectedRankedGuardSourceV3>,
         Vec<ProductionRankedExecutableEffectSourceV1>,
     ),
     ProductionRankedProjectionErrorV1,
@@ -16853,6 +17973,7 @@ fn build_ranked_cfg(
         },
     ));
     let mut sources = Vec::new();
+    let mut guard_sources_v3 = Vec::new();
     let mut executable_effect_sources = Vec::new();
     for (semantic_index, (projected, terminator)) in
         projected_blocks.into_iter().zip(terminators).enumerate()
@@ -16883,6 +18004,12 @@ fn build_ranked_cfg(
                     let access_block = current + predicate.comparisons.len();
                     let failure_block = access_block + 1;
                     let continuation = failure_block + 1;
+                    retain_projected_guard_sources_v3(
+                        &mut guard_sources_v3,
+                        current,
+                        operations.len(),
+                        &predicate,
+                    )?;
                     if !live.is_empty() {
                         append_predicate_blocks_with_index_arguments(
                             &mut blocks,
@@ -17197,6 +18324,12 @@ fn build_ranked_cfg(
                     true_block,
                     false_block,
                 } if predicate.comparisons.len() == 1 => {
+                    retain_projected_guard_sources_v3(
+                        &mut guard_sources_v3,
+                        current,
+                        operations.len(),
+                        &predicate,
+                    )?;
                     let (lhs, rhs) = predicate.comparisons[0];
                     ProductionRankedTerminatorV1::IndexLessThanArgs {
                         lhs,
@@ -17291,14 +18424,22 @@ fn build_ranked_cfg(
                 predicate,
                 true_block,
                 false_block,
-            } => append_predicate_blocks(
-                &mut blocks,
-                current,
-                operations,
-                &predicate,
-                projected_target(&base_blocks, true_block)?,
-                projected_target(&base_blocks, false_block)?,
-            )?,
+            } => {
+                retain_projected_guard_sources_v3(
+                    &mut guard_sources_v3,
+                    current,
+                    operations.len(),
+                    &predicate,
+                )?;
+                append_predicate_blocks(
+                    &mut blocks,
+                    current,
+                    operations,
+                    &predicate,
+                    projected_target(&base_blocks, true_block)?,
+                    projected_target(&base_blocks, false_block)?,
+                )?
+            }
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block,
                 second_block,
@@ -17340,7 +18481,47 @@ fn build_ranked_cfg(
             "semantic CFG projection produced a non-canonical block inventory",
         ));
     }
-    Ok((blocks, sources, executable_effect_sources))
+    Ok((blocks, sources, guard_sources_v3, executable_effect_sources))
+}
+
+fn retain_projected_guard_sources_v3(
+    retained: &mut Vec<ProjectedRankedGuardSourceV3>,
+    first_block: usize,
+    first_operation_count: usize,
+    predicate: &GuardPredicateV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if predicate.comparisons.len() != predicate.comparison_sources.len() {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a projected affine predicate lost semantic guard-source alignment",
+        ));
+    }
+    for (index, (&(lhs, rhs), semantic_site)) in predicate
+        .comparisons
+        .iter()
+        .zip(&predicate.comparison_sources)
+        .enumerate()
+    {
+        let Some(semantic_site) = semantic_site else {
+            continue;
+        };
+        retained.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic guard-source storage cannot be reserved",
+            )
+        })?;
+        retained.push(ProjectedRankedGuardSourceV3 {
+            ranked_block: first_block.checked_add(index).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "ranked guard-source block overflow",
+                ),
+            )?,
+            ranked_operation: if index == 0 { first_operation_count } else { 0 },
+            lhs,
+            rhs,
+            semantic_site: *semantic_site,
+        });
+    }
+    Ok(())
 }
 
 fn ranked_operation_last_result_v1(
@@ -20325,6 +21506,7 @@ fn project_place_access_with_atomic(
     let mut dynamic_extents = Vec::new();
     let mut indices = Vec::new();
     let mut comparisons = Vec::new();
+    let mut comparison_sources = Vec::new();
     let mut crosses_memory_boundary = false;
     let mut dereferenced_memory_space = None;
     for projection in place.projections() {
@@ -20374,6 +21556,7 @@ fn project_place_access_with_atomic(
                         dynamic_extents.push(check.extent);
                         indices.push(ProjectedIndexV1::Dynamic(check.index));
                         comparisons.push((check.index, check.extent));
+                        comparison_sources.push(Some(check.guard_site));
                     }
                     _ => {
                         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -20581,6 +21764,7 @@ fn project_place_access_with_atomic(
                 indices: ranked_indices,
                 checked_success: None,
                 comparisons,
+                comparison_sources,
                 access,
                 memory_space,
                 source,
@@ -21706,6 +22890,7 @@ mod tests {
             induction_checked_additions_examined: 7 + u64::from(middle_end_identity),
             induction_certificate_count: 2,
             induction_work_units: 19 + u64::from(middle_end_identity),
+            dynamic_affine_guard_source_sha256: bytes(middle_end_identity.wrapping_add(0x60)),
         }
     }
 
@@ -21796,6 +22981,9 @@ mod tests {
         let mut induction_work = exact;
         induction_work[1].induction_work_units += 1;
         substitutions.push(induction_work);
+        let mut dynamic_guard_source = exact;
+        dynamic_guard_source[1].dynamic_affine_guard_source_sha256 = bytes(0xeb);
+        substitutions.push(dynamic_guard_source);
 
         for hostile in substitutions {
             assert!(matches!(
@@ -22859,7 +24047,7 @@ mod tests {
     ) {
         let function =
             projection_function(vec![block(29, vec![], SemanticTerminatorKindV1::Return)]);
-        let (blocks, sources, _) = build_ranked_cfg(
+        let (blocks, sources, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -23008,6 +24196,7 @@ mod tests {
                 ProductionRankedValueV1::Local(invocation),
                 ProductionRankedValueV1::Argument(0),
             )],
+            comparison_sources: vec![None],
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
@@ -23043,11 +24232,346 @@ mod tests {
                 .constrained_affine_certificates()
                 .is_empty()
         );
+        assert_eq!(
+            lowering
+                .bounds_report()
+                .required_dynamic_constrained_affine_site_count_v3(),
+            0
+        );
+        assert!(
+            lowering
+                .bounds_report()
+                .complete_dynamic_constrained_affine_site_roster_v3()
+                .is_none()
+        );
         let retained = independently_verify_constrained_affine_bounds_v2(&lowering).unwrap();
         assert!(retained.is_empty());
         revalidate_constrained_affine_bounds_custody_v2(&lowering, &retained).unwrap();
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
         assert!(ranked_ir.contains("kernel.br ^bb4"));
+    }
+
+    #[test]
+    fn representative_dynamic_vector_kernel_has_three_exact_v3_sites() {
+        let gid = ProductionRankedValueIdV1::new(0);
+        let input_a_extent = ProductionRankedValueIdV1::new(1);
+        let input_b_extent = ProductionRankedValueIdV1::new(2);
+        let output_extent = ProductionRankedValueIdV1::new(3);
+        let input_a = ProductionRankedValueIdV1::new(4);
+        let input_b = ProductionRankedValueIdV1::new(5);
+        let output = ProductionRankedValueIdV1::new(6);
+        let view = |result, dynamic_extent, writable, allocation_origin, noalias_class| {
+            ProductionRankedOperationV1::ViewInSpace {
+                result,
+                element_width: 32,
+                writable,
+                shape: vec![DYNAMIC_EXTENT],
+                dynamic_extents: vec![ProductionRankedValueV1::Local(dynamic_extent)],
+                memory_space: MemorySpaceAttr::Global,
+                allocation_origin,
+                noalias_class,
+            }
+        };
+        let kernel = ProductionRankedKernelV1::new(
+            "dynamic_vector_three_sites",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::InvocationIndex {
+                            result: gid,
+                            dimension: 0,
+                            launch_extent: 16,
+                        },
+                        ProductionRankedOperationV1::IndexUnknown {
+                            result: input_a_extent,
+                        },
+                        ProductionRankedOperationV1::IndexUnknown {
+                            result: input_b_extent,
+                        },
+                        ProductionRankedOperationV1::IndexUnknown {
+                            result: output_extent,
+                        },
+                        view(input_a, input_a_extent, false, 1, 1),
+                        view(input_b, input_b_extent, false, 2, 2),
+                        view(output, output_extent, true, 3, 3),
+                    ],
+                    ProductionRankedTerminatorV1::Branch { target: 1 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThan {
+                        lhs: ProductionRankedValueV1::Local(gid),
+                        rhs: ProductionRankedValueV1::Local(input_a_extent),
+                        true_block: 2,
+                        false_block: 6,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThan {
+                        lhs: ProductionRankedValueV1::Local(gid),
+                        rhs: ProductionRankedValueV1::Local(input_b_extent),
+                        true_block: 3,
+                        false_block: 6,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThan {
+                        lhs: ProductionRankedValueV1::Local(gid),
+                        rhs: ProductionRankedValueV1::Local(output_extent),
+                        true_block: 4,
+                        false_block: 6,
+                    },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::Access {
+                            kind: AccessKindAttr::Read,
+                            view: ProductionRankedValueV1::Local(input_a),
+                            indices: vec![ProductionRankedValueV1::Local(gid)],
+                        },
+                        ProductionRankedOperationV1::Access {
+                            kind: AccessKindAttr::Read,
+                            view: ProductionRankedValueV1::Local(input_b),
+                            indices: vec![ProductionRankedValueV1::Local(gid)],
+                        },
+                        ProductionRankedOperationV1::Access {
+                            kind: AccessKindAttr::Write,
+                            view: ProductionRankedValueV1::Local(output),
+                            indices: vec![ProductionRankedValueV1::Local(gid)],
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::Branch { target: 5 },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap();
+        let construction =
+            ProductionConstructionV1::ranked_kernel("dynamic_vector_module", kernel).unwrap();
+        let lowering = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert!(lowering.bounds_report().is_clean());
+        assert!(lowering.race_report().is_clean());
+        assert_eq!(
+            lowering
+                .bounds_report()
+                .required_dynamic_constrained_affine_site_count_v3(),
+            3
+        );
+        let records = lowering
+            .bounds_report()
+            .complete_dynamic_constrained_affine_site_roster_v3()
+            .expect("representative V3 roster must be nonempty and complete");
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.access_kind())
+                .collect::<Vec<_>>(),
+            [
+                AccessKindAttr::Read,
+                AccessKindAttr::Read,
+                AccessKindAttr::Write
+            ]
+        );
+        let shared_index = records[0].access_index().to_owned();
+        for (operation, record) in records.iter().enumerate() {
+            assert_eq!(
+                (record.block(), record.operation(), record.dimension()),
+                (4, operation, 0)
+            );
+            assert_eq!(record.access_index(), shared_index);
+            assert_eq!(record.dynamic_extent(), format!("v{}", operation + 1));
+            assert_eq!(record.runtime_variables().len(), 3);
+            assert_eq!(record.runtime_variables()[0].value_identity(), "v1");
+            assert_eq!(record.runtime_variables()[1].value_identity(), "v2");
+            assert_eq!(record.runtime_variables()[2].value_identity(), "v3");
+            assert_eq!(record.guards().len(), 3);
+            assert_eq!(
+                record
+                    .certificate()
+                    .index_certificate()
+                    .query()
+                    .constraints()
+                    .len(),
+                3
+            );
+        }
+
+        let access_sources = (0..3_u32)
+            .map(|operation| {
+                ProductionRankedAccessSourceV1::new(10, Some(operation), 0, 4, operation)
+            })
+            .collect::<Vec<_>>();
+        let guard_sources_v3 = [input_a_extent, input_b_extent, output_extent]
+            .into_iter()
+            .enumerate()
+            .map(|(index, extent)| ProjectedRankedGuardSourceV3 {
+                ranked_block: index + 1,
+                ranked_operation: 0,
+                lhs: ProductionRankedValueV1::Local(gid),
+                rhs: ProductionRankedValueV1::Local(extent),
+                semantic_site: ProjectedSemanticGuardSiteV3 {
+                    block: index + 20,
+                    statement: 0,
+                    condition_local: SemanticLocalIdV1::from_index(index as u32 + 10),
+                    lhs_local: SemanticLocalIdV1::from_index(0),
+                    rhs_local: SemanticLocalIdV1::from_index(index as u32 + 1),
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut retained = independently_verify_dynamic_constrained_affine_bounds_v3(
+            &lowering,
+            &access_sources,
+            &guard_sources_v3,
+        )
+        .unwrap();
+        assert_eq!(retained.len(), 3);
+        for (operation, site) in retained.iter().enumerate() {
+            assert_eq!(site.semantic_block, 10);
+            assert_eq!(site.semantic_statement, Some(operation as u32));
+            assert_eq!(site.semantic_access_ordinal, 0);
+        }
+        revalidate_dynamic_constrained_affine_bounds_custody_v3(
+            &lowering,
+            &access_sources,
+            &guard_sources_v3,
+            &retained,
+        )
+        .unwrap();
+        retained[0].runtime_variables[0] = "arg9".to_owned();
+        assert!(matches!(
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+                &retained,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+
+        let mut duplicate_runtime = independently_verify_dynamic_constrained_affine_bounds_v3(
+            &lowering,
+            &access_sources,
+            &guard_sources_v3,
+        )
+        .unwrap();
+        duplicate_runtime[0].runtime_variables[1] =
+            duplicate_runtime[0].runtime_variables[0].clone();
+        assert!(matches!(
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+                &duplicate_runtime,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+
+        let mut substituted_extent = independently_verify_dynamic_constrained_affine_bounds_v3(
+            &lowering,
+            &access_sources,
+            &guard_sources_v3,
+        )
+        .unwrap();
+        substituted_extent[0].dynamic_extent = "v9".to_owned();
+        assert!(matches!(
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+                &substituted_extent,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+
+        let mut reversed = independently_verify_dynamic_constrained_affine_bounds_v3(
+            &lowering,
+            &access_sources,
+            &guard_sources_v3,
+        )
+        .unwrap();
+        reversed[0].guards[0].accepted_successor = reversed[0].guards[0].false_successor;
+        assert!(matches!(
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+                &reversed,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+        let mut substituted_guard_location =
+            independently_verify_dynamic_constrained_affine_bounds_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+            )
+            .unwrap();
+        substituted_guard_location[0].guards[0].semantic_statement = 1;
+        assert!(matches!(
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+                &substituted_guard_location,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+        let mut reordered_guard_sources = guard_sources_v3.clone();
+        reordered_guard_sources.swap(0, 1);
+        assert!(matches!(
+            independently_verify_dynamic_constrained_affine_bounds_v3(
+                &lowering,
+                &access_sources,
+                &reordered_guard_sources,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+        let mut duplicate_guard_source = guard_sources_v3.clone();
+        duplicate_guard_source.push(guard_sources_v3[0]);
+        assert!(matches!(
+            independently_verify_dynamic_constrained_affine_bounds_v3(
+                &lowering,
+                &access_sources,
+                &duplicate_guard_source,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+        assert!(matches!(
+            revalidate_dynamic_constrained_affine_bounds_custody_v3(
+                &lowering,
+                &access_sources,
+                &guard_sources_v3,
+                &[],
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+        assert!(matches!(
+            independently_verify_dynamic_constrained_affine_bounds_v3(
+                &lowering,
+                &access_sources[..2],
+                &guard_sources_v3,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
+        let mut duplicate_source = access_sources.clone();
+        duplicate_source.push(access_sources[0]);
+        assert!(matches!(
+            independently_verify_dynamic_constrained_affine_bounds_v3(
+                &lowering,
+                &duplicate_source,
+                &guard_sources_v3,
+            ),
+            Err(ProductionRankedVerificationErrorV1::DynamicConstrainedAffineBoundsCustody)
+        ));
     }
 
     #[test]
@@ -23084,6 +24608,7 @@ mod tests {
                 ProductionRankedValueV1::Local(invocation),
                 ProductionRankedValueV1::Local(extent),
             )],
+            comparison_sources: vec![None],
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
@@ -23665,6 +25190,7 @@ mod tests {
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),
                 )],
+                comparison_sources: vec![None],
                 access: AccessKindAttr::Write,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
@@ -23685,7 +25211,7 @@ mod tests {
             block(71, vec![], SemanticTerminatorKindV1::Return),
         ]);
 
-        let (after_blocks, _, _) = build_ranked_cfg(
+        let (after_blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -23710,7 +25236,7 @@ mod tests {
             [ProductionRankedOperationV1::Barrier { .. }]
         ));
 
-        let (before_blocks, _, _) = build_ranked_cfg(
+        let (before_blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -23790,6 +25316,7 @@ mod tests {
                     ProductionRankedValueV1::Argument(0),
                 ),
             ],
+            comparison_sources: vec![None, None],
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
@@ -27014,6 +28541,7 @@ mod tests {
                 ProductionRankedValueV1::Argument(1),
                 ProductionRankedValueV1::Argument(2),
             )],
+            comparison_sources: vec![None],
         };
         for mutation in [None, Some(false), Some(true)] {
             let mut statements = vec![
@@ -27764,12 +29292,14 @@ mod tests {
                 ProductionRankedValueV1::Argument(1),
                 ProductionRankedValueV1::Argument(2),
             )],
+            comparison_sources: vec![None],
         };
         let conflicting = GuardPredicateV1 {
             comparisons: vec![(
                 ProductionRankedValueV1::Argument(2),
                 ProductionRankedValueV1::Argument(1),
             )],
+            comparison_sources: vec![None],
         };
         let mut slot = None;
         retain_identical_direct_switch_predicate_v1(&mut slot, first.clone()).unwrap();
@@ -30368,6 +31898,7 @@ mod tests {
                 ProductionRankedValueV1::Argument(0),
                 ProductionRankedValueV1::Argument(1),
             )],
+            comparison_sources: vec![None],
         };
         assert_eq!(
             projected_cfg_terminator(
@@ -30648,7 +32179,7 @@ mod tests {
         assert!(constant_values.contains(&7));
         assert!(constant_values.contains(&16));
 
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -32151,6 +33682,7 @@ mod tests {
                 ProductionRankedValueV1::Argument(0),
                 ProductionRankedValueV1::Argument(1),
             )],
+            comparison_sources: vec![None],
         };
         for function in [
             single_explicit_boolean_switch(0, 2, 1),
@@ -33553,7 +35085,7 @@ mod tests {
         .unwrap();
         assert_eq!(inductions.len(), 1);
 
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -33651,7 +35183,7 @@ mod tests {
             "the generic scalar range proof must retain the exact stable loop guard fact",
         );
 
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &types,
             &function,
             &[],
@@ -34874,7 +36406,7 @@ mod tests {
             operation: barrier.clone(),
             source: None,
         });
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -34918,7 +36450,7 @@ mod tests {
         assert_eq!(inductions.len(), 1);
         assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3, 4]);
 
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -35720,10 +37252,11 @@ mod tests {
                 ProductionRankedValueV1::Argument(0),
                 ProductionRankedValueV1::Argument(1),
             )],
+            comparison_sources: vec![None],
         };
         let mut predicates = vec![None; function.locals().len()];
         predicates[4] = Some(predicate);
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -35771,7 +37304,7 @@ mod tests {
             targets: vec![(zero, 3)],
             otherwise: 4,
         });
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -35850,7 +37383,7 @@ mod tests {
         assert_eq!(inductions.len(), 1);
         assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3]);
 
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &callables,
@@ -36097,7 +37630,7 @@ mod tests {
             1,
         );
         let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],
@@ -36141,12 +37674,13 @@ mod tests {
                     ProductionRankedValueV1::Argument(0),
                     ProductionRankedValueV1::Argument(1),
                 )],
+                comparison_sources: vec![None],
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
                 semantic_site: None,
             }));
-        let (blocks, _, _) = build_ranked_cfg(
+        let (blocks, _, _, _) = build_ranked_cfg(
             &projection_types(),
             &function,
             &[],

@@ -31,6 +31,7 @@ use dialect_proof::{
 };
 use fe2o3_proof_contracts::{
     AffineBoundsCertificateV1, AffineInequalityV2, ConstrainedAffineBoundsCertificateV2,
+    DynamicConstrainedAffineBoundsCertificateV3,
 };
 use pliron::{
     builtin::ops::FuncOp,
@@ -45,8 +46,9 @@ use pliron::{
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{
     KernelCheckPassKindV1, KernelCheckStatusV1, PlironPresburgerAnalysisV1, PresburgerAffineExprV1,
-    PresburgerConstraintV1, PresburgerMapExprV1, PresburgerRangeDecisionV1, SparseIndexAnalysisV1,
-    SparseIndexFactV1, SparseIndexFailureV1,
+    PresburgerBoxV1, PresburgerConstraintV1, PresburgerMapExprV1, PresburgerMapV1,
+    PresburgerRangeDecisionV1, PresburgerSetV1, SparseIndexAnalysisV1, SparseIndexFactV1,
+    SparseIndexFailureV1,
 };
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
@@ -271,6 +273,79 @@ pub struct RankedConstrainedAffineBoundsCertificateV2 {
     certificate: ConstrainedAffineBoundsCertificateV2,
 }
 
+/// One V3 runtime symbol, in exact appended query-dimension order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RankedDynamicAffineVariableV3 {
+    value_identity: String,
+}
+
+impl RankedDynamicAffineVariableV3 {
+    pub fn value_identity(&self) -> &str {
+        &self.value_identity
+    }
+}
+
+/// One runtime-extent theorem bound to an exact ranked-access coordinate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RankedDynamicConstrainedAffineBoundsCertificateV3 {
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    access_kind: AccessKindAttr,
+    access_view: String,
+    access_index: String,
+    dynamic_extent: String,
+    runtime_variables: Vec<RankedDynamicAffineVariableV3>,
+    guards: Vec<RankedAffineGuardProvenanceV2>,
+    certificate: DynamicConstrainedAffineBoundsCertificateV3,
+}
+
+impl RankedDynamicConstrainedAffineBoundsCertificateV3 {
+    pub const fn block(&self) -> usize {
+        self.block
+    }
+
+    pub const fn operation(&self) -> usize {
+        self.operation
+    }
+
+    pub const fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    pub const fn access_kind(&self) -> AccessKindAttr {
+        self.access_kind
+    }
+
+    pub fn access_view(&self) -> &str {
+        &self.access_view
+    }
+
+    pub fn access_index(&self) -> &str {
+        &self.access_index
+    }
+
+    pub fn dynamic_extent(&self) -> &str {
+        &self.dynamic_extent
+    }
+
+    pub fn runtime_variables(&self) -> &[RankedDynamicAffineVariableV3] {
+        &self.runtime_variables
+    }
+
+    pub fn guards(&self) -> &[RankedAffineGuardProvenanceV2] {
+        &self.guards
+    }
+
+    pub const fn certificate(&self) -> &DynamicConstrainedAffineBoundsCertificateV3 {
+        &self.certificate
+    }
+
+    pub const fn grants_lowering_race_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Exact CFG origin for one affine inequality used at a ranked access.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RankedAffineGuardProvenanceV2 {
@@ -391,6 +466,8 @@ pub struct RankedBoundsReportV1 {
     affine_certificates: Vec<RankedAffineBoundsCertificateV1>,
     constrained_affine_certificates: Vec<RankedConstrainedAffineBoundsCertificateV2>,
     required_constrained_affine_sites: usize,
+    dynamic_constrained_affine_certificates: Vec<RankedDynamicConstrainedAffineBoundsCertificateV3>,
+    required_dynamic_constrained_affine_sites: usize,
 }
 
 impl RankedBoundsReportV1 {
@@ -438,6 +515,28 @@ impl RankedBoundsReportV1 {
         (self.required_constrained_affine_sites != 0
             && self.constrained_affine_certificates.len() == self.required_constrained_affine_sites)
             .then_some(self.constrained_affine_certificates.as_slice())
+    }
+
+    /// Generated V3 runtime-extent theorem candidates. This is not a status.
+    pub fn dynamic_constrained_affine_certificates_v3(
+        &self,
+    ) -> &[RankedDynamicConstrainedAffineBoundsCertificateV3] {
+        &self.dynamic_constrained_affine_certificates
+    }
+
+    /// Number of dynamic affine sites in the bounded V3 multi-guard subset.
+    pub const fn required_dynamic_constrained_affine_site_count_v3(&self) -> usize {
+        self.required_dynamic_constrained_affine_sites
+    }
+
+    /// Returns a V3 proof roster only when the defined subset is nonempty and complete.
+    pub fn complete_dynamic_constrained_affine_site_roster_v3(
+        &self,
+    ) -> Option<&[RankedDynamicConstrainedAffineBoundsCertificateV3]> {
+        (self.required_dynamic_constrained_affine_sites != 0
+            && self.dynamic_constrained_affine_certificates.len()
+                == self.required_dynamic_constrained_affine_sites)
+            .then_some(self.dynamic_constrained_affine_certificates.as_slice())
     }
 
     pub fn is_clean(&self) -> bool {
@@ -998,7 +1097,10 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     let mut affine_certificates = Vec::new();
     let mut constrained_affine_certificates = Vec::new();
     let mut required_constrained_affine_sites = 0_usize;
+    let mut dynamic_constrained_affine_certificates = Vec::new();
+    let mut required_dynamic_constrained_affine_sites = 0_usize;
     let mut fact_indices = HashMap::new();
+    let mut facts_by_index = Vec::new();
     let mut fact_origins = Vec::<Vec<LessThanGuardOriginV2>>::new();
 
     for (block_index, block) in blocks.iter().enumerate() {
@@ -1030,6 +1132,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 }
                 let next = fact_indices.len();
                 fact_indices.insert(fact, next);
+                facts_by_index.push(fact);
                 fact_origins.push(Vec::new());
                 Some(next)
             }
@@ -1194,6 +1297,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                     &mut AccessCheck {
                         facts: &inputs[block_index],
                         fact_indices: &fact_indices,
+                        facts_by_index: &facts_by_index,
                         fact_origins: &fact_origins,
                         context,
                         sparse_indices,
@@ -1202,6 +1306,10 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                         affine_certificates: &mut affine_certificates,
                         constrained_affine_certificates: &mut constrained_affine_certificates,
                         required_constrained_affine_sites: &mut required_constrained_affine_sites,
+                        dynamic_constrained_affine_certificates:
+                            &mut dynamic_constrained_affine_certificates,
+                        required_dynamic_constrained_affine_sites:
+                            &mut required_dynamic_constrained_affine_sites,
                         budget: &mut budget,
                     },
                 )
@@ -1216,6 +1324,8 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         affine_certificates,
         constrained_affine_certificates,
         required_constrained_affine_sites,
+        dynamic_constrained_affine_certificates,
+        required_dynamic_constrained_affine_sites,
     }
 }
 
@@ -1267,6 +1377,8 @@ fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
         affine_certificates: Vec::new(),
         constrained_affine_certificates: Vec::new(),
         required_constrained_affine_sites: 0,
+        dynamic_constrained_affine_certificates: Vec::new(),
+        required_dynamic_constrained_affine_sites: 0,
     }
 }
 
@@ -1350,6 +1462,8 @@ mod status_tests {
             affine_certificates: vec![],
             constrained_affine_certificates: vec![],
             required_constrained_affine_sites: 0,
+            dynamic_constrained_affine_certificates: vec![],
+            required_dynamic_constrained_affine_sites: 0,
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
         assert!(!report.is_clean());
@@ -1359,6 +1473,8 @@ mod status_tests {
                 affine_certificates: vec![],
                 constrained_affine_certificates: vec![],
                 required_constrained_affine_sites: 0,
+                dynamic_constrained_affine_certificates: vec![],
+                required_dynamic_constrained_affine_sites: 0,
             }
             .status(),
             KernelCheckStatusV1::Clean
@@ -1424,6 +1540,7 @@ fn intersect_predecessor_facts(
 struct AccessCheck<'a> {
     facts: &'a FactSet,
     fact_indices: &'a HashMap<LessThanFact, usize>,
+    facts_by_index: &'a [LessThanFact],
     fact_origins: &'a [Vec<LessThanGuardOriginV2>],
     context: &'a Context,
     sparse_indices: &'a SparseIndexAnalysisV1,
@@ -1432,6 +1549,9 @@ struct AccessCheck<'a> {
     affine_certificates: &'a mut Vec<RankedAffineBoundsCertificateV1>,
     constrained_affine_certificates: &'a mut Vec<RankedConstrainedAffineBoundsCertificateV2>,
     required_constrained_affine_sites: &'a mut usize,
+    dynamic_constrained_affine_certificates:
+        &'a mut Vec<RankedDynamicConstrainedAffineBoundsCertificateV3>,
+    required_dynamic_constrained_affine_sites: &'a mut usize,
     budget: &'a mut RankedBoundsBudget,
 }
 
@@ -1519,6 +1639,33 @@ fn verify_access(
                     dimension,
                     check,
                 )?;
+            }
+            if let (Some(_), IndexExpr::Value(_), SparseIndexFactV1::Affine(_)) =
+                (active_bound_fact, extent_expr, &sparse_fact)
+            {
+                let active_fact_count = check
+                    .facts_by_index
+                    .iter()
+                    .enumerate()
+                    .filter(|(fact, _)| check.facts.contains(*fact))
+                    .count();
+                if active_fact_count >= 2 {
+                    *check.required_dynamic_constrained_affine_sites = check
+                        .required_dynamic_constrained_affine_sites
+                        .checked_add(1)
+                        .ok_or(RankedBoundsFindingV1::StructuralVerificationFailed)?;
+                    let _retained = retain_dynamic_constrained_affine_certificate_v3(
+                        &sparse_fact,
+                        extent_expr,
+                        access_kind,
+                        view.unique_name(check.context).to_string(),
+                        index.unique_name(check.context).to_string(),
+                        block,
+                        operation,
+                        dimension,
+                        check,
+                    )?;
+                }
             }
             continue;
         }
@@ -1691,6 +1838,264 @@ fn retain_constrained_affine_certificate_v2(
             certificate,
         });
     Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retain_dynamic_constrained_affine_certificate_v3(
+    index_fact: &SparseIndexFactV1,
+    extent: IndexExpr,
+    access_kind: AccessKindAttr,
+    access_view: String,
+    access_index: String,
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    check: &mut AccessCheck<'_>,
+) -> Result<bool, RankedBoundsFindingV1> {
+    let active = check
+        .facts_by_index
+        .iter()
+        .enumerate()
+        .filter(|(fact, _)| check.facts.contains(*fact))
+        .map(|(index, fact)| (index, *fact))
+        .collect::<Vec<_>>();
+    if active.len() < 2 {
+        return Ok(false);
+    }
+
+    let mut runtime_values = Vec::<Value>::new();
+    for (_, fact) in &active {
+        for expression in [fact.lhs, fact.rhs] {
+            collect_runtime_affine_variable_v3(
+                expression,
+                check.sparse_indices,
+                &mut runtime_values,
+            )?;
+        }
+    }
+    collect_runtime_affine_variable_v3(extent, check.sparse_indices, &mut runtime_values)?;
+    if runtime_values.is_empty() {
+        return Ok(false);
+    }
+    let IndexExpr::Value(dynamic_extent) = extent else {
+        return Ok(false);
+    };
+    let rank = check
+        .presburger
+        .launch_extents()
+        .len()
+        .checked_add(runtime_values.len())
+        .ok_or(RankedBoundsFindingV1::StructuralVerificationFailed)?;
+    retain_dynamic_constrained_affine_certificate_for_output_v3(
+        index_fact,
+        extent,
+        access_kind,
+        access_view,
+        access_index,
+        dynamic_extent.unique_name(check.context).to_string(),
+        block,
+        operation,
+        dimension,
+        active,
+        runtime_values,
+        rank,
+        check,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retain_dynamic_constrained_affine_certificate_for_output_v3(
+    index_fact: &SparseIndexFactV1,
+    extent: IndexExpr,
+    access_kind: AccessKindAttr,
+    access_view: String,
+    access_index: String,
+    dynamic_extent: String,
+    block: usize,
+    operation: usize,
+    dimension: usize,
+    active: Vec<(usize, LessThanFact)>,
+    runtime_values: Vec<Value>,
+    rank: usize,
+    check: &mut AccessCheck<'_>,
+) -> Result<bool, RankedBoundsFindingV1> {
+    let Some(PresburgerMapExprV1::Affine(mut index)) =
+        check.presburger.map_expr_for_fact(index_fact).ok()
+    else {
+        return Ok(false);
+    };
+    index = extend_affine_rank_v3(&index, rank)?;
+    let Some(extent) = affine_expression_for_index_v3(extent, check, &runtime_values, rank) else {
+        return Ok(false);
+    };
+
+    let mut constraints = Vec::with_capacity(active.len());
+    let mut guards = Vec::with_capacity(active.len());
+    for (fact_index, fact) in active {
+        let [origin] = check
+            .fact_origins
+            .get(fact_index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+        else {
+            return Ok(false);
+        };
+        let Some(lhs) = affine_expression_for_index_v3(fact.lhs, check, &runtime_values, rank)
+        else {
+            return Ok(false);
+        };
+        let Some(rhs) = affine_expression_for_index_v3(fact.rhs, check, &runtime_values, rank)
+        else {
+            return Ok(false);
+        };
+        let Some(row) = lhs.checked_sub(&rhs).ok().and_then(|row| {
+            PresburgerAffineExprV1::constant(1, rank)
+                .ok()
+                .and_then(|one| row.checked_add(&one).ok())
+        }) else {
+            return Ok(false);
+        };
+        let normalized_constraint =
+            AffineInequalityV2::new(row.constant_term(), row.coefficients().to_vec());
+        constraints.push(PresburgerConstraintV1::LessEqualZero(row));
+        guards.push(RankedAffineGuardProvenanceV2 {
+            branch_block: origin.branch_block,
+            branch_operation: origin.branch_operation,
+            lhs_value: origin.lhs_value.clone(),
+            rhs_value: origin.rhs_value.clone(),
+            true_successor: origin.true_successor,
+            false_successor: origin.false_successor,
+            accepted_successor: origin.true_successor,
+            accepted_on_true_edge: true,
+            normalized_constraint,
+        });
+    }
+
+    let mut lower = vec![0_i128; rank];
+    let mut upper = check
+        .presburger
+        .launch_extents()
+        .iter()
+        .copied()
+        .map(i128::from)
+        .collect::<Vec<_>>();
+    upper.resize(rank, i128::from(u64::MAX) + 1);
+    lower.resize(rank, 0);
+    let domain = match PresburgerBoxV1::new(lower, upper)
+        .and_then(|domain| PresburgerSetV1::new(domain, constraints))
+    {
+        Ok(domain) => domain,
+        Err(_) => return Ok(false),
+    };
+    let map = match PresburgerMapV1::new(
+        domain,
+        vec![
+            PresburgerMapExprV1::Affine(index),
+            PresburgerMapExprV1::Affine(extent),
+        ],
+    ) {
+        Ok(map) => map,
+        Err(_) => return Ok(false),
+    };
+    let certificate = match map.checked_dynamic_constrained_affine_bounds_certificate_v3(0, 1) {
+        Ok(Some(certificate)) => certificate,
+        Ok(None) | Err(_) => return Ok(false),
+    };
+    let query = certificate.index_certificate().query();
+    if query.constraints().len() != guards.len()
+        || query
+            .constraints()
+            .iter()
+            .ne(guards.iter().map(|guard| &guard.normalized_constraint))
+    {
+        return Ok(false);
+    }
+    let rows = query
+        .constraints()
+        .len()
+        .saturating_add(rank.saturating_mul(2));
+    check
+        .budget
+        .work(rows.saturating_mul(2).saturating_add(1))?;
+    check.budget.storage(
+        rows.saturating_mul(4)
+            .saturating_add(rank.saturating_mul(8)),
+    )?;
+    check.dynamic_constrained_affine_certificates.push(
+        RankedDynamicConstrainedAffineBoundsCertificateV3 {
+            block,
+            operation,
+            dimension,
+            access_kind,
+            access_view,
+            access_index,
+            dynamic_extent,
+            runtime_variables: runtime_values
+                .iter()
+                .map(|value| RankedDynamicAffineVariableV3 {
+                    value_identity: value.unique_name(check.context).to_string(),
+                })
+                .collect(),
+            guards,
+            certificate,
+        },
+    );
+    Ok(true)
+}
+
+fn collect_runtime_affine_variable_v3(
+    expression: IndexExpr,
+    sparse_indices: &SparseIndexAnalysisV1,
+    values: &mut Vec<Value>,
+) -> Result<(), RankedBoundsFindingV1> {
+    if let IndexExpr::Value(value) = expression
+        && matches!(sparse_indices.fact(value), SparseIndexFactV1::Unknown)
+        && !values.contains(&value)
+    {
+        values.push(value);
+    }
+    Ok(())
+}
+
+fn affine_expression_for_index_v3(
+    expression: IndexExpr,
+    check: &AccessCheck<'_>,
+    runtime_values: &[Value],
+    rank: usize,
+) -> Option<PresburgerAffineExprV1> {
+    if let Some(expression) =
+        affine_expression_for_index_v2(expression, check.sparse_indices, check.presburger)
+    {
+        return extend_affine_rank_v3(&expression, rank).ok();
+    }
+    let IndexExpr::Value(value) = expression else {
+        return None;
+    };
+    if !matches!(check.sparse_indices.fact(value), SparseIndexFactV1::Unknown) {
+        return None;
+    }
+    let symbol = runtime_values
+        .iter()
+        .position(|candidate| *candidate == value)?;
+    let dimension = check
+        .presburger
+        .launch_extents()
+        .len()
+        .checked_add(symbol)?;
+    PresburgerAffineExprV1::variable(rank, dimension).ok()
+}
+
+fn extend_affine_rank_v3(
+    expression: &PresburgerAffineExprV1,
+    rank: usize,
+) -> Result<PresburgerAffineExprV1, RankedBoundsFindingV1> {
+    if expression.coefficients().len() > rank {
+        return Err(RankedBoundsFindingV1::StructuralVerificationFailed);
+    }
+    let mut coefficients = expression.coefficients().to_vec();
+    coefficients.resize(rank, 0);
+    PresburgerAffineExprV1::new(expression.constant_term(), coefficients)
+        .map_err(|_| RankedBoundsFindingV1::StructuralVerificationFailed)
 }
 
 fn affine_constraint_for_fact_v2(

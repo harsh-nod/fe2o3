@@ -11,6 +11,7 @@ extern crate alloc;
 
 mod affine_bounds_v1;
 mod constrained_affine_bounds_v2;
+mod dynamic_constrained_affine_bounds_v3;
 mod identity;
 mod model;
 mod validation;
@@ -26,6 +27,11 @@ pub use constrained_affine_bounds_v2::{
     ConstrainedAffineBoundsQueryV2, MAX_CONSTRAINED_AFFINE_CONSTRAINTS_V2,
     MAX_CONSTRAINED_AFFINE_MULTIPLIER_V2, MAX_CONSTRAINED_AFFINE_RANK_V2,
     check_constrained_affine_bounds_certificate_v2,
+};
+pub use dynamic_constrained_affine_bounds_v3::{
+    CheckedDynamicConstrainedAffineBoundsCertificateV3, DYNAMIC_AFFINE_COMPONENT_CEILING_V3,
+    DynamicConstrainedAffineBoundsCertificateErrorV3, DynamicConstrainedAffineBoundsCertificateV3,
+    check_dynamic_constrained_affine_bounds_certificate_v3,
 };
 pub use identity::{
     ArtifactIdentityV1, CorrespondenceIdentityV1, DIGEST_BYTES_V1, DigestV1, EvidenceIdentityV1,
