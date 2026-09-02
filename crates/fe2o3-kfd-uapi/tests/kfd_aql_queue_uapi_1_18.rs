@@ -27,7 +27,7 @@ use fe2o3_kfd_uapi::{
     KfdIoctlUpdateQueueArgs, KfdQueuePercentageError, KfdQueuePriorityError, KfdSdmaQueueBuffers,
     admit_kfd_aql_queue_ring_address, admit_kfd_aql_queue_ring_size,
     admit_kfd_gfx942_create_queue_outputs, admit_kfd_gfx942_sdma_engine_id,
-    admit_kfd_queue_percentage, admit_kfd_queue_priority,
+    admit_kfd_gfx942_sdma_xgmi_engine_mask, admit_kfd_queue_percentage, admit_kfd_queue_priority,
 };
 use sha2::{Digest, Sha256};
 
@@ -404,6 +404,32 @@ fn targeted_sdma_builder_uses_an_engine_index_not_an_hsa_mask() {
         assert_eq!(args.queue_id, u32::MAX);
     }
     assert!(admit_kfd_gfx942_sdma_engine_id(2).is_err());
+}
+
+#[test]
+fn topology_mask_admits_only_the_gfx942_xgmi_engine_range() {
+    let buffers = KfdSdmaQueueBuffers {
+        ring_base_address: 0x5_0000,
+        write_pointer_address: 0x6_0000,
+        read_pointer_address: 0x6_1000,
+    };
+    for index in 2_u32..16 {
+        let engine = admit_kfd_gfx942_sdma_xgmi_engine_mask(1_u64 << index).unwrap();
+        assert_eq!(engine.value(), index);
+        let args = KfdIoctlCreateQueueArgs::new_sdma_xgmi_on_engine(
+            buffers,
+            admit_kfd_aql_queue_ring_size(4096).unwrap(),
+            7,
+            admit_kfd_queue_percentage(100).unwrap(),
+            admit_kfd_queue_priority(15).unwrap(),
+            engine,
+        );
+        assert_eq!(args.queue_type, KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID);
+        assert_eq!(args.sdma_engine_id, index);
+    }
+    for invalid in [0, 1, 3, 1_u64 << 16, u64::MAX] {
+        assert!(admit_kfd_gfx942_sdma_xgmi_engine_mask(invalid).is_err());
+    }
 }
 
 #[test]

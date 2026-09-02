@@ -60,14 +60,16 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The base backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, multiple serialized logical streams, and one pending compute launch. `KfdMultiDeviceRuntimeBackendV1` admits all devices before queue creation and routes one independent child per device. The lower-level gfx942 SDMA layer owns either one generic copy queue or an exact H2D/D2H targeted pair per child, with at most 63 in-flight copies per queue. | Persistent compute storage is unchanged. The SDMA profile adds move-only host-coherent and HBM buffers plus per-device best-fit pools with explicit recycle and trim. The routed facade has bounded cooperative host-staged same-device and peer copies. | Same-device concurrent compute dispatches, persistent compute allocations shared with runtime-SPI SDMA, native XGMI peer copy, atomics, collectives |
+| KFD | The base backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, multiple serialized logical streams, and one pending compute launch. `KfdMultiDeviceRuntimeBackendV1` admits all devices before queue creation and routes one independent child per device. The lower-level gfx942 SDMA layer owns either one generic copy queue, an exact H2D/D2H targeted pair, or one exact directional native XGMI BY_ENG_ID queue. Ordinary queues admit at most 63 in-flight copies; the bounded XGMI profile admits at most 32. | Persistent compute storage is unchanged. The SDMA profile adds move-only host-coherent and HBM buffers plus per-device best-fit pools with explicit recycle and trim. Native XGMI adds PUBLIC HBM owners mapped to one canonical two-GPU roster. The routed facade still has bounded cooperative host-staged same-device and peer copies. | Same-device concurrent compute dispatches, persistent facade allocations shared with runtime-SPI SDMA/XGMI, native XGMI routing through `RuntimeContextV1`, semantically refined atomic/collective launch authority |
 | HSA | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy only because it
 implements the complete facade contract through host staging. A single-device
 KFD child and the HSA adapter do not advertise it. Atomics and collectives are
 capability vocabulary only; V1 defines no general atomic or collective
-operation. These rows are not HIP/HSA parity.
+operation. The separate native XGMI queue is a callable low-level KFD API, not
+an implementation of the facade peer-copy SPI. These rows are not HIP/HSA
+parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
 kernel metadata at resolution, and shares those immutable bytes and descriptors
@@ -132,6 +134,18 @@ validation failures return the move-only buffers after a successful currentness
 check. Counter or generation divergence, currentness failure, and any
 uncertainty after mutation terminally poison the session and retain native
 custody.
+
+The R9 native XGMI variant additionally binds a generation-retained
+directional type-11 link, same-hive endpoints, the exact XGMI engine inventory,
+and the link's one-bit recommended engine mask. PUBLIC device-local allocation
+owners map one canonical ascending two-GPU KFD array. Map/unmap interruption is
+tracked as an absolute cumulative prefix: errno at a full map prefix remains
+cleanup-only, while errno at a full unmap prefix quarantines without minting
+free authority. Nonblocking queue tickets retain both mapping owners until an
+exact completion is acquired. Full topology checks bracket lifecycle and batch
+scopes; prospective reset and operational checks remain on the publication and
+completion path. This API still requires process teardown after terminal native
+ambiguity.
 
 ## Performance Rules
 
@@ -200,6 +214,17 @@ substitution, conflicting overlap, atomic alignment/coherence/return, and
 early or duplicate collective arrival. The model has no byte ranges or
 physical-alias relation and does not refine the executable Rust router.
 
+The additive R9 Verus file proves fourteen abstract theorems over canonical
+absolute mapping prefixes, successful compensation, exact directional route
+currentness, native-copy custody, evidence equality, and publication gating.
+Fifteen R9 mutations cover noncanonical/duplicate devices, prefix and
+compensation errors, reversed or stale routes, inactive mappings, artifact and
+receipt substitution, stale dispatch state, reset-fence loss, and premature
+release after uncertain completion. The cumulative suite has 81 proved
+obligations and 60 mutations. Errno-at-full-prefix behavior is Checked in the
+Rust state machine; it is not a consequence of the successful-compensation
+Verus theorem. There is no Rust-to-Verus refinement proof.
+
 Executable Rust tests cover the pool model, router route-exhaustion preflight
 and terminal latching, bounded dependency-chain progress, packet bytes, range
 checks, queue admission, and custody transitions. The separate executable
@@ -215,3 +240,18 @@ MI300X run. The R8 copy qualification record names the exact measured commit,
 devices, software stack, validation policy, load boundaries, raw output, and
 limitations in
 [`benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-02.md`](../benchmarks/runtime_gfx942/results/async-copy-mi300x-2026-09-02.md).
+
+R9 adds an authenticated machine-structure receipt for a closed gfx942 subset
+of global/LDS integer RMW atomics and collective primitives. It binds the exact
+payload, descriptor, entry, reachable instruction bytes, opcode classes, and a
+loader-prepared dispatch. Its current collective roster covers exact LDS
+read/write/permutation and workgroup-barrier spellings; every `_DPP` spelling
+is rejected. The safe structure-required wrapper consumes the applied receipt,
+independent Worker V3 authority, and a checked device before delegating to the
+sole authorized runtime dispatch, and retains the structure in the successful
+result. The receipt is Checked structural evidence, not a proof of instruction
+semantics, ordering, scope, convergence, compiler preservation, or hardware
+behavior, and it grants no load or launch authority. Worker V3 remains the
+semantic and launch authority.
+The exact claim matrix is in
+[`crates/fe2o3-kfd/docs/r9-native-xgmi-machine-structure-v1.md`](../crates/fe2o3-kfd/docs/r9-native-xgmi-machine-structure-v1.md).

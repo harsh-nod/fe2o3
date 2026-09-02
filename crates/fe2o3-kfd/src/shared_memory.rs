@@ -18,8 +18,9 @@ use fe2o3_runtime_model::{
     MemoryIdentityDisciplineV1, MemoryKindV1, MemoryLifecycleStateV1, MemoryMappingKeyV1,
     MemoryPublicationIdV1, MemoryPublicationKeyV1, MemoryTransitionErrorV1, MemoryTransitionV1,
     ModelAdmissionStatusV1, ModelDeviceAdmissionV1, PartialOperationStatusV1,
-    PartialProgressObservationV1, UntrustedAllocationHandleObservationV1,
-    UntrustedVmHandleObservationV1, VaReservationIdV1, VaReservationKeyV1, VmIdV1, VmKeyV1,
+    PartialProgressObservationV1, QueueGenerationV1, QueueInstanceIdV1, QueueKeyV1,
+    UntrustedAllocationHandleObservationV1, UntrustedVmHandleObservationV1, VaReservationIdV1,
+    VaReservationKeyV1, VmIdV1, VmKeyV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -35,6 +36,7 @@ pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
 pub const MAX_SHARED_GTT_GPU_VA_BYTES_V1: u64 = 8 << 30;
 pub const MIN_AQL_QUEUE_BYTES_V1: u64 = 4_096;
 static NEXT_SHARED_MEMORY_SESSION_ID_V1: AtomicU64 = AtomicU64::new(1);
+static NEXT_XGMI_SDMA_QUEUE_INSTANCE_V1: AtomicU64 = AtomicU64::new(1);
 pub const MAX_AQL_QUEUE_BYTES_V1: u64 = 1 << 31;
 pub const MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1: usize = 64;
 pub const MAX_GFX942_DEVICE_MEMORY_BYTES_V1: u64 = 192 << 30;
@@ -210,6 +212,150 @@ pub struct Gfx942DeviceMemoryLeaseV1<S: Gfx942DeviceMemoryStateV1> {
     vm: VmKeyV1,
     layout: Gfx942DeviceMemoryLayoutV1,
     marker: PhantomData<S>,
+}
+
+/// Move-only owner for one device-local allocation mapped to a canonical GPU
+/// roster. A prefix shorter than the roster represents an interrupted map and
+/// permits cleanup only; it grants no queue or copy authority.
+#[must_use = "the retained KFD mappings must be explicitly unmapped"]
+pub struct Gfx942XgmiMappedDeviceMemoryV1 {
+    lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    gpu_ids: Box<[u32]>,
+    mapped_prefix: u32,
+    unmapped_prefix: u32,
+    map_succeeded: bool,
+    unmap_indeterminate: bool,
+}
+
+impl Gfx942XgmiMappedDeviceMemoryV1 {
+    pub fn gpu_ids(&self) -> &[u32] {
+        &self.gpu_ids
+    }
+
+    pub const fn mapped_prefix(&self) -> u32 {
+        self.mapped_prefix
+    }
+
+    pub const fn unmapped_prefix(&self) -> u32 {
+        self.unmapped_prefix
+    }
+
+    pub fn is_fully_mapped(&self) -> bool {
+        usize::try_from(self.mapped_prefix) == Ok(self.gpu_ids.len())
+            && self.unmapped_prefix == 0
+            && self.map_succeeded
+            && !self.unmap_indeterminate
+    }
+
+    pub(crate) const fn lease(&self) -> &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+        &self.lease
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn xgmi_mapping_for_sdma_test(id: u64) -> Gfx942XgmiMappedDeviceMemoryV1 {
+    let device = DeviceKeyV1 {
+        physical: fe2o3_runtime_model::PhysicalDeviceIdV1(7),
+        generation: fe2o3_runtime_model::DeviceGenerationV1(1),
+    };
+    Gfx942XgmiMappedDeviceMemoryV1 {
+        lease: Gfx942DeviceMemoryLeaseV1 {
+            id,
+            generation: 1,
+            device,
+            vm: VmKeyV1 {
+                device,
+                id: VmIdV1(1),
+            },
+            layout: Gfx942DeviceMemoryLayoutV1 {
+                requested_bytes: 4096,
+                backing_bytes: 4096,
+                alignment: 4096,
+                uapi_flags: KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC,
+            },
+            marker: PhantomData,
+        },
+        gpu_ids: vec![7, 9].into_boxed_slice(),
+        mapped_prefix: 2,
+        unmapped_prefix: 0,
+        map_succeeded: true,
+        unmap_indeterminate: false,
+    }
+}
+
+pub enum Gfx942XgmiMapRecoveryV1 {
+    Unmapped(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>),
+    PartiallyMapped(Gfx942XgmiMappedDeviceMemoryV1),
+}
+
+pub struct Gfx942XgmiMapFailureV1 {
+    error: MemorySessionError,
+    recovery: Gfx942XgmiMapRecoveryV1,
+}
+
+impl Gfx942XgmiMapFailureV1 {
+    pub const fn error(&self) -> &MemorySessionError {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (MemorySessionError, Gfx942XgmiMapRecoveryV1) {
+        (self.error, self.recovery)
+    }
+}
+
+// Recovery ownership stays inline so an allocator failure after a native side
+// effect cannot erase the only cleanup capability.
+#[allow(clippy::result_large_err)]
+fn finish_xgmi_map_with_peer_post(
+    result: Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1>,
+    peer_post: Result<(), MemorySessionError>,
+) -> Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1> {
+    match (result, peer_post) {
+        (Ok(mapping), Ok(())) => Ok(mapping),
+        (Ok(mapping), Err(error)) => Err(Gfx942XgmiMapFailureV1 {
+            error,
+            recovery: Gfx942XgmiMapRecoveryV1::PartiallyMapped(mapping),
+        }),
+        (Err(failure), _) => Err(failure),
+    }
+}
+
+pub enum Gfx942XgmiUnmapRecoveryV1 {
+    Unmapped(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>),
+    PartiallyUnmapped(Gfx942XgmiMappedDeviceMemoryV1),
+}
+
+pub struct Gfx942XgmiUnmapFailureV1 {
+    error: MemorySessionError,
+    recovery: Gfx942XgmiUnmapRecoveryV1,
+}
+
+impl Gfx942XgmiUnmapFailureV1 {
+    pub const fn error(&self) -> &MemorySessionError {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (MemorySessionError, Gfx942XgmiUnmapRecoveryV1) {
+        (self.error, self.recovery)
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn finish_xgmi_unmap_with_peer_post(
+    result: Result<
+        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        Gfx942XgmiUnmapFailureV1,
+    >,
+    peer_post: Result<(), MemorySessionError>,
+) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, Gfx942XgmiUnmapFailureV1> {
+    match (result, peer_post) {
+        (Ok(lease), Ok(())) => Ok(lease),
+        (Ok(lease), Err(error)) => Err(Gfx942XgmiUnmapFailureV1 {
+            error,
+            recovery: Gfx942XgmiUnmapRecoveryV1::Unmapped(lease),
+        }),
+        (Err(failure), _) => Err(failure),
+    }
 }
 
 /// Linear mapped device-local storage whose exact byte extent was initialized
@@ -954,6 +1100,16 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         Ok(())
     }
 
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
+        if self.backend.opener_pid() != std::process::id() {
+            return self.quarantine(MemorySessionError::ProcessChanged);
+        }
+        if let Err(error) = self.backend.check_xgmi_publication_currentness() {
+            return self.quarantine(error);
+        }
+        Ok(())
+    }
+
     fn allocate<P: GttProfileV1>(
         &mut self,
         requested_bytes: usize,
@@ -1395,6 +1551,68 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         Ok(Gfx942InitializedDeviceMemoryV1 { lease, content })
     }
 
+    fn with_unmapped_public_device_memory<R>(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        access: impl FnOnce(&mut [u8]) -> R,
+    ) -> Result<R, MemorySessionError> {
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Unmapped)?;
+        if lease.layout.uapi_flags != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        self.check_currentness()?;
+        let mapping_bytes = usize::try_from(self.device_memory[index].layout.backing_bytes)
+            .map_err(|_| MemorySessionError::SizeOverflow)?;
+        let requested_bytes = usize::try_from(self.device_memory[index].layout.requested_bytes)
+            .map_err(|_| MemorySessionError::SizeOverflow)?;
+        let mmap_offset = self.device_memory[index].mmap_offset;
+        let mapping_result = {
+            let (backend, records) = (&mut self.backend, &mut self.device_memory);
+            let reservation = records[index]
+                .reservation
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+            backend.map_cpu(reservation, mmap_offset, mapping_bytes)
+        };
+        let mapping = match mapping_result {
+            Ok(mapping) => mapping,
+            Err(error) => return self.quarantine(error),
+        };
+        self.device_memory[index].mapping = Some(mapping);
+        let prepare_result = {
+            let (backend, records) = (&mut self.backend, &mut self.device_memory);
+            let mapping = records[index]
+                .mapping
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+            backend.prepare_cpu_mapping(mapping)
+        };
+        if let Err(error) = prepare_result {
+            return self.quarantine(error);
+        }
+        let result = {
+            let mapping = self.device_memory[index]
+                .mapping
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+            B::with_bytes_mut(mapping, requested_bytes, access)
+        };
+        let unmap_result = {
+            let (backend, records) = (&mut self.backend, &mut self.device_memory);
+            let mapping = records[index]
+                .mapping
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+            backend.unmap_cpu(mapping)
+        };
+        if let Err(error) = unmap_result {
+            return self.quarantine(error);
+        }
+        self.device_memory[index].mapping = None;
+        self.check_currentness()?;
+        Ok(result)
+    }
+
     fn device_memory_index<S: Gfx942DeviceMemoryStateV1>(
         &self,
         lease: &Gfx942DeviceMemoryLeaseV1<S>,
@@ -1484,6 +1702,255 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         self.check_currentness()?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Mapped;
         Ok(lease.retag())
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn map_device_memory_to_gpus(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        gpu_ids: Box<[u32]>,
+    ) -> Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1> {
+        let fail_unmapped = |error, lease| Gfx942XgmiMapFailureV1 {
+            error,
+            recovery: Gfx942XgmiMapRecoveryV1::Unmapped(lease),
+        };
+        let index = match self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped) {
+            Ok(index) => index,
+            Err(error) => return Err(fail_unmapped(error, lease)),
+        };
+        if gpu_ids.len() < 2
+            || gpu_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            || !gpu_ids.contains(&self.backend.gpu_id())
+        {
+            return Err(fail_unmapped(
+                MemorySessionError::KernelResultMalformed(
+                    "noncanonical multi-GPU device-memory map roster",
+                ),
+                lease,
+            ));
+        }
+        if let Err(error) = self.check_currentness() {
+            return Err(fail_unmapped(error, lease));
+        }
+        let handle = match self.device_memory[index].handle {
+            Some(handle) => handle,
+            None => {
+                return Err(fail_unmapped(
+                    MemorySessionError::InvalidDeviceMemoryAuthority,
+                    lease,
+                ));
+            }
+        };
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        let mapped_lease = lease.retag();
+        let mut prefix = 0;
+        loop {
+            let outcome = self.backend.map_gpu_ids(handle, &gpu_ids, prefix);
+            if outcome.value < prefix
+                || usize::try_from(outcome.value)
+                    .ok()
+                    .is_none_or(|n| n > gpu_ids.len())
+            {
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                return Err(Gfx942XgmiMapFailureV1 {
+                    error: MemorySessionError::KernelResultMalformed(
+                        "multi-GPU MAP_MEMORY_TO_GPU cumulative prefix",
+                    ),
+                    recovery: Gfx942XgmiMapRecoveryV1::PartiallyMapped(
+                        Gfx942XgmiMappedDeviceMemoryV1 {
+                            lease: mapped_lease,
+                            gpu_ids,
+                            mapped_prefix: prefix,
+                            unmapped_prefix: 0,
+                            map_succeeded: false,
+                            unmap_indeterminate: false,
+                        },
+                    ),
+                });
+            }
+            let advanced = outcome.value > prefix;
+            prefix = outcome.value;
+            if usize::try_from(prefix) == Ok(gpu_ids.len()) {
+                if outcome.result.is_ok() {
+                    break;
+                }
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Mapped;
+                return Err(Gfx942XgmiMapFailureV1 {
+                    error: outcome.result.expect_err("checked errored XGMI map"),
+                    recovery: Gfx942XgmiMapRecoveryV1::PartiallyMapped(
+                        Gfx942XgmiMappedDeviceMemoryV1 {
+                            lease: mapped_lease,
+                            gpu_ids,
+                            mapped_prefix: prefix,
+                            unmapped_prefix: 0,
+                            map_succeeded: false,
+                            unmap_indeterminate: false,
+                        },
+                    ),
+                });
+            }
+            if outcome.result.is_ok() {
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                return Err(Gfx942XgmiMapFailureV1 {
+                    error: MemorySessionError::KernelResultMalformed(
+                        "multi-GPU MAP_MEMORY_TO_GPU returned an incomplete successful prefix",
+                    ),
+                    recovery: Gfx942XgmiMapRecoveryV1::PartiallyMapped(
+                        Gfx942XgmiMappedDeviceMemoryV1 {
+                            lease: mapped_lease,
+                            gpu_ids,
+                            mapped_prefix: prefix,
+                            unmapped_prefix: 0,
+                            map_succeeded: false,
+                            unmap_indeterminate: false,
+                        },
+                    ),
+                });
+            }
+            if !advanced {
+                self.device_memory[index].phase = if prefix == 0 {
+                    DeviceMemoryPhaseV1::Unmapped
+                } else {
+                    DeviceMemoryPhaseV1::Mapped
+                };
+                let error = outcome.result.expect_err("checked errored XGMI map");
+                return Err(Gfx942XgmiMapFailureV1 {
+                    error,
+                    recovery: if prefix == 0 {
+                        Gfx942XgmiMapRecoveryV1::Unmapped(mapped_lease.retag())
+                    } else {
+                        Gfx942XgmiMapRecoveryV1::PartiallyMapped(Gfx942XgmiMappedDeviceMemoryV1 {
+                            lease: mapped_lease,
+                            gpu_ids,
+                            mapped_prefix: prefix,
+                            unmapped_prefix: 0,
+                            map_succeeded: false,
+                            unmap_indeterminate: false,
+                        })
+                    },
+                });
+            }
+        }
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Mapped;
+        let mapping = Gfx942XgmiMappedDeviceMemoryV1 {
+            lease: mapped_lease,
+            gpu_ids,
+            mapped_prefix: prefix,
+            unmapped_prefix: 0,
+            map_succeeded: true,
+            unmap_indeterminate: false,
+        };
+        if let Err(error) = self.check_currentness() {
+            return Err(Gfx942XgmiMapFailureV1 {
+                error,
+                recovery: Gfx942XgmiMapRecoveryV1::PartiallyMapped(mapping),
+            });
+        }
+        Ok(mapping)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn unmap_device_memory_from_gpus(
+        &mut self,
+        mut mapping: Gfx942XgmiMappedDeviceMemoryV1,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, Gfx942XgmiUnmapFailureV1>
+    {
+        let index = match self.device_memory_index(&mapping.lease, DeviceMemoryPhaseV1::Mapped) {
+            Ok(index) => index,
+            Err(error) => {
+                return Err(Gfx942XgmiUnmapFailureV1 {
+                    error,
+                    recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+                });
+            }
+        };
+        if mapping.mapped_prefix == 0
+            || usize::try_from(mapping.mapped_prefix)
+                .ok()
+                .is_none_or(|prefix| prefix > mapping.gpu_ids.len())
+            || mapping.unmapped_prefix >= mapping.mapped_prefix
+            || mapping.unmap_indeterminate
+        {
+            return Err(Gfx942XgmiUnmapFailureV1 {
+                error: MemorySessionError::KernelResultMalformed(
+                    "invalid multi-GPU mapping-owner prefix",
+                ),
+                recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+            });
+        }
+        if let Err(error) = self.check_currentness() {
+            return Err(Gfx942XgmiUnmapFailureV1 {
+                error,
+                recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+            });
+        }
+        let Some(handle) = self.device_memory[index].handle else {
+            return Err(Gfx942XgmiUnmapFailureV1 {
+                error: MemorySessionError::InvalidDeviceMemoryAuthority,
+                recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+            });
+        };
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+        let target = &mapping.gpu_ids[..mapping.mapped_prefix as usize];
+        loop {
+            let outcome = self
+                .backend
+                .unmap_gpu_ids(handle, target, mapping.unmapped_prefix);
+            if outcome.value < mapping.unmapped_prefix || outcome.value > mapping.mapped_prefix {
+                mapping.unmap_indeterminate = true;
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                return Err(Gfx942XgmiUnmapFailureV1 {
+                    error: MemorySessionError::KernelResultMalformed(
+                        "multi-GPU UNMAP_MEMORY_FROM_GPU cumulative prefix",
+                    ),
+                    recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+                });
+            }
+            let advanced = outcome.value > mapping.unmapped_prefix;
+            mapping.unmapped_prefix = outcome.value;
+            if mapping.unmapped_prefix == mapping.mapped_prefix {
+                if outcome.result.is_ok() {
+                    break;
+                }
+                mapping.unmap_indeterminate = true;
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                return Err(Gfx942XgmiUnmapFailureV1 {
+                    error: outcome.result.expect_err("checked errored XGMI unmap"),
+                    recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+                });
+            }
+            if outcome.result.is_ok() {
+                mapping.unmap_indeterminate = true;
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Ambiguous;
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                return Err(Gfx942XgmiUnmapFailureV1 {
+                    error: MemorySessionError::KernelResultMalformed(
+                        "multi-GPU UNMAP_MEMORY_FROM_GPU returned an incomplete successful prefix",
+                    ),
+                    recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+                });
+            }
+            if !advanced {
+                self.device_memory[index].phase = DeviceMemoryPhaseV1::Mapped;
+                return Err(Gfx942XgmiUnmapFailureV1 {
+                    error: outcome.result.expect_err("checked errored XGMI unmap"),
+                    recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+                });
+            }
+        }
+        self.device_memory[index].phase = DeviceMemoryPhaseV1::Unmapped;
+        let lease = mapping.lease.retag();
+        if let Err(error) = self.check_currentness() {
+            return Err(Gfx942XgmiUnmapFailureV1 {
+                error,
+                recovery: Gfx942XgmiUnmapRecoveryV1::Unmapped(lease),
+            });
+        }
+        Ok(lease)
     }
 
     fn unmap_device_memory(
@@ -2723,6 +3190,47 @@ impl SharedGttMemorySessionV1 {
         )
     }
 
+    /// Allocates PUBLIC device-local VRAM for the bounded native XGMI path.
+    /// The allocation is initially CPU- and GPU-unmapped and remains owned by
+    /// this GPU even when subsequently mapped into a peer VM.
+    pub fn allocate_gfx942_xgmi_device_memory(
+        &mut self,
+        requested_bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        self.engine.allocate_device_memory_with_flags(
+            self.model_device.model_key(),
+            self.vm,
+            requested_bytes,
+            alignment,
+            KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+        )
+    }
+
+    /// Writes the complete logical extent of one unmapped PUBLIC XGMI BO.
+    pub fn write_gfx942_xgmi_device_memory(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        source: &[u8],
+    ) -> Result<(), MemorySessionError> {
+        if u64::try_from(source.len()) != Ok(lease.layout().requested_bytes()) {
+            return Err(MemorySessionError::DeviceContentMismatch);
+        }
+        self.engine
+            .with_unmapped_public_device_memory(lease, |destination| {
+                destination.copy_from_slice(source);
+            })
+    }
+
+    /// Reads the complete logical extent of one unmapped PUBLIC XGMI BO.
+    pub fn read_gfx942_xgmi_device_memory(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<Box<[u8]>, MemorySessionError> {
+        self.engine
+            .with_unmapped_public_device_memory(lease, |source| source.to_vec().into_boxed_slice())
+    }
+
     /// Allocates CPU-visible device-local storage, writes one exact owned byte
     /// extent, verifies the mapped bytes, removes CPU access, and maps the
     /// allocation to the selected GPU.
@@ -2792,6 +3300,177 @@ impl SharedGttMemorySessionV1 {
         self.engine.map_device_memory(lease)
     }
 
+    /// Maps one PUBLIC device-local allocation to both GPUs named by an exact
+    /// directional XGMI route. The canonical ascending GPU-ID roster is
+    /// retained in the move-only result and every interrupted ioctl prefix is
+    /// returned to the caller for cleanup.
+    #[allow(clippy::result_large_err)]
+    pub fn map_gfx942_device_memory_for_xgmi_peer(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1> {
+        let fail = |error, lease| Gfx942XgmiMapFailureV1 {
+            error,
+            recovery: Gfx942XgmiMapRecoveryV1::Unmapped(lease),
+        };
+        let roster = route.canonical_mapping_gpu_ids();
+        let self_gpu = self.engine.backend.gpu_id_value();
+        let peer_gpu = peer.engine.backend.gpu_id_value();
+        if self_gpu == peer_gpu
+            || !roster.contains(&self_gpu)
+            || !roster.contains(&peer_gpu)
+            || roster != [self_gpu.min(peer_gpu), self_gpu.max(peer_gpu)]
+        {
+            return Err(fail(
+                MemorySessionError::KernelResultMalformed("gfx942 XGMI session pair"),
+                lease,
+            ));
+        }
+        let retained = match self
+            .engine
+            .backend
+            .retained_xgmi_route(route.source_gpu_id(), route.destination_gpu_id())
+        {
+            Ok(retained) => retained,
+            Err(error) => return Err(fail(error, lease)),
+        };
+        let peer_retained = match peer
+            .engine
+            .backend
+            .retained_xgmi_route(route.source_gpu_id(), route.destination_gpu_id())
+        {
+            Ok(retained) => retained,
+            Err(error) => return Err(fail(error, lease)),
+        };
+        if retained != route || peer_retained != route {
+            return Err(fail(
+                MemorySessionError::KernelResultMalformed("stale gfx942 XGMI topology route"),
+                lease,
+            ));
+        }
+        if let Err(error) = self.engine.backend.check_xgmi_route_currentness(route) {
+            return Err(fail(error, lease));
+        }
+        if let Err(error) = peer.engine.backend.check_xgmi_route_currentness(route) {
+            return Err(fail(error, lease));
+        }
+        if lease.layout().uapi_flags() != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC {
+            return Err(fail(
+                MemorySessionError::KernelResultMalformed(
+                    "XGMI remote access requires PUBLIC device-local memory",
+                ),
+                lease,
+            ));
+        }
+        if let Err(error) = peer.engine.check_currentness() {
+            return Err(fail(error, lease));
+        }
+        let result = self.engine.map_device_memory_to_gpus(lease, roster.into());
+        let peer_post = peer.engine.check_currentness();
+        finish_xgmi_map_with_peer_post(result, peer_post)
+    }
+
+    /// Unmaps every successfully mapped prefix represented by the move-only
+    /// XGMI mapping owner. Interrupted unmaps return the advanced cumulative
+    /// prefix so callers can retry without freeing a partially mapped BO.
+    #[allow(clippy::result_large_err)]
+    pub fn unmap_gfx942_device_memory_from_xgmi_peer(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        mapping: Gfx942XgmiMappedDeviceMemoryV1,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, Gfx942XgmiUnmapFailureV1>
+    {
+        let roster = route.canonical_mapping_gpu_ids();
+        if mapping.gpu_ids.as_ref() != roster
+            || !roster.contains(&self.engine.backend.gpu_id_value())
+            || !roster.contains(&peer.engine.backend.gpu_id_value())
+        {
+            return Err(Gfx942XgmiUnmapFailureV1 {
+                error: MemorySessionError::KernelResultMalformed("gfx942 XGMI unmap binding"),
+                recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+            });
+        }
+        if let Err(error) = peer.engine.check_currentness() {
+            return Err(Gfx942XgmiUnmapFailureV1 {
+                error,
+                recovery: Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping),
+            });
+        }
+        let result = self.engine.unmap_device_memory_from_gpus(mapping);
+        let peer_post = peer.engine.check_currentness();
+        finish_xgmi_unmap_with_peer_post(result, peer_post)
+    }
+
+    pub(crate) fn mapped_xgmi_device_memory_facts(
+        &self,
+        mapping: &Gfx942XgmiMappedDeviceMemoryV1,
+    ) -> Result<Gfx942DeviceMemoryDispatchFactsV1, MemorySessionError> {
+        if !mapping.is_fully_mapped() {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        self.mapped_gfx942_device_memory_facts(mapping.lease())
+    }
+
+    pub(crate) fn validate_gfx942_xgmi_route_with_peer(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.validate_gfx942_xgmi_pair_binding(peer, route)?;
+        if let Err(error) = self.engine.backend.check_xgmi_route_currentness(route) {
+            return self.engine.quarantine(error);
+        }
+        if let Err(error) = peer.engine.backend.check_xgmi_route_currentness(route) {
+            return peer.engine.quarantine(error);
+        }
+        self.engine.check_currentness()?;
+        peer.engine.check_currentness()
+    }
+
+    pub(crate) fn validate_gfx942_xgmi_publication_with_peer(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.validate_gfx942_xgmi_pair_binding(peer, route)?;
+        self.engine.check_xgmi_publication_currentness()?;
+        peer.engine.check_xgmi_publication_currentness()
+    }
+
+    fn validate_gfx942_xgmi_pair_binding(
+        &self,
+        peer: &Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.engine.require_active()?;
+        peer.engine.require_active()?;
+        let roster = route.canonical_mapping_gpu_ids();
+        let self_gpu = self.engine.backend.gpu_id_value();
+        let peer_gpu = peer.engine.backend.gpu_id_value();
+        if self_gpu == peer_gpu || roster != [self_gpu.min(peer_gpu), self_gpu.max(peer_gpu)] {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "gfx942 directional XGMI session pair",
+            ));
+        }
+        let retained = self
+            .engine
+            .backend
+            .retained_xgmi_route(route.source_gpu_id(), route.destination_gpu_id())?;
+        let peer_retained = peer
+            .engine
+            .backend
+            .retained_xgmi_route(route.source_gpu_id(), route.destination_gpu_id())?;
+        if retained != route || peer_retained != route {
+            return Err(MemorySessionError::KernelResultMalformed(
+                "stale gfx942 directional XGMI route",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn unmap_gfx942_device_memory(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
@@ -2844,6 +3523,20 @@ impl SharedGttMemorySessionV1 {
 
     pub(crate) fn opener_pid(&self) -> u32 {
         self.engine.backend.opener_pid()
+    }
+
+    pub(crate) fn next_xgmi_sdma_queue_key(&self) -> Result<QueueKeyV1, MemorySessionError> {
+        self.engine.require_active()?;
+        let id = NEXT_XGMI_SDMA_QUEUE_INSTANCE_V1
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| MemorySessionError::Model("XGMI SDMA queue identity exhausted"))?;
+        Ok(QueueKeyV1 {
+            vm: self.vm,
+            id: QueueInstanceIdV1(id),
+            generation: QueueGenerationV1(1),
+        })
     }
 
     pub(crate) fn kfd_fd(&self) -> BorrowedFd<'_> {
@@ -4075,6 +4768,10 @@ mod tests {
         map_cpu_calls: usize,
         map_gpu_calls: usize,
         unmap_gpu_calls: usize,
+        multi_map_script: Vec<(u32, bool)>,
+        multi_unmap_script: Vec<(u32, bool)>,
+        multi_map_inputs: Vec<(Vec<u32>, u32)>,
+        multi_unmap_inputs: Vec<(Vec<u32>, u32)>,
         free_calls: usize,
         release_va_calls: usize,
         corrupt_readback: bool,
@@ -4107,6 +4804,10 @@ mod tests {
                 map_cpu_calls: 0,
                 map_gpu_calls: 0,
                 unmap_gpu_calls: 0,
+                multi_map_script: Vec::new(),
+                multi_unmap_script: Vec::new(),
+                multi_map_inputs: Vec::new(),
+                multi_unmap_inputs: Vec::new(),
                 free_calls: 0,
                 release_va_calls: 0,
                 corrupt_readback: false,
@@ -4322,6 +5023,51 @@ mod tests {
                     Err(MemorySessionError::Injected("unmap_gpu"))
                 } else {
                     self.check("unmap_gpu")
+                },
+            }
+        }
+        fn map_gpu_ids(
+            &mut self,
+            _handle: u64,
+            gpu_ids: &[u32],
+            old_success: u32,
+        ) -> KernelOutcome<u32> {
+            let call = self.multi_map_inputs.len();
+            self.multi_map_inputs.push((gpu_ids.to_vec(), old_success));
+            let (value, errno) = self
+                .multi_map_script
+                .get(call)
+                .copied()
+                .unwrap_or((gpu_ids.len() as u32, false));
+            KernelOutcome {
+                value,
+                result: if errno {
+                    Err(MemorySessionError::Injected("multi_map_gpu"))
+                } else {
+                    Ok(())
+                },
+            }
+        }
+        fn unmap_gpu_ids(
+            &mut self,
+            _handle: u64,
+            gpu_ids: &[u32],
+            old_success: u32,
+        ) -> KernelOutcome<u32> {
+            let call = self.multi_unmap_inputs.len();
+            self.multi_unmap_inputs
+                .push((gpu_ids.to_vec(), old_success));
+            let (value, errno) = self
+                .multi_unmap_script
+                .get(call)
+                .copied()
+                .unwrap_or((gpu_ids.len() as u32, false));
+            KernelOutcome {
+                value,
+                result: if errno {
+                    Err(MemorySessionError::Injected("multi_unmap_gpu"))
+                } else {
+                    Ok(())
                 },
             }
         }
@@ -5553,6 +6299,191 @@ mod tests {
         assert_eq!(engine.backend.release_va_calls, 1);
         assert_eq!(engine.retained_device_memory_bytes, 0);
         assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Released);
+    }
+
+    fn allocate_public_device_memory(
+        engine: &mut SharedMemoryEngine<FakeBackend>,
+    ) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1> {
+        let (device, vm) = device_vm(7);
+        engine
+            .allocate_device_memory_with_flags(
+                device,
+                vm,
+                4096,
+                4096,
+                KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn xgmi_mapping_retries_only_advanced_prefixes_and_retains_canonical_roster() {
+        let mut engine = acquired();
+        engine.backend.multi_map_script = vec![(1, true), (2, false)];
+        engine.backend.multi_unmap_script = vec![(1, true), (2, false)];
+        let lease = allocate_public_device_memory(&mut engine);
+        let mapping = match engine.map_device_memory_to_gpus(lease, [7, 9].into()) {
+            Ok(mapping) => mapping,
+            Err(_) => panic!("advanced cumulative map prefix must be retried"),
+        };
+        assert!(mapping.is_fully_mapped());
+        assert_eq!(mapping.gpu_ids(), [7, 9]);
+        assert_eq!(
+            engine.backend.multi_map_inputs,
+            [(vec![7, 9], 0), (vec![7, 9], 1),]
+        );
+        let lease = match engine.unmap_device_memory_from_gpus(mapping) {
+            Ok(lease) => lease,
+            Err(_) => panic!("advanced cumulative unmap prefix must be retried"),
+        };
+        assert_eq!(
+            engine.backend.multi_unmap_inputs,
+            [(vec![7, 9], 0), (vec![7, 9], 1),]
+        );
+        engine.release_device_memory(lease).unwrap();
+    }
+
+    #[test]
+    fn xgmi_map_errno_at_full_prefix_never_grants_copy_authority() {
+        let mut engine = acquired();
+        engine.backend.multi_map_script = vec![(2, true)];
+        let lease = allocate_public_device_memory(&mut engine);
+        let failure = match engine.map_device_memory_to_gpus(lease, [7, 9].into()) {
+            Err(failure) => failure,
+            Ok(_) => panic!("errored full map prefix must not be admitted"),
+        };
+        let (_, recovery) = failure.into_parts();
+        let mapping = match recovery {
+            Gfx942XgmiMapRecoveryV1::PartiallyMapped(mapping) => mapping,
+            Gfx942XgmiMapRecoveryV1::Unmapped(_) => panic!("full prefix may retain mappings"),
+        };
+        assert_eq!(mapping.mapped_prefix(), 2);
+        assert!(!mapping.is_fully_mapped());
+        let lease = match engine.unmap_device_memory_from_gpus(mapping) {
+            Ok(lease) => lease,
+            Err(_) => panic!("cleanup of the known mapped prefix must remain possible"),
+        };
+        engine.release_device_memory(lease).unwrap();
+    }
+
+    #[test]
+    fn xgmi_peer_post_currentness_failure_retains_mapped_cleanup_authority() {
+        let failure = finish_xgmi_map_with_peer_post(
+            Ok(xgmi_mapping_for_sdma_test(17)),
+            Err(MemorySessionError::Injected("peer post currentness")),
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(
+            failure.error(),
+            MemorySessionError::Injected("peer post currentness")
+        ));
+        let (_, recovery) = failure.into_parts();
+        let mapping = match recovery {
+            Gfx942XgmiMapRecoveryV1::PartiallyMapped(mapping) => mapping,
+            Gfx942XgmiMapRecoveryV1::Unmapped(_) => {
+                panic!("successful native map must retain mapped cleanup authority")
+            }
+        };
+        assert_eq!(mapping.gpu_ids(), [7, 9]);
+        assert!(mapping.is_fully_mapped());
+    }
+
+    #[test]
+    fn xgmi_peer_post_unmap_failure_retains_unmapped_free_authority() {
+        let mapping = xgmi_mapping_for_sdma_test(18);
+        let lease = mapping.lease.retag();
+        let failure = finish_xgmi_unmap_with_peer_post(
+            Ok(lease),
+            Err(MemorySessionError::Injected("peer post unmap currentness")),
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(
+            failure.error(),
+            MemorySessionError::Injected("peer post unmap currentness")
+        ));
+        assert!(matches!(
+            failure.into_parts().1,
+            Gfx942XgmiUnmapRecoveryV1::Unmapped(_)
+        ));
+    }
+
+    #[test]
+    fn xgmi_unmap_errno_at_full_prefix_quarantines_without_release() {
+        let mut engine = acquired();
+        let lease = allocate_public_device_memory(&mut engine);
+        let mapping = match engine.map_device_memory_to_gpus(lease, [7, 9].into()) {
+            Ok(mapping) => mapping,
+            Err(_) => panic!("full successful mapping expected"),
+        };
+        engine.backend.multi_unmap_script = vec![(2, true)];
+        let failure = match engine.unmap_device_memory_from_gpus(mapping) {
+            Err(failure) => failure,
+            Ok(_) => panic!("errored full unmap prefix must remain indeterminate"),
+        };
+        let (_, recovery) = failure.into_parts();
+        let mapping = match recovery {
+            Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping) => mapping,
+            Gfx942XgmiUnmapRecoveryV1::Unmapped(_) => {
+                panic!("errored unmap must not mint unmapped authority")
+            }
+        };
+        assert_eq!(mapping.unmapped_prefix(), 2);
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.backend.free_calls, 0);
+        assert_eq!(
+            engine.device_memory[0].phase,
+            DeviceMemoryPhaseV1::Ambiguous
+        );
+    }
+
+    #[test]
+    fn xgmi_unmap_regressed_prefix_is_indeterminate_and_quarantined() {
+        let mut engine = acquired();
+        let lease = allocate_public_device_memory(&mut engine);
+        let mapping = engine
+            .map_device_memory_to_gpus(lease, [7, 9].into())
+            .ok()
+            .unwrap();
+        engine.backend.multi_unmap_script = vec![(1, true), (0, true)];
+        let failure = engine.unmap_device_memory_from_gpus(mapping).err().unwrap();
+        let mapping = match failure.into_parts().1 {
+            Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping) => mapping,
+            Gfx942XgmiUnmapRecoveryV1::Unmapped(_) => panic!("regression cannot release"),
+        };
+        assert_eq!(mapping.unmapped_prefix, 1);
+        assert!(mapping.unmap_indeterminate);
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(
+            engine.device_memory[0].phase,
+            DeviceMemoryPhaseV1::Ambiguous
+        );
+        assert_eq!(engine.backend.free_calls, 0);
+    }
+
+    #[test]
+    fn xgmi_unmap_overshoot_is_indeterminate_and_quarantined() {
+        let mut engine = acquired();
+        let lease = allocate_public_device_memory(&mut engine);
+        let mapping = engine
+            .map_device_memory_to_gpus(lease, [7, 9].into())
+            .ok()
+            .unwrap();
+        engine.backend.multi_unmap_script = vec![(3, true)];
+        let failure = engine.unmap_device_memory_from_gpus(mapping).err().unwrap();
+        let mapping = match failure.into_parts().1 {
+            Gfx942XgmiUnmapRecoveryV1::PartiallyUnmapped(mapping) => mapping,
+            Gfx942XgmiUnmapRecoveryV1::Unmapped(_) => panic!("overshoot cannot release"),
+        };
+        assert_eq!(mapping.unmapped_prefix, 0);
+        assert!(mapping.unmap_indeterminate);
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(
+            engine.device_memory[0].phase,
+            DeviceMemoryPhaseV1::Ambiguous
+        );
+        assert_eq!(engine.backend.free_calls, 0);
     }
 
     fn content(bytes: &[u8]) -> Gfx942DeviceContentDescriptorV1 {

@@ -13,6 +13,7 @@ materialization_proof="$script_dir/materialization_v1.rs"
 aql_proof="$script_dir/aql_publication_v1.rs"
 r7_async_resources_proof="$script_dir/r7_async_resources_v1.rs"
 r8_execution_contracts_proof="$script_dir/r8_execution_contracts_v1.rs"
+r9_native_evidence_proof="$script_dir/r9_native_evidence_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -58,6 +59,21 @@ negative_r8_atomic_coherence="$script_dir/negative/r8_execution_contracts_v1_ato
 negative_r8_atomic_return="$script_dir/negative/r8_execution_contracts_v1_atomic_return.rs"
 negative_r8_early_collective="$script_dir/negative/r8_execution_contracts_v1_early_collective.rs"
 negative_r8_duplicate_collective="$script_dir/negative/r8_execution_contracts_v1_duplicate_collective.rs"
+negative_r9_duplicate_gpu="$script_dir/negative/r9_native_evidence_v1_duplicate_gpu.rs"
+negative_r9_nonzero_begin_prefix="$script_dir/negative/r9_native_evidence_v1_nonzero_begin_prefix.rs"
+negative_r9_map_prefix_substitution="$script_dir/negative/r9_native_evidence_v1_map_prefix_substitution.rs"
+negative_r9_unmap_prefix_addition="$script_dir/negative/r9_native_evidence_v1_unmap_prefix_addition.rs"
+negative_r9_early_compensation_release="$script_dir/negative/r9_native_evidence_v1_early_compensation_release.rs"
+negative_r9_incomplete_compensation="$script_dir/negative/r9_native_evidence_v1_incomplete_compensation.rs"
+negative_r9_reversed_route="$script_dir/negative/r9_native_evidence_v1_reversed_route.rs"
+negative_r9_stale_topology="$script_dir/negative/r9_native_evidence_v1_stale_topology.rs"
+negative_r9_reset_fence_drop="$script_dir/negative/r9_native_evidence_v1_reset_fence_drop.rs"
+negative_r9_artifact_substitution="$script_dir/negative/r9_native_evidence_v1_artifact_substitution.rs"
+negative_r9_receipt_substitution="$script_dir/negative/r9_native_evidence_v1_receipt_substitution.rs"
+negative_r9_stale_dispatch="$script_dir/negative/r9_native_evidence_v1_stale_dispatch.rs"
+negative_r9_incomplete_dependency="$script_dir/negative/r9_native_evidence_v1_incomplete_dependency.rs"
+negative_r9_copy_inactive_mapping="$script_dir/negative/r9_native_evidence_v1_copy_inactive_mapping.rs"
+negative_r9_uncertain_copy_release="$script_dir/negative/r9_native_evidence_v1_uncertain_copy_release.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -92,6 +108,7 @@ expected_negative_lifecycle=$(read_pin "$pin_dir/NEGATIVE_SHA256")
 expected_aql=$(read_pin "$pin_dir/AQL_PUBLICATION_SHA256")
 expected_r7_async_resources=$(read_pin "$pin_dir/R7_ASYNC_RESOURCES_SHA256")
 expected_r8_execution_contracts=$(read_pin "$pin_dir/R8_EXECUTION_CONTRACTS_SHA256")
+expected_r9_native_evidence=$(read_pin "$pin_dir/R9_NATIVE_EVIDENCE_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -137,6 +154,21 @@ expected_negative_r8_atomic_coherence=$(read_pin "$pin_dir/NEGATIVE_R8_ATOMIC_CO
 expected_negative_r8_atomic_return=$(read_pin "$pin_dir/NEGATIVE_R8_ATOMIC_RETURN_SHA256")
 expected_negative_r8_early_collective=$(read_pin "$pin_dir/NEGATIVE_R8_EARLY_COLLECTIVE_SHA256")
 expected_negative_r8_duplicate_collective=$(read_pin "$pin_dir/NEGATIVE_R8_DUPLICATE_COLLECTIVE_SHA256")
+expected_negative_r9_duplicate_gpu=$(read_pin "$pin_dir/NEGATIVE_R9_DUPLICATE_GPU_SHA256")
+expected_negative_r9_nonzero_begin_prefix=$(read_pin "$pin_dir/NEGATIVE_R9_NONZERO_BEGIN_PREFIX_SHA256")
+expected_negative_r9_map_prefix_substitution=$(read_pin "$pin_dir/NEGATIVE_R9_MAP_PREFIX_SUBSTITUTION_SHA256")
+expected_negative_r9_unmap_prefix_addition=$(read_pin "$pin_dir/NEGATIVE_R9_UNMAP_PREFIX_ADDITION_SHA256")
+expected_negative_r9_early_compensation_release=$(read_pin "$pin_dir/NEGATIVE_R9_EARLY_COMPENSATION_RELEASE_SHA256")
+expected_negative_r9_incomplete_compensation=$(read_pin "$pin_dir/NEGATIVE_R9_INCOMPLETE_COMPENSATION_SHA256")
+expected_negative_r9_reversed_route=$(read_pin "$pin_dir/NEGATIVE_R9_REVERSED_ROUTE_SHA256")
+expected_negative_r9_stale_topology=$(read_pin "$pin_dir/NEGATIVE_R9_STALE_TOPOLOGY_SHA256")
+expected_negative_r9_reset_fence_drop=$(read_pin "$pin_dir/NEGATIVE_R9_RESET_FENCE_DROP_SHA256")
+expected_negative_r9_artifact_substitution=$(read_pin "$pin_dir/NEGATIVE_R9_ARTIFACT_SUBSTITUTION_SHA256")
+expected_negative_r9_receipt_substitution=$(read_pin "$pin_dir/NEGATIVE_R9_RECEIPT_SUBSTITUTION_SHA256")
+expected_negative_r9_stale_dispatch=$(read_pin "$pin_dir/NEGATIVE_R9_STALE_DISPATCH_SHA256")
+expected_negative_r9_incomplete_dependency=$(read_pin "$pin_dir/NEGATIVE_R9_INCOMPLETE_DEPENDENCY_SHA256")
+expected_negative_r9_copy_inactive_mapping=$(read_pin "$pin_dir/NEGATIVE_R9_COPY_INACTIVE_MAPPING_SHA256")
+expected_negative_r9_uncertain_copy_release=$(read_pin "$pin_dir/NEGATIVE_R9_UNCERTAIN_COPY_RELEASE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -174,6 +206,7 @@ check_sources() {
     check_digest "$expected_aql" "$aql_proof"
     check_digest "$expected_r7_async_resources" "$r7_async_resources_proof"
     check_digest "$expected_r8_execution_contracts" "$r8_execution_contracts_proof"
+    check_digest "$expected_r9_native_evidence" "$r9_native_evidence_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -219,6 +252,21 @@ check_sources() {
     check_digest "$expected_negative_r8_atomic_return" "$negative_r8_atomic_return"
     check_digest "$expected_negative_r8_early_collective" "$negative_r8_early_collective"
     check_digest "$expected_negative_r8_duplicate_collective" "$negative_r8_duplicate_collective"
+    check_digest "$expected_negative_r9_duplicate_gpu" "$negative_r9_duplicate_gpu"
+    check_digest "$expected_negative_r9_nonzero_begin_prefix" "$negative_r9_nonzero_begin_prefix"
+    check_digest "$expected_negative_r9_map_prefix_substitution" "$negative_r9_map_prefix_substitution"
+    check_digest "$expected_negative_r9_unmap_prefix_addition" "$negative_r9_unmap_prefix_addition"
+    check_digest "$expected_negative_r9_early_compensation_release" "$negative_r9_early_compensation_release"
+    check_digest "$expected_negative_r9_incomplete_compensation" "$negative_r9_incomplete_compensation"
+    check_digest "$expected_negative_r9_reversed_route" "$negative_r9_reversed_route"
+    check_digest "$expected_negative_r9_stale_topology" "$negative_r9_stale_topology"
+    check_digest "$expected_negative_r9_reset_fence_drop" "$negative_r9_reset_fence_drop"
+    check_digest "$expected_negative_r9_artifact_substitution" "$negative_r9_artifact_substitution"
+    check_digest "$expected_negative_r9_receipt_substitution" "$negative_r9_receipt_substitution"
+    check_digest "$expected_negative_r9_stale_dispatch" "$negative_r9_stale_dispatch"
+    check_digest "$expected_negative_r9_incomplete_dependency" "$negative_r9_incomplete_dependency"
+    check_digest "$expected_negative_r9_copy_inactive_mapping" "$negative_r9_copy_inactive_mapping"
+    check_digest "$expected_negative_r9_uncertain_copy_release" "$negative_r9_uncertain_copy_release"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -237,6 +285,7 @@ check_sources
     "$aql_proof" \
     "$r7_async_resources_proof" \
     "$r8_execution_contracts_proof" \
+    "$r9_native_evidence_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -278,7 +327,22 @@ check_sources
     "$negative_r8_atomic_coherence" \
     "$negative_r8_atomic_return" \
     "$negative_r8_early_collective" \
-    "$negative_r8_duplicate_collective"
+    "$negative_r8_duplicate_collective" \
+    "$negative_r9_duplicate_gpu" \
+    "$negative_r9_nonzero_begin_prefix" \
+    "$negative_r9_map_prefix_substitution" \
+    "$negative_r9_unmap_prefix_addition" \
+    "$negative_r9_early_compensation_release" \
+    "$negative_r9_incomplete_compensation" \
+    "$negative_r9_reversed_route" \
+    "$negative_r9_stale_topology" \
+    "$negative_r9_reset_fence_drop" \
+    "$negative_r9_artifact_substitution" \
+    "$negative_r9_receipt_substitution" \
+    "$negative_r9_stale_dispatch" \
+    "$negative_r9_incomplete_dependency" \
+    "$negative_r9_copy_inactive_mapping" \
+    "$negative_r9_uncertain_copy_release"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -387,6 +451,7 @@ check_positive "$materialization_proof" 'verification results:: 8 verified, 0 er
 check_positive "$aql_proof" 'verification results:: 11 verified, 0 errors' aql-publication
 check_positive "$r7_async_resources_proof" 'verification results:: 8 verified, 0 errors' r7-async-resources
 check_positive "$r8_execution_contracts_proof" 'verification results:: 10 verified, 0 errors' r8-execution-contracts
+check_positive "$r9_native_evidence_proof" 'verification results:: 14 verified, 0 errors' r9-native-evidence
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -432,13 +497,28 @@ check_negative "$negative_r8_atomic_coherence" mutated_fetch_add_retains_coheren
 check_negative "$negative_r8_atomic_return" mutated_fetch_add_returns_old_v1 r8-atomic-return
 check_negative "$negative_r8_early_collective" mutated_partial_collective_cannot_publish_v1 r8-early-collective
 check_negative "$negative_r8_duplicate_collective" mutated_duplicate_collective_arrival_does_not_advance_v1 r8-duplicate-collective
+check_negative "$negative_r9_duplicate_gpu" mutated_canonical_gpu_ids_are_unique_v1 r9-duplicate-gpu
+check_negative "$negative_r9_nonzero_begin_prefix" mutated_mapping_begins_with_zero_prefix_v1 r9-nonzero-begin-prefix
+check_negative "$negative_r9_map_prefix_substitution" mutated_failed_map_retains_exact_prefix_v1 r9-map-prefix-substitution
+check_negative "$negative_r9_unmap_prefix_addition" mutated_compensation_retains_absolute_cumulative_prefix_v1 r9-unmap-prefix-addition
+check_negative "$negative_r9_early_compensation_release" mutated_partial_compensation_blocks_release_v1 r9-early-compensation-release
+check_negative "$negative_r9_incomplete_compensation" mutated_complete_compensation_releases_exact_prefix_v1 r9-incomplete-compensation
+check_negative "$negative_r9_reversed_route" mutated_reversed_xgmi_direction_is_rejected_v1 r9-reversed-route
+check_negative "$negative_r9_stale_topology" mutated_stale_topology_generation_blocks_route_v1 r9-stale-topology
+check_negative "$negative_r9_reset_fence_drop" mutated_reset_fence_is_required_for_route_v1 r9-reset-fence-drop
+check_negative "$negative_r9_artifact_substitution" mutated_machine_evidence_retains_artifact_v1 r9-artifact-substitution
+check_negative "$negative_r9_receipt_substitution" mutated_instruction_class_receipt_is_exact_v1 r9-receipt-substitution
+check_negative "$negative_r9_stale_dispatch" mutated_any_stale_surface_blocks_dispatch_v1 r9-stale-dispatch
+check_negative "$negative_r9_incomplete_dependency" mutated_incomplete_dependency_blocks_evidence_dispatch_v1 r9-incomplete-dependency
+check_negative "$negative_r9_copy_inactive_mapping" mutated_xgmi_copy_requires_both_active_mappings_v1 r9-copy-inactive-mapping
+check_negative "$negative_r9_uncertain_copy_release" mutated_uncertain_xgmi_completion_retains_owners_v1 r9-uncertain-copy-release
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 mutations=45'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 mutations=60'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

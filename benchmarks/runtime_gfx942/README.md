@@ -123,6 +123,46 @@ The load gate samples each selected GPU immediately before and after every
 phase and refuses the result when either boundary exceeds the configured
 threshold. It cannot detect an unrelated workload that starts and stops wholly
 inside a phase; continuous machine exclusivity remains an external benchmark
-condition. The harness does not benchmark peer copy: the implemented KFD
-facade peer operation is host staged, while HIP/HSA native peer operations
-would be a different mechanism.
+condition. This harness does not benchmark peer copy: the KFD facade peer
+operation is host staged, while HIP/HSA native peer operations would be a
+different mechanism.
+
+## Native XGMI Peer Qualification
+
+Run the matched low-level KFD, HSA, and HIP native peer-copy harness on two idle
+MI300X GPUs:
+
+```sh
+benchmarks/runtime_gfx942/run-xgmi-peer-mi300x.sh
+```
+
+The defaults use physical GPU indices 0 and 1, 1 MiB transfers, depths 1 and
+16, 10 warmups, and 30 samples. Override them with `FE2O3_XGMI_GPU_INDEX`,
+`FE2O3_XGMI_PEER_GPU_INDEX`, `FE2O3_XGMI_BYTES`, `FE2O3_XGMI_DEPTHS`,
+`FE2O3_XGMI_WARMUPS`, and `FE2O3_XGMI_SAMPLES`. The release load ceiling is 5%
+per selected GPU and may be lowered or raised with
+`FE2O3_XGMI_MAX_BUSY_PERCENT`; the per-phase outer timeout defaults to 120
+seconds and is controlled by `FE2O3_XGMI_PHASE_TIMEOUT_SECONDS`.
+
+All lanes use the same exact physical unique IDs and require
+`gfx942:xnack-`. KFD admits a retained directional type-11 topology link and
+creates a BY_ENG_ID queue on its one-bit recommended XGMI engine. HSA uses
+`hsa_amd_memory_async_copy`; HIP uses `hipMemcpyPeerAsync` after exact peer
+access checks. Both directions are timed separately. Allocation, access setup,
+mapping, changing per-round source patterns, destination poisoning, readback,
+canary checks, and teardown are outside timing. Every timing row covers all
+depth submissions through observation of all completions and reports p50/p95
+nanoseconds plus p50 aggregate GB/s.
+
+The runner requires a clean checkout, prints the Git commit and complete
+software/device context, checks both GPUs immediately before and after every
+backend phase, and removes its unique temporary build directory on every exit
+path. A passing result measures only that exact pair, transfer profile, commit,
+and software stack. It does not establish facade integration, general topology
+support, or system-coherent atomic behavior.
+
+This peer-copy harness does not exercise the separate structure-required
+Worker V3 dispatch wrapper and makes no atomic or collective
+performance claim. That wrapper admits only its finite integer-atomic,
+LDS-primitive, and workgroup-barrier structure roster; all `_DPP` spellings
+currently fail closed.

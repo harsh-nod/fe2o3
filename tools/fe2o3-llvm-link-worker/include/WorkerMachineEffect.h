@@ -109,6 +109,10 @@ enum class PhysicalMachineMemoryAccess : uint8_t {
   None = 0,
   Read = 1,
   Write = 2,
+  ReadWrite = 3,
+  WorkgroupRead = 4,
+  WorkgroupWrite = 5,
+  WorkgroupReadWrite = 6,
 };
 
 struct PhysicalMachineBasicBlockTrace {
@@ -150,6 +154,12 @@ struct PhysicalMachineEffectEvidence {
   std::vector<PhysicalMachineBasicBlockTrace> Blocks;
   std::vector<PhysicalMachineInstructionTrace> Instructions;
 };
+
+// Closed structural opcode grammars used by analysis and native tests.
+uint16_t classifyGfx942GlobalAtomicOpcodeWidth(llvm::StringRef Name);
+uint16_t classifyGfx942DsAtomicOpcodeWidth(llvm::StringRef Name);
+bool classifyGfx942DsCollectiveOpcode(llvm::StringRef Name);
+bool classifyGfx942WorkgroupBarrierOpcode(llvm::StringRef Name);
 
 PhysicalMachineEffectIdentities physicalMachineEffectIdentities();
 

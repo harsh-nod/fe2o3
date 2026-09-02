@@ -133,16 +133,61 @@ pub enum PhysicalMachineBranchKindV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum PhysicalMachineMemoryAccessV1 {
     None,
-    Read { byte_width: u16 },
-    Write { byte_width: u16 },
+    /// One global-memory read.
+    Read {
+        byte_width: u16,
+    },
+    /// One global-memory write.
+    Write {
+        byte_width: u16,
+    },
+    /// One worker-classified global read/write site.
+    ReadWrite {
+        byte_width: u16,
+    },
+    /// One LDS/workgroup-memory read. This is not a global effect.
+    WorkgroupRead {
+        byte_width: u16,
+    },
+    /// One LDS/workgroup-memory write. This is not a global effect.
+    WorkgroupWrite {
+        byte_width: u16,
+    },
+    /// One worker-classified LDS/workgroup read/write site.
+    WorkgroupReadWrite {
+        byte_width: u16,
+    },
 }
 
 impl PhysicalMachineMemoryAccessV1 {
     pub const fn byte_width(self) -> u16 {
         match self {
             Self::None => 0,
-            Self::Read { byte_width } | Self::Write { byte_width } => byte_width,
+            Self::Read { byte_width }
+            | Self::Write { byte_width }
+            | Self::ReadWrite { byte_width }
+            | Self::WorkgroupRead { byte_width }
+            | Self::WorkgroupWrite { byte_width }
+            | Self::WorkgroupReadWrite { byte_width } => byte_width,
         }
+    }
+
+    /// Returns whether the instruction accesses process-global GPU memory.
+    pub const fn is_global(self) -> bool {
+        matches!(
+            self,
+            Self::Read { .. } | Self::Write { .. } | Self::ReadWrite { .. }
+        )
+    }
+
+    /// Returns whether the instruction accesses workgroup-local LDS memory.
+    pub const fn is_workgroup(self) -> bool {
+        matches!(
+            self,
+            Self::WorkgroupRead { .. }
+                | Self::WorkgroupWrite { .. }
+                | Self::WorkgroupReadWrite { .. }
+        )
     }
 }
 
@@ -503,6 +548,10 @@ fn decode_instruction(
         (0, 0) => PhysicalMachineMemoryAccessV1::None,
         (1, 1..) => PhysicalMachineMemoryAccessV1::Read { byte_width },
         (2, 1..) => PhysicalMachineMemoryAccessV1::Write { byte_width },
+        (3, 1..) => PhysicalMachineMemoryAccessV1::ReadWrite { byte_width },
+        (4, 1..) => PhysicalMachineMemoryAccessV1::WorkgroupRead { byte_width },
+        (5, 1..) => PhysicalMachineMemoryAccessV1::WorkgroupWrite { byte_width },
+        (6, 1..) => PhysicalMachineMemoryAccessV1::WorkgroupReadWrite { byte_width },
         _ => return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess),
     };
     validate_instruction_shape(branch_kind, flags, memory_access)?;
@@ -546,11 +595,8 @@ fn validate_instruction_shape(
     memory_access: PhysicalMachineMemoryAccessV1,
 ) -> Result<(), PhysicalMachineTraceEvidenceErrorV1> {
     // LLVM's MC `Barrier` flag is a scheduling/control-flow barrier and is
-    // commonly set on branches. Workgroup synchronization opcodes are rejected
-    // separately by the native analyzer's closed side-effect policy.
-    if flags.may_load() && flags.may_store() {
-        return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidInstructionFlags);
-    }
+    // commonly set on branches. The native analyzer separately attests its
+    // closed S_BARRIER spellings because LLVM does not set that MC flag there.
     if flags.may_trap()
         && (branch_kind != PhysicalMachineBranchKindV1::None
             || memory_access != PhysicalMachineMemoryAccessV1::None)
@@ -569,6 +615,22 @@ fn validate_instruction_shape(
             }
         }
         PhysicalMachineMemoryAccessV1::Write { .. } => {
+            if flags.may_load() || !flags.may_store() {
+                return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess);
+            }
+        }
+        PhysicalMachineMemoryAccessV1::ReadWrite { .. }
+        | PhysicalMachineMemoryAccessV1::WorkgroupReadWrite { .. } => {
+            if !flags.may_load() || !flags.may_store() {
+                return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess);
+            }
+        }
+        PhysicalMachineMemoryAccessV1::WorkgroupRead { .. } => {
+            if !flags.may_load() || flags.may_store() {
+                return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess);
+            }
+        }
+        PhysicalMachineMemoryAccessV1::WorkgroupWrite { .. } => {
             if flags.may_load() || !flags.may_store() {
                 return Err(PhysicalMachineTraceEvidenceErrorV1::InvalidMemoryAccess);
             }
@@ -916,6 +978,32 @@ fn validate_effect_correspondence(
                             byte_width,
                         ));
                     }
+                    PhysicalMachineMemoryAccessV1::ReadWrite { byte_width } => {
+                        expected.push((
+                            entry.symbol(),
+                            function_symbol,
+                            instruction.instruction_offset,
+                            1,
+                            8,
+                        ));
+                        expected.push((
+                            entry.symbol(),
+                            function_symbol,
+                            instruction.instruction_offset,
+                            2,
+                            byte_width,
+                        ));
+                        expected.push((
+                            entry.symbol(),
+                            function_symbol,
+                            instruction.instruction_offset,
+                            3,
+                            byte_width,
+                        ));
+                    }
+                    PhysicalMachineMemoryAccessV1::WorkgroupRead { .. }
+                    | PhysicalMachineMemoryAccessV1::WorkgroupWrite { .. }
+                    | PhysicalMachineMemoryAccessV1::WorkgroupReadWrite { .. } => {}
                 }
                 if instruction.branch_kind == PhysicalMachineBranchKindV1::Return {
                     expected.push((

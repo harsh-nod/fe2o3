@@ -558,6 +558,9 @@ pub const KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID: u32 = 0x4;
 
 /// Exact ordinary SDMA inventory in the admitted MI300X gfx942 profile.
 pub const KFD_GFX942_SDMA_ENGINE_COUNT_V1: u32 = 2;
+pub const KFD_GFX942_SDMA_XGMI_ENGINE_COUNT_V1: u32 = 14;
+pub const KFD_GFX942_SDMA_TOTAL_ENGINE_COUNT_V1: u32 =
+    KFD_GFX942_SDMA_ENGINE_COUNT_V1 + KFD_GFX942_SDMA_XGMI_ENGINE_COUNT_V1;
 pub const KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1: u32 = 8;
 
 /// One ordinary SDMA engine admitted by the exact gfx942 two-engine profile.
@@ -587,6 +590,40 @@ pub const fn admit_kfd_gfx942_sdma_engine_id(
         });
     }
     Ok(KfdGfx942SdmaEngineId(engine_id))
+}
+
+/// One topology-recommended gfx942 XGMI SDMA engine in the BY_ENG_ID space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdGfx942SdmaXgmiEngineId(u32);
+
+impl KfdGfx942SdmaXgmiEngineId {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdGfx942SdmaXgmiEngineMaskError {
+    pub engine_mask: u64,
+}
+
+/// Decodes an exact one-bit topology recommendation into an XGMI engine.
+/// Ordinary engines 0 and 1 and bits beyond the 16-engine gfx942 inventory
+/// are rejected.
+pub const fn admit_kfd_gfx942_sdma_xgmi_engine_mask(
+    engine_mask: u64,
+) -> Result<KfdGfx942SdmaXgmiEngineId, KfdGfx942SdmaXgmiEngineMaskError> {
+    if engine_mask.count_ones() != 1 {
+        return Err(KfdGfx942SdmaXgmiEngineMaskError { engine_mask });
+    }
+    let engine_id = engine_mask.trailing_zeros();
+    if engine_id < KFD_GFX942_SDMA_ENGINE_COUNT_V1
+        || engine_id >= KFD_GFX942_SDMA_TOTAL_ENGINE_COUNT_V1
+    {
+        return Err(KfdGfx942SdmaXgmiEngineMaskError { engine_mask });
+    }
+    Ok(KfdGfx942SdmaXgmiEngineId(engine_id))
 }
 
 /// Maximum low-byte queue percentage accepted by the active driver.
@@ -1214,6 +1251,22 @@ impl KfdIoctlCreateQueueArgs {
         queue_percentage: KfdQueuePercentage,
         queue_priority: KfdQueuePriority,
         engine_id: KfdGfx942SdmaEngineId,
+    ) -> Self {
+        let mut args = Self::new_sdma(buffers, ring_size, gpu_id, queue_percentage, queue_priority);
+        args.queue_type = KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID;
+        args.sdma_engine_id = engine_id.value();
+        args
+    }
+
+    /// Builds a gfx942 XGMI queue targeted to the exact engine recommended by
+    /// one separately admitted directional topology link.
+    pub const fn new_sdma_xgmi_on_engine(
+        buffers: KfdSdmaQueueBuffers,
+        ring_size: KfdAqlQueueRingSize,
+        gpu_id: u32,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+        engine_id: KfdGfx942SdmaXgmiEngineId,
     ) -> Self {
         let mut args = Self::new_sdma(buffers, ring_size, gpu_id, queue_percentage, queue_priority);
         args.queue_type = KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID;

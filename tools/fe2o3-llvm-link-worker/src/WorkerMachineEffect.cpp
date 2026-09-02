@@ -1179,12 +1179,71 @@ std::optional<uint16_t> memoryWidth(StringRef Name) {
     return 2;
   if (Name.contains("BYTE"))
     return 1;
+  if (Name.contains("B64") || Name.contains("U64") || Name.contains("_X2"))
+    return 8;
+  if (Name.contains("B32") || Name.contains("U32") || Name.contains("I32"))
+    return 4;
   return std::nullopt;
 }
 
+uint16_t supportedGlobalAtomicWidth(StringRef Name) {
+  if (!Name.consume_front("GLOBAL_ATOMIC_"))
+    return 0;
+  Name.consume_back("_vi");
+  Name.consume_back("_SADDR");
+  Name.consume_back("_RTN");
+  bool Wide = Name.consume_back("_X2");
+  bool Operation = StringSwitch<bool>(Name)
+                       .Cases({"CMPSWAP", "SWAP", "ADD"}, true)
+                       .Cases({"SUB", "AND", "OR"}, true)
+                       .Cases({"XOR", "SMIN", "UMIN"}, true)
+                       .Cases({"SMAX", "UMAX"}, true)
+                       .Default(false);
+  return Operation ? (Wide ? 8 : 4) : 0;
+}
+
+uint16_t supportedDsAtomicWidth(StringRef Name) {
+  if (!Name.consume_front("DS_"))
+    return 0;
+  Name.consume_back("_vi");
+  return StringSwitch<uint16_t>(Name)
+      .Cases({"CMPST_B32", "CMPST_RTN_B32", "WRXCHG_B32"}, 4)
+      .Case("WRXCHG_RTN_B32", 4)
+      .Cases({"CMPST_B64", "CMPST_RTN_B64", "WRXCHG_B64"}, 8)
+      .Case("WRXCHG_RTN_B64", 8)
+      .Cases({"ADD_U32", "ADD_RTN_U32", "SUB_U32"}, 4)
+      .Cases({"SUB_RTN_U32", "RSUB_U32", "RSUB_RTN_U32"}, 4)
+      .Cases({"ADD_U64", "ADD_RTN_U64", "SUB_U64"}, 8)
+      .Cases({"SUB_RTN_U64", "RSUB_U64", "RSUB_RTN_U64"}, 8)
+      .Cases({"AND_B32", "AND_RTN_B32", "OR_B32"}, 4)
+      .Cases({"OR_RTN_B32", "XOR_B32", "XOR_RTN_B32"}, 4)
+      .Cases({"AND_B64", "AND_RTN_B64", "OR_B64"}, 8)
+      .Cases({"OR_RTN_B64", "XOR_B64", "XOR_RTN_B64"}, 8)
+      .Cases({"MIN_I32", "MIN_RTN_I32", "MIN_U32"}, 4)
+      .Cases({"MIN_RTN_U32", "MAX_I32", "MAX_RTN_I32"}, 4)
+      .Cases({"MAX_U32", "MAX_RTN_U32"}, 4)
+      .Cases({"MIN_I64", "MIN_RTN_I64", "MIN_U64"}, 8)
+      .Cases({"MIN_RTN_U64", "MAX_I64", "MAX_RTN_I64"}, 8)
+      .Cases({"MAX_U64", "MAX_RTN_U64"}, 8)
+      .Default(0);
+}
+
+bool supportedDsCollectivePrimitive(StringRef Name) {
+  return StringSwitch<bool>(Name)
+      .Cases({"DS_READ_B32", "DS_READ_B32_vi"}, true)
+      .Cases({"DS_WRITE_B32", "DS_WRITE_B32_vi"}, true)
+      .Cases({"DS_BPERMUTE_B32", "DS_BPERMUTE_B32_vi"}, true)
+      .Cases({"DS_PERMUTE_B32", "DS_PERMUTE_B32_vi"}, true)
+      .Cases({"DS_SWIZZLE_B32", "DS_SWIZZLE_B32_vi"}, true)
+      .Default(false);
+}
+
+bool supportedWorkgroupBarrier(StringRef Name) {
+  return Name == "S_BARRIER" || Name == "S_BARRIER_vi";
+}
+
 bool forbiddenOpcodeFamily(StringRef Name) {
-  return Name.contains("ATOMIC") || Name.starts_with("DS_") ||
-         Name.starts_with("FLAT_") || Name.starts_with("BUFFER_") ||
+  return Name.starts_with("FLAT_") || Name.starts_with("BUFFER_") ||
          Name.starts_with("TBUFFER_") || Name.starts_with("IMAGE_") ||
          Name.starts_with("SCRATCH_") || Name.starts_with("S_SENDMSG") ||
          Name.starts_with("S_SLEEP") || Name.starts_with("S_DEBUG") ||
@@ -1193,7 +1252,7 @@ bool forbiddenOpcodeFamily(StringRef Name) {
          Name.starts_with("S_MEMREALTIME") ||
          Name.starts_with("S_TTRACEDATA") || Name.starts_with("S_WAKEUP") ||
          Name.starts_with("S_HALT") || Name.starts_with("S_RFE") ||
-         Name.starts_with("S_BARRIER") || Name.starts_with("EXP");
+         Name.starts_with("EXP");
 }
 
 std::string instructionDescription(const DecodedInstruction &Instruction,
@@ -1840,6 +1899,23 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
         static_cast<uint32_t>(BlockOrdinal), Mc);
     if (!InstructionTrace)
       return InstructionTrace.takeError();
+    uint16_t GlobalAtomicWidth = classifyGfx942GlobalAtomicOpcodeWidth(Name);
+    uint16_t DsAtomicWidth = classifyGfx942DsAtomicOpcodeWidth(Name);
+    bool GlobalAtomic = GlobalAtomicWidth != 0;
+    bool DsAtomic = DsAtomicWidth != 0;
+    bool DsCollective = classifyGfx942DsCollectiveOpcode(Name);
+    bool WorkgroupBarrier = classifyGfx942WorkgroupBarrierOpcode(Name);
+    if (Name.contains("ATOMIC") && !GlobalAtomic)
+      return analysisError(Twine("unsupported atomic opcode classification ") +
+                           Name + " in " + Function.Name);
+    if (Name.starts_with("DS_") && !DsAtomic && !DsCollective)
+      return analysisError(
+          Twine("unsupported collective/atomic DS opcode classification ") +
+          Name + " in " + Function.Name);
+    if (Name.starts_with("S_BARRIER") && !WorkgroupBarrier)
+      return analysisError(
+          Twine("unsupported collective barrier opcode classification ") +
+          Name + " in " + Function.Name);
     if (forbiddenOpcodeFamily(Name))
       return analysisError(Twine("unsupported opcode family ") + Name + " in " +
                            Function.Name);
@@ -1912,6 +1988,54 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       if (!CanonicalTarget)
         return CanonicalTarget.takeError();
       InstructionTrace->BranchTarget = *CanonicalTarget;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (GlobalAtomic || DsAtomic) {
+      if (!Descriptor.mayLoad() || !Descriptor.mayStore())
+        return analysisError(Twine("atomic opcode lacks read-write MC flags ") +
+                             Name + " in " + Function.Name);
+      uint16_t Width = GlobalAtomic ? GlobalAtomicWidth : DsAtomicWidth;
+      if (GlobalAtomic) {
+        Result.Effects.push_back(
+            {*CanonicalOffset, PhysicalMachineEffectKind::GlobalAddress, 8});
+        Result.Effects.push_back(
+            {*CanonicalOffset, PhysicalMachineEffectKind::GlobalRead, Width});
+        Result.Effects.push_back(
+            {*CanonicalOffset, PhysicalMachineEffectKind::GlobalWrite, Width});
+        InstructionTrace->MemoryAccess = PhysicalMachineMemoryAccess::ReadWrite;
+      } else {
+        InstructionTrace->MemoryAccess =
+            PhysicalMachineMemoryAccess::WorkgroupReadWrite;
+      }
+      InstructionTrace->MemoryWidth = Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (DsCollective) {
+      auto Width = memoryWidth(Name);
+      if (!Width || *Width != 4)
+        return analysisError(Twine("unknown collective LDS width for ") + Name);
+      bool Read = Descriptor.mayLoad();
+      bool Write = Descriptor.mayStore();
+      if (!Read && !Write)
+        return analysisError(Twine("collective LDS opcode lacks MC memory flags ") +
+                             Name + " in " + Function.Name);
+      InstructionTrace->MemoryAccess =
+          Read && Write   ? PhysicalMachineMemoryAccess::WorkgroupReadWrite
+          : Read          ? PhysicalMachineMemoryAccess::WorkgroupRead
+                          : PhysicalMachineMemoryAccess::WorkgroupWrite;
+      InstructionTrace->MemoryWidth = *Width;
+      Result.Instructions.push_back(std::move(*InstructionTrace));
+      continue;
+    }
+    if (WorkgroupBarrier) {
+      if (Descriptor.mayLoad() || Descriptor.mayStore())
+        return analysisError(Twine("collective barrier has invalid MC flags ") +
+                             Name + " in " + Function.Name);
+      // LLVM does not mark gfx942 S_BARRIER as an MC scheduling barrier. This
+      // bit records the worker's exact closed-opcode classification instead.
+      InstructionTrace->Flags |= InstructionBarrier;
       Result.Instructions.push_back(std::move(*InstructionTrace));
       continue;
     }
@@ -2050,6 +2174,22 @@ Error validateBudget(const PhysicalMachineEffectEntryRequest &Entry,
 }
 
 } // namespace
+
+uint16_t classifyGfx942GlobalAtomicOpcodeWidth(StringRef Name) {
+  return supportedGlobalAtomicWidth(Name);
+}
+
+uint16_t classifyGfx942DsAtomicOpcodeWidth(StringRef Name) {
+  return supportedDsAtomicWidth(Name);
+}
+
+bool classifyGfx942DsCollectiveOpcode(StringRef Name) {
+  return supportedDsCollectivePrimitive(Name);
+}
+
+bool classifyGfx942WorkgroupBarrierOpcode(StringRef Name) {
+  return supportedWorkgroupBarrier(Name);
+}
 
 bool matchesPhysicalMachineEffectMetadataTargetV1(StringRef Target) {
   return Target == PhysicalProfileMetadataTarget;

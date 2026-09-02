@@ -102,6 +102,30 @@ impl LinuxMemoryBackend {
             .map_or((None, None), |gpu| gpu.sdma_engine_inventory())
     }
 
+    pub(super) fn gpu_id_value(&self) -> u32 {
+        self.gpu_id()
+    }
+
+    pub(super) fn retained_xgmi_route(
+        &self,
+        source_gpu_id: u32,
+        destination_gpu_id: u32,
+    ) -> Result<crate::topology::Gfx942XgmiRouteV1, MemorySessionError> {
+        self.device
+            .topology_snapshot()
+            .topology()
+            .admit_gfx942_xgmi_route(source_gpu_id, destination_gpu_id)
+            .map_err(|_| MemorySessionError::KernelResultMalformed("gfx942 XGMI topology route"))
+    }
+
+    pub(super) fn check_xgmi_route_currentness(
+        &mut self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.device.check_gfx942_xgmi_route_currentness(route)?;
+        Ok(())
+    }
+
     pub(super) fn check_gfx942_sdma_topology_capability_currentness(
         &mut self,
     ) -> Result<(), MemorySessionError> {
@@ -205,20 +229,37 @@ impl LinuxMemoryBackend {
     fn exact_progress(
         operation: &'static str,
         handle: u64,
-        gpu_id: u32,
+        device_ids: &[u32],
         old_success: u32,
         unmap: bool,
         kfd: &rustix::fd::OwnedFd,
     ) -> KernelOutcome<u32> {
-        let device_ids = [gpu_id];
+        let Some(n_devices) = u32::try_from(device_ids.len())
+            .ok()
+            .filter(|count| *count != 0)
+        else {
+            return KernelOutcome {
+                value: old_success,
+                result: Err(MemorySessionError::KernelResultMalformed(
+                    "empty or oversized GPU-ID mapping roster",
+                )),
+            };
+        };
+        if old_success > n_devices
+            || device_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            || device_ids.contains(&0)
+        {
+            return KernelOutcome {
+                value: old_success,
+                result: Err(MemorySessionError::KernelResultMalformed(
+                    "noncanonical GPU-ID mapping roster or prefix",
+                )),
+            };
+        }
         let pointer = device_ids.as_ptr() as usize as u64;
         if unmap {
-            let mut args = KfdIoctlUnmapMemoryFromGpuArgs::retry(
-                handle,
-                pointer,
-                device_ids.len() as u32,
-                old_success,
-            );
+            let mut args =
+                KfdIoctlUnmapMemoryFromGpuArgs::retry(handle, pointer, n_devices, old_success);
             // SAFETY: the opcode and LP64 layout are frozen by the KFD 1.18
             // oracle. `device_ids` and the initialized in/out record remain
             // live and immutably located for the complete call.
@@ -229,9 +270,9 @@ impl LinuxMemoryBackend {
                 .map_err(|source| Self::syscall(operation, source));
             if args.handle != handle
                 || args.device_ids_array_ptr != pointer
-                || args.n_devices != 1
+                || args.n_devices != n_devices
                 || args.n_success < old_success
-                || args.n_success > 1
+                || args.n_success > n_devices
             {
                 return KernelOutcome {
                     value: args.n_success,
@@ -245,12 +286,8 @@ impl LinuxMemoryBackend {
                 result,
             }
         } else {
-            let mut args = KfdIoctlMapMemoryToGpuArgs::retry(
-                handle,
-                pointer,
-                device_ids.len() as u32,
-                old_success,
-            );
+            let mut args =
+                KfdIoctlMapMemoryToGpuArgs::retry(handle, pointer, n_devices, old_success);
             // SAFETY: same reviewed nested-pointer contract as the unmap path.
             let request = unsafe { Updater::<MAP_MEMORY_OPCODE, _>::new(&mut args) };
             // SAFETY: request and backing array stay live; output is exclusive.
@@ -258,9 +295,9 @@ impl LinuxMemoryBackend {
                 .map_err(|source| Self::syscall(operation, source));
             if args.handle != handle
                 || args.device_ids_array_ptr != pointer
-                || args.n_devices != 1
+                || args.n_devices != n_devices
                 || args.n_success < old_success
-                || args.n_success > 1
+                || args.n_success > n_devices
             {
                 return KernelOutcome {
                     value: args.n_success,
@@ -304,6 +341,11 @@ impl MemoryBackend for LinuxMemoryBackend {
 
     fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
         self.device.check_operational_currentness()?;
+        Ok(())
+    }
+
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.device.check_gfx942_xgmi_publication_currentness()?;
         Ok(())
     }
 
@@ -540,10 +582,11 @@ impl MemoryBackend for LinuxMemoryBackend {
     }
 
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
+        let gpu_ids = [self.gpu_id()];
         Self::exact_progress(
             "AMDKFD_IOC_MAP_MEMORY_TO_GPU",
             handle,
-            self.gpu_id(),
+            &gpu_ids,
             old_success,
             false,
             &self.device.kfd.opened.fd,
@@ -551,10 +594,43 @@ impl MemoryBackend for LinuxMemoryBackend {
     }
 
     fn unmap_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
+        let gpu_ids = [self.gpu_id()];
         Self::exact_progress(
             "AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU",
             handle,
-            self.gpu_id(),
+            &gpu_ids,
+            old_success,
+            true,
+            &self.device.kfd.opened.fd,
+        )
+    }
+
+    fn map_gpu_ids(
+        &mut self,
+        handle: u64,
+        gpu_ids: &[u32],
+        old_success: u32,
+    ) -> KernelOutcome<u32> {
+        Self::exact_progress(
+            "AMDKFD_IOC_MAP_MEMORY_TO_GPU(multi-GPU)",
+            handle,
+            gpu_ids,
+            old_success,
+            false,
+            &self.device.kfd.opened.fd,
+        )
+    }
+
+    fn unmap_gpu_ids(
+        &mut self,
+        handle: u64,
+        gpu_ids: &[u32],
+        old_success: u32,
+    ) -> KernelOutcome<u32> {
+        Self::exact_progress(
+            "AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU(multi-GPU)",
+            handle,
+            gpu_ids,
             old_success,
             true,
             &self.device.kfd.opened.fd,

@@ -28,6 +28,7 @@ mod memory_pool;
 mod model;
 mod multi_device;
 mod queue_lifecycle;
+mod r9_native_evidence;
 mod typed_async;
 
 pub use async_queue::*;
@@ -41,6 +42,7 @@ pub use memory_pool::*;
 pub use model::*;
 pub use multi_device::*;
 pub use queue_lifecycle::*;
+pub use r9_native_evidence::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -61,6 +63,8 @@ mod memory_pool_tests;
 mod multi_device_tests;
 #[cfg(test)]
 mod queue_lifecycle_tests;
+#[cfg(test)]
+mod r9_native_evidence_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

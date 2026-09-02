@@ -628,12 +628,38 @@ refine this Rust code. Ioctl truth, doorbell MMIO, CPU/GPU coherence, firmware
 consumption, completion, liveness, and performance remain contracted or
 measured.
 
-The [R8 native-feature boundary](docs/r8-native-xgmi-atomics-collectives-boundary-v1.md)
-defines the checked model support and the remaining native gates for direct
-XGMI peer copies, system-scope atomics, and wave/subgroup/workgroup
-collectives. In particular, KFD atomics and collectives are code-object
-semantics rather than standalone ioctls, and the current topology snapshot
-retains link counts but not exact directional link records.
+### R9 native XGMI and machine-structure admission
+
+The [R9 boundary](docs/r9-native-xgmi-machine-structure-v1.md) defines a
+bounded low-level native XGMI path. Topology discovery retains exact
+directional link records. Route admission binds one enabled type-11 XGMI
+`io_links` edge, same-hive gfx942 endpoints, nonzero bandwidth, the exact
+2+14-engine inventory, and one topology-recommended XGMI engine. PUBLIC HBM
+owners map an exact canonical two-GPU array with cumulative-prefix recovery;
+an errored full map is cleanup-only and an errored full unmap quarantines
+without granting free authority. A BY_ENG_ID XGMI SDMA queue exposes
+nonblocking bounded submission and exact completion custody in both
+directions. A bounded batch has one full topology-currentness envelope, while
+each packet performs its own prospective reset checks and doorbell store. A
+prepared multi-packet single-doorbell publication and topology-safe striping
+across XGMI engines remain open performance work.
+
+The authenticated LLVM/MC analyzer separately classifies a closed set of
+global/LDS integer RMW atomic instructions and collective building blocks. Its
+move-only receipt binds exact payload, descriptor, entry, reachable machine
+sites, encodings, widths, and memory classes, then matches those coordinates
+to a loader-prepared dispatch. The reviewed collective structure roster covers
+exact LDS read/write/permutation and workgroup-barrier spellings; all `_DPP`
+spellings are rejected. The safe structure-required runtime wrapper consumes
+the applied receipt, independent Worker V3 authority, and a checked device,
+delegates to the sole authorized dispatch transition, and returns the retained
+structure with the normal result. This is Checked machine-structure evidence.
+It does not prove opcode semantics, ordering, scope, convergence, compiler
+refinement, coherence, or hardware behavior and itself grants no load or
+launch authority. KFD atomics and collectives remain code-object behavior
+rather than standalone ioctls. Worker V3 remains responsible for exact
+semantic and launch authority; concrete device, queue, publication, and
+completion custody remains with the native owner.
 
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,

@@ -77,6 +77,41 @@ void require(bool Condition, StringRef Message) {
     fail(Message);
 }
 
+void closedAtomicCollectiveOpcodeGrammarIsExact() {
+  require(classifyGfx942GlobalAtomicOpcodeWidth("GLOBAL_ATOMIC_ADD") == 4 &&
+              classifyGfx942GlobalAtomicOpcodeWidth(
+                  "GLOBAL_ATOMIC_ADD_SADDR_vi") == 4 &&
+              classifyGfx942GlobalAtomicOpcodeWidth(
+                  "GLOBAL_ATOMIC_ADD_RTN_vi") == 4 &&
+              classifyGfx942GlobalAtomicOpcodeWidth(
+                  "GLOBAL_ATOMIC_ADD_X2_RTN_SADDR_vi") == 8,
+          "closed global-atomic spellings changed");
+  for (StringRef Opcode : {"GLOBAL_ATOMIC_ADD_FUTURE_vi",
+                           "GLOBAL_ATOMIC_ADD_SADDR_FUTURE_vi",
+                           "GLOBAL_ATOMIC_ADD_SADDR_RTN_vi",
+                           "GLOBAL_ATOMIC_ADD_vi_SADDR",
+                           "GLOBAL_ATOMIC_ADD_X2_X2_vi"})
+    require(classifyGfx942GlobalAtomicOpcodeWidth(Opcode) == 0,
+            "unknown global-atomic suffix was admitted");
+
+  require(classifyGfx942DsAtomicOpcodeWidth("DS_ADD_U32_vi") == 4 &&
+              classifyGfx942DsAtomicOpcodeWidth("DS_ADD_RTN_U64_vi") == 8,
+          "closed DS-atomic spellings changed");
+  for (StringRef Opcode : {"DS_ADD_FUTURE_vi", "DS_ADD_U32_FUTURE_vi",
+                           "DS_ADD_U32_vi_FUTURE"})
+    require(classifyGfx942DsAtomicOpcodeWidth(Opcode) == 0,
+            "unknown DS-atomic suffix was admitted");
+
+  require(classifyGfx942DsCollectiveOpcode("DS_READ_B32") &&
+              classifyGfx942DsCollectiveOpcode("DS_BPERMUTE_B32_vi") &&
+              !classifyGfx942DsCollectiveOpcode("DS_READ_B32_FUTURE_vi") &&
+              !classifyGfx942DsCollectiveOpcode("DS_READ2_B32_vi"),
+          "closed DS-collective spellings changed");
+  require(classifyGfx942WorkgroupBarrierOpcode("S_BARRIER_vi") &&
+              !classifyGfx942WorkgroupBarrierOpcode("S_BARRIER_SIGNAL_vi"),
+          "closed workgroup-barrier spellings changed");
+}
+
 std::string takeError(Error ErrorValue) {
   return toString(std::move(ErrorValue));
 }
@@ -295,6 +330,44 @@ std::vector<uint8_t> makeTrapKernelBitcode() {
   BasicBlock *ZetaEntry = BasicBlock::Create(Context, "entry", Zeta);
   IRBuilder<> ZetaBuilder(ZetaEntry);
   ZetaBuilder.CreateStore(ConstantFP::get(F32, 2.0), Zeta->getArg(0));
+  ZetaBuilder.CreateRetVoid();
+
+  SmallVector<char, 0> Bytes;
+  raw_svector_ostream Stream(Bytes);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
+}
+
+std::vector<uint8_t> makeAtomicBarrierKernelBitcode() {
+  LLVMContext Context;
+  Module ModuleValue("physical-machine-atomic-barrier-fixture", Context);
+  auto Machine = createMachine();
+  ModuleValue.setTargetTriple(Triple(TripleName));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+
+  Type *I32 = Type::getInt32Ty(Context);
+  PointerType *GlobalPointer = PointerType::get(Context, 1);
+  FunctionType *AlphaType =
+      FunctionType::get(Type::getVoidTy(Context), {GlobalPointer}, false);
+  Function *Alpha = Function::Create(AlphaType, GlobalValue::ExternalLinkage,
+                                     "alpha", ModuleValue);
+  configureKernel(*Alpha, Context);
+  BasicBlock *AlphaEntry = BasicBlock::Create(Context, "entry", Alpha);
+  IRBuilder<> AlphaBuilder(AlphaEntry);
+  AlphaBuilder.CreateAtomicRMW(
+      AtomicRMWInst::Add, Alpha->getArg(0), ConstantInt::get(I32, 1), Align(4),
+      AtomicOrdering::Monotonic, SyncScope::System);
+  AlphaBuilder.CreateRetVoid();
+
+  FunctionType *ZetaType = FunctionType::get(Type::getVoidTy(Context), false);
+  Function *Zeta = Function::Create(ZetaType, GlobalValue::ExternalLinkage,
+                                    "zeta", ModuleValue);
+  configureKernel(*Zeta, Context);
+  BasicBlock *ZetaEntry = BasicBlock::Create(Context, "entry", Zeta);
+  IRBuilder<> ZetaBuilder(ZetaEntry);
+  ZetaBuilder.CreateCall(
+      ZetaType, InlineAsm::get(ZetaType, "s_barrier", "", true), {});
   ZetaBuilder.CreateRetVoid();
 
   SmallVector<char, 0> Bytes;
@@ -560,6 +633,61 @@ void trapSitesAreRetainedForSemanticDischarge() {
   if (!Bundle)
     fail(takeError(Bundle.takeError()));
   require(!Bundle->empty(), "trap analysis bundle is empty");
+}
+
+void atomicAndBarrierSitesRetainExactClosedClassifications() {
+  auto Payload = finalize(makeAtomicBarrierKernelBitcode());
+  auto Result = analyzeGfx942PhysicalMachineEffects(directRequest(Payload));
+  if (!Result)
+    fail(takeError(Result.takeError()));
+
+  auto Atomic = llvm::find_if(Result->Instructions, [](const auto &Instruction) {
+    return Instruction.FunctionSymbol == "alpha" &&
+           (Instruction.Opcode == "GLOBAL_ATOMIC_ADD" ||
+            Instruction.Opcode == "GLOBAL_ATOMIC_ADD_vi" ||
+            Instruction.Opcode == "GLOBAL_ATOMIC_ADD_SADDR_vi");
+  });
+  require(Atomic != Result->Instructions.end(),
+          "atomic fixture has no exact GLOBAL_ATOMIC_ADD instruction");
+  require((Atomic->Flags & ((1 << 0) | (1 << 1))) ==
+              ((1 << 0) | (1 << 1)) &&
+              Atomic->MemoryAccess == PhysicalMachineMemoryAccess::ReadWrite &&
+              Atomic->MemoryWidth == 4,
+          "atomic trace lost its exact read-write MC classification");
+  require(llvm::any_of(Result->Effects, [&](const auto &Effect) {
+            return Effect.EntrySymbol == "alpha" &&
+                   Effect.InstructionOffset == Atomic->InstructionOffset &&
+                   Effect.Kind == PhysicalMachineEffectKind::GlobalRead &&
+                   Effect.ByteWidth == 4;
+          }) &&
+              llvm::any_of(Result->Effects, [&](const auto &Effect) {
+                return Effect.EntrySymbol == "alpha" &&
+                       Effect.InstructionOffset == Atomic->InstructionOffset &&
+                       Effect.Kind == PhysicalMachineEffectKind::GlobalWrite &&
+                       Effect.ByteWidth == 4;
+              }),
+          "atomic site lacks matching global read/write effects");
+
+  auto Barrier =
+      llvm::find_if(Result->Instructions, [](const auto &Instruction) {
+        return Instruction.FunctionSymbol == "zeta" &&
+               (Instruction.Opcode == "S_BARRIER" ||
+                Instruction.Opcode == "S_BARRIER_vi");
+      });
+  require(Barrier != Result->Instructions.end(),
+          "collective fixture has no exact S_BARRIER instruction");
+  require((Barrier->Flags & (1 << 3)) != 0 &&
+              Barrier->MemoryAccess == PhysicalMachineMemoryAccess::None &&
+              Barrier->MemoryWidth == 0,
+          "barrier trace lost its exact MC classification");
+  auto EffectBytes = encodePhysicalMachineEffectEvidence(*Result);
+  if (!EffectBytes)
+    fail(takeError(EffectBytes.takeError()));
+  auto TraceBytes = encodePhysicalMachineTraceEvidence(*Result, *EffectBytes);
+  if (!TraceBytes)
+    fail(takeError(TraceBytes.takeError()));
+  require(!TraceBytes->empty(),
+          "atomic/barrier canonical trace encoding is empty");
 }
 
 void identityProbeBindsFreshChallenge() {
@@ -1619,12 +1747,14 @@ void scalarLoadWidthsUseExactMcEncodings() {
 int main(int ArgumentCount, char **ArgumentValues) {
   require(ArgumentCount == 1 || ArgumentCount == 2,
           "expected at most one HSACO output path");
+  closedAtomicCollectiveOpcodeGrammarIsExact();
   identityProbeBindsFreshChallenge();
   targetEnvelopeRejectsAlternatives();
   exactDynamicSymbolicDeclarationIsAccepted();
   physicalAnalysisDerivesDeterministicClosedEffects();
   backwardLoopCfgIsAcceptedGenerically();
   trapSitesAreRetainedForSemanticDischarge();
+  atomicAndBarrierSitesRetainExactClosedClassifications();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();
   loaderViewMutationsFailClosed();

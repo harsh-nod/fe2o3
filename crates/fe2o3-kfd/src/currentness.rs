@@ -168,6 +168,92 @@ impl ObservableDeviceCurrentnessV1 {
 }
 
 impl CheckedGfx942XnackMinusDevice {
+    pub(crate) fn check_gfx942_xgmi_publication_currentness(
+        &mut self,
+    ) -> Result<(), DeviceBindingError> {
+        if self.currentness_poisoned {
+            return Err(DeviceBindingError::CurrentnessFencePoisoned);
+        }
+        let result = self.check_gfx942_xgmi_publication_currentness_inner();
+        if result.is_err() {
+            self.currentness_poisoned = true;
+        }
+        result
+    }
+
+    fn check_gfx942_xgmi_publication_currentness_inner(
+        &mut self,
+    ) -> Result<(), DeviceBindingError> {
+        self.kfd
+            .opened
+            .ensure_process(std::process::id())
+            .map_err(DeviceBindingError::Kfd)?;
+        let process = crate::linux::observe_process_incarnation()?;
+        if process != self.process {
+            return Err(DeviceBindingError::ProcessIncarnationChanged);
+        }
+        self.reset_fence.check_clear()
+    }
+
+    pub(crate) fn check_gfx942_xgmi_route_currentness(
+        &mut self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), DeviceBindingError> {
+        if self.currentness_poisoned {
+            return Err(DeviceBindingError::CurrentnessFencePoisoned);
+        }
+        let result = self.check_gfx942_xgmi_route_currentness_inner(route);
+        if result.is_err() {
+            self.currentness_poisoned = true;
+        }
+        result
+    }
+
+    fn check_gfx942_xgmi_route_currentness_inner(
+        &mut self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), DeviceBindingError> {
+        self.kfd
+            .opened
+            .ensure_process(std::process::id())
+            .map_err(DeviceBindingError::Kfd)?;
+        let process_before = crate::linux::observe_process_incarnation()?;
+        if process_before != self.process {
+            return Err(DeviceBindingError::ProcessIncarnationChanged);
+        }
+        self.reset_fence.check_clear()?;
+        let selected_gpu = self.observation.kfd_gpu_id();
+        if !route.canonical_mapping_gpu_ids().contains(&selected_gpu) {
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "XGMI selected-device binding",
+            ));
+        }
+        let retained = self
+            .topology
+            .topology()
+            .admit_gfx942_xgmi_route(route.source_gpu_id(), route.destination_gpu_id())
+            .map_err(|_| {
+                DeviceBindingError::ObservableCurrentnessChanged("retained XGMI topology route")
+            })?;
+        let observed = crate::topology::discover_default_topology()?;
+        let observed_route = observed
+            .topology()
+            .admit_gfx942_xgmi_route(route.source_gpu_id(), route.destination_gpu_id())
+            .map_err(|_| {
+                DeviceBindingError::ObservableCurrentnessChanged("observed XGMI topology route")
+            })?;
+        if retained != route || observed_route != route {
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "directional XGMI topology route",
+            ));
+        }
+        let process_after = crate::linux::observe_process_incarnation()?;
+        if process_after != process_before || process_after != self.process {
+            return Err(DeviceBindingError::ProcessIncarnationChanged);
+        }
+        self.reset_fence.check_clear()
+    }
+
     /// Reobserves the additive SDMA topology sidecar without changing frozen
     /// base-device equality or admission semantics.
     pub(crate) fn check_gfx942_sdma_topology_capability_currentness(

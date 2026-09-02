@@ -1,8 +1,8 @@
 # Runtime model verification
 
 This directory contains the issue #137 Verus specifications and the additive R7
-asynchronous-resource and R8 execution-contract models. The authenticated runner proves sixty-seven
-obligations over finite abstract values
+asynchronous-resource, R8 execution-contract, and R9 native-evidence models.
+The authenticated runner proves eighty-one obligations over finite abstract values
 and traces. The materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
 lengths are not bounded by these proofs.
@@ -231,6 +231,71 @@ Its collective membership set is bounded to 256 positive participant
 identities, but proves no wave convergence, LDS behavior, numerical reduction,
 firmware progress, or cross-device communication.
 
+`r9_native_evidence_v1.rs` proves fourteen abstract mapping, XGMI-route, and
+machine-evidence obligations:
+
+1. a canonical one-through-64-entry KFD GPU-ID sequence is positive, strictly
+   ordered, and duplicate-free;
+2. mapping begins with the exact canonical device array and zero map/unmap
+   prefixes;
+3. a failed MAP outcome retains exactly the absolute cumulative successful
+   prefix reported for the full KFD GPU-ID roster;
+4. an admitted partial successful-compensation transition retains the absolute
+   cumulative prefix and remains unreleasable;
+5. the abstract successful-compensation transition releases only after its
+   absolute cumulative prefix equals the exact mapped prefix;
+6. an admitted XGMI route retains its exact source/destination device and
+   generation, topology generation, hive, directional IO-link type/index,
+   bandwidth, engine mask, selected engine, and reset-currentness coordinates;
+7. reversing the source and destination cannot satisfy directional route
+   currentness;
+8. a stale topology generation blocks XGMI route admission;
+9. matching machine evidence retains the exact artifact, gfx942 COV6 target,
+   symbol, descriptor, machine-code digest, checked instruction-class receipt,
+   declared semantic-contract identity, and kernel identity;
+10. substituting the checked instruction-class receipt rejects the evidence
+    binding;
+11. any stale device, code, mapping, queue, or reset-fence coordinate blocks
+    dispatch; and
+12. an evidence-bound dispatch publishes only when every exact binding is
+    current and its dependency frontier is complete;
+13. a native XGMI copy publishes only with two fully active mapping owners, an
+    exact current directional route and selected engine, and distinct
+    nonoverlapping source/destination ranges; and
+14. timeout or indeterminate XGMI completion quarantines the copy and retains
+    both exact mapping owners.
+
+The selected native route is one retained directional KFD `io_links` record.
+KFD `p2p_links` records remain part of the topology snapshot but are not a
+selected coordinate of the current `Gfx942XgmiRouteV1`, so the R9 route model
+does not invent a P2P-link ID. The executable model additionally checks that
+the recommended engine mask contains exactly one bit and that its index is the
+selected gfx942 XGMI SDMA engine. The Verus model retains the exact mask and
+engine coordinates but does not prove bit-level mask decoding.
+
+## R9 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract canonical mapping, successful compensation, route/copy currentness and custody, evidence equality, and dispatch gating | **Proved** | The fourteen theorems in `r9_native_evidence_v1.rs`; mathematical values only. The compensation theorem has no ioctl result-status input and does not prove errno-at-full-prefix handling. |
+| Executable `r9_native_evidence.rs` state machines and rejection tests | **Checked** | Rust tests cover absolute cumulative prefixes, including a retry after prior progress, failed-full-prefix quarantine, canonical arrays, directional topology, exact evidence equality, and stale dispatch rejection. There is no Rust-to-Verus refinement theorem. |
+| Instruction-class receipt | **Checked** | The model binds the digest of a separately checked decoder/classifier receipt. It does not prove decoded instructions implement the declared atomic or collective semantics. |
+| KFD topology, `n_success`, VM mapping ownership, queue selection, reset observations, firmware, and coherence | **Contracted** | A native adapter must authenticate observations, preserve owners, and fail closed on uncertain side effects. |
+| Compiler preservation and machine-code semantics | **Not established** | Artifact and receipt identities are bound exactly, but no theorem relates Rust/device-language semantics through LLVM to decoded gfx942 instructions. This is not machine-semantic refinement. |
+| Native XGMI transfer, atomic/collective results, progress, and performance | **Measured** | Exact-commit hardware qualification is evidence for the tested machine only; it is not a proof. |
+
+The native-copy theorem is not a refinement of the concrete SDMA queue state
+machine. In particular, a concrete batch reobserves full directional topology
+at its scope edges and checks both process/reset fences per operation, but does
+not rediscover sysfs topology for every packet. A concrete wait timeout may
+retain its exact ticket for retry instead of entering the abstract
+`Quarantined` phase, while a completion followed by failed currentness retains
+both mappings in a distinct completed-but-indeterminate result. The common
+proved safety property is custody: neither an uncertain abstract completion
+nor these concrete failure results authorize early mapping release. Per-packet
+topology currentness, the concrete ticket/record correspondence, and those
+concrete phase distinctions require a future Rust-to-Verus refinement.
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -271,8 +336,14 @@ device, eager copy publication, conflicting overlap, returning a fetch-add's
 new value instead of its old value, inverted dependency readiness, destination
 binding substitution, resource-generation substitution, destination-epoch
 substitution, omitted atomic alignment, dropped atomic coherence, early
-collective publication, and a duplicate collective member incorrectly advancing
-the phase. The launcher
+collective publication, a duplicate collective member incorrectly advancing
+the phase, a duplicate GPU ID in a canonical native mapping, nonzero initial
+mapping progress, addition of an absolute MAP or UNMAP cumulative prefix to its
+prior prefix, early or incomplete compensation,
+a reversed or stale XGMI route, loss of its reset fence, artifact or checked
+instruction-receipt substitution, stale dispatch evidence, publication with
+incomplete dependencies, copy publication with an inactive mapping, and owner
+release after uncertain XGMI completion. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after

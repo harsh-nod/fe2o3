@@ -1,5 +1,12 @@
 # R8 native XGMI, atomics, and collectives boundary
 
+This R8 gap analysis is retained for history. R9 implements the bounded
+low-level native XGMI path and authenticated machine-structure admission
+described in
+[`r9-native-xgmi-machine-structure-v1.md`](r9-native-xgmi-machine-structure-v1.md).
+The R9 document also records the remaining facade and semantic-refinement
+boundaries.
+
 This document separates the executable R8 model from native KFD authority.
 It is not a native-support claim.
 

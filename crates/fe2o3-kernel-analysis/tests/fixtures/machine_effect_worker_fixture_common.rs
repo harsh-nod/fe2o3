@@ -476,11 +476,37 @@ fn evidence(request: &Request) -> Vec<u8> {
         push_u64(&mut output, request.payload_bytes);
         push_u16(&mut output, 0);
     }
-    let effect_count = request.entries.len() as u32;
+    let semantic_mode = request
+        .payload
+        .first()
+        .copied()
+        .filter(|mode| (19..=26).contains(mode));
+    let global_atomic_fixture = matches!(semantic_mode, Some(19 | 20 | 23));
+    let global_read_fixture = semantic_mode == Some(24);
+    let effect_count = request.entries.len() as u32
+        * if global_atomic_fixture {
+            4
+        } else if global_read_fixture {
+            3
+        } else {
+            1
+        };
     push_u32(&mut output, effect_count);
     for entry in &request.entries {
-        let base = 0;
-        push_effect(&mut output, &entry.symbol, base, 4, 0);
+        if global_atomic_fixture {
+            push_effect(&mut output, &entry.symbol, 0, 1, 8);
+            push_effect(&mut output, &entry.symbol, 0, 2, 4);
+            push_effect(&mut output, &entry.symbol, 0, 3, 4);
+            push_effect(&mut output, &entry.symbol, 12, 4, 0);
+        } else if global_read_fixture {
+            push_effect(&mut output, &entry.symbol, 0, 1, 8);
+            push_effect(&mut output, &entry.symbol, 0, 2, 4);
+            push_effect(&mut output, &entry.symbol, 12, 4, 0);
+        } else if semantic_mode.is_some() && request.payload.len() == 16 {
+            push_effect(&mut output, &entry.symbol, 12, 4, 0);
+        } else {
+            push_effect(&mut output, &entry.symbol, 0, 4, 0);
+        }
     }
     set_length(&mut output, EVIDENCE_DOMAIN.len());
     output
@@ -502,35 +528,132 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
     output.extend_from_slice(&request.toolchain);
     push_u16(&mut output, 1);
 
+    let semantic_mode = request
+        .payload
+        .first()
+        .copied()
+        .filter(|mode| (19..=26).contains(mode));
+    let semantic_fixture = semantic_mode.is_some() && request.payload.len() == 16;
     push_u32(&mut output, request.entries.len() as u32);
     for entry in &request.entries {
         push_text(&mut output, &entry.symbol);
         push_u32(&mut output, 0);
         push_u64(&mut output, 0);
-        push_u32(&mut output, 1);
+        push_u32(&mut output, if semantic_fixture { 4 } else { 1 });
         push_u16(&mut output, 0);
     }
 
-    push_u32(&mut output, request.entries.len() as u32);
+    push_u32(
+        &mut output,
+        request.entries.len() as u32 * if semantic_fixture { 4 } else { 1 },
+    );
     for entry in &request.entries {
-        push_text(&mut output, &entry.symbol);
-        push_u64(&mut output, 0);
-        push_u32(&mut output, 0);
-        push_text(&mut output, "S_ENDPGM");
-        push_u16(&mut output, request.payload.len() as u16);
-        output.extend_from_slice(&request.payload);
-        push_u16(&mut output, 0);
-        push_u16(&mut output, 0);
-        push_u16(&mut output, 0);
-        push_u16(&mut output, 0);
-        output.push(4);
-        push_u64(&mut output, 0);
-        push_u16(&mut output, 1 << 2);
-        output.push(0);
-        push_u16(&mut output, 0);
+        if semantic_fixture {
+            let (opcode, flags, memory, width) = match semantic_mode.unwrap() {
+                19 => ("GLOBAL_ATOMIC_ADD_RTN_vi", (1 << 0) | (1 << 1), 3, 4),
+                20 => ("GLOBAL_ATOMIC_INC_RTN_vi", (1 << 0) | (1 << 1), 3, 4),
+                21 => ("DS_READ2_B32_vi", 1 << 0, 4, 4),
+                22 => ("S_BARRIER_SIGNAL_vi", 1 << 3, 0, 0),
+                23 => (
+                    "GLOBAL_ATOMIC_ADD_FUTURE_vi",
+                    (1 << 0) | (1 << 1),
+                    3,
+                    4,
+                ),
+                24 => ("GLOBAL_ATOMIC_ADD_RTN_vi", 1 << 0, 1, 4),
+                25 => ("DS_READ_B32_FUTURE_vi", 1 << 0, 4, 4),
+                26 => ("V_ADD_U32_DPP_FUTURE", 0, 0, 0),
+                _ => unreachable!(),
+            };
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                0,
+                opcode,
+                &request.payload[0..4],
+                0,
+                flags,
+                memory,
+                width,
+            );
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                4,
+                "DS_READ_B32_vi",
+                &request.payload[4..8],
+                0,
+                1 << 0,
+                4,
+                4,
+            );
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                8,
+                "S_BARRIER_vi",
+                &request.payload[8..12],
+                0,
+                1 << 3,
+                0,
+                0,
+            );
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                12,
+                "S_ENDPGM",
+                &request.payload[12..16],
+                4,
+                1 << 2,
+                0,
+                0,
+            );
+        } else {
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                0,
+                "S_ENDPGM",
+                &request.payload,
+                4,
+                1 << 2,
+                0,
+                0,
+            );
+        }
     }
     set_length(&mut output, TRACE_DOMAIN.len());
     output
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_trace_instruction(
+    output: &mut Vec<u8>,
+    symbol: &str,
+    offset: u64,
+    opcode: &str,
+    encoding: &[u8],
+    branch: u8,
+    flags: u16,
+    memory: u8,
+    width: u16,
+) {
+    push_text(output, symbol);
+    push_u64(output, offset);
+    push_u32(output, 0);
+    push_text(output, opcode);
+    push_u16(output, encoding.len() as u16);
+    output.extend_from_slice(encoding);
+    push_u16(output, 0);
+    push_u16(output, 0);
+    push_u16(output, 0);
+    push_u16(output, 0);
+    output.push(branch);
+    push_u64(output, 0);
+    push_u16(output, flags);
+    output.push(memory);
+    push_u16(output, width);
 }
 
 fn analysis_bundle(effects: &[u8], trace: &[u8]) -> Vec<u8> {

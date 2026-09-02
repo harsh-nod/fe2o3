@@ -232,8 +232,47 @@ atomic and collective roster. Those premises are caller declarations and the
 result remains `ModelOnly`; this is Checked admission evidence, not proof of
 the loaded instructions, GPU coherence, or execution.
 
+## Runtime R9 Status
+
+R9 implements a bounded low-level native XGMI path for `gfx942:xnack-`.
+Generation-retained topology now includes exact directional link records; route
+admission requires same-hive endpoints, one enabled type-11 XGMI edge with
+nonzero bandwidth, the exact ordinary/XGMI engine inventory, and one-bit
+recommended engine selection. PUBLIC HBM owners support canonical two-GPU
+mapping and unmapping with cumulative-prefix compensation. The directional
+BY_ENG_ID queue exposes move-only asynchronous submission, bounded depth, and
+completion-gated ownership return. The matched KFD/HSA/HIP benchmark validates
+changing patterns and canaries outside a common submit-through-completion
+interval under a two-GPU load gate.
+
+The authenticated LLVM/MC worker and Rust checker also admit a closed gfx942
+machine-instruction structure subset for integer RMW atomics, LDS access and
+permutation primitives, and workgroup barriers. All `_DPP` spellings remain
+rejected pending an exact reviewed roster and fixtures.
+
+The receipt binds exact payload, descriptor, entry, reachable instruction
+bytes, and primitive classifications to a loader-prepared dispatch. The safe
+structure-required execution wrapper then consumes that application together
+with independent Worker V3 authority and a checked device, delegates to the
+sole authorized runtime dispatch, and returns the retained structure with the
+completion result. The receipt remains Checked structural evidence and grants
+no load or launch authority: instruction semantics, compiler preservation,
+ordering/scope, convergence, and coherence are not proved by opcode
+classification. Worker V3 remains the semantic and launch authority.
+
+The additive R9 Verus model proves fourteen abstract mapping, compensation,
+route/copy currentness, custody, exact-evidence, and dispatch-publication
+obligations. Fifteen corresponding R9 mutations fail as expected; cumulative
+coverage is 81 proved obligations and 60 mutations. There is no Rust-to-Verus
+refinement theorem. KFD, firmware, XGMI, and coherence remain Contracted, and
+hardware correctness/performance become Measured only through the clean-commit
+idle-MI300X runner. See the
+[R9 claim boundary](../crates/fe2o3-kfd/docs/r9-native-xgmi-machine-structure-v1.md).
+
 Still open: multiple simultaneous compute dispatches on one KFD device,
 checked multi-queue SDMA striping and same-device bidirectional overlap,
-persistent compute allocations shared with the KFD SDMA engine, native XGMI
-peer mapping and copy, authenticated code-object semantic refinement, native
-system-coherence evidence, and broader atomic/collective language support.
+persistent facade compute allocations shared with SDMA/XGMI, routing
+`RuntimeContextV1` peer copies through the native owners, true authenticated
+source-to-machine semantic refinement, native system-coherence evidence,
+atomic load/store machine correspondence, and broader closed
+atomic/collective language support.
