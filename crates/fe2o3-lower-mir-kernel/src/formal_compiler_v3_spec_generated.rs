@@ -36,6 +36,10 @@ pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = 1;
 pub const FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS: u8 = 3;
 /// Exact ordered runtime-extent count; extents are not assumed equal.
 pub const FORMAL_COMPILER_V3_DYNAMIC_EXTENTS: u8 = 3;
+/// Exact predicate count in the ordered short-circuit guard chain.
+pub const FORMAL_COMPILER_V3_GUARD_PREDICATES: u8 = 3;
+/// The production guard is an ordered short-circuit chain.
+pub const FORMAL_COMPILER_V3_USES_ORDERED_SHORT_CIRCUIT_GUARD: bool = true;
 /// Every modeled access must be in bounds for the guarded path to execute.
 pub const FORMAL_COMPILER_V3_GUARDS_ALL_ACCESSES: bool = true;
 /// Every access byte offset is `gid * byte_width`.

@@ -18,6 +18,8 @@
   "disjoint_writes": 1,
   "guarded_allocations": 3,
   "dynamic_extents": 3,
+  "guard_predicates": 3,
+  "guard_topology": "ordered-short-circuit-chain",
   "guard_semantics": "all-accesses-in-bounds",
   "byte_offset_semantics": "gid-times-byte-width",
   "allocation_relation": "pairwise-disjoint",

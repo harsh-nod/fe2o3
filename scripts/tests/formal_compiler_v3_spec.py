@@ -67,6 +67,7 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
             ("helper_branch_predicate", "xor-not-equal-zero"),
             ("helper_nonzero_result", "xor-u32"),
             ("guard_semantics", "any-access-in-bounds"),
+            ("guard_topology", "bitand-tree"),
             ("byte_offset_semantics", "gid-plus-byte-width"),
             ("allocation_relation", "may-alias"),
         ]:
@@ -79,6 +80,9 @@ class FormalCompilerV3SpecTests(unittest.TestCase):
         collapsed_extents = dict(self.spec)
         collapsed_extents["dynamic_extents"] = 1
         self.assert_rejected(collapsed_extents)
+        missing_predicate = dict(self.spec)
+        missing_predicate["guard_predicates"] = 2
+        self.assert_rejected(missing_predicate)
 
     def test_operation_roster_must_be_sorted_unique_and_nonempty(self) -> None:
         duplicate = dict(self.spec)

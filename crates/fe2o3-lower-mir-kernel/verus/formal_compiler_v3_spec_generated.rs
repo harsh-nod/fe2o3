@@ -20,6 +20,8 @@ pub open spec fn formal_compiler_v3_readonly_accesses() -> nat { 2 }
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat { 1 }
 pub open spec fn formal_compiler_v3_guarded_allocations() -> nat { 3 }
 pub open spec fn formal_compiler_v3_dynamic_extents() -> nat { 3 }
+pub open spec fn formal_compiler_v3_guard_predicates() -> nat { 3 }
+pub open spec fn formal_compiler_v3_uses_ordered_short_circuit_guard() -> bool { true }
 pub open spec fn formal_compiler_v3_guards_all_accesses() -> bool { true }
 pub open spec fn formal_compiler_v3_uses_gid_times_byte_width() -> bool { true }
 pub open spec fn formal_compiler_v3_requires_pairwise_disjoint_allocations() -> bool { true }

@@ -20,7 +20,7 @@ printf '%s  %s\n' ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382
   cd "$root"
   sha256sum -c <<'EOF'
 21ffbd4cd193fcf57e8127aadd4ce7a478edb23b039994f5f6547451b80d9021  crates/fe2o3-lower-mir-kernel/verus/mir_kir_structured_cfg_v3.rs
-1210dbc6a62f9087769f29672bedce40de49cc56e218f2833fae60a5f94ff2cc  crates/fe2o3-lower-mir-kernel/verus/formal_compiler_v3_spec_generated.rs
+22472060be444e80c3afbb8d2d83925ec7aa246f40bfab3cd7b89747bdb543fd  crates/fe2o3-lower-mir-kernel/verus/formal_compiler_v3_spec_generated.rs
 05be1ded212935e72d53a769aa056dfabc7c73583abcac75200232c5413a9953  crates/fe2o3-lower-mir-kernel/verus/negative/mir_kir_structured_checked_as_wrapping_v3.rs
 13e2257f40ba8661b932151e2fcc531d23b68af5b46b4fe4fb3d19176c8a6a6a  crates/fe2o3-lower-mir-kernel/verus/negative/mir_kir_structured_wrong_branch_v3.rs
 f733f5e045883a16ae4ef20d034e522b2f7087bb409897ac07612757d3cc3829  crates/fe2o3-lower-mir-kernel/verus/negative/mir_kir_structured_wrong_call_v3.rs

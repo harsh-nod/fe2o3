@@ -35,6 +35,8 @@ EXPECTED_KEYS = {
     "disjoint_writes",
     "guarded_allocations",
     "dynamic_extents",
+    "guard_predicates",
+    "guard_topology",
     "guard_semantics",
     "byte_offset_semantics",
     "allocation_relation",
@@ -63,6 +65,7 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         "disjoint_writes",
         "guarded_allocations",
         "dynamic_extents",
+        "guard_predicates",
     )
     if any(type(value[key]) is not int or value[key] <= 0 for key in integers):
         raise ValueError("V3 integer fields must be positive integers")
@@ -80,6 +83,7 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         "helper_branch_predicate": "xor-equals-zero",
         "helper_nonzero_result": "fallback-u32",
         "guard_semantics": "all-accesses-in-bounds",
+        "guard_topology": "ordered-short-circuit-chain",
         "byte_offset_semantics": "gid-times-byte-width",
         "allocation_relation": "pairwise-disjoint",
     }
@@ -89,6 +93,8 @@ def load_spec(path: Path = SPEC) -> dict[str, object]:
         raise ValueError("every V3 allocation must be represented in the guard")
     if value["dynamic_extents"] != value["guarded_allocations"]:
         raise ValueError("every V3 guarded allocation must retain its own dynamic extent")
+    if value["guard_predicates"] != value["guarded_allocations"]:
+        raise ValueError("every V3 guarded allocation must have one ordered predicate")
     if type(value["production_loop_trip_count"]) is not int:
         raise ValueError("V3 production loop trip count must be an integer")
     if value["production_loop_trip_count"] != 0:
@@ -160,6 +166,10 @@ pub const FORMAL_COMPILER_V3_DISJOINT_WRITES: u8 = {spec["disjoint_writes"]};
 pub const FORMAL_COMPILER_V3_GUARDED_ALLOCATIONS: u8 = {spec["guarded_allocations"]};
 /// Exact ordered runtime-extent count; extents are not assumed equal.
 pub const FORMAL_COMPILER_V3_DYNAMIC_EXTENTS: u8 = {spec["dynamic_extents"]};
+/// Exact predicate count in the ordered short-circuit guard chain.
+pub const FORMAL_COMPILER_V3_GUARD_PREDICATES: u8 = {spec["guard_predicates"]};
+/// The production guard is an ordered short-circuit chain.
+pub const FORMAL_COMPILER_V3_USES_ORDERED_SHORT_CIRCUIT_GUARD: bool = true;
 /// Every modeled access must be in bounds for the guarded path to execute.
 pub const FORMAL_COMPILER_V3_GUARDS_ALL_ACCESSES: bool = true;
 /// Every access byte offset is `gid * byte_width`.
@@ -212,6 +222,8 @@ pub open spec fn formal_compiler_v3_readonly_accesses() -> nat {{ {spec["readonl
 pub open spec fn formal_compiler_v3_disjoint_writes() -> nat {{ {spec["disjoint_writes"]} }}
 pub open spec fn formal_compiler_v3_guarded_allocations() -> nat {{ {spec["guarded_allocations"]} }}
 pub open spec fn formal_compiler_v3_dynamic_extents() -> nat {{ {spec["dynamic_extents"]} }}
+pub open spec fn formal_compiler_v3_guard_predicates() -> nat {{ {spec["guard_predicates"]} }}
+pub open spec fn formal_compiler_v3_uses_ordered_short_circuit_guard() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_guards_all_accesses() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_uses_gid_times_byte_width() -> bool {{ true }}
 pub open spec fn formal_compiler_v3_requires_pairwise_disjoint_allocations() -> bool {{ true }}
