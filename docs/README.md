@@ -48,6 +48,9 @@ documentation.
   extraction into an authority-free simulation bundle.
 - [Semantic schedule V1](semantic-schedule-v1.md): deterministic schedule
   recording and replay.
+- [Authority-free virtual runtime V1](virtual-runtime-v1.md): bounded
+  allocation, copy, queue, dependency, dispatch, completion, and failure-model
+  composition over admitted KIR.
 - [Debugger and profiler architecture](debugger-profiler-architecture-v1.md)
 - [Debugger and profiler task matrix](debugger-profiler-task-matrix-v1.md)
 - [Debugger and profiler qualification](debugger-profiler-qualification-v1.md)

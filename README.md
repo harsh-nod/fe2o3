@@ -36,6 +36,10 @@ the conditions in the [release process](docs/release-process.md) and
   execute the supported semantic subset and expose logical work-item, wave,
   workgroup, memory, atomic, fence, and barrier observations. It does not
   predict GPU performance.
+- **Virtual runtime without device handles.** Bounded identity-local
+  allocations, copies, queues, dependencies, dispatches, completions, and
+  quiesced failure states execute admitted KIR through the same CPU simulator.
+  This model-only path grants no KFD, load, launch, or hardware authority.
 - **Semantic debugging and profiling.** Agent-facing JSONL protocols preserve
   provenance and distinguish declared, observed, inferred, and unavailable
   facts. CPU replay supports reverse navigation and structured diagnosis;
@@ -142,6 +146,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | Rust kernel surface | Typed kernels, device indexing, checked buffer views, bounded scalar/control/memory subsets |
 | Compiler | Source/MIR through typed Pliron and verified KIR; bounded `gfx942` LLVM/HSACO vertical slices |
 | CPU simulation | Deterministic execution of admitted canonical KIR V7, including supported helpers, barriers, workgroup memory, atomics, fences, floating point, and seeded schedule exploration |
+| Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
 | Profiling | Bounded rocprofv3 dispatch import plus opt-in direct-KFD runtime lifecycle, host-staging, AQL publication/completion observations, and agent queries; rocprof real-dispatch correlation, counters, PC samples, and ATT remain incomplete |
@@ -208,6 +213,7 @@ profiler, simulator, verification, and evidence contracts.
 | `crates/cargo-fe2o3` | Cargo orchestration, inspection, debug, and profile commands |
 | `crates/fe2o3-kfd` | Direct Linux KFD boundary |
 | `crates/fe2o3-kir-sim*` | Deterministic CPU simulator and CLI |
+| `crates/fe2o3-virtual-runtime*` | Authority-free virtual lifecycle and headless JSON CLI over admitted simulator inputs |
 | `crates/fe2o3-debug-*` | Debug protocol, simulator debugger, and live-tool adapters |
 | `examples/` | Kernel source, host-boundary, proof, and qualification examples |
 | `docs/` | Architecture, contracts, evidence policy, testing, and status |

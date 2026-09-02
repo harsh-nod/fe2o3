@@ -31,6 +31,7 @@ readonly PLIRON_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/pliron_depen
 readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lockfiles.sh"
 readonly RUNTIME_PURE_RUST_AUDITOR="${REPO_ROOT}/scripts/runtime_pure_rust_audit.py"
 readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy.json"
+readonly VIRTUAL_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/virtual-runtime-no-gpu-policy.json"
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
 readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_identity_oracle.py"
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
@@ -116,6 +117,8 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-semantic-trace
   fe2o3-runtime
   fe2o3-runtime-model
+  fe2o3-virtual-runtime
+  fe2o3-virtual-runtime-cli
   fe2o3-verifier
   reserved-fe2o3-symbols
 )
@@ -769,6 +772,19 @@ run_runtime_pure_rust_policy() {
     env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
   run_step runtime-identity-oracle-parser-tests \
     env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}"
+  run_step virtual-runtime-no-gpu-metadata \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
+      --root fe2o3-virtual-runtime \
+      --root fe2o3-virtual-runtime-cli
+  run_step virtual-runtime-no-gpu-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-virtual-runtime-cli \
+        --bin fe2o3-virtual-runtime
+  run_step virtual-runtime-no-gpu-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-virtual-runtime"
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \

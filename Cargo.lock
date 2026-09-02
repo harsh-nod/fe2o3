@@ -1903,6 +1903,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-virtual-runtime"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
+ "fe2o3-runtime-model",
+]
+
+[[package]]
+name = "fe2o3-virtual-runtime-cli"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
+ "fe2o3-kir-sim-cli",
+ "fe2o3-runtime-model",
+ "fe2o3-virtual-runtime",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

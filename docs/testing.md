@@ -24,6 +24,21 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
+The issue #216 virtual-runtime slice has focused no-GPU coverage:
+
+```text
+cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
+cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --all-targets -- -D warnings
+cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli --no-deps
+scripts/ci-local.sh workspace-policy
+scripts/ci-local.sh runtime-policy
+```
+
+The runtime-policy lane checks both virtual-runtime package closures. It must
+remain independent of HIP, HSA, DRM, KFD device nodes, and GPU libraries. These
+tests establish model and semantic CPU behavior only; they do not increase a
+hardware or parity pass count.
+
 The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest
 separates source-artifact inventory from explicit qualification authority. It

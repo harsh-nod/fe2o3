@@ -256,6 +256,15 @@ be hosted behind the bounded `RuntimeWorkerBackendV1` transport so a terminal
 failure destroys the worker instead of the application process. Deprecated HSA
 qualification code may use the same isolation without becoming a public route.
 
+`fe2o3-virtual-runtime` is also classified here. It composes the syscall-free
+runtime model with already admitted KIR simulator state for deterministic CPU
+tests of allocation, copy, queue, dependency, dispatch, completion, and
+quiescence lifetimes. Its identity-bound ordinal handles expose neither host
+pointers nor model-internal synthetic addresses. It has no KFD, load, launch,
+hardware, equivalence, or performance authority and is not an alternate
+production runtime composition boundary. Its headless CLI belongs to the
+integration layer and reuses the existing secure simulator admission path.
+
 The bounded pure-Rust `gfx942:xnack-` composition is the protected production
 direction in the same crate. Its safe API prepares a complete address-free
 request and has one consuming execution transition. That transition requires an unsafe

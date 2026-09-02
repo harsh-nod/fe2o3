@@ -112,7 +112,8 @@
         "fe2o3-protected-static-executable",
         "fe2o3-runtime",
         "fe2o3-runtime-protocol",
-        "fe2o3-service-host"
+        "fe2o3-service-host",
+        "fe2o3-virtual-runtime"
       ]
     },
     {
@@ -127,6 +128,7 @@
         "fe2o3-semantic-query",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
+        "fe2o3-virtual-runtime-cli",
         "rustc-codegen-fe2o3"
       ]
     },

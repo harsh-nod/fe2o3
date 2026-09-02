@@ -107,6 +107,31 @@ counts, a semantic transcript identity, conflict assessment, and copied-back
 argument bytes. The exact fixture result is committed at
 [`expected-result.json`](../crates/fe2o3-kir-sim-cli/tutorial/fill-v1/expected-result.json).
 
+## Exercise virtual runtime lifetimes
+
+Run the same admitted fixture twice through persistent virtual allocations and
+a serial completion dependency:
+
+```console
+FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+  cargo run --locked -q -p fe2o3-virtual-runtime-cli --bin fe2o3-virtual-runtime -- \
+  --kir-v7 crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir \
+  --request crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json \
+  --repeat 2
+```
+
+The `fe2o3-virtual-runtime-result-v1` response identifies the model-only
+runtime, admitted KIR, module, allocation, queue, both completions, the serial
+dependency edge, copied bytes, and terminal cleanup states. It also states
+`"simulated":true`, `"hardware_observed":false`, and
+`"performance_prediction":false`.
+
+This command starts from exact admitted KIR. To begin with ordinary Rust, run
+`bash scripts/quickstart.sh no-gpu` or export its authority-free bundle, then
+replace `--kir-v7 PATH` with `--bundle PATH`. Read the
+[virtual runtime contract](virtual-runtime-v1.md) for limits, typed misuse and
+ambiguous-completion behavior, and the remaining issue #216 criteria.
+
 ## Run the component commands
 
 The `fe2o3-export-sim` binary reuses the production source/MIR/KIR stages under
