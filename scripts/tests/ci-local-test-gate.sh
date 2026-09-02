@@ -557,6 +557,14 @@ assert_equals \
   "$(step_command cpu-test-binding-projection-revalidation)" \
   'managed CPU tests did not revalidate the complete structural projection'
 assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} self-test" \
+  "$(step_command rustc-codegen-backend-profile-policy-tests)" \
+  'generic tests did not run the backend profile policy self-test'
+assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} check" \
+  "$(step_command rustc-codegen-backend-profile-policy)" \
+  'generic tests did not validate the backend profile policy'
+assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'generic tests did not validate the codegen shard policy'
@@ -623,6 +631,14 @@ STEP_COMMANDS=()
 run_rustc_codegen_shard 01-production-pipeline
 assert_no_codegen_test_driver
 assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} self-test" \
+  "$(step_command rustc-codegen-backend-profile-policy-tests)" \
+  'codegen shard did not run the backend profile policy self-test'
+assert_equals \
+  "python3 ${RUSTC_CODEGEN_BACKEND_PROFILE_POLICY} check" \
+  "$(step_command rustc-codegen-backend-profile-policy)" \
+  'codegen shard did not validate the backend profile policy'
+assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'codegen shard did not validate the checked-in assignment'
@@ -630,6 +646,10 @@ assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test production_pipeline" \
   "$(step_command rustc-codegen-test-production_pipeline)" \
   'codegen shard did not keep its target isolated'
+assert_equals \
+  "bash ${RUSTC_CODEGEN_BACKEND_ELF_CHECK} ${CARGO_TARGET_DIR:-${REPO_ROOT}/target} ${RUSTC:-rustc}" \
+  "$(step_command rustc-codegen-backend-elf-profile)" \
+  'control-flow shard did not inspect and load the bounded backend ELF'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
 for shard_step in "${STEP_NAMES[@]}"; do
