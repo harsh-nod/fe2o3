@@ -284,6 +284,15 @@ where
             );
         }
     };
+    if phase_input_is_queued(&control)? {
+        return reject_begin(
+            control,
+            caller,
+            request,
+            WorkerV3VerificationRejectionReasonV2::BeginPhaseOrder,
+            deadline,
+        );
+    }
     let challenge_frame = WorkerV3VerificationChallengeFrameV2::reserved(&request, &reservation);
     send_response(&control, challenge_frame.encode_canonical(), deadline)
         .map_err(WorkerV3VerificationServiceErrorV2::V1)?;

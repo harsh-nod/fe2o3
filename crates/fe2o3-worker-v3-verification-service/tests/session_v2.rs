@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{IoSlice, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -137,6 +138,24 @@ impl WorkerV3VerificationChallengeReservationProviderV2 for FixedReservations {
         self.available.then(|| {
             WorkerV3VerificationChallengeReservationV2::new(self.challenge, self.identity).unwrap()
         })
+    }
+}
+
+struct PausingReservations {
+    entered: mpsc::SyncSender<()>,
+    release: mpsc::Receiver<()>,
+    reservation: Option<WorkerV3VerificationChallengeReservationV2>,
+}
+
+impl WorkerV3VerificationChallengeReservationProviderV2 for PausingReservations {
+    fn reserve_current_record_challenge(
+        &mut self,
+        _caller: WorkerV3VerificationCallerV1,
+        _request: &WorkerV3VerificationRequestV1,
+    ) -> Option<WorkerV3VerificationChallengeReservationV2> {
+        self.entered.send(()).unwrap();
+        self.release.recv_timeout(Duration::from_secs(2)).unwrap();
+        self.reservation.take()
     }
 }
 
@@ -501,6 +520,53 @@ fn pipelined_packet_before_challenge_is_rejected_as_out_of_order() {
     );
     // Dropping a seqpacket endpoint with an unread out-of-order packet may make the peer observe
     // ECONNRESET instead of the already-sent generic rejection. Either way no reservation escapes.
+}
+
+#[test]
+fn packet_queued_while_reserving_challenge_is_rejected_before_challenge_release() {
+    let request = verification_request(30);
+    let service_request = request.clone();
+    let envelope = sealed_read_only(ENVELOPE);
+    let hsaco = sealed_read_only(HSACO);
+    let (service, peer) = pair();
+    let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+    let (release_tx, release_rx) = mpsc::sync_channel(0);
+    let service_thread = thread::spawn(move || {
+        let (mut policy, mut measurement, mut replay) = admission_state(&service_request);
+        let mut reservations = PausingReservations {
+            entered: entered_tx,
+            release: release_rx,
+            reservation: Some(
+                WorkerV3VerificationChallengeReservationV2::new([0x91; 32], [0x92; 32])
+                    .unwrap(),
+            ),
+        };
+        let outcome = begin_worker_v3_verification_session_v2(
+            service,
+            Duration::from_secs(2),
+            &mut policy,
+            &mut measurement,
+            &mut replay,
+            &mut reservations,
+        )
+        .unwrap();
+        let WorkerV3VerificationBeginOutcomeV2::Rejected(rejected) = outcome else {
+            panic!("packet queued during reservation received a challenge");
+        };
+        rejected.reason()
+    });
+
+    send_begin_raw(&peer, &request, &envelope, &hsaco);
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(send(&peer, b"early", SendFlags::NOSIGNAL).unwrap(), 5);
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        service_thread.join().unwrap(),
+        WorkerV3VerificationRejectionReasonV2::BeginPhaseOrder
+    );
+    let response = receive_challenge(&peer);
+    assert!(response.reservation().is_none());
+    assert!(response.matches_request(&request));
 }
 
 #[test]
