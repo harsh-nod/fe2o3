@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, DeviceSelector, Gfx942DeviceMemoryLeaseV1,
     Gfx942DeviceMemoryUnmappedV1, Gfx942NativeXgmiSdmaQueueV1, Gfx942XgmiMapRecoveryV1,
-    Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiUnmapRecoveryV1, OpenedKfd, SharedGttMemorySessionV1,
-    topology::Gfx942XgmiRouteV1,
+    Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1,
+    OpenedKfd, SharedGttMemorySessionV1, topology::Gfx942XgmiRouteV1,
 };
 
 const CANARY_BYTES: usize = 32;
@@ -128,23 +128,25 @@ fn run_round(
     pairs: &mut Vec<Pair>,
     copy_bytes: u32,
 ) -> Result<u128, Box<dyn std::error::Error>> {
-    let mut tickets = Vec::with_capacity(pairs.len());
+    let mut requests = Vec::with_capacity(pairs.len());
     let mut batch = queue.begin_batch(source_session, destination_session)?;
-    let start = Instant::now();
     for pair in std::mem::take(pairs) {
-        let ticket = batch
-            .submit(
-                pair.source,
-                CANARY_BYTES as u64,
-                pair.destination,
-                CANARY_BYTES as u64,
-                copy_bytes,
-            )
-            .map_err(|failure| failure.error().to_string())?;
-        tickets.push(ticket);
+        requests.push(Gfx942XgmiSdmaCopyRequestV1::new(
+            pair.source,
+            CANARY_BYTES as u64,
+            pair.destination,
+            CANARY_BYTES as u64,
+            copy_bytes,
+        ));
     }
-    for ticket in tickets {
-        let completed = batch.wait_for(ticket, Duration::from_secs(30))?;
+    let start = Instant::now();
+    let tickets = batch
+        .submit_batch(requests)
+        .map_err(|failure| failure.error().to_string())?;
+    let completed = batch
+        .wait_batch_for(tickets, Duration::from_secs(30))
+        .map_err(|failure| failure.error().to_string())?;
+    for completed in completed {
         let (source, destination) = completed.into_mappings();
         pairs.push(Pair {
             source,
@@ -419,12 +421,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("zero XGMI benchmark duration".into());
     }
     println!(
-        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 gpu_ids={},{} unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} warmups={} samples={} peer_access=topology-xgmi forward_engine={} reverse_engine={} forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit",
+        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 gpu_ids={},{} unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse concurrency=1 warmups={} samples={} peer_access=topology-xgmi doorbells_per_batch=1 forward_engine={} reverse_engine={} forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit",
         gpu_ids[0],
         gpu_ids[1],
         unique_ids[0],
         unique_ids[1],
         copy_bytes,
+        depth,
+        depth,
         depth,
         warmups,
         samples,

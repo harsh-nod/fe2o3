@@ -1,9 +1,9 @@
 # Runtime model verification
 
 This directory contains the issue #137 Verus specifications and the additive R7
-asynchronous-resource, R8 execution-contract, and R9 native-evidence models.
-The authenticated runner proves eighty-one obligations over finite abstract values
-and traces. The materialization input and image sequences are capped at 64 MiB
+asynchronous-resource, R8 execution-contract, R9 native-evidence, and R10 closed
+execution-composition models. The authenticated runner proves 101 obligations
+over finite abstract values and traces. The materialization input and image sequences are capped at 64 MiB
 and its phase trace has exactly four entries. The lifecycle-history sequence
 lengths are not bounded by these proofs.
 
@@ -296,6 +296,55 @@ nor these concrete failure results authorize early mapping release. Per-packet
 topology currentness, the concrete ticket/record correspondence, and those
 concrete phase distinctions require a future Rust-to-Verus refinement.
 
+`r10_closed_execution_v1.rs` proves twenty abstract closed-composition
+obligations:
+
+1. an incomplete dependency, including one produced on another stream, blocks
+   publication;
+2. a ready operation publishes with its exact stream, execution device, kind,
+   dependencies, leases, batch identity, and publication epoch;
+3. two distinct operations with disjoint lease sets can remain published
+   simultaneously;
+4. an unready prepared batch has no partial-publication transition;
+5. a ready batch publishes its complete exact roster at one batch identity and
+   publication epoch;
+6. completed pool-block release preserves storage identity, advances its
+   generation, and only then returns it to the free phase;
+7. a stale lease cannot equal a later generation of the same pool block;
+8. a peer copy has two distinct device owners and executes on its destination
+   device coordinate;
+9. post-publication cancellation and timeout retain the exact lease set and
+   published phase;
+10. indeterminate failure quarantines the operation, retains its leases, and
+    does not make it releasable;
+11. corresponding atomic load, store, and RMW records separately retain the
+    declared operation, order, scope, required fence plan, and abstract value
+    relation;
+12. a substituted observed atomic scope cannot satisfy correspondence;
+13. a divergent or incomplete Wave64 arrival cannot publish; and
+14. converged Wave64 barrier, reduction, inclusive-scan, and exclusive-scan
+    records publish the exact mathematical input, total, or prefix sequence.
+
+The numbering above groups related theorems; the verifier reports twenty proof
+obligations. The executable `closed_execution.rs` model is bounded to 64
+streams, 64 pools, 4,096 blocks, 4,096 operations, 64 leases per operation, and
+256 dependencies per operation. Its Rust tests check simultaneous compute
+operations, cross-stream dependency gating, failure-atomic prepared batches,
+generation-safe allocation reuse, exact two-device peer-copy custody,
+cancellation/timeout/quarantine retention, atomic label/fence/value rejection,
+and Wave64 wrapping reduction/scan results.
+
+## R10 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract closed operation, batch, pool, peer-owner, atomic-record, and Wave64 relations | **Proved** | Twenty theorems in `r10_closed_execution_v1.rs`; finite mathematical values only. |
+| Executable `closed_execution.rs` transitions and negative tests | **Checked** | Rust unit tests exercise the bounded state machine and executable wrapping arithmetic. |
+| Executable Rust to Verus correspondence | **Not established** | The Rust and Verus models intentionally use parallel structures, but there is no refinement theorem connecting their implementations. |
+| Atomic instruction decoding and compiler preservation | **Not established** | Atomic observed-operation/order/scope/fence fields are caller-supplied abstract observations, not decoded-instruction or compiler certificates. |
+| Wave convergence, barrier behavior, LDS, and machine arithmetic | **Contracted** | The model checks exact 64-lane arrival and computes host-side results; it does not establish GPU control-flow convergence or ISA behavior. |
+| KFD/HSA/HIP queues, mappings, coherence, completion, progress, and performance | **Contracted or measured** | Native adapters and hardware qualification must bind real resources and observations to the model. No model value grants native authority. |
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -343,7 +392,11 @@ prior prefix, early or incomplete compensation,
 a reversed or stale XGMI route, loss of its reset fence, artifact or checked
 instruction-receipt substitution, stale dispatch evidence, publication with
 incomplete dependencies, copy publication with an inactive mapping, and owner
-release after uncertain XGMI completion. The launcher
+release after uncertain XGMI completion; R10 dependency bypass, partial batch
+publication, pool-generation reuse, peer-owner reversal, post-publication
+cancellation release, quarantine release, atomic scope substitution, omitted
+release fence, wrong RMW return value, early Wave64 publication, and an
+inclusive-scan prefix off by one lane. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after

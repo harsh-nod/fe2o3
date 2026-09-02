@@ -210,7 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if !(5..=6).contains(&args.len()) {
         return Err(
-            "usage: kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> [generic|directional|engine0|engine1]".into(),
+            "usage: kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> [generic|directional|engine0|engine1|striped2|striped4|striped8|striped16]".into(),
         );
     }
     let unique_id = if let Some(hex) = args[0].strip_prefix("0x") {
@@ -253,6 +253,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "engine1" => {
             let queue = queue.enable_gfx942_sdma_copy_engine_on_engine_index(1)?;
             (queue.engine_index, queue.engine_index)
+        }
+        profile if profile.starts_with("striped") => {
+            let queue_count: u32 = profile["striped".len()..].parse()?;
+            let queues = queue.enable_gfx942_striped_sdma_copy_engines(queue_count)?;
+            if queues.len() != queue_count as usize {
+                return Err("striped queue observation count mismatch".into());
+            }
+            (None, None)
         }
         _ => return Err("unknown SDMA queue profile".into()),
     };
@@ -332,7 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trimmed = queue.trim_sdma_memory_pool()?;
     queue.destroy()?;
     println!(
-        "backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id={unique_id:016x} profile={profile} bytes={copy_bytes} depth={depth} warmups={warmups} samples={samples} h2d_engine_index={} d2h_engine_index={} h2d_p50_ns={h2d_p50} h2d_p95_ns={h2d_p95} h2d_submit_p50_ns={h2d_submit_p50} h2d_wait_p50_ns={h2d_wait_p50} h2d_p50_GBps={:.3} d2h_p50_ns={d2h_p50} d2h_p95_ns={d2h_p95} d2h_submit_p50_ns={d2h_submit_p50} d2h_wait_p50_ns={d2h_wait_p50} d2h_p50_GBps={:.3} combined_h2d_p50_ns={combined_h2d_p50} combined_h2d_p50_GBps={:.3} combined_d2h_p50_ns={combined_d2h_p50} combined_d2h_p50_GBps={:.3} pool_checkout_recycle_pair_ns={pool_ns_per_pair} pool_reuse_count={} pool_trimmed={trimmed}",
+        "backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id={unique_id:016x} profile={profile} bytes={copy_bytes} depth={depth} queue_depth={depth} batch_size={depth} direction=h2d-then-d2h concurrency=1 doorbells_per_batch=1 warmups={warmups} samples={samples} h2d_engine_index={} d2h_engine_index={} h2d_p50_ns={h2d_p50} h2d_p95_ns={h2d_p95} h2d_submit_p50_ns={h2d_submit_p50} h2d_wait_p50_ns={h2d_wait_p50} h2d_p50_GBps={:.3} d2h_p50_ns={d2h_p50} d2h_p95_ns={d2h_p95} d2h_submit_p50_ns={d2h_submit_p50} d2h_wait_p50_ns={d2h_wait_p50} d2h_p50_GBps={:.3} combined_h2d_p50_ns={combined_h2d_p50} combined_h2d_p50_GBps={:.3} combined_d2h_p50_ns={combined_d2h_p50} combined_d2h_p50_GBps={:.3} pool_checkout_recycle_pair_ns={pool_ns_per_pair} pool_reuse_count={} pool_trimmed={trimmed}",
         h2d_engine_index.unwrap_or(u32::MAX),
         d2h_engine_index.unwrap_or(u32::MAX),
         gbps(transferred, h2d_p50),

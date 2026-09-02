@@ -321,10 +321,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let d2h_p50 = percentile(&d2h, 1, 2);
     let d2h_p95 = percentile(&d2h, 19, 20);
     println!(
-        "backend=kfd schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 unique_ids={:016x},{:016x} bytes={} depth_per_device={} warmups={} samples={} h2d_p50_ns={} h2d_p95_ns={} h2d_aggregate_p50_GBps={:.3} d2h_p50_ns={} d2h_p95_ns={} d2h_aggregate_p50_GBps={:.3}",
+        "backend=kfd schema=fe2o3.async-copy-multi-device-benchmark.v1 devices=2 unique_ids={:016x},{:016x} bytes={} depth_per_device={} queue_depth_per_device={} batch_size_per_device={} direction=h2d-then-d2h concurrency=2 doorbells_per_device_batch=1 warmups={} samples={} h2d_p50_ns={} h2d_p95_ns={} h2d_aggregate_p50_GBps={:.3} d2h_p50_ns={} d2h_p95_ns={} d2h_aggregate_p50_GBps={:.3}",
         ids[0],
         ids[1],
         copy_bytes,
+        depth,
+        depth,
         depth,
         warmups,
         samples,

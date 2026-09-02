@@ -63,6 +63,22 @@ policies still differ. Do not compute ratios across the other metric names.
 These rows do not establish general HIP/HSA parity: they cover one artifact,
 one geometry, one device, and the exact software stack printed by the runner.
 
+For copy and XGMI logs, apply release thresholds to every matched row with the
+fail-closed checker. Thresholds are mandatory arguments so a report cannot
+silently inherit a more permissive policy:
+
+```sh
+python3 benchmarks/runtime_gfx942/check-parity.py result.txt \
+  --schema fe2o3.async-copy-benchmark.v1 \
+  --max-latency-ratio 1.10 \
+  --min-bandwidth-ratio 0.90
+```
+
+The example values are illustrative, not an adopted release policy. The
+checker rejects missing or duplicate backend rows, nonpositive metrics, and
+any KFD p50/p95 latency or p50 bandwidth ratio outside the supplied bounds.
+Multi-device copy and XGMI logs use their corresponding schema names.
+
 ## Asynchronous Copy Qualification
 
 Run the matched KFD, HSA, and HIP copy-engine harness on two idle MI300X GPUs:
@@ -129,8 +145,8 @@ different mechanism.
 
 ## Native XGMI Peer Qualification
 
-Run the matched low-level KFD, HSA, and HIP native peer-copy harness on two idle
-MI300X GPUs:
+Run the matched public-runtime-facade KFD, HSA, and HIP native peer-copy harness
+on two idle MI300X GPUs:
 
 ```sh
 benchmarks/runtime_gfx942/run-xgmi-peer-mi300x.sh
@@ -145,21 +161,38 @@ per selected GPU and may be lowered or raised with
 seconds and is controlled by `FE2O3_XGMI_PHASE_TIMEOUT_SECONDS`.
 
 All lanes use the same exact physical unique IDs and require
-`gfx942:xnack-`. KFD admits a retained directional type-11 topology link and
-creates a BY_ENG_ID queue on its one-bit recommended XGMI engine. HSA uses
-`hsa_amd_memory_async_copy`; HIP uses `hipMemcpyPeerAsync` after exact peer
-access checks. Both directions are timed separately. Allocation, access setup,
-mapping, changing per-round source patterns, destination poisoning, readback,
-canary checks, and teardown are outside timing. Every timing row covers all
-depth submissions through observation of all completions and reports p50/p95
-nanoseconds plus p50 aggregate GB/s.
+`gfx942:xnack-`. The KFD parity row uses only the public
+`RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>` surface. The backend admits a
+retained directional type-11 topology link and creates a BY_ENG_ID queue on its
+one-bit recommended XGMI engine. HSA uses `hsa_amd_memory_async_copy`; HIP uses
+`hipMemcpyPeerAsync` after exact peer access checks. Both directions are timed
+separately. Allocation, access setup, changing per-round source patterns,
+destination poisoning, readback, canary checks, and teardown are outside
+timing. The KFD interval intentionally includes facade admission, per-copy peer
+mapping, publication, observed completion, and peer unmapping. Every timing row
+covers all depth submissions through observation of all completions and reports
+p50/p95 nanoseconds plus p50 aggregate GB/s.
 
 The runner requires a clean checkout, prints the Git commit and complete
 software/device context, checks both GPUs immediately before and after every
 backend phase, and removes its unique temporary build directory on every exit
 path. A passing result measures only that exact pair, transfer profile, commit,
-and software stack. It does not establish facade integration, general topology
-support, or system-coherent atomic behavior.
+and software stack. It exercises facade integration but does not establish
+general topology support or system-coherent atomic behavior.
+
+The lower-level prepared-batch harness remains available as a mechanics
+diagnostic and is deliberately excluded from the parity row:
+
+```sh
+cargo run --locked --release -p fe2o3-kfd --features live-validation \
+  --example kfd-sdma-xgmi-peer-benchmark -- \
+  UNIQUE_ID_0 UNIQUE_ID_1 BYTES DEPTH WARMUPS SAMPLES
+```
+
+That diagnostic holds peer mappings across a round and submits the complete
+depth with one doorbell. Comparing it with the facade row isolates the current
+facade's per-copy mapping and publication overhead; it is not a substitute for
+the public API measurement.
 
 This peer-copy harness does not exercise the separate structure-required
 Worker V3 dispatch wrapper and makes no atomic or collective

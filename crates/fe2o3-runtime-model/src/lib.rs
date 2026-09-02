@@ -18,6 +18,7 @@ extern crate alloc;
 extern crate std;
 
 mod async_queue;
+mod closed_execution;
 mod device_identity;
 mod device_local;
 mod device_projection;
@@ -32,6 +33,7 @@ mod r9_native_evidence;
 mod typed_async;
 
 pub use async_queue::*;
+pub use closed_execution::*;
 pub use device_identity::*;
 pub use device_local::*;
 pub use device_projection::*;
@@ -47,6 +49,8 @@ pub use typed_async::*;
 
 #[cfg(test)]
 mod async_queue_tests;
+#[cfg(test)]
+mod closed_execution_tests;
 #[cfg(test)]
 mod device_identity_tests;
 #[cfg(test)]

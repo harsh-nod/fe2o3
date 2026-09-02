@@ -23,11 +23,13 @@ use crate::queue_resources::{
     AMD_AQL_READ_DISPATCH_ID_OFFSET_V1, AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
 };
 use crate::shared_memory::{
-    AqlControlResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, Gfx942DeviceMemoryLeaseV1,
-    Gfx942DeviceMemoryMappedV1, Gfx942XgmiMappedDeviceMemoryV1, GttGpuAccessibleMutableV1,
-    HostVisibleCoherentGttV1, SharedGttAllocationV1, SharedGttMemorySessionV1,
-    SharedGttQueueResourceAuthorityV1, UserptrAqlControlGttV1,
+    AqlControlResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, Gfx942DeviceMemoryIdentityV1,
+    Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1, Gfx942XgmiMappedDeviceMemoryV1,
+    GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1, SharedGttAllocationIdentityV1,
+    SharedGttAllocationV1, SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
+    UserptrAqlControlGttV1,
 };
+use crate::wait::MonotonicWaitV1;
 
 pub const GFX942_SDMA_COPY_PACKET_BYTES_V1: usize = 7 * 4;
 pub const GFX942_SDMA_FENCE_PACKET_BYTES_V1: usize = 4 * 4;
@@ -46,7 +48,7 @@ const GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1: usize = 2;
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v2\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v3\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -58,23 +60,25 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "rocr_publication_policy=projects/rocr-runtime/runtime/hsa-runtime/core/runtime/amd_blit_sdma.cpp:1954-1988,1998-2023,2049-2055\n",
     "packet=copy-linear-28-bytes,count-minus-one,source-u64,destination-u64;fence-16-bytes,mtype-3,sys-1,snp-1,u32-generation;zero-pad-to-64\n",
     "bounds=copy:1..4194272,ring:4096,submission:64,ring-slots:64,in-flight:63,one-slot-always-empty,nonoverlap\n",
-    "engines=generic-compatible-or-topology-exact-ordinary:2,queues-per-engine:8,h2d-index:1,d2h-index:0,targeted-queue-type:4\n",
-    "queue-identity=directional-native-queue-ids-must-be-distinct-before-publication\n",
+    "engines=generic-compatible-or-topology-exact-ordinary:2,queues-per-engine:8,h2d-index:1,d2h-index:0,targeted-queue-type:4,balanced-striped-queues:even-2..16,round-robin-per-successful-batch\n",
+    "queue-identity=all-directional-or-striped-native-queue-ids-must-be-distinct-before-publication\n",
     "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight\n",
     "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
-    "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-generation,deadline-wait,custody-returned-only-after-observation\n",
+    "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-generation,nonblocking-poll,queue-progress-at-host-monotonic-instant,adaptive-deadline-wait,custody-returned-only-after-observation,no-gpu-clock-calibration\n",
+    "cancellation=published-packets-cannot-be-retracted,typed-rejection-retains-ticket,poll-or-explicit-drain-required\n",
     "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown\n",
+    "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
     "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,internal-atomics-and-mapped-writes-only-inside-envelope\n",
     "failure=structural-preflight-and-ordinary-capacity-rejection-recover-inputs,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,partial-directional-create-or-destroy-has-process-only-terminal-custody\n",
     "teardown=destroy-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,no-executable-rust-refinement\n",
-    "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,kernel-firmware-packet-consumption,completion,progress,liveness\n",
+    "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
     "measured=hardware-correctness-and-performance-on-identified-host-only\n",
 );
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "e794d249b2d4a585a30cb4f22caa39931319784b824df344627560d4248ef914";
+    "749e371515337e9ce0ef25f6f96c42087c1b44b3057b0dd905b9e7b635b4fe21";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -191,6 +195,7 @@ pub enum Gfx942SdmaErrorV1 {
     QueueFull,
     Pending,
     Timeout,
+    PublishedCancellationUnsupported,
 }
 
 impl fmt::Display for Gfx942SdmaErrorV1 {
@@ -219,9 +224,15 @@ pub enum Gfx942SdmaBufferKindV1 {
     DeviceLocal,
 }
 
-enum Gfx942SdmaBufferStorageV1 {
+pub(crate) enum Gfx942SdmaBufferStorageV1 {
     Host(MappedHostBufferV1),
     Device(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Gfx942SdmaBufferStorageIdentityV1 {
+    Host(SharedGttAllocationIdentityV1),
+    Device(Gfx942DeviceMemoryIdentityV1),
 }
 
 /// Move-only allocation accepted by the bounded SDMA queue.
@@ -288,6 +299,40 @@ impl Gfx942SdmaBufferV1 {
         self.logical_bytes = logical_bytes;
     }
 
+    pub(crate) const fn storage_identity(&self) -> Gfx942SdmaBufferStorageIdentityV1 {
+        match &self.storage {
+            Gfx942SdmaBufferStorageV1::Host(token) => {
+                Gfx942SdmaBufferStorageIdentityV1::Host(token.storage_identity())
+            }
+            Gfx942SdmaBufferStorageV1::Device(lease) => {
+                Gfx942SdmaBufferStorageIdentityV1::Device(lease.storage_identity())
+            }
+        }
+    }
+
+    pub(crate) fn into_bridge_parts(self) -> (Gfx942SdmaBufferStorageV1, QueueKeyV1, u64, u64) {
+        (
+            self.storage,
+            self.owner,
+            self.pool_generation,
+            self.logical_bytes,
+        )
+    }
+
+    pub(crate) fn from_bridge_parts(
+        storage: Gfx942SdmaBufferStorageV1,
+        owner: QueueKeyV1,
+        pool_generation: u64,
+        logical_bytes: u64,
+    ) -> Self {
+        Self {
+            storage,
+            owner,
+            pool_generation,
+            logical_bytes,
+        }
+    }
+
     fn checked_gpu_subrange(
         &self,
         memory: &SharedGttMemorySessionV1,
@@ -331,6 +376,43 @@ pub struct Gfx942SdmaCopyRequestV1 {
     pub(crate) copy_bytes: u32,
 }
 
+/// One move-only XGMI copy request prepared for a directional route.
+#[must_use = "the request owns both peer-mapped allocations until submission"]
+pub struct Gfx942XgmiSdmaCopyRequestV1 {
+    source: Gfx942XgmiMappedDeviceMemoryV1,
+    source_offset: u64,
+    destination: Gfx942XgmiMappedDeviceMemoryV1,
+    destination_offset: u64,
+    copy_bytes: u32,
+}
+
+impl Gfx942XgmiSdmaCopyRequestV1 {
+    pub fn new(
+        source: Gfx942XgmiMappedDeviceMemoryV1,
+        source_offset: u64,
+        destination: Gfx942XgmiMappedDeviceMemoryV1,
+        destination_offset: u64,
+        copy_bytes: u32,
+    ) -> Self {
+        Self {
+            source,
+            source_offset,
+            destination,
+            destination_offset,
+            copy_bytes,
+        }
+    }
+
+    pub fn into_mappings(
+        self,
+    ) -> (
+        Gfx942XgmiMappedDeviceMemoryV1,
+        Gfx942XgmiMappedDeviceMemoryV1,
+    ) {
+        (self.source, self.destination)
+    }
+}
+
 impl Gfx942SdmaCopyRequestV1 {
     pub fn new(
         source: Gfx942SdmaBufferV1,
@@ -357,7 +439,9 @@ impl Gfx942SdmaCopyRequestV1 {
 pub struct Gfx942SdmaCompletedCopyV1 {
     pub source: Gfx942SdmaBufferV1,
     pub destination: Gfx942SdmaBufferV1,
-    copy_bytes: u32,
+    pub(crate) copy_bytes: u32,
+    pub(crate) source_offset: u64,
+    pub(crate) destination_offset: u64,
 }
 
 impl Gfx942SdmaCompletedCopyV1 {
@@ -376,6 +460,50 @@ impl Gfx942SdmaCompletedCopyV1 {
 pub enum Gfx942SdmaCopyPollV1 {
     Pending,
     Completed(Gfx942SdmaCompletedCopyV1),
+}
+
+/// Non-consuming host observation of one submitted ticket roster.
+///
+/// `host_observed_at` is a process-local monotonic timestamp. It is neither a
+/// GPU timestamp nor calibrated against a device clock.
+#[derive(Clone, Copy, Debug)]
+pub struct Gfx942SdmaQueueProgressObservationV1 {
+    queue_id: u32,
+    submitted_count: u16,
+    completed_count: u16,
+    queue_write_bytes: u64,
+    queue_read_bytes: u64,
+    host_observed_at: Instant,
+}
+
+impl Gfx942SdmaQueueProgressObservationV1 {
+    pub const fn queue_id(self) -> u32 {
+        self.queue_id
+    }
+
+    pub const fn submitted_count(self) -> u16 {
+        self.submitted_count
+    }
+
+    pub const fn completed_count(self) -> u16 {
+        self.completed_count
+    }
+
+    pub const fn pending_count(self) -> u16 {
+        self.submitted_count - self.completed_count
+    }
+
+    pub const fn queue_write_bytes(self) -> u64 {
+        self.queue_write_bytes
+    }
+
+    pub const fn queue_read_bytes(self) -> u64 {
+        self.queue_read_bytes
+    }
+
+    pub const fn host_observed_at(self) -> Instant {
+        self.host_observed_at
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -410,6 +538,8 @@ struct SdmaCopyRecordV1 {
     source: Gfx942SdmaBufferV1,
     destination: Gfx942SdmaBufferV1,
     copy_bytes: u32,
+    source_offset: u64,
+    destination_offset: u64,
 }
 
 struct XgmiSdmaCopyRecordV1 {
@@ -424,6 +554,12 @@ pub struct Gfx942XgmiCompletedCopyV1 {
     pub source: Gfx942XgmiMappedDeviceMemoryV1,
     pub destination: Gfx942XgmiMappedDeviceMemoryV1,
     copy_bytes: u32,
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum Gfx942XgmiCopyPollV1 {
+    Pending(Gfx942SdmaCopyTicketV1),
+    Completed(Gfx942XgmiCompletedCopyV1),
 }
 
 impl Gfx942XgmiCompletedCopyV1 {
@@ -449,6 +585,14 @@ struct PreparedSdmaCopyV1 {
     completion_value: u32,
 }
 
+#[derive(Clone, Copy)]
+struct PreparedXgmiSdmaCopyV1 {
+    packet: Gfx942SdmaCopySubmissionV1,
+    slot: usize,
+    generation: u32,
+    completion_value: u32,
+}
+
 pub(crate) struct PreparedSdmaBatchV1 {
     queue_id: u32,
     write: u64,
@@ -456,6 +600,43 @@ pub(crate) struct PreparedSdmaBatchV1 {
     copies: Vec<PreparedSdmaCopyV1>,
     tickets: Vec<Gfx942SdmaCopyTicketV1>,
     requests: Vec<Gfx942SdmaCopyRequestV1>,
+}
+
+struct PreparedXgmiSdmaBatchV1 {
+    queue_id: u32,
+    write: u64,
+    write_end: u64,
+    copies: Vec<PreparedXgmiSdmaCopyV1>,
+    tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdmaBatchPublicationPlanV1 {
+    write: u64,
+    write_end: u64,
+    packet_count: usize,
+}
+
+fn admit_sdma_batch_publication_plan(
+    write: u64,
+    write_end: u64,
+    packet_count: usize,
+) -> Result<SdmaBatchPublicationPlanV1, Gfx942SdmaErrorV1> {
+    validate_sdma_write_counter_alignment(write)?;
+    let expected_end = write
+        .checked_add(submission_batch_bytes(packet_count)?)
+        .ok_or(Gfx942SdmaErrorV1::Contract(
+            "SDMA batch publication overflow",
+        ))?;
+    if write_end != expected_end {
+        return Err(Gfx942SdmaErrorV1::Contract("SDMA batch publication extent"));
+    }
+    Ok(SdmaBatchPublicationPlanV1 {
+        write,
+        write_end,
+        packet_count,
+    })
 }
 
 pub(crate) struct Gfx942SdmaQueueOwnerV1 {
@@ -790,6 +971,8 @@ impl Gfx942SdmaQueueOwnerV1 {
             source,
             destination,
             copy_bytes,
+            source_offset,
+            destination_offset,
         });
         memory.publish_sdma_control_write_release_in_current_scope(
             self.control.as_mut().expect("checked SDMA control"),
@@ -933,6 +1116,213 @@ impl Gfx942SdmaQueueOwnerV1 {
         Ok(ticket)
     }
 
+    fn prepare_xgmi_batch_recoverable(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<PreparedXgmiSdmaBatchV1, (Gfx942SdmaErrorV1, Vec<Gfx942XgmiSdmaCopyRequestV1>)>
+    {
+        match self.prepare_xgmi_batch(source_session, destination_session, route, &requests) {
+            Ok((write, write_end, copies, tickets)) => Ok(PreparedXgmiSdmaBatchV1 {
+                queue_id: self.queue_id,
+                write,
+                write_end,
+                copies,
+                tickets,
+                requests,
+            }),
+            Err(error) => Err((error, requests)),
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn prepare_xgmi_batch(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        requests: &[Gfx942XgmiSdmaCopyRequestV1],
+    ) -> Result<
+        (
+            u64,
+            u64,
+            Vec<PreparedXgmiSdmaCopyV1>,
+            Vec<Gfx942SdmaCopyTicketV1>,
+        ),
+        Gfx942SdmaErrorV1,
+    > {
+        self.require_live()?;
+        let write = self.observe_batch_start(source_session, requests.len())?;
+        let write_end = checked_sdma_write_end(
+            write,
+            submission_batch_bytes(requests.len())?,
+            &mut self.poisoned,
+        )?;
+        let completion_base = source_session
+            .mapped_resource_facts(
+                self.completions
+                    .as_ref()
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
+            )?
+            .gpu_va();
+        let mut prepared = Vec::new();
+        prepared
+            .try_reserve_exact(requests.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("XGMI SDMA packet roster allocation"))?;
+        let mut tickets = Vec::new();
+        tickets
+            .try_reserve_exact(requests.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("XGMI SDMA ticket roster allocation"))?;
+        for (index, request) in requests.iter().enumerate() {
+            if !request.source.is_fully_mapped()
+                || !request.destination.is_fully_mapped()
+                || request.source.gpu_ids() != route.canonical_mapping_gpu_ids()
+                || request.destination.gpu_ids() != route.canonical_mapping_gpu_ids()
+            {
+                return Err(Gfx942SdmaErrorV1::Contract("XGMI mapping route roster"));
+            }
+            let source_address = source_session
+                .mapped_xgmi_device_memory_facts(&request.source)?
+                .checked_gpu_subrange(request.source_offset, u64::from(request.copy_bytes), 1)
+                .ok_or(Gfx942SdmaErrorV1::Contract("XGMI source copy range"))?;
+            let destination_address = destination_session
+                .mapped_xgmi_device_memory_facts(&request.destination)?
+                .checked_gpu_subrange(request.destination_offset, u64::from(request.copy_bytes), 1)
+                .ok_or(Gfx942SdmaErrorV1::Contract("XGMI destination copy range"))?;
+            if request.copy_bytes == 0
+                || request.copy_bytes > GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1
+                || ranges_overlap(
+                    source_address,
+                    u64::from(request.copy_bytes),
+                    destination_address,
+                    u64::from(request.copy_bytes),
+                )
+            {
+                return Err(Gfx942SdmaErrorV1::Contract("XGMI SDMA copy binding"));
+            }
+            let slot = batch_ring_slot(write, index)?;
+            let generation =
+                next_sdma_ticket_generation(self.generations[slot], &mut self.poisoned)?;
+            let completion_address = completion_base
+                .checked_add((slot * 8) as u64)
+                .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA completion address"))?;
+            prepared.push(PreparedXgmiSdmaCopyV1 {
+                packet: Gfx942SdmaCopySubmissionV1::new(
+                    source_address,
+                    destination_address,
+                    request.copy_bytes,
+                    completion_address,
+                    generation,
+                )?,
+                slot,
+                generation,
+                completion_value: generation,
+            });
+            tickets.push(Gfx942SdmaCopyTicketV1 {
+                owner: self.owner,
+                queue_id: self.queue_id,
+                slot: slot as u16,
+                generation,
+            });
+        }
+        Ok((write, write_end, prepared, tickets))
+    }
+
+    fn submit_prepared_xgmi_batch(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared: PreparedXgmiSdmaBatchV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, (Gfx942SdmaErrorV1, Vec<Gfx942SdmaCopyTicketV1>)> {
+        if prepared.queue_id != self.queue_id
+            || prepared.requests.len() != prepared.copies.len()
+            || prepared.requests.len() != prepared.tickets.len()
+        {
+            self.poisoned = true;
+            return Err((
+                Gfx942SdmaErrorV1::Contract("XGMI SDMA prepared batch queue or roster"),
+                prepared.tickets,
+            ));
+        }
+        let publication_plan = match admit_sdma_batch_publication_plan(
+            prepared.write,
+            prepared.write_end,
+            prepared.copies.len(),
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.poisoned = true;
+                return Err((error, prepared.tickets));
+            }
+        };
+        let PreparedXgmiSdmaBatchV1 {
+            queue_id: _,
+            write: _,
+            write_end: _,
+            copies,
+            tickets,
+            requests,
+        } = prepared;
+        // Retain every move-only mapping before the first fallible mapped write.
+        // Thereafter any error returns only tickets and leaves native custody here.
+        for (request, item) in requests.into_iter().zip(&copies) {
+            self.generations[item.slot] = item.generation;
+            self.xgmi_records[item.slot] = Some(XgmiSdmaCopyRecordV1 {
+                generation: item.generation,
+                completion_value: item.completion_value,
+                source: request.source,
+                destination: request.destination,
+                copy_bytes: request.copy_bytes,
+            });
+        }
+        self.poisoned = true;
+        let publication = (|| {
+            let completions = self
+                .completions
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing XGMI SDMA completion arena",
+                ))?;
+            for item in &copies {
+                memory.overwrite_mapped_host_visible_subrange_in_current_scope(
+                    completions,
+                    (item.slot * 8) as u64,
+                    &[0; 8],
+                )?;
+            }
+            let ring = self.ring.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
+                "missing XGMI SDMA ring authority",
+            ))?;
+            for item in &copies {
+                memory.write_sdma_ring_slot_in_current_scope(
+                    ring,
+                    item.slot as u32,
+                    item.packet.bytes(),
+                )?;
+            }
+            memory.publish_sdma_control_write_release_in_current_scope(
+                self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing XGMI SDMA control authority",
+                ))?,
+                publication_plan.write,
+                publication_plan.write_end,
+            )?;
+            self.doorbell
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA doorbell"))?
+                .store_packet_id_release(publication_plan.write_end)
+                .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))
+        })();
+        match publication {
+            Ok(()) => {
+                self.poisoned = false;
+                Ok(tickets)
+            }
+            Err(error) => Err((error, tickets)),
+        }
+    }
+
     fn prepare_batch_recoverable(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
@@ -1037,16 +1427,35 @@ impl Gfx942SdmaQueueOwnerV1 {
                 "SDMA prepared batch queue or roster",
             ));
         }
+        let publication_plan = admit_sdma_batch_publication_plan(
+            prepared_batch.write,
+            prepared_batch.write_end,
+            prepared_batch.copies.len(),
+        )?;
         let PreparedSdmaBatchV1 {
             queue_id: _,
-            write,
-            write_end,
+            write: _,
+            write_end: _,
             copies,
             tickets,
             requests,
         } = prepared_batch;
         // Every fallible structural check and allocation precedes this point.
-        // From the first mapped write onward, any error retains native custody.
+        // Retain all buffers before the first mapped write so a later error
+        // leaves exact native custody in this poisoned owner.
+        for (request, item) in requests.into_iter().zip(&copies) {
+            self.generations[item.slot] = item.generation;
+            self.records[item.slot] = Some(SdmaCopyRecordV1 {
+                generation: item.generation,
+                completion_value: item.completion_value,
+                completion_observed: false,
+                source: request.source,
+                destination: request.destination,
+                copy_bytes: request.copy_bytes,
+                source_offset: request.source_offset,
+                destination_offset: request.destination_offset,
+            });
+        }
         self.poisoned = true;
         let completions = self
             .completions
@@ -1070,28 +1479,17 @@ impl Gfx942SdmaQueueOwnerV1 {
                 item.packet.bytes(),
             )?;
         }
-        for (request, item) in requests.into_iter().zip(copies) {
-            self.generations[item.slot] = item.generation;
-            self.records[item.slot] = Some(SdmaCopyRecordV1 {
-                generation: item.generation,
-                completion_value: item.completion_value,
-                completion_observed: false,
-                source: request.source,
-                destination: request.destination,
-                copy_bytes: request.copy_bytes,
-            });
-        }
         memory.publish_sdma_control_write_release_in_current_scope(
             self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
                 "missing SDMA control authority",
             ))?,
-            write,
-            write_end,
+            publication_plan.write,
+            publication_plan.write_end,
         )?;
         self.doorbell
             .as_mut()
             .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
-            .store_packet_id_release(write_end)
+            .store_packet_id_release(publication_plan.write_end)
             .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
         self.poisoned = false;
         Ok(tickets)
@@ -1158,6 +1556,8 @@ impl Gfx942SdmaQueueOwnerV1 {
             source: record.source,
             destination: record.destination,
             copy_bytes: record.copy_bytes,
+            source_offset: record.source_offset,
+            destination_offset: record.destination_offset,
         }))
     }
 
@@ -1176,6 +1576,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Gfx942SdmaErrorV1::Contract("SDMA wait deadline"))?;
+        let mut wait = MonotonicWaitV1::until(deadline);
         memory.check_queue_operational_currentness()?;
         loop {
             let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
@@ -1193,11 +1594,11 @@ impl Gfx942SdmaQueueOwnerV1 {
                     "unexpected SDMA completion value",
                 ));
             }
-            if Instant::now() >= deadline {
+            if wait.expired() {
                 memory.check_queue_operational_currentness()?;
                 return Err(Gfx942SdmaErrorV1::Timeout);
             }
-            core::hint::spin_loop();
+            wait.pause();
         }
         memory.check_queue_operational_currentness()?;
         let record = self.records[slot].take().expect("completed SDMA record");
@@ -1205,6 +1606,8 @@ impl Gfx942SdmaQueueOwnerV1 {
             source: record.source,
             destination: record.destination,
             copy_bytes: record.copy_bytes,
+            source_offset: record.source_offset,
+            destination_offset: record.destination_offset,
         })
     }
 
@@ -1224,6 +1627,44 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
     }
 
+    fn poll_xgmi_in_current_scope(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<Gfx942XgmiCopyPollV1, Gfx942SdmaErrorV1> {
+        self.require_live()?;
+        let slot = self.validate_xgmi_ticket(ticket)?;
+        let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
+            self.completions
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing XGMI SDMA completion arena",
+                ))?,
+            (slot * 8) as u64,
+        )?;
+        let expected = self.xgmi_records[slot]
+            .as_ref()
+            .expect("validated XGMI SDMA record")
+            .completion_value;
+        if observed == 0 {
+            return Ok(Gfx942XgmiCopyPollV1::Pending(ticket));
+        }
+        if observed != i64::from(expected) {
+            self.poisoned = true;
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "unexpected XGMI SDMA completion value",
+            ));
+        }
+        let record = self.xgmi_records[slot]
+            .take()
+            .expect("completed XGMI SDMA record");
+        Ok(Gfx942XgmiCopyPollV1::Completed(Gfx942XgmiCompletedCopyV1 {
+            source: record.source,
+            destination: record.destination,
+            copy_bytes: record.copy_bytes,
+        }))
+    }
+
     fn wait_xgmi_for_in_current_scope(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
@@ -1239,6 +1680,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA wait deadline"))?;
+        let mut wait = MonotonicWaitV1::until(deadline);
         loop {
             let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
                 self.completions
@@ -1257,10 +1699,10 @@ impl Gfx942SdmaQueueOwnerV1 {
                     "unexpected XGMI SDMA completion value",
                 ));
             }
-            if Instant::now() >= deadline {
+            if wait.expired() {
                 return Err(Gfx942SdmaErrorV1::Timeout);
             }
-            core::hint::spin_loop();
+            wait.pause();
         }
         let record = self.xgmi_records[slot]
             .take()
@@ -1269,6 +1711,160 @@ impl Gfx942SdmaQueueOwnerV1 {
             source: record.source,
             destination: record.destination,
             copy_bytes: record.copy_bytes,
+        })
+    }
+
+    fn wait_many_xgmi_for_in_current_scope(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942SdmaErrorV1> {
+        self.require_live()?;
+        if tickets.is_empty() || tickets.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+            return Err(Gfx942SdmaErrorV1::Contract("XGMI SDMA wait batch size"));
+        }
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(tickets.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("XGMI SDMA wait roster allocation"))?;
+        for ticket in tickets {
+            let slot = self.validate_xgmi_ticket(*ticket)?;
+            if slots.contains(&slot) {
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "duplicate XGMI SDMA wait ticket",
+                ));
+            }
+            slots.push(slot);
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA batch wait deadline"))?;
+        let mut wait = MonotonicWaitV1::until(deadline);
+        let mut ready = vec![false; slots.len()];
+        loop {
+            let mut all_ready = true;
+            for (index, slot) in slots.iter().copied().enumerate() {
+                if ready[index] {
+                    continue;
+                }
+                let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
+                    self.completions
+                        .as_mut()
+                        .ok_or(Gfx942SdmaErrorV1::Contract(
+                            "missing XGMI SDMA completion arena",
+                        ))?,
+                    (slot * 8) as u64,
+                )?;
+                let expected = self.xgmi_records[slot]
+                    .as_ref()
+                    .expect("validated XGMI SDMA batch record")
+                    .completion_value;
+                if observed == i64::from(expected) {
+                    ready[index] = true;
+                } else if observed == 0 {
+                    all_ready = false;
+                } else {
+                    self.poisoned = true;
+                    return Err(Gfx942SdmaErrorV1::Contract(
+                        "unexpected XGMI SDMA batch completion value",
+                    ));
+                }
+            }
+            if all_ready && ready.iter().all(|value| *value) {
+                break;
+            }
+            if wait.expired() {
+                return Err(Gfx942SdmaErrorV1::Timeout);
+            }
+            wait.pause();
+        }
+        let mut completed = Vec::new();
+        completed
+            .try_reserve_exact(slots.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("XGMI completion roster allocation"))?;
+        for slot in slots {
+            let record = self.xgmi_records[slot]
+                .take()
+                .expect("completed XGMI SDMA batch record");
+            completed.push(Gfx942XgmiCompletedCopyV1 {
+                source: record.source,
+                destination: record.destination,
+                copy_bytes: record.copy_bytes,
+            });
+        }
+        Ok(completed)
+    }
+
+    fn observe_progress_in_current_scope(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        xgmi: bool,
+    ) -> Result<Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaErrorV1> {
+        self.require_live()?;
+        if tickets.is_empty() || tickets.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+            return Err(Gfx942SdmaErrorV1::Contract("SDMA progress ticket roster"));
+        }
+        let mut completed_count = 0_u16;
+        let mut seen_slots = Vec::new();
+        seen_slots
+            .try_reserve_exact(tickets.len())
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA progress roster allocation"))?;
+        for ticket in tickets {
+            let slot = if xgmi {
+                self.validate_xgmi_ticket(*ticket)?
+            } else {
+                self.validate_ticket(*ticket)?
+            };
+            if seen_slots.contains(&slot) {
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "duplicate SDMA progress ticket",
+                ));
+            }
+            seen_slots.push(slot);
+            let expected = if xgmi {
+                self.xgmi_records[slot]
+                    .as_ref()
+                    .expect("validated XGMI SDMA progress record")
+                    .completion_value
+            } else {
+                self.records[slot]
+                    .as_ref()
+                    .expect("validated SDMA progress record")
+                    .completion_value
+            };
+            let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
+                self.completions
+                    .as_mut()
+                    .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?,
+                (slot * 8) as u64,
+            )?;
+            if observed == i64::from(expected) {
+                completed_count += 1;
+            } else if observed != 0 {
+                self.poisoned = true;
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "unexpected SDMA progress completion value",
+                ));
+            }
+        }
+        let (queue_write_bytes, queue_read_bytes) = memory
+            .observe_aql_control_counters_in_current_scope(self.control.as_mut().ok_or(
+                Gfx942SdmaErrorV1::Contract("missing SDMA control authority"),
+            )?)?;
+        validate_sdma_write_counter_or_poison(queue_write_bytes, &mut self.poisoned)?;
+        if !sdma_ring_delta_is_below_capacity(queue_write_bytes, queue_read_bytes) {
+            self.poisoned = true;
+            return Err(Gfx942SdmaErrorV1::Contract("invalid SDMA queue counters"));
+        }
+        Ok(Gfx942SdmaQueueProgressObservationV1 {
+            queue_id: self.queue_id,
+            submitted_count: tickets.len() as u16,
+            completed_count,
+            queue_write_bytes,
+            queue_read_bytes,
+            host_observed_at: Instant::now(),
         })
     }
 
@@ -1296,6 +1892,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Gfx942SdmaErrorV1::Contract("SDMA batch wait deadline"))?;
+        let mut wait = MonotonicWaitV1::until(deadline);
         let mut ready = Vec::new();
         ready
             .try_reserve_exact(slots.len())
@@ -1331,10 +1928,10 @@ impl Gfx942SdmaQueueOwnerV1 {
             if all_ready && ready.iter().all(|value| *value) {
                 break;
             }
-            if Instant::now() >= deadline {
+            if wait.expired() {
                 return Err(Gfx942SdmaErrorV1::Timeout);
             }
-            core::hint::spin_loop();
+            wait.pause();
         }
         let mut completed = Vec::new();
         completed
@@ -1348,6 +1945,8 @@ impl Gfx942SdmaQueueOwnerV1 {
                 source: record.source,
                 destination: record.destination,
                 copy_bytes: record.copy_bytes,
+                source_offset: record.source_offset,
+                destination_offset: record.destination_offset,
             });
         }
         Ok(completed)
@@ -1564,6 +2163,125 @@ pub enum Gfx942XgmiWaitFailureV1 {
         completed: Gfx942XgmiCompletedCopyV1,
     },
 }
+
+#[must_use = "inspect the error and recover requests or the retained pending tickets"]
+pub enum Gfx942XgmiBatchSubmissionFailureV1 {
+    Recoverable {
+        error: Gfx942SdmaErrorV1,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    },
+    Retained {
+        error: Gfx942SdmaErrorV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    },
+}
+
+impl Gfx942XgmiBatchSubmissionFailureV1 {
+    pub const fn error(&self) -> &Gfx942SdmaErrorV1 {
+        match self {
+            Self::Recoverable { error, .. } | Self::Retained { error, .. } => error,
+        }
+    }
+
+    pub fn into_recoverable_requests(self) -> Option<Vec<Gfx942XgmiSdmaCopyRequestV1>> {
+        match self {
+            Self::Recoverable { requests, .. } => Some(requests),
+            Self::Retained { .. } => None,
+        }
+    }
+
+    pub fn into_retained_tickets(self) -> Option<Vec<Gfx942SdmaCopyTicketV1>> {
+        match self {
+            Self::Retained { tickets, .. } => Some(tickets),
+            Self::Recoverable { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for Gfx942XgmiBatchSubmissionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error().fmt(formatter)
+    }
+}
+
+impl fmt::Debug for Gfx942XgmiBatchSubmissionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942XgmiBatchSubmissionFailureV1")
+            .field("error", self.error())
+            .field(
+                "recovery",
+                &match self {
+                    Self::Recoverable { requests, .. } => ("requests", requests.len()),
+                    Self::Retained { tickets, .. } => ("tickets", tickets.len()),
+                },
+            )
+            .finish()
+    }
+}
+
+impl std::error::Error for Gfx942XgmiBatchSubmissionFailureV1 {}
+
+#[must_use = "inspect the error and recover pending tickets or completed mappings"]
+pub enum Gfx942XgmiBatchWaitFailureV1 {
+    Retained {
+        error: Gfx942SdmaErrorV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    },
+    CompletedCurrentnessIndeterminate {
+        error: Gfx942SdmaErrorV1,
+        completed: Vec<Gfx942XgmiCompletedCopyV1>,
+    },
+}
+
+impl Gfx942XgmiBatchWaitFailureV1 {
+    pub const fn error(&self) -> &Gfx942SdmaErrorV1 {
+        match self {
+            Self::Retained { error, .. }
+            | Self::CompletedCurrentnessIndeterminate { error, .. } => error,
+        }
+    }
+
+    pub fn into_retained_tickets(self) -> Option<Vec<Gfx942SdmaCopyTicketV1>> {
+        match self {
+            Self::Retained { tickets, .. } => Some(tickets),
+            Self::CompletedCurrentnessIndeterminate { .. } => None,
+        }
+    }
+
+    pub fn into_indeterminate_completions(self) -> Option<Vec<Gfx942XgmiCompletedCopyV1>> {
+        match self {
+            Self::CompletedCurrentnessIndeterminate { completed, .. } => Some(completed),
+            Self::Retained { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for Gfx942XgmiBatchWaitFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error().fmt(formatter)
+    }
+}
+
+impl fmt::Debug for Gfx942XgmiBatchWaitFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942XgmiBatchWaitFailureV1")
+            .field("error", self.error())
+            .field(
+                "recovery",
+                &match self {
+                    Self::Retained { tickets, .. } => ("tickets", tickets.len()),
+                    Self::CompletedCurrentnessIndeterminate { completed, .. } => {
+                        ("completed", completed.len())
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+impl std::error::Error for Gfx942XgmiBatchWaitFailureV1 {}
 
 impl Gfx942XgmiWaitFailureV1 {
     pub const fn error(&self) -> &Gfx942SdmaErrorV1 {
@@ -1806,6 +2524,167 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         }
     }
 
+    /// Prepares all packet images, retains every peer mapping, and publishes
+    /// the bounded batch with one write-pointer update and one doorbell store.
+    pub fn submit_batch(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
+        self.submit_batch_with_currentness(
+            source_session,
+            destination_session,
+            requests,
+            XgmiRouteCurrentnessV1::Full,
+        )
+    }
+
+    fn submit_batch_with_currentness(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+        currentness: XgmiRouteCurrentnessV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
+        if let Err(error) = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            currentness,
+        ) {
+            return Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error, requests });
+        }
+        let owner = match self.owner.as_mut() {
+            Some(owner) => owner,
+            None => {
+                return Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable {
+                    error: Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"),
+                    requests,
+                });
+            }
+        };
+        let prepared = match owner.prepare_xgmi_batch_recoverable(
+            source_session,
+            destination_session,
+            self.route,
+            requests,
+        ) {
+            Ok(prepared) => prepared,
+            Err((error, requests)) => {
+                return Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error, requests });
+            }
+        };
+        let tickets = match owner.submit_prepared_xgmi_batch(source_session, prepared) {
+            Ok(tickets) => tickets,
+            Err((error, tickets)) => {
+                return Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets });
+            }
+        };
+        if let Err(error) = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            currentness,
+        ) {
+            owner.poisoned = true;
+            return Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets });
+        }
+        Ok(tickets)
+    }
+
+    /// Observes one XGMI completion without blocking or releasing custody early.
+    pub fn poll(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<Gfx942XgmiCopyPollV1, Gfx942XgmiCopyFailureV1> {
+        if let Err(error) = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            XgmiRouteCurrentnessV1::Full,
+        ) {
+            self.poison_for_abandoned_batch();
+            return Err(Gfx942XgmiCopyFailureV1::Retained { error, ticket });
+        }
+        let result = match self.owner.as_mut() {
+            Some(owner) => owner.poll_xgmi_in_current_scope(source_session, ticket),
+            None => Err(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner")),
+        };
+        let post = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            XgmiRouteCurrentnessV1::Full,
+        );
+        if let Err(error) = post {
+            self.poison_for_abandoned_batch();
+            return Err(match result {
+                Ok(Gfx942XgmiCopyPollV1::Completed(completed)) => {
+                    Gfx942XgmiCopyFailureV1::CompletedCurrentnessIndeterminate { error, completed }
+                }
+                Ok(Gfx942XgmiCopyPollV1::Pending(pending)) => Gfx942XgmiCopyFailureV1::Retained {
+                    error,
+                    ticket: pending,
+                },
+                Err(_) => Gfx942XgmiCopyFailureV1::Retained { error, ticket },
+            });
+        }
+        result.map_err(|error| Gfx942XgmiCopyFailureV1::Retained { error, ticket })
+    }
+
+    /// Reports queue counters and per-ticket fence progress at one host instant.
+    pub fn observe_progress(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaErrorV1> {
+        Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            XgmiRouteCurrentnessV1::Full,
+        )?;
+        let result = self
+            .owner
+            .as_mut()
+            .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?
+            .observe_progress_in_current_scope(source_session, tickets, true);
+        let post = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            XgmiRouteCurrentnessV1::Full,
+        );
+        if post.is_err() {
+            self.poison_for_abandoned_batch();
+        }
+        match (result, post) {
+            (Ok(observation), Ok(())) => Ok(observation),
+            (Err(error), Ok(())) => Err(error),
+            (_, Err(error)) => Err(error),
+        }
+    }
+
+    /// Validates the ticket and rejects cancellation without mutating native state.
+    ///
+    /// Published SDMA packets cannot be retracted safely with the admitted KFD
+    /// queue interface. The returned ticket remains valid and must be drained.
+    pub fn try_cancel(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<(), (Gfx942SdmaErrorV1, Gfx942SdmaCopyTicketV1)> {
+        match self.observe_progress(source_session, destination_session, &[ticket]) {
+            Ok(_) => Err((Gfx942SdmaErrorV1::PublishedCancellationUnsupported, ticket)),
+            Err(error) => Err((error, ticket)),
+        }
+    }
+
     pub fn wait_for(
         &mut self,
         source_session: &mut SharedGttMemorySessionV1,
@@ -1820,6 +2699,68 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             timeout,
             XgmiRouteCurrentnessV1::Full,
         )
+    }
+
+    /// Drains every ticket in one bounded batch under an exact route envelope.
+    pub fn wait_batch_for(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
+        self.wait_batch_for_with_currentness(
+            source_session,
+            destination_session,
+            tickets,
+            timeout,
+            XgmiRouteCurrentnessV1::Full,
+        )
+    }
+
+    fn wait_batch_for_with_currentness(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        timeout: Duration,
+        currentness: XgmiRouteCurrentnessV1,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
+        if let Err(error) = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            currentness,
+        ) {
+            self.poison_for_abandoned_batch();
+            return Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets });
+        }
+        let result = match self.owner.as_mut() {
+            Some(owner) => {
+                owner.wait_many_xgmi_for_in_current_scope(source_session, &tickets, timeout)
+            }
+            None => Err(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner")),
+        };
+        let post = Self::validate_route_currentness(
+            source_session,
+            destination_session,
+            self.route,
+            currentness,
+        );
+        if post.is_err() {
+            self.poison_for_abandoned_batch();
+        }
+        match (result, post) {
+            (Ok(completed), Ok(())) => Ok(completed),
+            (Err(error), Ok(())) => Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets }),
+            (Err(_), Err(error)) => Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets }),
+            (Ok(completed), Err(error)) => Err(
+                Gfx942XgmiBatchWaitFailureV1::CompletedCurrentnessIndeterminate {
+                    error,
+                    completed,
+                },
+            ),
+        }
     }
 
     fn wait_for_with_currentness(
@@ -1953,6 +2894,19 @@ impl Gfx942NativeXgmiSdmaBatchV1<'_> {
         )
     }
 
+    /// Publishes a prepared multi-packet batch with one final doorbell store.
+    pub fn submit_batch(
+        &mut self,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
+        self.queue.submit_batch_with_currentness(
+            self.source,
+            self.destination,
+            requests,
+            XgmiRouteCurrentnessV1::BatchScoped,
+        )
+    }
+
     pub fn wait_for(
         &mut self,
         ticket: Gfx942SdmaCopyTicketV1,
@@ -1962,6 +2916,20 @@ impl Gfx942NativeXgmiSdmaBatchV1<'_> {
             self.source,
             self.destination,
             ticket,
+            timeout,
+            XgmiRouteCurrentnessV1::BatchScoped,
+        )
+    }
+
+    pub fn wait_batch_for(
+        &mut self,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        timeout: Duration,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
+        self.queue.wait_batch_for_with_currentness(
+            self.source,
+            self.destination,
+            tickets,
             timeout,
             XgmiRouteCurrentnessV1::BatchScoped,
         )
@@ -2007,6 +2975,10 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
 pub(crate) enum Gfx942SdmaQueueSetV1 {
     Generic(Vec<Gfx942SdmaQueueOwnerV1>),
     Directional(Vec<Gfx942SdmaQueueOwnerV1>),
+    Striped {
+        owners: Vec<Gfx942SdmaQueueOwnerV1>,
+        next_owner: usize,
+    },
 }
 
 impl Gfx942SdmaQueueSetV1 {
@@ -2089,10 +3061,63 @@ impl Gfx942SdmaQueueSetV1 {
         Ok(Self::Generic(owners))
     }
 
+    pub(crate) fn create_striped(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+        queue_count: u32,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        memory.check_gfx942_sdma_topology_capability_currentness()?;
+        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
+        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
+            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
+            || !striped_sdma_queue_count_is_admitted(queue_count)
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "striped SDMA queue topology or count",
+            ));
+        }
+        let mut owners = Vec::new();
+        owners
+            .try_reserve_exact(queue_count as usize)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("striped SDMA owner roster allocation"))?;
+        for queue_index in 0..queue_count {
+            let engine_index = queue_index % KFD_GFX942_SDMA_ENGINE_COUNT_V1;
+            let engine = admit_kfd_gfx942_sdma_engine_id(engine_index)
+                .map_err(|_| Gfx942SdmaErrorV1::Contract("striped SDMA engine index"))?;
+            let created = Gfx942SdmaQueueOwnerV1::create_on_engine(memory, owner, engine)?;
+            if owners
+                .iter()
+                .any(|existing: &Gfx942SdmaQueueOwnerV1| existing.queue_id == created.queue_id)
+            {
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "striped SDMA duplicate native queue ID",
+                ));
+            }
+            owners.push(created);
+        }
+        memory.check_gfx942_sdma_topology_capability_currentness()?;
+        Ok(Self::Striped {
+            owners,
+            next_owner: 0,
+        })
+    }
+
     pub(crate) fn generic_observation(&self) -> Option<Gfx942SdmaQueueObservationV1> {
         match self {
             Self::Generic(owners) => owners.first().map(Gfx942SdmaQueueOwnerV1::observation),
-            Self::Directional(_) => None,
+            Self::Directional(_) | Self::Striped { .. } => None,
+        }
+    }
+
+    pub(crate) fn striped_observations(&self) -> Option<Vec<Gfx942SdmaQueueObservationV1>> {
+        match self {
+            Self::Striped { owners, .. } => Some(
+                owners
+                    .iter()
+                    .map(Gfx942SdmaQueueOwnerV1::observation)
+                    .collect(),
+            ),
+            Self::Generic(_) | Self::Directional(_) => None,
         }
     }
 
@@ -2100,7 +3125,7 @@ impl Gfx942SdmaQueueSetV1 {
         &self,
     ) -> Option<Gfx942DirectionalSdmaQueueObservationV1> {
         match self {
-            Self::Generic(_) => None,
+            Self::Generic(_) | Self::Striped { .. } => None,
             Self::Directional(owners) => Some(Gfx942DirectionalSdmaQueueObservationV1 {
                 host_to_device: owners.get(GFX942_SDMA_H2D_OWNER_SLOT_V1)?.observation(),
                 device_to_host: owners.get(GFX942_SDMA_D2H_OWNER_SLOT_V1)?.observation(),
@@ -2151,7 +3176,9 @@ impl Gfx942SdmaQueueSetV1 {
         destination_offset: u64,
         copy_bytes: u32,
     ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1> {
-        self.owner_for_copy(source.kind(), destination.kind())?
+        let striped = matches!(self, Self::Striped { .. });
+        let result = self
+            .owner_for_copy(source.kind(), destination.kind())?
             .submit(
                 memory,
                 source,
@@ -2159,7 +3186,11 @@ impl Gfx942SdmaQueueSetV1 {
                 destination,
                 destination_offset,
                 copy_bytes,
-            )
+            );
+        if striped && result.is_ok() {
+            self.advance_striped_owner()?;
+        }
+        result
     }
 
     pub(crate) fn submit_prepared_batch(
@@ -2174,8 +3205,14 @@ impl Gfx942SdmaQueueSetV1 {
             .ok_or(Gfx942SdmaErrorV1::Contract(
                 "SDMA prepared batch ticket roster",
             ))?;
-        self.owner_for_ticket(ticket)?
-            .submit_prepared_batch(memory, prepared)
+        let striped = matches!(self, Self::Striped { .. });
+        let result = self
+            .owner_for_ticket(ticket)?
+            .submit_prepared_batch(memory, prepared);
+        if striped && result.is_ok() {
+            self.advance_striped_owner()?;
+        }
+        result
     }
 
     pub(crate) fn poll(
@@ -2184,6 +3221,23 @@ impl Gfx942SdmaQueueSetV1 {
         ticket: Gfx942SdmaCopyTicketV1,
     ) -> Result<Gfx942SdmaCopyPollV1, Gfx942SdmaErrorV1> {
         self.owner_for_ticket(ticket)?.poll(memory, ticket)
+    }
+
+    pub(crate) fn observe_progress(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaErrorV1> {
+        self.owner_for_tickets(tickets)?
+            .observe_progress_in_current_scope(memory, tickets, false)
+    }
+
+    pub(crate) fn validate_published_ticket(
+        &mut self,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
+        self.owner_for_ticket(ticket)?.validate_ticket(ticket)?;
+        Ok(())
     }
 
     pub(crate) fn wait_for(
@@ -2245,6 +3299,7 @@ impl Gfx942SdmaQueueSetV1 {
                 .first()
                 .is_some_and(|owner| owner.engine_index.is_some()),
             Self::Directional(_) => true,
+            Self::Striped { .. } => true,
         };
         if targeted {
             memory.check_gfx942_sdma_topology_capability_currentness()?;
@@ -2260,6 +3315,12 @@ impl Gfx942SdmaQueueSetV1 {
                 }
                 owners[GFX942_SDMA_H2D_OWNER_SLOT_V1].destroy_queue(memory)?;
                 owners[GFX942_SDMA_D2H_OWNER_SLOT_V1].destroy_queue(memory)
+            }
+            Self::Striped { owners, .. } => {
+                for owner in owners {
+                    owner.destroy_queue(memory)?;
+                }
+                Ok(())
             }
         }?;
         if targeted {
@@ -2290,6 +3351,12 @@ impl Gfx942SdmaQueueSetV1 {
                     .expect("checked D2H SDMA owner")
                     .release_resources(memory)
             }
+            Self::Striped { mut owners, .. } => {
+                while let Some(owner) = owners.pop() {
+                    owner.release_resources(memory)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -2297,6 +3364,9 @@ impl Gfx942SdmaQueueSetV1 {
         match self {
             Self::Generic(_) => 3,
             Self::Directional(_) => 6,
+            Self::Striped { owners, .. } => {
+                u8::try_from(owners.len().saturating_mul(3)).unwrap_or(u8::MAX)
+            }
         }
     }
 
@@ -2307,6 +3377,12 @@ impl Gfx942SdmaQueueSetV1 {
             }
             Self::Directional(owners) => {
                 owners.len() != GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1
+                    || owners.iter().any(Gfx942SdmaQueueOwnerV1::is_poisoned)
+            }
+            Self::Striped { owners, next_owner } => {
+                owners.len() < 2
+                    || !owners.len().is_multiple_of(2)
+                    || *next_owner >= owners.len()
                     || owners.iter().any(Gfx942SdmaQueueOwnerV1::is_poisoned)
             }
         }
@@ -2338,6 +3414,9 @@ impl Gfx942SdmaQueueSetV1 {
                     "directional SDMA profile admits only H2D or D2H copies",
                 )),
             },
+            Self::Striped { owners, next_owner } => owners
+                .get_mut(*next_owner)
+                .ok_or(Gfx942SdmaErrorV1::Contract("striped SDMA owner cursor")),
         }
     }
 
@@ -2381,7 +3460,19 @@ impl Gfx942SdmaQueueSetV1 {
                 .iter_mut()
                 .find(|owner| owner.queue_id == ticket.queue_id)
                 .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
+            Self::Striped { owners, .. } => owners
+                .iter_mut()
+                .find(|owner| owner.queue_id == ticket.queue_id)
+                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
         }
+    }
+
+    fn advance_striped_owner(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
+        let Self::Striped { owners, next_owner } = self else {
+            return Ok(());
+        };
+        *next_owner = next_striped_owner(*next_owner, owners.len())?;
+        Ok(())
     }
 }
 
@@ -2565,6 +3656,19 @@ const fn directional_queue_ids_are_distinct(
     host_to_device_queue_id: u32,
 ) -> bool {
     device_to_host_queue_id != host_to_device_queue_id
+}
+
+pub(crate) const fn striped_sdma_queue_count_is_admitted(queue_count: u32) -> bool {
+    queue_count >= KFD_GFX942_SDMA_ENGINE_COUNT_V1
+        && queue_count.is_multiple_of(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
+        && queue_count <= KFD_GFX942_SDMA_ENGINE_COUNT_V1 * KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1
+}
+
+fn next_striped_owner(current: usize, owner_count: usize) -> Result<usize, Gfx942SdmaErrorV1> {
+    if owner_count == 0 || current >= owner_count {
+        return Err(Gfx942SdmaErrorV1::Contract("striped SDMA owner cursor"));
+    }
+    Ok((current + 1) % owner_count)
 }
 
 fn exact_queue_owner(left: QueueKeyV1, right: QueueKeyV1) -> bool {
@@ -2764,6 +3868,71 @@ mod tests {
         assert!(sdma_ring_delta_is_below_capacity(4032, 0));
         assert!(!sdma_ring_delta_is_below_capacity(4096, 0));
         assert!(!sdma_ring_delta_is_below_capacity(63, 64));
+    }
+
+    #[test]
+    fn batch_publication_plan_has_one_exact_tail_for_fake_mmio() {
+        #[derive(Default)]
+        struct FakePublication {
+            packet_writes: usize,
+            write_publications: Vec<(u64, u64)>,
+            doorbells: Vec<u64>,
+        }
+
+        let plan = admit_sdma_batch_publication_plan(4032, 4032 + 4 * 64, 4).unwrap();
+        let mut fake = FakePublication::default();
+        fake.packet_writes += plan.packet_count;
+        fake.write_publications.push((plan.write, plan.write_end));
+        fake.doorbells.push(plan.write_end);
+        assert_eq!(fake.packet_writes, 4);
+        assert_eq!(fake.write_publications, [(4032, 4288)]);
+        assert_eq!(fake.doorbells, [4288]);
+
+        assert!(admit_sdma_batch_publication_plan(1, 65, 1).is_err());
+        assert!(admit_sdma_batch_publication_plan(0, 64, 0).is_err());
+        assert!(admit_sdma_batch_publication_plan(0, 192, 2).is_err());
+        assert!(
+            admit_sdma_batch_publication_plan(0, 64 * 64, GFX942_SDMA_RING_SLOT_COUNT_V1).is_err()
+        );
+    }
+
+    #[test]
+    fn striped_queue_count_is_closed_to_balanced_gfx942_inventory() {
+        for admitted in [2, 4, 6, 8, 10, 12, 14, 16] {
+            assert!(striped_sdma_queue_count_is_admitted(admitted));
+        }
+        for rejected in [0, 1, 3, 15, 17, u32::MAX] {
+            assert!(!striped_sdma_queue_count_is_admitted(rejected));
+        }
+    }
+
+    #[test]
+    fn striped_queue_cursor_is_deterministic_and_wraps() {
+        assert_eq!(next_striped_owner(0, 4).unwrap(), 1);
+        assert_eq!(next_striped_owner(2, 4).unwrap(), 3);
+        assert_eq!(next_striped_owner(3, 4).unwrap(), 0);
+        assert!(next_striped_owner(0, 0).is_err());
+        assert!(next_striped_owner(4, 4).is_err());
+    }
+
+    #[test]
+    fn progress_counts_pending_without_device_clock_claim() {
+        let observed_at = Instant::now();
+        let progress = Gfx942SdmaQueueProgressObservationV1 {
+            queue_id: 17,
+            submitted_count: 7,
+            completed_count: 3,
+            queue_write_bytes: 448,
+            queue_read_bytes: 192,
+            host_observed_at: observed_at,
+        };
+        assert_eq!(progress.queue_id(), 17);
+        assert_eq!(progress.submitted_count(), 7);
+        assert_eq!(progress.completed_count(), 3);
+        assert_eq!(progress.pending_count(), 4);
+        assert_eq!(progress.queue_write_bytes(), 448);
+        assert_eq!(progress.queue_read_bytes(), 192);
+        assert_eq!(progress.host_observed_at(), observed_at);
     }
 
     #[test]

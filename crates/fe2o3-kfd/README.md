@@ -589,12 +589,16 @@ also does not authenticate a device copy.
 
 ### R7 gfx942 SDMA and pooled buffers
 
-An active compute session may add either one generic classic KFD SDMA queue or
-an exact two-queue directional profile with a 4096-byte ring and at most 63
-in-flight 64-byte submissions per queue. Directional admission requires a
-fresh, generation-consistent observation of exactly two ordinary SDMA engines
-and eight queues per engine before and after targeted queue creation and
-destruction. KFD engine index 1 carries H2D and index 0 carries D2H; these are
+An active compute session may add one generic classic KFD SDMA queue, an exact
+two-queue directional profile, or a balanced striped set with any even count
+from 2 through 16 targeted queues. Every queue has a 4096-byte ring and at most 63 in-flight
+64-byte submissions. Directional and striped admission requires a fresh,
+generation-consistent observation of exactly two ordinary SDMA engines and
+eight queues per engine before and after targeted queue creation and
+destruction. The striped profile alternates engine indices 0 and 1, rejects
+duplicate native queue IDs, selects one queue round-robin per successfully
+published batch, and does not advance its selection on rejection. KFD engine
+index 1 carries directional H2D and index 0 carries directional D2H; these are
 indices, not the public HSA engine bit masks. Each submission contains one
 reviewed gfx942 linear-copy packet and one system-memory completion fence.
 Move-only host-coherent and HBM buffers retain the exact queue owner and a
@@ -609,6 +613,17 @@ operational-currentness envelope for submission and another for waiting; the
 checked combined API uses one envelope from preparation through observed
 completion.
 
+Polling and queue-progress observations are nonblocking. Progress binds the
+native queue occurrence, submitted/completed/pending counts, and ring byte
+counters to one host `Instant`; that is host-monotonic observation time, not a
+calibrated GPU timestamp. Deadline waits use bounded adaptive
+spin/yield/sleep backoff. The admitted SDMA fence protocol does not create a
+KFD completion event: the queue event is an exception signal, so completion
+remains coherent-memory polling. Published packets cannot be cancelled or
+retracted safely through this KFD interface. Cancellation validates custody
+and returns a typed unsupported result; callers must poll or explicitly drain
+the retained ticket batch.
+
 The session also owns a best-fit pool keyed by buffer kind, physical bytes, and
 alignment. Recycling is explicit, is possible only after buffer authority has
 returned from completion, and advances the concrete generation before reuse.
@@ -619,6 +634,23 @@ release of the copy ring, control page, and completion arena. A partial
 directional create or destroy failure returns no retryable state: native and
 mapped custody is terminally retained for process teardown.
 
+An exact full coherent upload buffer can be moved into fixed-dispatch data only
+after its complete physical extent matches a content descriptor. An exact full
+H2D completion can similarly move its device destination without a second
+allocation or copy, but only after the complete coherent source matches the
+descriptor. The move-only bridge binds queue occurrence, storage identity,
+extent, and pool generation; demotion checks those coordinates and advances
+the pool generation before returning SDMA custody. Partial copies, pooled
+logical/physical extent differences, foreign owners, digest substitution, and
+detached-ledger substitution fail closed. This is a custody-preserving role
+transition, not a proof of DMA execution or coherence.
+
+The fixed AQL batch supports multiple independent dispatch packets on one
+compute queue. This work does not create multiple compute queues inside one
+checked-device owner: the device, VM, and shared-memory session are linear and
+splitting that authority requires a separate native-owner transition. Striped
+queues apply only to SDMA work.
+
 `GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
 capability sidecar, reviewed ROCr revision, direction policy and packet sources,
 packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves
@@ -627,6 +659,22 @@ retention, quarantine, dependency, and device-coordinate theorems. It does not
 refine this Rust code. Ioctl truth, doorbell MMIO, CPU/GPU coherence, firmware
 consumption, completion, liveness, and performance remain contracted or
 measured.
+
+The hardware benchmarks print stable key/value records containing queue depth,
+batch size, direction, concurrency, doorbells per batch, and p50/p95 latency.
+Representative commands are:
+
+```text
+cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> directional
+cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> striped8
+cargo run -p fe2o3-kfd --example kfd-sdma-multi-device-benchmark -- <gpu0> <gpu1> <bytes> <depth-per-device> <warmups> <samples>
+cargo run -p fe2o3-kfd --example kfd-sdma-xgmi-peer-benchmark -- <gpu0> <gpu1> <bytes> <depth> <warmups> <samples>
+```
+
+The ordinary and XGMI publication changes are packet-model and fake-MMIO
+tested. Throughput, completion latency, copy-engine overlap, and cross-GPU
+behavior remain hardware-unverified until these commands are run on the named
+gfx942 topology and compared with equivalent HIP/HSA workloads.
 
 ### R9 native XGMI and machine-structure admission
 
@@ -639,10 +687,17 @@ owners map an exact canonical two-GPU array with cumulative-prefix recovery;
 an errored full map is cleanup-only and an errored full unmap quarantines
 without granting free authority. A BY_ENG_ID XGMI SDMA queue exposes
 nonblocking bounded submission and exact completion custody in both
-directions. A bounded batch has one full topology-currentness envelope, while
-each packet performs its own prospective reset checks and doorbell store. A
-prepared multi-packet single-doorbell publication and topology-safe striping
-across XGMI engines remain open performance work.
+directions. A bounded batch performs all fallible packet construction and
+retained-mapping allocation before native mutation, writes every packet while
+the visible write pointer is unchanged, then performs one release write-pointer
+publication and one final doorbell store under one topology-currentness
+envelope. Nonblocking poll, progress observation, bounded adaptive wait, typed
+cancellation rejection, and explicit batch drain mirror the ordinary SDMA
+surface. Forward and reverse route queues use the topology-recommended XGMI
+engine for their exact direction. The current safe API holds both device
+sessions mutably for one route queue, so the bidirectional benchmark runs
+forward then reverse and reports `concurrency=1`; simultaneous opposite-route
+striping requires a future split peer-session authority.
 
 The authenticated LLVM/MC analyzer separately classifies a closed set of
 global/LDS integer RMW atomic instructions and collective building blocks. Its

@@ -14,6 +14,7 @@ aql_proof="$script_dir/aql_publication_v1.rs"
 r7_async_resources_proof="$script_dir/r7_async_resources_v1.rs"
 r8_execution_contracts_proof="$script_dir/r8_execution_contracts_v1.rs"
 r9_native_evidence_proof="$script_dir/r9_native_evidence_v1.rs"
+r10_closed_execution_proof="$script_dir/r10_closed_execution_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -74,6 +75,17 @@ negative_r9_stale_dispatch="$script_dir/negative/r9_native_evidence_v1_stale_dis
 negative_r9_incomplete_dependency="$script_dir/negative/r9_native_evidence_v1_incomplete_dependency.rs"
 negative_r9_copy_inactive_mapping="$script_dir/negative/r9_native_evidence_v1_copy_inactive_mapping.rs"
 negative_r9_uncertain_copy_release="$script_dir/negative/r9_native_evidence_v1_uncertain_copy_release.rs"
+negative_r10_dependency_bypass="$script_dir/negative/r10_closed_execution_v1_dependency_bypass.rs"
+negative_r10_partial_batch="$script_dir/negative/r10_closed_execution_v1_partial_batch.rs"
+negative_r10_pool_generation="$script_dir/negative/r10_closed_execution_v1_pool_generation.rs"
+negative_r10_peer_owner="$script_dir/negative/r10_closed_execution_v1_peer_owner.rs"
+negative_r10_cancel_release="$script_dir/negative/r10_closed_execution_v1_cancel_release.rs"
+negative_r10_quarantine_release="$script_dir/negative/r10_closed_execution_v1_quarantine_release.rs"
+negative_r10_atomic_scope="$script_dir/negative/r10_closed_execution_v1_atomic_scope.rs"
+negative_r10_atomic_fence="$script_dir/negative/r10_closed_execution_v1_atomic_fence.rs"
+negative_r10_atomic_return="$script_dir/negative/r10_closed_execution_v1_atomic_return.rs"
+negative_r10_wave_early="$script_dir/negative/r10_closed_execution_v1_wave_early.rs"
+negative_r10_scan_prefix="$script_dir/negative/r10_closed_execution_v1_scan_prefix.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -109,6 +121,7 @@ expected_aql=$(read_pin "$pin_dir/AQL_PUBLICATION_SHA256")
 expected_r7_async_resources=$(read_pin "$pin_dir/R7_ASYNC_RESOURCES_SHA256")
 expected_r8_execution_contracts=$(read_pin "$pin_dir/R8_EXECUTION_CONTRACTS_SHA256")
 expected_r9_native_evidence=$(read_pin "$pin_dir/R9_NATIVE_EVIDENCE_SHA256")
+expected_r10_closed_execution=$(read_pin "$pin_dir/R10_CLOSED_EXECUTION_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -169,6 +182,17 @@ expected_negative_r9_stale_dispatch=$(read_pin "$pin_dir/NEGATIVE_R9_STALE_DISPA
 expected_negative_r9_incomplete_dependency=$(read_pin "$pin_dir/NEGATIVE_R9_INCOMPLETE_DEPENDENCY_SHA256")
 expected_negative_r9_copy_inactive_mapping=$(read_pin "$pin_dir/NEGATIVE_R9_COPY_INACTIVE_MAPPING_SHA256")
 expected_negative_r9_uncertain_copy_release=$(read_pin "$pin_dir/NEGATIVE_R9_UNCERTAIN_COPY_RELEASE_SHA256")
+expected_negative_r10_dependency_bypass=$(read_pin "$pin_dir/NEGATIVE_R10_DEPENDENCY_BYPASS_SHA256")
+expected_negative_r10_partial_batch=$(read_pin "$pin_dir/NEGATIVE_R10_PARTIAL_BATCH_SHA256")
+expected_negative_r10_pool_generation=$(read_pin "$pin_dir/NEGATIVE_R10_POOL_GENERATION_SHA256")
+expected_negative_r10_peer_owner=$(read_pin "$pin_dir/NEGATIVE_R10_PEER_OWNER_SHA256")
+expected_negative_r10_cancel_release=$(read_pin "$pin_dir/NEGATIVE_R10_CANCEL_RELEASE_SHA256")
+expected_negative_r10_quarantine_release=$(read_pin "$pin_dir/NEGATIVE_R10_QUARANTINE_RELEASE_SHA256")
+expected_negative_r10_atomic_scope=$(read_pin "$pin_dir/NEGATIVE_R10_ATOMIC_SCOPE_SHA256")
+expected_negative_r10_atomic_fence=$(read_pin "$pin_dir/NEGATIVE_R10_ATOMIC_FENCE_SHA256")
+expected_negative_r10_atomic_return=$(read_pin "$pin_dir/NEGATIVE_R10_ATOMIC_RETURN_SHA256")
+expected_negative_r10_wave_early=$(read_pin "$pin_dir/NEGATIVE_R10_WAVE_EARLY_SHA256")
+expected_negative_r10_scan_prefix=$(read_pin "$pin_dir/NEGATIVE_R10_SCAN_PREFIX_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -207,6 +231,7 @@ check_sources() {
     check_digest "$expected_r7_async_resources" "$r7_async_resources_proof"
     check_digest "$expected_r8_execution_contracts" "$r8_execution_contracts_proof"
     check_digest "$expected_r9_native_evidence" "$r9_native_evidence_proof"
+    check_digest "$expected_r10_closed_execution" "$r10_closed_execution_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -267,6 +292,17 @@ check_sources() {
     check_digest "$expected_negative_r9_incomplete_dependency" "$negative_r9_incomplete_dependency"
     check_digest "$expected_negative_r9_copy_inactive_mapping" "$negative_r9_copy_inactive_mapping"
     check_digest "$expected_negative_r9_uncertain_copy_release" "$negative_r9_uncertain_copy_release"
+    check_digest "$expected_negative_r10_dependency_bypass" "$negative_r10_dependency_bypass"
+    check_digest "$expected_negative_r10_partial_batch" "$negative_r10_partial_batch"
+    check_digest "$expected_negative_r10_pool_generation" "$negative_r10_pool_generation"
+    check_digest "$expected_negative_r10_peer_owner" "$negative_r10_peer_owner"
+    check_digest "$expected_negative_r10_cancel_release" "$negative_r10_cancel_release"
+    check_digest "$expected_negative_r10_quarantine_release" "$negative_r10_quarantine_release"
+    check_digest "$expected_negative_r10_atomic_scope" "$negative_r10_atomic_scope"
+    check_digest "$expected_negative_r10_atomic_fence" "$negative_r10_atomic_fence"
+    check_digest "$expected_negative_r10_atomic_return" "$negative_r10_atomic_return"
+    check_digest "$expected_negative_r10_wave_early" "$negative_r10_wave_early"
+    check_digest "$expected_negative_r10_scan_prefix" "$negative_r10_scan_prefix"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -286,6 +322,7 @@ check_sources
     "$r7_async_resources_proof" \
     "$r8_execution_contracts_proof" \
     "$r9_native_evidence_proof" \
+    "$r10_closed_execution_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -342,7 +379,18 @@ check_sources
     "$negative_r9_stale_dispatch" \
     "$negative_r9_incomplete_dependency" \
     "$negative_r9_copy_inactive_mapping" \
-    "$negative_r9_uncertain_copy_release"
+    "$negative_r9_uncertain_copy_release" \
+    "$negative_r10_dependency_bypass" \
+    "$negative_r10_partial_batch" \
+    "$negative_r10_pool_generation" \
+    "$negative_r10_peer_owner" \
+    "$negative_r10_cancel_release" \
+    "$negative_r10_quarantine_release" \
+    "$negative_r10_atomic_scope" \
+    "$negative_r10_atomic_fence" \
+    "$negative_r10_atomic_return" \
+    "$negative_r10_wave_early" \
+    "$negative_r10_scan_prefix"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -452,6 +500,7 @@ check_positive "$aql_proof" 'verification results:: 11 verified, 0 errors' aql-p
 check_positive "$r7_async_resources_proof" 'verification results:: 8 verified, 0 errors' r7-async-resources
 check_positive "$r8_execution_contracts_proof" 'verification results:: 10 verified, 0 errors' r8-execution-contracts
 check_positive "$r9_native_evidence_proof" 'verification results:: 14 verified, 0 errors' r9-native-evidence
+check_positive "$r10_closed_execution_proof" 'verification results:: 20 verified, 0 errors' r10-closed-execution
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -512,13 +561,24 @@ check_negative "$negative_r9_stale_dispatch" mutated_any_stale_surface_blocks_di
 check_negative "$negative_r9_incomplete_dependency" mutated_incomplete_dependency_blocks_evidence_dispatch_v1 r9-incomplete-dependency
 check_negative "$negative_r9_copy_inactive_mapping" mutated_xgmi_copy_requires_both_active_mappings_v1 r9-copy-inactive-mapping
 check_negative "$negative_r9_uncertain_copy_release" mutated_uncertain_xgmi_completion_retains_owners_v1 r9-uncertain-copy-release
+check_negative "$negative_r10_dependency_bypass" mutated_incomplete_dependency_blocks_closed_publication_v1 r10-dependency-bypass
+check_negative "$negative_r10_partial_batch" mutated_unready_batch_has_no_partial_publication_v1 r10-partial-batch
+check_negative "$negative_r10_pool_generation" mutated_completed_pool_release_advances_generation_v1 r10-pool-generation
+check_negative "$negative_r10_peer_owner" mutated_peer_copy_executes_on_destination_v1 r10-peer-owner
+check_negative "$negative_r10_cancel_release" mutated_published_cancellation_retains_leases_v1 r10-cancel-release
+check_negative "$negative_r10_quarantine_release" mutated_indeterminate_failure_blocks_release_v1 r10-quarantine-release
+check_negative "$negative_r10_atomic_scope" mutated_substituted_atomic_scope_never_corresponds_v1 r10-atomic-scope
+check_negative "$negative_r10_atomic_fence" mutated_release_atomic_requires_pre_fence_v1 r10-atomic-fence
+check_negative "$negative_r10_atomic_return" mutated_atomic_rmw_returns_old_value_v1 r10-atomic-return
+check_negative "$negative_r10_wave_early" mutated_incomplete_wave64_cannot_publish_v1 r10-wave-early
+check_negative "$negative_r10_scan_prefix" mutated_inclusive_scan_includes_current_lane_v1 r10-scan-prefix
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 mutations=60'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 mutations=71'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

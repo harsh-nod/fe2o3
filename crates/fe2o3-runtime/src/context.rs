@@ -85,6 +85,24 @@ pub struct RuntimeCapabilitiesV1 {
     pub collectives: bool,
 }
 
+/// Optional execution-detail inventory outside the stable Worker V3 bitset.
+///
+/// Backends must opt in field by field. The default is deliberately all false,
+/// so an older backend cannot accidentally advertise a native mechanism merely
+/// because it implements the corresponding logical operation cooperatively.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeExecutionCapabilitiesV1 {
+    pub native_async_copy: bool,
+    pub native_peer_copy: bool,
+    pub concurrent_compute: bool,
+    pub compute_copy_overlap: bool,
+    pub memory_pool: bool,
+    pub profiling: bool,
+    pub cancellation: bool,
+    pub atomics: bool,
+    pub collectives: bool,
+}
+
 /// Backend-reported immutable device description.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackendDeviceDescriptionV1 {
@@ -301,6 +319,12 @@ pub enum RuntimeBackendFailureV1<E> {
 pub trait RuntimeBackendV1 {
     type Error: Error + Send + Sync + 'static;
 
+    /// Reports execution details that are not representable in Worker V3's
+    /// stable capability bitset. Implementations inherit a fail-closed default.
+    fn execution_capabilities_v1(&self, _device: u64) -> RuntimeExecutionCapabilitiesV1 {
+        RuntimeExecutionCapabilitiesV1::default()
+    }
+
     fn enumerate_devices_v1(
         &mut self,
     ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>>;
@@ -421,6 +445,38 @@ pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
 }
+
+/// Backend result of a cancellation attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendCancellationV1 {
+    /// The operation was withdrawn before publication and is quiescent.
+    Cancelled,
+    /// Publication already occurred; custody and completion remain live.
+    TooLate,
+}
+
+/// Additive cancellation and drain SPI outside the Worker V3 wire contract.
+pub trait RuntimeCancellationBackendV1: RuntimeBackendV1 {
+    fn cancel_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>>;
+
+    fn drain_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Public cancellation observation. `TooLate` retains the submission token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeCancellationV1 {
+    Cancelled,
+    TooLate,
+}
+
+const RUNTIME_CANCELLED_CODE_V1: i64 = -2;
 
 /// Validation failure before entering a backend.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -803,6 +859,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     pub fn devices(&self) -> &[RuntimeDeviceV1] {
         &self.devices
+    }
+
+    /// Returns mechanism-level capabilities for one context device.
+    pub fn execution_capabilities(
+        &self,
+        device: RuntimeDeviceIdV1,
+    ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeValidationErrorV1> {
+        let record = self.device(device)?;
+        Ok(self
+            .backend
+            .execution_capabilities_v1(record.backend_device))
     }
 
     pub const fn is_terminal(&self) -> bool {
@@ -1807,8 +1874,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// Submits a same-device copy without waiting for completion.
     ///
     /// The concrete backend determines whether progress is native or
-    /// cooperative. The direct KFD backend currently rejects this extension;
-    /// the multi-device router supplies bounded cooperative host progress.
+    /// cooperative. A live direct KFD backend uses persistent native SDMA
+    /// storage; its synthetic constructor rejects the extension. The KFD
+    /// multi-device router uses native SDMA within one live child and bounded
+    /// cooperative host progress otherwise.
     pub fn copy_async(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -1922,6 +1991,67 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             marker: PhantomData,
         };
         self.seal_backend_protocol(protocol_error, submission)
+    }
+
+    /// Attempts to withdraw a submission before native publication.
+    ///
+    /// A `TooLate` result does not release or otherwise weaken submission
+    /// custody. The caller must continue polling or drain it to completion.
+    pub fn cancel<A>(
+        &mut self,
+        submission: &mut RuntimeSubmissionV1<A>,
+    ) -> Result<RuntimeCancellationV1, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeCancellationBackendV1,
+    {
+        self.require_live()?;
+        let record = self.submission_record(submission)?;
+        if record.quiescent {
+            return Ok(RuntimeCancellationV1::TooLate);
+        }
+        let result = self.backend.cancel_v1(record.backend_submission);
+        match self.backend_result(result)? {
+            BackendCancellationV1::Cancelled => {
+                self.submissions
+                    .get_mut(&submission.id)
+                    .expect("validated submission remains indexed")
+                    .quiescent = true;
+                submission.completion = Some(RuntimePollV1::Failed {
+                    code: RUNTIME_CANCELLED_CODE_V1,
+                });
+                Ok(RuntimeCancellationV1::Cancelled)
+            }
+            BackendCancellationV1::TooLate => Ok(RuntimeCancellationV1::TooLate),
+        }
+    }
+
+    /// Waits for a submission through a backend's explicit drain path.
+    pub fn drain<A>(
+        &mut self,
+        submission: &mut RuntimeSubmissionV1<A>,
+        deadline: Instant,
+    ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeCancellationBackendV1,
+    {
+        self.require_live()?;
+        if deadline <= Instant::now() {
+            return Err(RuntimeValidationErrorV1::InvalidDeadline.into());
+        }
+        let record = self.submission_record(submission)?;
+        if let Some(completion) = submission.completion {
+            return Ok(completion);
+        }
+        let result = self.backend.drain_v1(record.backend_submission, deadline);
+        let observation = self.backend_result(result)?;
+        let poll = submission.observe(observation);
+        if poll != RuntimePollV1::Pending {
+            self.submissions
+                .get_mut(&submission.id)
+                .expect("validated submission remains indexed")
+                .quiescent = true;
+        }
+        Ok(poll)
     }
 }
 
@@ -2092,6 +2222,8 @@ mod tests {
         device_name_len: usize,
         device_target_len: usize,
         handle_override: Option<(MockHandleKind, u64)>,
+        cancel_before_publication: bool,
+        execution_capabilities: RuntimeExecutionCapabilitiesV1,
     }
 
     impl MockBackend {
@@ -2113,6 +2245,10 @@ mod tests {
 
     impl RuntimeBackendV1 for MockBackend {
         type Error = MockError;
+
+        fn execution_capabilities_v1(&self, _device: u64) -> RuntimeExecutionCapabilitiesV1 {
+            self.execution_capabilities
+        }
 
         fn enumerate_devices_v1(
             &mut self,
@@ -2359,6 +2495,32 @@ mod tests {
             let identity = self.handle(MockHandleKind::Submission);
             self.polls.insert(identity, 0);
             Ok(identity)
+        }
+    }
+
+    impl RuntimeCancellationBackendV1 for MockBackend {
+        fn cancel_v1(
+            &mut self,
+            submission: u64,
+        ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+            if !self.polls.contains_key(&submission) {
+                return Err(RuntimeBackendFailureV1::Rejected(MockError(
+                    "unknown submission",
+                )));
+            }
+            Ok(if self.cancel_before_publication {
+                BackendCancellationV1::Cancelled
+            } else {
+                BackendCancellationV1::TooLate
+            })
+        }
+
+        fn drain_v1(
+            &mut self,
+            submission: u64,
+            deadline: Instant,
+        ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.wait_v1(submission, deadline)
         }
     }
 
@@ -3777,6 +3939,94 @@ mod tests {
         let second = context.cleanup();
         assert!(second.is_terminal());
         assert_eq!(context.backend().cleanup_log.len(), 2);
+    }
+
+    #[test]
+    fn execution_capability_detail_defaults_closed_and_reports_opt_in_bits() {
+        let context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        assert_eq!(
+            context.execution_capabilities(device).unwrap(),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        let backend = context.shutdown().unwrap();
+        let expected = RuntimeExecutionCapabilitiesV1 {
+            native_async_copy: true,
+            native_peer_copy: true,
+            concurrent_compute: true,
+            compute_copy_overlap: true,
+            memory_pool: true,
+            profiling: true,
+            cancellation: true,
+            atomics: true,
+            collectives: true,
+        };
+        let context = RuntimeContextV1::open(MockBackend {
+            execution_capabilities: expected,
+            ..backend
+        })
+        .unwrap();
+        assert_eq!(
+            context.execution_capabilities(context.devices()[0].id()),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn cancellation_distinguishes_prepublication_quiescence_from_too_late() {
+        for (cancel_before_publication, expected) in [
+            (true, RuntimeCancellationV1::Cancelled),
+            (false, RuntimeCancellationV1::TooLate),
+        ] {
+            let mut context = RuntimeContextV1::open(MockBackend {
+                cancel_before_publication,
+                ..MockBackend::default()
+            })
+            .unwrap();
+            let device = context.devices()[0].id();
+            let stream = context.create_stream(device).unwrap();
+            let source = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let destination = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let mut submission = context
+                .copy_async(
+                    stream,
+                    RuntimeMemoryRegionV1 {
+                        allocation: source,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: 16,
+                    },
+                    RuntimeMemoryRegionV1 {
+                        allocation: destination,
+                        access: RuntimeAccessV1::Write,
+                        byte_offset: 0,
+                        byte_len: 16,
+                    },
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(context.cancel(&mut submission).unwrap(), expected);
+            if expected == RuntimeCancellationV1::Cancelled {
+                assert_eq!(
+                    context.poll(&mut submission).unwrap(),
+                    RuntimePollV1::Failed {
+                        code: RUNTIME_CANCELLED_CODE_V1
+                    }
+                );
+            } else {
+                assert_eq!(
+                    context
+                        .drain(&mut submission, Instant::now() + Duration::from_secs(1))
+                        .unwrap(),
+                    RuntimePollV1::Succeeded
+                );
+            }
+            context.release_submission(submission).unwrap();
+        }
     }
 
     #[test]

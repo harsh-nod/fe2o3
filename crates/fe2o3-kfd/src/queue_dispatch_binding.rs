@@ -29,6 +29,7 @@ use super::completion::{
 use super::device_content::Gfx942DeviceContentDescriptorV1;
 use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
 use crate::MemorySessionError;
+use crate::sdma::{Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1};
 use crate::shared_memory::{
     AqlDispatchCodeResourceRoleV1, AqlDispatchHostDataResourceRoleV1,
     AqlDispatchKernargResourceRoleV1, ExecutableGttV1, Gfx942DeviceMemoryDispatchAuthorityV1,
@@ -407,6 +408,42 @@ impl Gfx942FixedDispatchDataV1 {
                 Gfx942FixedDispatchStorageIdentityV1::HostVisibleInitialized(
                     memory.storage_identity(),
                 )
+            }
+        }
+    }
+
+    pub(crate) const fn sdma_storage_identity(&self) -> Gfx942SdmaBufferStorageIdentityV1 {
+        match &self.storage {
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                Gfx942SdmaBufferStorageIdentityV1::Device(lease.storage_identity())
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                Gfx942SdmaBufferStorageIdentityV1::Device(memory.storage_identity())
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942SdmaBufferStorageIdentityV1::Host(token.storage_identity())
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942SdmaBufferStorageIdentityV1::Host(memory.storage_identity())
+            }
+        }
+    }
+
+    pub(crate) fn into_sdma_storage(self) -> Gfx942SdmaBufferStorageV1 {
+        match self.storage {
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                Gfx942SdmaBufferStorageV1::Device(lease)
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                Gfx942SdmaBufferStorageV1::Device(memory.into_parts().0)
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942SdmaBufferStorageV1::Host(token)
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942SdmaBufferStorageV1::Host(memory.into_token())
             }
         }
     }

@@ -7,9 +7,10 @@ submissions, optional same-device copies, and peer copies through context-local 
 capabilities are explicit, so unsupported operations reject before native
 mutation rather than being inferred from the build host.
 
-`RuntimeBackendV1` is the base backend SPI. `RuntimeAsyncCopyBackendV1` is an
-additive same-device copy extension that leaves the Worker V3 wire contract
-unchanged. Both carry only numeric sealed handles,
+`RuntimeBackendV1` is the base backend SPI. `RuntimeAsyncCopyBackendV1` and
+`RuntimeCancellationBackendV1` are additive in-process copy and
+cancellation/drain extensions that leave the Worker V3 wire contract unchanged.
+All carry only numeric sealed handles,
 address-free argument images, allocation-relative bindings, explicit event
 dependencies, and monotonic deadlines. KFD, HSA, and worker-backed adapters can
 implement the same contract without exposing raw addresses or native resource
@@ -49,37 +50,54 @@ that submission, consume `release_submission`, destroy streams, and call
 Direct KFD/HSA backend drop may abort when live or ambiguous native custody
 remains, so explicit shutdown is required for predictable teardown.
 
-The current KFD adapter admits one gfx942 device and serializes logical streams
-over one native queue. Same-shape launches retain native host-visible storage,
-code, kernarg, and dispatch state across completion generations. Logical host
-images use shared immutable snapshots; exact repeated full writes reuse their
-validated digest and update attached coherent storage before launch. GPU-written
-extents stay native-authoritative until `read_allocation` or a later launch
-requires the host image, and facade reads can copy directly into the caller's
-destination. Device-local input is still host-staged, materialized per launch,
-and read-only. KFD module validation is cached at load and kernel metadata is
-cached at resolution. Logical KFD allocations are capped at 256 MiB each and 1
-GiB per backend context; budget and allocator exhaustion return `Capacity`
-before native publication. `KfdMultiDeviceRuntimeBackendV1` admits every
-selected physical device before any queue exists, routes independent child
-backends, and advertises a bounded host-staged peer copy. Submission performs
-no child read or write; each read/write `poll` issues one child range request of
-at most 64 KiB and `wait` repeatedly drives the same cooperative state machine
-to its deadline. A child may first reconcile allocation-wide native-dirty or
-copy-on-write state, so this is not a strict host-work or latency bound. Pending
-copy staging is capped at 1 GiB per router and released at conclusive
-completion. Destination storage and both allocation handles stay inaccessible
-through the router until terminal completion. This is neither background DMA
-nor native XGMI transfer, and fairness requires the caller to poll or wait.
-Applications must explicitly shut down the router;
-it tears down pristine child backends in reverse admission order and latches
-terminal after any ambiguous child failure. The lower-level KFD session separately exposes a
-classic gfx942 SDMA queue and pooled host/HBM buffers; that backend-specific API
-is not yet wired to persistent compute allocations. The direct KFD backend
-therefore implements the async-copy extension as an explicit `Unsupported`
-rejection. The HSA adapter admits one correlated
-gfx942 or gfx950 device and host-visible memory. Same-device concurrent KFD
-compute dispatches and native peer copy remain unsupported. A separate
+The current single-device KFD adapter admits one gfx942 device and serializes
+logical compute streams over one AQL queue. Live logical allocations retain
+native host or HBM SDMA storage, while bounded host images remain the current
+compute authority. Same-device `copy_async` uses the native directional SDMA
+queues, splits logical ranges larger than one linear packet into sequential
+packets, and retains explicit event dependencies until publication. Cancellation
+before publication quiesces the submission; cancellation after a doorbell is
+explicitly `TooLate`. One compute dispatch and SDMA work may overlap when every
+referenced allocation is disjoint. An overlapping copy may remain unpublished
+behind an explicit event for the active compute dispatch; a compute launch that
+overlaps pending SDMA is rejected, as is a compute dependency on a pending copy.
+Same-device concurrent compute remains unsupported. Persistent SDMA allocations
+and transient staging use the queue-owned best-fit memory pool; device-local
+buffers are initialized before publication and scrubbed before recycle, and
+explicit shutdown trims the pool. Persistent SDMA buffers are not yet shared
+with fixed-dispatch compute storage, so device-local compute input remains
+materialized per launch and read-only.
+
+Logical KFD allocations are capped at 256 MiB each and 1 GiB per backend
+context; budget and allocator exhaustion return `Capacity` before native
+publication. `KfdMultiDeviceRuntimeBackendV1` admits every selected physical
+device before any queue exists and routes independent child backends. A live
+same-device copy uses that child's native SDMA path. Peer copy in this generic
+router remains bounded host staging: each `poll` performs at most one 64 KiB
+child range request, pending staging is capped at 1 GiB, and fairness requires
+the caller to poll or wait. It is not background DMA or native XGMI.
+
+`KfdNativeXgmiRuntimeBackendV1` is the separate exact two-device, copy-only
+native peer backend. It admits both gfx942 devices and both directional topology
+routes before acquiring either VM, allocates PUBLIC device-local VRAM, maps both
+allocations to the canonical GPU-ID pair for each copy, and selects the source
+device's topology-admitted XGMI SDMA engine. The destination device owns the
+public stream. Every copy is limited to one admitted linear packet, one copy per
+logical stream may be pending, and mappings are explicitly released after
+completion or retained in terminal quarantine when currentness becomes
+ambiguous. The facade currently maps and unmaps both BOs for each copy and uses
+one doorbell per packet; it does not yet use persistent peer mappings or the
+low-level prepared single-doorbell batch path. It exposes no compute, same-device
+copy, memory pool, profiling, atomics, or collectives. Capability detail is
+available through `RuntimeContextV1::execution_capabilities` so applications can
+distinguish this native peer path from the router's host-staged peer copy.
+
+Applications must explicitly shut down either multi-device KFD owner after
+releasing submissions, events, allocations, and streams. Ambiguous native
+failure retains custody and latches terminal state. The HSA adapter admits one
+correlated gfx942 or gfx950 device and host-visible memory. Per-device
+concurrent KFD compute remains unsupported, and native peer copy is available
+only through the separate copy-only XGMI owner. A separate
 authority-free gfx942 model checks the reviewed integer-atomic and collective
 semantic declarations against exact runtime resources, but atomics and
 collectives have no general V1 facade operation and no authenticated

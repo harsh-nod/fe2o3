@@ -84,6 +84,14 @@ pub use live::{
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
+// These types are exported through the private queue module solely to make
+// the public move-only role transition nameable at the crate boundary.
+#[allow(unused_imports)]
+pub use live::{
+    Gfx942PromotedSdmaDestinationV1, Gfx942SdmaCompletedPromotionFailureV1,
+    Gfx942SdmaDispatchDataBridgeV1, Gfx942SdmaDispatchDataDemotionFailureV1,
+};
+
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r22-v1\n",

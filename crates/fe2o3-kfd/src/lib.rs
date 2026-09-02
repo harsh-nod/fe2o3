@@ -101,10 +101,12 @@ pub use queue::{
     Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
     Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
-    Gfx942RecycledDispatchResourcesV1, Gfx942RecycledDispatchWriteRequestV1,
-    Gfx942RepeatedByteContentV1, Gfx942SdmaBatchExecutionFailureV1,
-    Gfx942SdmaBatchExecutionRecoveryV1, Gfx942SdmaBatchSubmissionFailureV1,
-    Gfx942SdmaBufferTransitionFailureV1, Gfx942SdmaSubmissionFailureV1,
+    Gfx942PromotedSdmaDestinationV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942RecycledDispatchWriteRequestV1, Gfx942RepeatedByteContentV1,
+    Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
+    Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
+    Gfx942SdmaCompletedPromotionFailureV1, Gfx942SdmaDispatchDataBridgeV1,
+    Gfx942SdmaDispatchDataDemotionFailureV1, Gfx942SdmaSubmissionFailureV1,
     Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
     KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
@@ -125,7 +127,9 @@ pub use sdma::{
     Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
     Gfx942SdmaCopySubmissionV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
     Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaPacketErrorV1, Gfx942SdmaQueueObservationV1,
-    Gfx942XgmiCompletedCopyV1, Gfx942XgmiCopyFailureV1, Gfx942XgmiWaitFailureV1,
+    Gfx942SdmaQueueProgressObservationV1, Gfx942XgmiBatchSubmissionFailureV1,
+    Gfx942XgmiBatchWaitFailureV1, Gfx942XgmiCompletedCopyV1, Gfx942XgmiCopyFailureV1,
+    Gfx942XgmiCopyPollV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiWaitFailureV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

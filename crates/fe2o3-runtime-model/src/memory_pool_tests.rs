@@ -100,6 +100,22 @@ fn completion_is_required_before_releasing_published_storage() {
 }
 
 #[test]
+fn exact_alignment_does_not_overallocate_an_extra_block() {
+    let mut pool = MemoryPoolModelV1::new_model_only(
+        digest(7),
+        device(10, 1),
+        MemoryKindV1::DeviceLocal,
+        4096,
+        1,
+    )
+    .unwrap();
+    let lease = pool.lease_model_only(4096, 4096).unwrap();
+    assert_eq!(pool.committed_bytes(), 4096);
+    assert_eq!(pool.blocks()[0].byte_len(), 4096);
+    pool.release_model_only(lease).unwrap();
+}
+
+#[test]
 fn capacity_and_identity_coordinates_fail_closed() {
     assert_eq!(
         MemoryPoolModelV1::new_model_only(

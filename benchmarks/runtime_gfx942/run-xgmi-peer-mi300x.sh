@@ -124,8 +124,8 @@ peer_unique_id="$(unique_id_for_gpu "${peer_gpu_index}")"
 
 export CARGO_TARGET_DIR="${build_dir}/target"
 cd "${repo_root}"
-cargo build --locked --release -p fe2o3-kfd --features live-validation \
-  --example kfd-sdma-xgmi-peer-benchmark
+cargo build --locked --release -p fe2o3-runtime \
+  --example gfx942-runtime-xgmi-peer-benchmark
 "${rocm_path}/bin/hipcc" -std=c++17 -O3 -Wall -Wextra -Werror \
   benchmarks/runtime_gfx942/xgmi_peer_hip.cpp -o "${build_dir}/xgmi-peer-hip"
 g++ -std=c++17 -O3 -Wall -Wextra -Werror \
@@ -135,7 +135,7 @@ g++ -std=c++17 -O3 -Wall -Wextra -Werror \
 
 rocm_version=unknown
 [[ ! -r "${rocm_path}/.info/version" ]] || IFS= read -r rocm_version < "${rocm_path}/.info/version"
-printf 'context schema=fe2o3.xgmi-peer-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s timing=submit-through-observed-completion setup_validation=outside-timing\n' \
+printf 'context schema=fe2o3.xgmi-peer-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s kfd_surface=runtime-facade timing=submit-through-observed-completion setup_validation=outside-timing\n' \
   "$(git rev-parse HEAD)" "${gpu_index}" "${peer_gpu_index}" \
   "${unique_id}" "${peer_unique_id}" "${bytes}" "${depths// /,}" \
   "${warmups}" "${samples}" "${max_busy}" "${phase_timeout}" \
@@ -143,7 +143,7 @@ printf 'context schema=fe2o3.xgmi-peer-benchmark.v1 git_commit=%s target=gfx942:
 
 for depth in ${depths}; do
   run_phase kfd "${depth}" \
-    "${build_dir}/target/release/examples/kfd-sdma-xgmi-peer-benchmark" \
+    "${build_dir}/target/release/examples/gfx942-runtime-xgmi-peer-benchmark" \
     "${unique_id}" "${peer_unique_id}" "${bytes}" "${depth}" "${warmups}" "${samples}"
   run_phase hsa "${depth}" env HSA_XNACK=0 \
     ROCR_VISIBLE_DEVICES="${gpu_index},${peer_gpu_index}" \
