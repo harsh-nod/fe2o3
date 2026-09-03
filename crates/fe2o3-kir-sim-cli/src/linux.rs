@@ -2679,9 +2679,7 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
             | fe2o3_kernel_ir::F32MathFunction::Ceil
             | fe2o3_kernel_ir::F32MathFunction::Truncate
             | fe2o3_kernel_ir::F32MathFunction::RoundTiesEven
-            | fe2o3_kernel_ir::F32MathFunction::Abs => {
-                UnsupportedFeatureCode::FloatOperation
-            }
+            | fe2o3_kernel_ir::F32MathFunction::Abs => UnsupportedFeatureCode::FloatOperation,
         },
         UnsupportedFeatureV1::InvalidIntegerCast { .. } => {
             UnsupportedFeatureCode::InvalidIntegerCast

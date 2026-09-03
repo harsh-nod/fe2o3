@@ -3469,9 +3469,7 @@ mod tests {
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
                 ProductionTerminalExpansionV1::RustcFabsF32,
-                ProductionTerminalExpansionV1::MathF32(
-                    fe2o3_kernel_ir::F32MathFunction::Abs,
-                ),
+                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs,),
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(
                 expansion,

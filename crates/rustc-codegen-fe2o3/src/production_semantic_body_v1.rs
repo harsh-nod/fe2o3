@@ -1645,19 +1645,17 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         argument_count: usize,
     ) -> Result<SemanticCallableIdV1, ProductionSemanticBodyErrorV1> {
         let index = usize::try_from(raw_block).map_err(|_| table("call binding table"))?;
-        let classified = crate::production_semantic_terminal_v1::classify(
-            self.tcx,
-            resolved.def_id(),
-        );
+        let classified =
+            crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id());
         let expansion = match classified {
             Some(
                 crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Expand(
                     expansion,
                 ),
             ) => Some(expansion),
-            Some(crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Reject(
-                _,
-            )) => {
+            Some(
+                crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Reject(_),
+            ) => {
                 return Err(unsupported(
                     "reviewed terminal without a production expansion",
                     Some(raw_block),
@@ -1666,8 +1664,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             }
             None => match crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved) {
                 Ok(Some(classification))
-                    if classification.operation
-                        == ProductionRustcIntrinsicOperationV1::FabsF32 =>
+                    if classification.operation == ProductionRustcIntrinsicOperationV1::FabsF32 =>
                 {
                     Some(ProductionTerminalExpansionV1::RustcFabsF32)
                 }

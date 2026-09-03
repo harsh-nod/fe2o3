@@ -131,7 +131,10 @@ pub(crate) fn classify<'tcx>(
         validate_fabs_contract_v1(
             scalar_float_width_v1(element_type),
             signature.inputs().len(),
-            signature.inputs().first().is_some_and(|input| *input == element_type),
+            signature
+                .inputs()
+                .first()
+                .is_some_and(|input| *input == element_type),
             signature.output() == element_type,
         )?;
         return Ok(Some(ProductionRustcIntrinsicClassificationV1 {
