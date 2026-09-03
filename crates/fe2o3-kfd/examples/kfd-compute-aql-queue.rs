@@ -56,7 +56,7 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
     assert!(observation.doorbell_byte_offset() < 8192);
     assert_eq!(observation.doorbell_byte_offset() % 8, 0);
     assert!((1..=255).contains(&observation.event_id()));
-    assert_eq!(observation.cwsr_shadow_pages(), 8);
+    assert_eq!(observation.cwsr_shadow_pages(), 24);
     queue.verify_doorbell_dontfork()?;
     queue.verify_exception_shadows_dontfork()?;
     let destroyed = queue.destroy()?;

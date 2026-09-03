@@ -124,11 +124,11 @@ fn stopped_queue_envelope() -> LiveGpuStoppedQueueEnvelopeV3 {
             xcc_ordinal,
             identity: identity(40 + u8::try_from(xcc_ordinal).unwrap()),
             control_stack: LiveGpuStoppedQueueRelativeRangeV3 {
-                offset: 0,
+                offset: 0x3000,
                 bytes: 0,
             },
             wave_state: LiveGpuStoppedQueueRelativeRangeV3 {
-                offset: 0,
+                offset: 0x3000,
                 bytes: 0,
             },
             debug: LiveGpuStoppedQueueRelativeRangeV3 {
@@ -163,9 +163,14 @@ fn stopped_queue_envelope() -> LiveGpuStoppedQueueEnvelopeV3 {
             total_allocation_bytes: u64::from(CONTEXT_BYTES) * 8 + u64::from(DEBUG_BYTES),
             headers,
         },
-        hardware_checkpoint_bytes: stopped_unavailable(
-            LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible,
-        ),
+        opaque_checkpoint: LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
+            checkpoint_identity: identity(60),
+            content_identity: identity(61),
+            artifact_binding_identity: binding().binding_identity,
+            captured_bytes: 0,
+            segment_count: 0,
+            private_bytes_exposed: false,
+        },
         waves: stopped_unavailable(
             LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi,
         ),
@@ -215,7 +220,8 @@ fn stopped_queue_envelope_is_bounded_address_free_and_keeps_session_running() {
     let text = std::str::from_utf8(&line).unwrap();
     assert!(text.contains("\"state\":\"running\""));
     assert!(text.contains("\"resume_required\":true"));
-    assert!(text.contains("hardware_checkpoint_bytes_not_cpu_visible"));
+    assert!(text.contains("\"opaque_checkpoint\":{\"availability\":\"complete\""));
+    assert!(text.contains("\"private_bytes_exposed\":false"));
     assert!(text.contains("wave_record_layout_not_in_kfd_uapi"));
     assert!(text.contains("error_binding_present"));
     for forbidden in [
@@ -264,6 +270,47 @@ fn hostile_stopped_queue_envelopes_fail_closed() {
     bad_reason.waves.reason = LiveGpuStoppedQueueUnavailableReasonV3::MemoryValuesNotCaptured;
     assert!(
         stopped_queue_response(bad_reason)
+            .validate(LiveGpuProtocolLimitsV3::default())
+            .is_err()
+    );
+
+    let mut exposed_private_bytes = stopped_queue_envelope();
+    let LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
+        private_bytes_exposed,
+        ..
+    } = &mut exposed_private_bytes.opaque_checkpoint
+    else {
+        unreachable!()
+    };
+    *private_bytes_exposed = true;
+    assert!(
+        stopped_queue_response(exposed_private_bytes)
+            .validate(LiveGpuProtocolLimitsV3::default())
+            .is_err()
+    );
+
+    let mut substituted_artifact = stopped_queue_envelope();
+    let LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
+        artifact_binding_identity,
+        ..
+    } = &mut substituted_artifact.opaque_checkpoint
+    else {
+        unreachable!()
+    };
+    *artifact_binding_identity = identity(62);
+    assert!(
+        stopped_queue_response(substituted_artifact)
+            .validate(LiveGpuProtocolLimitsV3::default())
+            .is_err()
+    );
+
+    let mut partial_prefix = stopped_queue_envelope();
+    partial_prefix.opaque_checkpoint = LiveGpuStoppedQueueOpaqueCheckpointV3::Truncated {
+        required_bytes: 384,
+        capture_limit_bytes: 384,
+    };
+    assert!(
+        stopped_queue_response(partial_prefix)
             .validate(LiveGpuProtocolLimitsV3::default())
             .is_err()
     );
@@ -354,6 +401,22 @@ fn hostile_stopped_queue_envelopes_fail_closed() {
     };
     assert!(
         stopped_queue_response(overlapping)
+            .validate(LiveGpuProtocolLimitsV3::default())
+            .is_err()
+    );
+
+    let mut out_of_bounds_empty_cursor = stopped_queue_envelope();
+    let LiveGpuStoppedQueueContextSaveV3::Available { headers, .. } =
+        &mut out_of_bounds_empty_cursor.context_save
+    else {
+        unreachable!()
+    };
+    headers[0].control_stack = LiveGpuStoppedQueueRelativeRangeV3 {
+        offset: 0x162_1001,
+        bytes: 0,
+    };
+    assert!(
+        stopped_queue_response(out_of_bounds_empty_cursor)
             .validate(LiveGpuProtocolLimitsV3::default())
             .is_err()
     );

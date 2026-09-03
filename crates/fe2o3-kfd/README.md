@@ -592,11 +592,13 @@ Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
 capabilities, and TTMP-save. Success is required while the process has no user
 queue. It then creates one first-internal-page auto-reset signal event, admits
-only IDs 1 through 255, and replaces exactly the eight owned PROT_NONE CWSR
-reservation pages at `base + xcc * 0x1621000` with private anonymous pages.
-Each page transitions PROT_NONE, MADV_DONTFORK, then read/write. The same exact
-40-byte header is read back from the executable-GTT BO and CPU shadow; every
-header names the event and one aligned zero reason word in the first shadow.
+only IDs 1 through 255, and replaces exactly the first three owned PROT_NONE
+CWSR reservation pages at each `base + xcc * 0x1621000` stride with 24 private
+anonymous control-stack pages. Each page transitions PROT_NONE,
+MADV_DONTFORK, then read/write. A separate private DONTFORK page holds the
+aligned zero event-reason word so a non-empty control-stack copy cannot
+overwrite event state. The same exact 40-byte header is read back from the
+executable-GTT BO and the first CPU shadow page for each XCC.
 No mapping address, pointer, fd, event handle, or MMIO capability is public.
 
 Explicit cleanup first requires every completion batch recycled, then confirms
@@ -605,8 +607,9 @@ CWSR/queue-resource/completion-arena unmap and FREE. The process-global
 guard remains held through resource return. Drop performs none of those native
 operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
 live on the selected MI300X while publishing zero packets and performing zero
-MMIO stores. It also forks to confirm the doorbell and all eight shadow VMAs
-are absent in the child. It accepts one unique ID or `--all`; the latter uses a
+MMIO stores. It also forks to confirm the doorbell, all 24 shadow VMAs, and the
+separate event-payload VMA are absent in the child. It accepts one unique ID or
+`--all`; the latter uses a
 separate process and queue lifecycle for every topology GPU.
 
 A debugger-enabled target can consume `KfdTargetRuntimeDebugTokenV1` into the
@@ -626,7 +629,9 @@ The serial live validation ptrace-attaches a child, acknowledges target runtime
 enable, observes the real 4 KiB KFD queue through the bounded debugger snapshot,
 observes its removal after queue/event destruction, acknowledges runtime
 disable, and completes bounded detach/reap of that direct child leader. The
-test does not establish descendant containment. It does not qualify
+test also suspends the idle queue and captures a complete zero-byte opaque
+checkpoint before explicitly resuming it. It does not establish descendant
+containment or a non-empty hardware checkpoint. It does not qualify decoded
 wave/register state, source debugging, target-memory access, kernel execution
 under the debugger, timing, or performance.
 
@@ -667,13 +672,18 @@ unknown reason, reuse, or syscall uncertainty forbids later publication and
 in-process cleanup; recovery is process teardown. Foreign KFD clients in the
 same process remain outside the crate-global ownership claim.
 
-This is queue-exception preparation, not actual fault-delivery evidence.
-CPU-visible debug suspend and checkpoint/wave-state control-stack copies remain
-unsupported because only the eight header pages are CPU shadows. Ordinary
-hardware CWSR preemption and restore use the GPUVM BO and remain Contracted,
-not excluded. Live kernel dispatch, hardware completion evidence, a production
-data-copy and implicit-kernarg premise producer, and an injected-fault
-observation remain separate gates.
+This is queue-exception preparation, not actual fault-delivery evidence. The
+direct-KFD stopped-state API can retain the KFD-header-bounded control-stack
+and wave-state bytes as a private, zeroizing opaque checkpoint after exact
+session-owned suspension. It double-reads every non-empty segment, rereads all
+headers, binds content to the exact runtime/queue/device/session snapshot, and
+returns explicit no-prefix truncation at a caller-selected bounded limit.
+Neither the Linux KFD UAPI nor installed public headers specify the inner
+gfx942 record layout, so wave, lane, register, PC, and source values remain
+typed unavailable. Ordinary hardware CWSR preemption and restore remain
+Contracted. Non-empty live checkpoint qualification, live kernel dispatch,
+hardware completion evidence, a production data-copy and implicit-kernarg
+premise producer, and an injected-fault observation remain separate gates.
 
 The abstract Verus relation proves Active and Disabled are the only direct
 destroy sources and that failed-no-effect restores the exact retained source.

@@ -14,7 +14,7 @@ use crate::{
     GFX942_MAX_ADMITTED_RING_BYTES_V1, GFX942_MIN_ROCR_RING_BYTES_V1,
 };
 
-const EXPECTED_CWSR_SHADOW_PAGES: u8 = 8;
+const EXPECTED_CWSR_SHADOW_PAGES: u8 = 24;
 const EXPECTED_RELEASED_QUEUE_RESOURCES: u8 = 4;
 const ZERO_SCOPE: [u8; 32] = [0; 32];
 
@@ -25,7 +25,7 @@ const ZERO_SCOPE: [u8; 32] = [0; 32];
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-direct-kfd-semantic-observation-r8-v1\n",
     "source.device_admission_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "source.queue_session_sha256=d4c599f03c2e7bad0ea15dfd3a64cdde5ed387c7945f32d03b6b8ea59753491d\n",
+    "source.queue_session_sha256=ab5d1fc0b2fcdc4f3918d772f03156b14cb524da7c7660c39f29b539e6186289\n",
     "input=detached-device-binding-optional,detached-live-queue,detached-destroyed-queue-optional\n",
     "bounds=fixed-size,no-input-read,no-variable-allocation,no-device-enumeration\n",
     "identity=sha256-domain-separated-canonical-little-endian,caller-supplied-nonzero-scope,opaque-correlation-not-authentication-or-secrecy\n",
@@ -39,7 +39,7 @@ pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1`].
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_SHA256_V1: &str =
-    "5fe66008f629f7f862b95d31134dc162c825ae1d15f75c7f0c2798a9ba6b2449";
+    "42ed7a9ee2a0bc03956070044bf60f1e87b8f4a5bac17896fddcedfd9a59afe8";
 
 /// A caller-controlled correlation scope for one observation domain.
 ///
@@ -720,7 +720,7 @@ mod tests {
         assert!(size_of::<KfdSemanticObservationReportV1>() <= 128);
         assert_eq!(first.ring_bytes(), 4096);
         assert_eq!(first.doorbell_slice_bytes(), 8192);
-        assert_eq!(first.cwsr_shadow_pages(), 8);
+        assert_eq!(first.cwsr_shadow_pages(), 24);
         assert_eq!(first.provenance().source_fact_count(), 1);
     }
 
@@ -760,14 +760,21 @@ mod tests {
                 8192,
                 RAW_DOORBELL_OFFSET,
                 RAW_EVENT_ID + 1,
-                8,
+                EXPECTED_CWSR_SHADOW_PAGES,
             ),
         )
         .expect("changed event remains valid");
         let changed_offset = observe_kfd_live_queue_v1(
             &scope,
             None,
-            queue_with(RAW_QUEUE_ID, 4096, 8192, 0x1ac0, RAW_EVENT_ID, 8),
+            queue_with(
+                RAW_QUEUE_ID,
+                4096,
+                8192,
+                0x1ac0,
+                RAW_EVENT_ID,
+                EXPECTED_CWSR_SHADOW_PAGES,
+            ),
         )
         .expect("changed offset remains valid");
         assert_eq!(baseline.queue_identity(), changed_event.queue_identity());
@@ -802,14 +809,14 @@ mod tests {
     fn hostile_live_queue_fields_fail_closed() {
         let scope = scope(0x41);
         let invalid = [
-            queue_with(RAW_QUEUE_ID, 2048, 8192, 0, 1, 8),
-            queue_with(RAW_QUEUE_ID, 4097, 8192, 0, 1, 8),
-            queue_with(RAW_QUEUE_ID, 4096, 4096, 0, 1, 8),
-            queue_with(RAW_QUEUE_ID, 4096, 8192, 1, 1, 8),
-            queue_with(RAW_QUEUE_ID, 4096, 8192, 8192, 1, 8),
-            queue_with(RAW_QUEUE_ID, 4096, 8192, u64::MAX, 1, 8),
-            queue_with(RAW_QUEUE_ID, 4096, 8192, 0, 0, 8),
-            queue_with(RAW_QUEUE_ID, 4096, 8192, 0, 256, 8),
+            queue_with(RAW_QUEUE_ID, 2048, 8192, 0, 1, 24),
+            queue_with(RAW_QUEUE_ID, 4097, 8192, 0, 1, 24),
+            queue_with(RAW_QUEUE_ID, 4096, 4096, 0, 1, 24),
+            queue_with(RAW_QUEUE_ID, 4096, 8192, 1, 1, 24),
+            queue_with(RAW_QUEUE_ID, 4096, 8192, 8192, 1, 24),
+            queue_with(RAW_QUEUE_ID, 4096, 8192, u64::MAX, 1, 24),
+            queue_with(RAW_QUEUE_ID, 4096, 8192, 0, 0, 24),
+            queue_with(RAW_QUEUE_ID, 4096, 8192, 0, 256, 24),
             queue_with(RAW_QUEUE_ID, 4096, 8192, 0, 1, 7),
         ];
         for observation in invalid {
@@ -819,7 +826,7 @@ mod tests {
             ));
         }
         assert!(
-            observe_kfd_live_queue_v1(&scope, None, queue_with(0, 4096, 8192, 0, 1, 8),).is_ok()
+            observe_kfd_live_queue_v1(&scope, None, queue_with(0, 4096, 8192, 0, 1, 24),).is_ok()
         );
     }
 
