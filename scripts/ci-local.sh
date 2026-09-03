@@ -1308,6 +1308,12 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1 -- \
         --ignored --exact
+  run_step rocm-production-scan-bundle-v5-cpu \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_neutral_workgroup_reduce_driver_v1 \
+        ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path -- \
+        --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \

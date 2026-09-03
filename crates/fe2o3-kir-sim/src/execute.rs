@@ -2045,6 +2045,7 @@ pub(crate) fn conservative_execution_resident_bytes(
     admitted_resident_bytes: usize,
     request: &SimulationRequestV1,
     limits: SimulationLimitsV1,
+    reserved_call_depth: usize,
     reachable_ssa_values: usize,
     plan_identity_bytes: usize,
     reachable_indices_capacity: usize,
@@ -2130,24 +2131,24 @@ pub(crate) fn conservative_execution_resident_bytes(
     )?)?;
     resident.add_product(
         workgroup_participants,
-        geometric_vec_bytes::<RuntimeFrame<'static>>(limits.max_call_depth)?,
+        geometric_vec_bytes::<RuntimeFrame<'static>>(reserved_call_depth)?,
     )?;
     // InvocationMachine::new owns the next frame before it is moved into one reserved stack.
     resident.add_bytes(size_of::<RuntimeFrame<'static>>())?;
     let values_per_frame = reserved_hash_map_bytes::<ValueId, RuntimeValue>(reachable_ssa_values)?;
     resident.add_product(
-        workgroup_participants.checked_mul(limits.max_call_depth)?,
+        workgroup_participants.checked_mul(reserved_call_depth)?,
         values_per_frame,
     )?;
     let incoming_per_frame = reserved_vec_bytes::<RuntimeValue>(reachable_ssa_values)?;
     resident.add_product(
-        workgroup_participants.checked_mul(limits.max_call_depth)?,
+        workgroup_participants.checked_mul(reserved_call_depth)?,
         incoming_per_frame,
     )?;
     resident.add_product(reserved_vec_bytes::<RuntimeValue>(reachable_ssa_values)?, 2)?;
     resident.add_bytes(partitioned_geometric_vec_bytes::<FrameAllocation>(
         limits.max_allocations,
-        workgroup_participants.checked_mul(limits.max_call_depth)?,
+        workgroup_participants.checked_mul(reserved_call_depth)?,
     )?)?;
     resident.add_bytes(reserved_vec_bytes::<WorkgroupAllocation>(
         workgroup_allocation_sites,
@@ -2182,6 +2183,7 @@ mod execution_resident_tests {
                 0,
                 &request,
                 limits,
+                limits.max_call_depth,
                 0,
                 0,
                 0,

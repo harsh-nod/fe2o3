@@ -5995,7 +5995,8 @@ impl InertSemanticMirRequestV1 {
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
-    /// workgroup pipelines occur together, and V10 for target-neutral scans.
+    /// workgroup pipelines occur together, and V10 for target-neutral scans
+    /// or the compiler trap terminal.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -16307,7 +16308,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. },
+                operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Trap,
                 ..
             }
         )
@@ -17271,7 +17273,15 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(3)?;
             encode_axis(writer, axis)
         }
-        SemanticCompilerIntrinsicOperationV1::Trap => writer.u8(41),
+        SemanticCompilerIntrinsicOperationV1::Trap => {
+            if wire_version != SemanticMirWireVersionV1::V10 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V10,
+                });
+            }
+            writer.u8(64)
+        }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
             dynamic_lds,

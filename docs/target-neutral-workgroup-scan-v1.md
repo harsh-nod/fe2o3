@@ -56,6 +56,35 @@ recorded schedule because the replay binding includes the exact request.
 Wrong workgroup geometry fails at preflight, and divergent participants return
 the typed workgroup-barrier diagnostic.
 
+The ordinary source examples also pass through the production Bundle V5 path,
+not a handwritten simulator copy. The compiler derives each kernel's semantic
+ABI/storage correspondence, emits production KIR V8 plus exact same-module KIR
+V10, and content-binds the debug source map. One bounded gate exports all 18
+feature-isolated entries across the six type/mode families, executes every
+result row through direct CPU simulation and the runtime backend, records a
+complete Trace V2, and opens the debugger's retained workgroup, wave, and lane
+views. The 65-lane cases also inspect lane 64 in their one-lane final Wave64.
+The 255-lane debugger transcript reaches its published hard retention ceiling:
+the protocol must report the inexact `resource_exhaustion` stop and still
+permits inspection of the bounded retained prefix. Smaller examples complete
+their debugger transcripts exactly.
+
+Run the 3-lane ordinary source example without GPU access:
+
+```bash
+./scripts/quickstart.sh simulate-source \
+  --crate fe2o3_workgroup_sync_v1 \
+  --request examples/workgroup_sync_v1/scan-u32-request.json \
+  --bundle-version 5 \
+  --output /tmp/scan-u32.fe2sim \
+  -- --manifest-path examples/workgroup_sync_v1/Cargo.toml \
+  --no-default-features --features lds-scan-u32-kernel --lib
+```
+
+Bundle V1 remains the quickstart default for compatibility. Select Bundle V5
+when the consumer needs compiler-derived semantic MIR, storage correspondence,
+and source-map members in addition to executable KIR.
+
 This is deterministic CPU execution and compiler evidence. It is not GPU
 execution, hardware validation, performance prediction, or proof that all
 possible schedules were explored.
@@ -63,19 +92,21 @@ possible schedules were explored.
 ## Ordinary Rust examples
 
 - [`kernel_scan_u32.rs`](../examples/workgroup_sync_v1/src/kernel_scan_u32.rs)
-  computes a 3-lane inclusive `u32` scan.
+  computes 3-, 65-, and 255-lane inclusive `u32` scans.
 - [`kernel_scan_u32_exclusive.rs`](../examples/workgroup_sync_v1/src/kernel_scan_u32_exclusive.rs)
-  computes a 255-lane exclusive `u32` scan.
+  computes 3-, 65-, and 255-lane exclusive `u32` scans.
 - [`kernel_scan_i32.rs`](../examples/workgroup_sync_v1/src/kernel_scan_i32.rs)
-  computes a 65-lane exclusive `i32` scan.
+  computes 3-, 65-, and 255-lane exclusive `i32` scans.
 - [`kernel_scan_i32_inclusive.rs`](../examples/workgroup_sync_v1/src/kernel_scan_i32_inclusive.rs)
-  computes a 3-lane inclusive `i32` scan.
+  computes 3-, 65-, and 255-lane inclusive `i32` scans.
 - [`kernel_scan_f32.rs`](../examples/workgroup_sync_v1/src/kernel_scan_f32.rs)
-  computes a 255-lane inclusive `f32` scan.
+  computes 3-, 65-, and 255-lane inclusive `f32` scans.
 - [`kernel_scan_f32_exclusive.rs`](../examples/workgroup_sync_v1/src/kernel_scan_f32_exclusive.rs)
-  computes a 65-lane exclusive `f32` scan.
+  computes 3-, 65-, and 255-lane exclusive `f32` scans.
 
-The ignored production driver compiles all six sources through semantic MIR,
-ranked PLIRON, verified KIR, and both gfx942/gfx950 LLVM bindings. It checks
-compiler output only and grants no artifact, load, launch, hardware, or
-performance authority.
+The existing target driver compiles one compatibility entry from each of the
+six source families through semantic MIR, ranked PLIRON, verified KIR, and both
+gfx942/gfx950 LLVM bindings. The Bundle V5 CPU driver separately qualifies all
+18 feature-isolated entries through gfx942 source export, simulation, runtime,
+Trace V2, and bounded debugger inspection. Neither grants artifact, load,
+launch, hardware, or performance authority.

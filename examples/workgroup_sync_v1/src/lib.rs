@@ -13,17 +13,41 @@ pub mod contract;
 pub mod kernel;
 #[cfg(feature = "lds-f32-kernel")]
 mod kernel_f32;
-#[cfg(feature = "lds-scan-f32-kernel")]
+#[cfg(any(
+    feature = "lds-scan-f32-kernel",
+    feature = "lds-scan-f32-3-kernel",
+    feature = "lds-scan-f32-65-kernel"
+))]
 mod kernel_scan_f32;
-#[cfg(feature = "lds-scan-f32-exclusive-kernel")]
+#[cfg(any(
+    feature = "lds-scan-f32-exclusive-kernel",
+    feature = "lds-scan-f32-exclusive-3-kernel",
+    feature = "lds-scan-f32-exclusive-255-kernel"
+))]
 mod kernel_scan_f32_exclusive;
-#[cfg(feature = "lds-scan-i32-kernel")]
+#[cfg(any(
+    feature = "lds-scan-i32-kernel",
+    feature = "lds-scan-i32-3-kernel",
+    feature = "lds-scan-i32-255-kernel"
+))]
 mod kernel_scan_i32;
-#[cfg(feature = "lds-scan-i32-inclusive-kernel")]
+#[cfg(any(
+    feature = "lds-scan-i32-inclusive-kernel",
+    feature = "lds-scan-i32-inclusive-65-kernel",
+    feature = "lds-scan-i32-inclusive-255-kernel"
+))]
 mod kernel_scan_i32_inclusive;
-#[cfg(feature = "lds-scan-u32-kernel")]
+#[cfg(any(
+    feature = "lds-scan-u32-kernel",
+    feature = "lds-scan-u32-65-kernel",
+    feature = "lds-scan-u32-255-kernel"
+))]
 mod kernel_scan_u32;
-#[cfg(feature = "lds-scan-u32-exclusive-kernel")]
+#[cfg(any(
+    feature = "lds-scan-u32-exclusive-kernel",
+    feature = "lds-scan-u32-exclusive-3-kernel",
+    feature = "lds-scan-u32-exclusive-65-kernel"
+))]
 mod kernel_scan_u32_exclusive;
 #[cfg(feature = "lds-u32-kernel")]
 mod kernel_u32;

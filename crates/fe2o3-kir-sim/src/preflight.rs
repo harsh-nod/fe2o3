@@ -534,7 +534,7 @@ pub(crate) fn preflight(
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
     }
-    validate_acyclic_call_depth(module, entry, limits)?;
+    let reserved_call_depth = validate_acyclic_call_depth(module, entry, limits)?;
     validate_arguments(entry, request, target, limits)?;
     let workgroup_resources = validate_workgroup_resources(
         module,
@@ -576,6 +576,7 @@ pub(crate) fn preflight(
         admitted_resident_bytes,
         request,
         limits,
+        reserved_call_depth,
         reachable_ssa_values,
         kernel_identity_bytes,
         reachable_function_indices.capacity(),
@@ -1214,7 +1215,7 @@ fn validate_acyclic_call_depth(
     module: &Module,
     entry: &Function,
     limits: SimulationLimitsV1,
-) -> Result<(), SimulationPreflightErrorV1> {
+) -> Result<usize, SimulationPreflightErrorV1> {
     let mut functions = HashMap::new();
     functions
         .try_reserve(module.functions.len())
@@ -1439,7 +1440,17 @@ fn validate_acyclic_call_depth(
         "acyclic call depth",
         maximum as u64,
         limits.max_call_depth as u64,
-    )
+    )?;
+    let recursive = component_sizes.iter().any(|size| *size > 1)
+        || graph
+            .iter()
+            .enumerate()
+            .any(|(source, edges)| edges.contains(&source));
+    Ok(if recursive {
+        limits.max_call_depth
+    } else {
+        maximum
+    })
 }
 
 struct CallGraphDfsFrame {
@@ -2262,6 +2273,63 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn call_depth_test_function(name: &str, callees: &[&str], kernel: bool) -> Function {
+        let mut block = fe2o3_kernel_ir::BasicBlock::new(BlockId(0));
+        for callee in callees {
+            block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: (*callee).into(),
+                    arguments: vec![],
+                },
+            ));
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        if kernel {
+            Function::kernel_entry(
+                name,
+                fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+                vec![],
+                vec![block],
+            )
+        } else {
+            Function::internal_helper(
+                name,
+                fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+                vec![],
+                vec![block],
+            )
+        }
+    }
+
+    #[test]
+    fn resident_call_depth_uses_proven_acyclic_depth_but_bounds_recursion() {
+        let limits = SimulationLimitsV1 {
+            max_call_depth: 64,
+            ..SimulationLimitsV1::default()
+        };
+        let mut acyclic = Module::new("acyclic-depth");
+        acyclic
+            .functions
+            .push(call_depth_test_function("root", &["leaf"], true));
+        acyclic
+            .functions
+            .push(call_depth_test_function("leaf", &[], false));
+        assert_eq!(
+            validate_acyclic_call_depth(&acyclic, &acyclic.functions[0], limits).unwrap(),
+            2
+        );
+
+        let mut recursive = Module::new("recursive-depth");
+        recursive
+            .functions
+            .push(call_depth_test_function("root", &["root"], true));
+        assert_eq!(
+            validate_acyclic_call_depth(&recursive, &recursive.functions[0], limits).unwrap(),
+            limits.max_call_depth
+        );
+    }
 
     #[test]
     fn dynamic_at_least_reports_its_exact_unrepresented_authority_boundary() {

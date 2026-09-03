@@ -1552,7 +1552,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V10 {
-            63
+            64
         } else if self.wire_version == SemanticMirWireVersionV1::V9 {
             62
         } else if self.wire_version == SemanticMirWireVersionV1::V8 {
@@ -1963,6 +1963,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                     _ => unreachable!(),
                 },
             },
+            64 => SemanticCompilerIntrinsicOperationV1::Trap,
             _ => unreachable!(),
         })
     }
@@ -2689,6 +2690,85 @@ mod tests {
             request.statics.into_vec(),
             request.vtables.into_vec(),
             request.functions.into_vec(),
+            callables,
+            request.roots.into_vec(),
+        )
+        .unwrap()
+    }
+
+    fn non_scan_trap_request() -> InertSemanticMirRequestV1 {
+        let request = minimal_request();
+        let never = SemanticTypeIdV1::from_index(u32::try_from(request.types.len()).unwrap());
+        let mut types = request.types.into_vec();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1(identity(130)),
+            SemanticLayoutIdentityV1(identity(131)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                SemanticFieldsShapeV1::Primitive,
+                SemanticRustcVariantsV1::Empty,
+                SemanticBackendReprV1::memory(true),
+                None,
+                true,
+                None,
+                1,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Never,
+        ));
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1(identity(132)),
+            SemanticLayoutIdentityV1(identity(133)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(never, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let trap = SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1(identity(134)),
+                SemanticItemDefinitionIdentityV1(identity(135)),
+                SemanticMonomorphizationIdentityV1(identity(136)),
+                SemanticGenericTypeArgumentsIdentityV1(identity(137)),
+                SemanticConstGenericArgumentsIdentityV1(identity(138)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation: SemanticCompilerIntrinsicOperationV1::Trap,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1(identity(139)),
+        };
+        let mut callables = request.callables.into_vec();
+        callables.push(trap);
+        let mut functions = request.functions.into_vec();
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![],
+            None,
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        functions[0].blocks[0] = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1(identity(140)),
+            SemanticSourceProvenanceV1::unavailable(),
+            vec![],
+            SemanticTerminatorV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticTerminatorKindV1::Call(call),
+            ),
+        )
+        .unwrap();
+        InertSemanticMirRequestV1::new_with_callables(
+            request.target,
+            types,
+            request.allocations.into_vec(),
+            request.statics.into_vec(),
+            request.vtables.into_vec(),
+            functions,
             callables,
             request.roots.into_vec(),
         )
@@ -3752,6 +3832,58 @@ mod tests {
         let mut decoder = CanonicalDecoderV1::new(&[63], SemanticMirLimitsV1::default());
         decoder.wire_version = SemanticMirWireVersionV1::V9;
         assert!(decoder.compiler_intrinsic().is_err());
+    }
+
+    #[test]
+    fn trap_round_trips_at_its_unique_v10_tag() {
+        let operation = SemanticCompilerIntrinsicOperationV1::Trap;
+        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V10);
+        assert_eq!(encoded, [64]);
+
+        for wire_version in [
+            SemanticMirWireVersionV1::V7,
+            SemanticMirWireVersionV1::V8,
+            SemanticMirWireVersionV1::V9,
+        ] {
+            let mut writer = CanonicalWriterV1::new(1);
+            assert!(matches!(
+                encode_compiler_intrinsic_operation(&mut writer, operation, wire_version),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    required: SemanticMirWireVersionV1::V10,
+                    ..
+                })
+            ));
+
+            let mut decoder = CanonicalDecoderV1::new(&[64], SemanticMirLimitsV1::default());
+            decoder.wire_version = wire_version;
+            assert!(decoder.compiler_intrinsic().is_err());
+        }
+    }
+
+    #[test]
+    fn non_scan_trap_selects_and_round_trips_current_production_v10() {
+        let request = non_scan_trap_request();
+        assert_eq!(
+            minimum_wire_version(&request),
+            SemanticMirWireVersionV1::V10
+        );
+        let admitted = request
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .unwrap();
+        assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V10);
+        let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+        assert!(decoded.callables().iter().any(|callable| matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Trap,
+                ..
+            }
+        )));
     }
 
     #[test]
