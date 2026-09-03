@@ -173,6 +173,25 @@ decoded ATT wave timelines unavailable. ATT decoder availability is a
 collection-host/toolchain property; PC Capture V3 neither invokes nor replaces
 the SDK decoder.
 
+## Decoded ATT V1
+
+`DecodedAttQuerySessionV1` opens the separately admitted Decoded ATT V1
+interchange. It pages raw-reference and code-object catalogs, occupancy,
+fixed-size wave summaries, wave states, instructions, performance events,
+shaderdata, realtime correlations, and INFO records. Wave states and
+instructions use raw-position cursors with per-wave offsets, so late pages do
+not rescan the flattened child stream from zero. Filters cover CU/WGP, SIMD,
+wave slot, export-scoped code object, instruction category, and wave state.
+
+`fe2o3-profiler-service decoded-att-jsonl` exposes the same read-only surface to
+agents. The strict canonical protocol is revisioned, rejects zero/replayed
+request IDs, charges malformed attempts, terminates on oversized records or
+responses with a small typed error, and grants no path, decoder, collection,
+attach, or execution authority. Empty callback classes are unavailable without
+claiming decoder absence or complete capture. Source/MIR/KIR/LLVM/ISA joins
+remain unavailable until an independently admitted exact artifact-to-
+characteristic relation is supplied.
+
 `PcSampleCodeObjectQuerySessionV1` optionally opens Capture V3 together with
 its V1 code-object relation sidecar. Opening replays exact relation admission
 from the original bounded rocprof JSON and HSACO bytes and rejects a stale or

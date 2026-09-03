@@ -107,7 +107,7 @@ authority.
 | Direct-KFD runtime observation | Experimental, MI300X-qualified slice | Opt-in bounded lifecycle, host staging, queue, AQL publication/completion, and host-monotonic timing; no device-clock or rocprof correlation claim |
 | Real GPU-dispatch round trip | Unavailable as protected qualification | Current tests use deterministic/fake collector inputs plus real KFD observation where gated |
 | Runtime/copy attribution | Incomplete | Direct-KFD logical runtime and host staging are observed; device copy-engine events and full semantic treatment lineage remain unavailable |
-| ATT/thread trace import | Unavailable | Requires a mutation-proof sealed decoder route |
+| ATT/thread trace import | Experimental, authority-free decoded interchange | Strictly admits a canonical external ROCprofiler SDK 7.2.4 callback export with exact manifest/raw/header/library/exporter identities, bounded paging, and loss/incomplete truth; raw decoding, authenticated decoder custody, beta collection, full-grid coverage, and source/IR/ISA correlation remain unavailable |
 | Source/IR/ISA causal localization | Incomplete | Exact artifact and source-map associations remain open |
 | Performance prediction | Out of scope | CPU simulation and profiler import make no prediction claim |
 | Agent-native queries | Experimental | Read-only typed facts with explicit provenance and availability |
