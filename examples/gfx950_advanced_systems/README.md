@@ -2,7 +2,8 @@
 
 The ordinary attributed Rust kernels in [`src/kernel.rs`](src/kernel.rs) are
 the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
-contains independent safe CPU references, and `cargo test --offline` checks
+contains independent safe CPU references, and
+`cargo fe2o3 test --offline --all-targets` checks
 their bounded numerical and transactional contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion.
 

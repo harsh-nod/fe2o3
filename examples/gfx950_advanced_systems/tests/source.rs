@@ -52,7 +52,7 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     assert!(manifest.contains("ablation-route-owner-only"));
     assert!(crate_root.contains("ablation-route-owner-only is rejected"));
     assert!(crate_root.contains("ablation-route-unpacked is retained only"));
-    assert_eq!(source.matches("namespace = \"").count(), 13);
+    assert!(!source.contains("namespace ="));
     assert_eq!(source.matches("max_grid = [1, 1, 1]").count(), 11);
     assert_eq!(source.matches("launch(required = [256, 1, 1]").count(), 3);
     assert_eq!(source.matches("launch(required = [64, 1, 1]").count(), 10);

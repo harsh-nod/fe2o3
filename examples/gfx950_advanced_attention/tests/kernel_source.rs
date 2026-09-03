@@ -65,7 +65,7 @@ fn source_contains_the_eight_expected_typed_kernels() {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(attributes.contains("typed"));
-        assert!(attributes.contains("namespace"));
+        assert!(!attributes.contains("namespace"));
         let kda = function.sig.ident.to_string().starts_with("gfx950_kda_");
         let workgroup = if kda { 256 } else { 64 };
         assert!(attributes.contains(&format!("required = [{workgroup} , 1 , 1]")));

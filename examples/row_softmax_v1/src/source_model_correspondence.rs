@@ -35,7 +35,6 @@ const ROW_ELEMENTS: usize = 64;
 
 #[kernel(
     typed,
-    namespace = "b9c43562d541f2f0489f311058c425d85a7ea6c328a3991bb6da17bdf85f766c",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(64, 64, 64))
 )]

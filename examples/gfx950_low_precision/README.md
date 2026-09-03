@@ -21,7 +21,7 @@ axis-varying inputs and exact OCP E2M1/E4M3 decoders.
 Run the Rust source and oracle checks with:
 
 ```bash
-cargo test --manifest-path Cargo.toml
+cargo fe2o3 test --all-targets --manifest-path Cargo.toml
 ```
 
 The production rustc importer, V8/V9 Kernel IR schemas, exact gfx950 target
@@ -48,7 +48,7 @@ ordered nine-file ROCm 7.2.1 closure accepted by
 four B8 transpose reads, one uniform publication barrier, and the exact static
 LDS allocation before dispatch.
 
-The selected root extraction namespace is portable across checkout paths.
+The selected root compiler binding is portable across checkout paths.
 Cargo's original ordered metadata remains a separate build observation; only
 the terminal analysis session receives the package-, manifest-, feature-,
 target-, and profile-bound portable token. Dependency compilations and general
@@ -107,7 +107,7 @@ On 2026-08-26, all four ordinary Rust runners passed through SSH host alias
 Every test checked all 256 outputs, immutable inputs, output canaries, exact
 gfx950:xnack- COV6 metadata, and symbol-scoped ISA.
 
-| Rust kernel | Portable namespace | LLVM SHA-256 | HSACO SHA-256 | Required ISA | Maximum absolute error |
+| Rust kernel | Compiler-derived binding | LLVM SHA-256 | HSACO SHA-256 | Required ISA | Maximum absolute error |
 | --- | --- | --- | --- | --- | --- |
 | `gfx950_fp4_gemm_rust` | `ff22ff3610dda0a94803a8011ced229b78c77400ca63c9b929d6ecba78ed6f01` | `b92ceef45655bb2ae131c2b09645ff8fb588299a994e9cbf84b07b7868fca115` | `f170671b0b778cda3876faee253e4ac3a092efdd9c1ebbfcfe901590ea3e4e4d` | scaled MFMA, `cbsz:4 blgp:4` | `0` |
 | `gfx950_fp8_gemm_rust` | `d67f1755b38fbdac67cec83da3ebc359f874e3fbf90fcc036471455ec117dfea` | `351dbfeecec00e673e3e15557b97dc1c53006839dfb9d1a0a7b03ac6c23ae6e3` | `4c19d4a90ec71afa7621cc7f9f8d4d5af8e9dd87486536c702b8eb6dcc4c3d8f` | scaled MFMA, FP8 selectors | `0` |
