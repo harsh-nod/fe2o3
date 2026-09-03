@@ -6,21 +6,31 @@
 #![allow(unsafe_code)]
 
 use std::convert::Infallible;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use fe2o3_aql::AqlDispatchGeometryV1;
+use fe2o3_debug_protocol::{
+    KFD_OPAQUE_CHECKPOINT_RANGE_SLOTS_V1, KfdOpaqueCheckpointQualificationObservationV1,
+    KfdOpaqueCheckpointQualificationReceiptV1, KfdOpaqueCheckpointQualificationTruthV1,
+    KfdOpaqueCheckpointRangeContentV1, KfdOpaqueCheckpointRangeKindV1,
+    KfdOpaqueCheckpointRangeSlotV1, KfdOpaqueCheckpointUnavailableV1, OpaqueIdentityV1,
+    decode_kfd_opaque_checkpoint_qualification_v1, encode_kfd_opaque_checkpoint_qualification_v1,
+};
 use fe2o3_kfd::{
-    DEFAULT_KFD_PATH, DeviceSelector, KfdAdapterError, KfdDebugExceptionInfoV1,
+    DEFAULT_KFD_PATH, DeviceSelector, KFD_STOPPED_STATE_MANIFEST_SHA256_V1,
+    KFD_STOPPED_STATE_MANIFEST_V1, KfdAdapterError, KfdDebugExceptionInfoV1,
     KfdDebugQueueOperationStateV1, KfdDebugSessionErrorV1, KfdDebugSessionPlanV1,
     KfdDebuggerTelemetryEndpointV2, KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1,
     KfdOpaqueCheckpointObservationV1, KfdOpaqueCheckpointSegmentKindV1, KfdStoppedAvailabilityV1,
-    KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1,
+    KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1, KfdStoppedQueueSnapshotV1,
     KfdStoppedSnapshotOwnershipV1, KfdStoppedStateScopeV1, KfdStoppedUnavailableReasonV1,
     KfdTargetDebugArtifactIdentityV1, KfdTargetDebugSessionNonceV1, KfdTargetDebugSessionOutcomeV2,
     KfdTargetDebugTelemetryDigestV1, KfdTargetDebugTelemetryPayloadV2,
@@ -40,6 +50,7 @@ use fe2o3_runtime::{
 use sha2::{Digest, Sha256};
 
 const HELPER_ENV: &str = "FE2O3_KFD_ACTIVE_CHECKPOINT_LIVE_HELPER";
+const RECEIPT_PATH_ENV: &str = "FE2O3_KFD_OPAQUE_CHECKPOINT_QUALIFICATION_RECEIPT_V1";
 const WAIT_BOUND: Duration = Duration::from_secs(45);
 const KERNEL: &str = "active_checkpoint_liveness";
 const ITERATIONS: u32 = 1_000_000_000;
@@ -161,6 +172,177 @@ fn random_nonce() -> KfdTargetDebugSessionNonceV1 {
     KfdTargetDebugSessionNonceV1::from_bytes(bytes).expect("urandom nonce is nonzero")
 }
 
+fn random_stopped_state_scope() -> KfdStoppedStateScopeV1 {
+    let mut bytes = [0_u8; 32];
+    fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .expect("read one live-test stopped-state scope");
+    KfdStoppedStateScopeV1::new(bytes).expect("urandom stopped-state scope is nonzero")
+}
+
+fn opaque_identity(bytes: &[u8; 32]) -> Result<OpaqueIdentityV1, String> {
+    OpaqueIdentityV1::new(*bytes).map_err(|error| error.to_string())
+}
+
+fn build_checkpoint_receipt(
+    stopped: &KfdStoppedQueueSnapshotV1,
+) -> Result<KfdOpaqueCheckpointQualificationReceiptV1, String> {
+    if stopped.ownership() != KfdStoppedSnapshotOwnershipV1::SessionRetainedSuspension {
+        return Err("stopped snapshot does not retain session-local suspension".to_owned());
+    }
+    let layout = match stopped.context_save() {
+        KfdStoppedContextSaveObservationV1::Available(layout) => layout,
+        other => {
+            return Err(format!(
+                "context-save observation is not available: {other:?}"
+            ));
+        }
+    };
+    let checkpoint = match stopped.opaque_checkpoint() {
+        KfdOpaqueCheckpointObservationV1::Complete(checkpoint) => checkpoint,
+        other => return Err(format!("opaque checkpoint is not complete: {other:?}")),
+    };
+    if checkpoint.captured_bytes() == 0 || checkpoint.segments().is_empty() {
+        return Err("qualification requires a nonempty opaque checkpoint".to_owned());
+    }
+
+    let mut segments = checkpoint.segments().iter();
+    let mut ranges = Vec::with_capacity(KFD_OPAQUE_CHECKPOINT_RANGE_SLOTS_V1);
+    for header in layout.headers() {
+        for (native_kind, kind, range) in [
+            (
+                KfdOpaqueCheckpointSegmentKindV1::ControlStack,
+                KfdOpaqueCheckpointRangeKindV1::ControlStack,
+                header.control_stack(),
+            ),
+            (
+                KfdOpaqueCheckpointSegmentKindV1::WaveState,
+                KfdOpaqueCheckpointRangeKindV1::WaveState,
+                header.wave_state(),
+            ),
+        ] {
+            let content = if range.is_empty() {
+                KfdOpaqueCheckpointRangeContentV1::Empty
+            } else {
+                let segment = segments
+                    .next()
+                    .ok_or_else(|| "checkpoint segment roster is incomplete".to_owned())?;
+                if segment.xcc_ordinal() != header.xcc_ordinal()
+                    || segment.kind() != native_kind
+                    || segment.range() != range
+                {
+                    return Err(
+                        "checkpoint segment does not match its public-header range".to_owned()
+                    );
+                }
+                KfdOpaqueCheckpointRangeContentV1::Complete {
+                    content_identity: opaque_identity(segment.content_identity().as_bytes())?,
+                }
+            };
+            ranges.push(KfdOpaqueCheckpointRangeSlotV1 {
+                xcc_ordinal: header.xcc_ordinal(),
+                kind,
+                offset: range.offset(),
+                bytes: range.bytes(),
+                content,
+            });
+        }
+    }
+    if segments.next().is_some() {
+        return Err("checkpoint segment roster contains an unannounced segment".to_owned());
+    }
+
+    let manifest_digest = digest(KFD_STOPPED_STATE_MANIFEST_V1.as_bytes());
+    if hex(&manifest_digest) != KFD_STOPPED_STATE_MANIFEST_SHA256_V1 {
+        return Err("native stopped-state manifest digest drifted".to_owned());
+    }
+    KfdOpaqueCheckpointQualificationReceiptV1::new(KfdOpaqueCheckpointQualificationObservationV1 {
+        producer_manifest_sha256: opaque_identity(&manifest_digest)?,
+        gfx_target_version: stopped.gfx_target_version(),
+        xcc_count: stopped.xcc_count(),
+        context_bytes_per_xcc: layout.context_bytes_per_xcc(),
+        stopped_snapshot_identity: opaque_identity(stopped.logical_identity().as_bytes())?,
+        queue_observation_identity: opaque_identity(stopped.queue_identity().as_bytes())?,
+        device_observation_identity: opaque_identity(stopped.device_identity().as_bytes())?,
+        context_save_identity: opaque_identity(layout.logical_identity().as_bytes())?,
+        checkpoint_identity: opaque_identity(checkpoint.logical_identity().as_bytes())?,
+        checkpoint_content_identity: opaque_identity(checkpoint.content_identity().as_bytes())?,
+        capture_limit_bytes: checkpoint.capture_limit_bytes(),
+        captured_bytes: checkpoint.captured_bytes(),
+        ranges,
+        unavailable: vec![
+            KfdOpaqueCheckpointUnavailableV1::DecodedWave,
+            KfdOpaqueCheckpointUnavailableV1::DecodedLane,
+            KfdOpaqueCheckpointUnavailableV1::Register,
+            KfdOpaqueCheckpointUnavailableV1::ProgramCounter,
+            KfdOpaqueCheckpointUnavailableV1::Source,
+            KfdOpaqueCheckpointUnavailableV1::TargetMemory,
+        ],
+        truth: KfdOpaqueCheckpointQualificationTruthV1::caller_bound_direct_kfd(),
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn publish_checkpoint_receipt_if_requested(bytes: &[u8]) -> Result<(), String> {
+    let Some(path) = std::env::var_os(RECEIPT_PATH_ENV).map(PathBuf::from) else {
+        return Ok(());
+    };
+    if !path.is_absolute() {
+        return Err(format!("{RECEIPT_PATH_ENV} must be absolute"));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{RECEIPT_PATH_ENV} has no parent"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("{RECEIPT_PATH_ENV} has no leaf"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("canonicalize receipt parent: {error}"))?;
+    if canonical_parent.join(file_name) != path {
+        return Err(format!("{RECEIPT_PATH_ENV} must use its canonical parent"));
+    }
+    let parent_file =
+        File::open(&canonical_parent).map_err(|error| format!("open receipt parent: {error}"))?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|error| format!("create receipt: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect receipt: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.nlink() != 1 || metadata.mode() & 0o777 != 0o600
+    {
+        return Err("new receipt file does not have private single-link custody".to_owned());
+    }
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("write receipt: {error}"))?;
+    let encoded_len = u64::try_from(bytes.len()).map_err(|_| "receipt size overflow".to_owned())?;
+    if file
+        .metadata()
+        .map_err(|error| format!("reinspect receipt: {error}"))?
+        .len()
+        != encoded_len
+    {
+        return Err("receipt length changed after write".to_owned());
+    }
+    let mut observed = vec![0_u8; bytes.len()];
+    file.read_exact_at(&mut observed, 0)
+        .map_err(|error| format!("reread receipt: {error}"))?;
+    if observed != bytes || decode_kfd_opaque_checkpoint_qualification_v1(&observed).is_err() {
+        return Err("receipt readback is not the exact canonical record".to_owned());
+    }
+    parent_file
+        .sync_all()
+        .map_err(|error| format!("sync receipt parent: {error}"))?;
+    Ok(())
+}
+
 fn artifact_identity(bytes: &[u8]) -> KfdTargetDebugArtifactIdentityV1 {
     KfdTargetDebugArtifactIdentityV1::new(
         KfdTargetDebugTelemetryDigestV1::from_bytes(digest(bytes)).unwrap(),
@@ -277,6 +459,7 @@ fn mi300x_captures_nonempty_same_queue_opaque_checkpoint() {
             fe2o3_kfd::KFD_TARGET_DEBUG_TELEMETRY_DEBUGGER_PID_ENV_V2,
             std::process::id().to_string(),
         )
+        .env_remove(RECEIPT_PATH_ENV)
         .env_remove("RUST_MIN_STACK")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -398,7 +581,7 @@ fn mi300x_captures_nonempty_same_queue_opaque_checkpoint() {
         .capture_stopped_queue_v1(
             KfdStoppedQueueCapturePlanV1::with_checkpoint_byte_limit(
                 *target_kfd_queue_id_observation,
-                KfdStoppedStateScopeV1::new([0x4d; 32]).unwrap(),
+                random_stopped_state_scope(),
                 MAX_KFD_OPAQUE_CHECKPOINT_BYTES_V1,
             )
             .unwrap(),
@@ -454,6 +637,15 @@ fn mi300x_captures_nonempty_same_queue_opaque_checkpoint() {
             KfdStoppedUnavailableReasonV1::ProgramCounterRequiresRegisterRecord
         )
     );
+    assert_ne!(stopped.logical_identity().as_bytes(), &[0; 32]);
+    assert_ne!(checkpoint.content_identity().as_bytes(), &[0; 32]);
+    let receipt = build_checkpoint_receipt(&stopped).unwrap();
+    let receipt_bytes = encode_kfd_opaque_checkpoint_qualification_v1(&receipt).unwrap();
+    assert_eq!(
+        decode_kfd_opaque_checkpoint_qualification_v1(&receipt_bytes).unwrap(),
+        receipt
+    );
+    drop(stopped);
 
     let resumed = session
         .resume_queues(&[*target_kfd_queue_id_observation])
@@ -480,9 +672,8 @@ fn mi300x_captures_nonempty_same_queue_opaque_checkpoint() {
     release_helper(child.child());
     child.finish(Instant::now() + WAIT_BOUND);
 
-    assert_ne!(stopped.logical_identity().as_bytes(), &[0; 32]);
-    assert_ne!(checkpoint.content_identity().as_bytes(), &[0; 32]);
     assert_ne!(executable.digest().as_bytes(), &[0; 32]);
+    publish_checkpoint_receipt_if_requested(&receipt_bytes).unwrap();
 }
 
 fn receive_telemetry(

@@ -79,6 +79,30 @@ captured, and resumed. This is same-queue runtime-observation evidence. It is
 not a coherent-interval proof and does not independently authenticate which
 code-object bytes were physically loaded or executed.
 
+## Redacted qualification receipt
+
+The opt-in active MI300X gate can emit a strict-canonical
+`fe2o3-direct-kfd-opaque-checkpoint-qualification-v1` receipt. It records all
+16 ordered XCC control-stack/wave-state slots, including empty ranges, and the
+native snapshot, queue, device, context-save, checkpoint, overall content, and
+nonempty segment correlation identities. It never serializes the private
+bytes, stopped-state scope, native identifiers, addresses, handles,
+descriptors, or live selectors.
+
+Run `scripts/qualify-kfd-opaque-checkpoint.sh` from an exact clean source tree
+on the MI300X host. The default run validates a new private temporary receipt
+and removes it. `--bless` is the explicit publication step: it archives the
+redacted canonical JSON plus a narrative containing the exact producer commit,
+tree, host kernel, raw file digest, and claim boundary. A missing KFD device,
+idle zero-byte checkpoint, truncation, unavailable capture, failed resume,
+incorrect output, incomplete target lifecycle, failed session cleanup, or
+failed child exit produces no blessed record.
+
+The receipt self-identity and the checked-in raw file digest detect
+substitution after pinning. They are not signatures, do not authenticate the
+producer, and do not upgrade target-declared artifact correlation into proof of
+physical loading or execution.
+
 Useful decoded stopped-state inspection still requires a stable, documented
 direct-KFD decoder interface or a separately versioned and reviewed decoder
 with exact driver/firmware provenance; neither exists in the current public
