@@ -67,7 +67,7 @@ fn fixture() -> TestWorkspace {
     write(
         &workspace.0,
         "Cargo.toml",
-        "[workspace]\nresolver = \"2\"\nmembers = [\n  \"fallback-internal\",\n  \"managed-feature\",\n  \"managed-include\",\n  \"managed-library\",\n  \"ordinary\",\n  \"ordinary-dependent\",\n]\n",
+        "[workspace]\nresolver = \"2\"\nmembers = [\n  \"fallback-internal\",\n  \"managed-evidence\",\n  \"managed-feature\",\n  \"managed-include\",\n  \"managed-library\",\n  \"ordinary\",\n  \"ordinary-dependent\",\n]\n",
     );
     add_package(
         &workspace.0,
@@ -78,6 +78,12 @@ fn fixture() -> TestWorkspace {
         &workspace.0,
         "fallback-internal/src/helper.rs",
         "pub fn helper() {}\n",
+    );
+    add_package(&workspace.0, "managed-evidence", "pub fn ordinary() {}\n");
+    write(
+        &workspace.0,
+        "managed-evidence/tests/fixtures/verus.rs",
+        "broadcast use prelude::*;\n",
     );
     add_package(&workspace.0, "managed-feature", "pub fn ordinary() {}\n");
     write(
@@ -143,7 +149,7 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
     );
     assert_eq!(
         String::from_utf8(output.stdout).expect("UTF-8 projection"),
-        "managed-feature\nmanaged-include\nmanaged-library\n"
+        "managed-evidence\nmanaged-feature\nmanaged-include\nmanaged-library\n"
     );
 
     let status = workspace
@@ -151,6 +157,7 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
         .args([
             "examples",
             "check-wrapper-managed",
+            "managed-evidence",
             "managed-feature",
             "managed-include",
             "managed-library",
