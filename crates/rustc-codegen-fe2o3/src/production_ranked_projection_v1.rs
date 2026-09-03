@@ -2092,9 +2092,19 @@ fn scalar_defined_callable_call_v1(
         eligible &=
             scalar_defined_callable_destination_v1(types, function, destination.place(), work)?;
     }
-    let Some(SemanticCallableDeclV1::Defined { function: callee }) =
-        callables.get(call.callee().index() as usize)
-    else {
+    let Some(callable) = callables.get(call.callee().index() as usize) else {
+        return Ok(false);
+    };
+    if matches!(
+        callable,
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::FabsF32,
+            ..
+        }
+    ) {
+        return Ok(eligible);
+    }
+    let SemanticCallableDeclV1::Defined { function: callee } = callable else {
         return Ok(false);
     };
     let callee = callee.index() as usize;
@@ -2139,9 +2149,19 @@ fn scalar_defined_callable_tail_call_v1(
     for argument in call.arguments() {
         eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
     }
-    let Some(SemanticCallableDeclV1::Defined { function: callee }) =
-        callables.get(call.callee().index() as usize)
-    else {
+    let Some(callable) = callables.get(call.callee().index() as usize) else {
+        return Ok(false);
+    };
+    if matches!(
+        callable,
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::FabsF32,
+            ..
+        }
+    ) {
+        return Ok(eligible);
+    }
+    let SemanticCallableDeclV1::Defined { function: callee } = callable else {
         return Ok(false);
     };
     let callee = callee.index() as usize;
@@ -30527,6 +30547,26 @@ mod tests {
         .unwrap();
 
         assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+    }
+
+    #[test]
+    fn defined_scalar_helper_admits_only_exact_fabs_compiler_intrinsic() {
+        let functions = vec![scalar_summary_calling_helper(171, 1)];
+        let callables = vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            compiler_intrinsic_callable(SemanticCompilerIntrinsicOperationV1::FabsF32),
+        ];
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &functions,
+            &callables,
+        )
+        .unwrap();
+
+        assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(summaries.is_exact_empty_deterministic_scalar(
+            SemanticFunctionIdV1::from_index(0)
+        ));
     }
 
     #[test]
