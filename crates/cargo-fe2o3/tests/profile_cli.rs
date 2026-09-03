@@ -1075,6 +1075,8 @@ fn reserved_generated_names_are_rejected_and_cleaned() {
         ".fe2o3-direct-kfd-rocprof-qualification-v1.redo",
         "fe2o3-direct-kfd-runtime-profile-v1.json",
         ".fe2o3-direct-kfd-runtime-profile-v1.redo",
+        "fe2o3-rocprof-wrapper-host-wall-comparison-v1.json",
+        ".fe2o3-rocprof-wrapper-host-wall-comparison-v1.redo",
     ] {
         let fixture = Fixture::new(false);
         fixture.replace_behavior(&format!(
@@ -1087,6 +1089,90 @@ fn reserved_generated_names_are_rejected_and_cleaned() {
         assert!(!output.status.success());
         assert!(!output_directory.exists());
     }
+}
+
+#[test]
+fn wrapper_host_wall_comparison_requires_separate_acknowledgement_and_is_non_authoritative() {
+    let fixture = Fixture::new(false);
+    fixture.replace_behavior(
+        r#"
+target = args[args.index("--") + 1:]
+raise SystemExit(subprocess.run(target, check=False).returncode)
+"#,
+    );
+    let output_directory = fixture.output("wrapper-overhead");
+    let options = [
+        "--measure-direct-kfd-wrapper-overhead",
+        "--overhead-warmup-pairs",
+        "1",
+        "--overhead-measured-pairs",
+        "3",
+        "--overhead-candidate-budget-bps",
+        "1000000",
+    ];
+    let plan = fixture.plan_with_options(&output_directory, &options, &[]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let acknowledgement = field(&plan, "repeated-target-execution-acknowledgement");
+
+    let without_ack = collect_with_options(
+        &fixture,
+        &output_directory,
+        &authorization(&plan),
+        &options,
+        &[],
+    );
+    assert!(!without_ack.status.success());
+    assert!(!output_directory.exists());
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command.args([
+        "profile",
+        "--collect",
+        "--authorize-collection",
+        &authorization(&plan),
+        "--acknowledge-repeated-target-execution",
+        &acknowledgement,
+        "--tool",
+        fixture.tool.to_str().unwrap(),
+    ]);
+    command.args(options).args([
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+        "--",
+        "/bin/true",
+    ]);
+    let collected = command.output().unwrap();
+    assert!(
+        collected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&collected.stderr)
+    );
+    let evidence: serde_json::Value = serde_json::from_slice(
+        &fs::read(output_directory.join("fe2o3-rocprof-wrapper-host-wall-comparison-v1.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        evidence["schema"],
+        "fe2o3-rocprof-wrapper-host-wall-comparison-v1"
+    );
+    assert_eq!(evidence["invocations"].as_array().unwrap().len(), 8);
+    assert!(!evidence["summary"].is_null());
+    assert_eq!(
+        evidence["kernel_trace_capture_overhead"],
+        "unavailable_no_admitted_capture"
+    );
+    assert_eq!(evidence["grants_collection_authority"], false);
+    assert_eq!(evidence["grants_production_qualification"], false);
+    assert!(
+        output_directory
+            .join("fe2o3-profile-manifest-v1.txt")
+            .is_file()
+    );
 }
 
 #[test]

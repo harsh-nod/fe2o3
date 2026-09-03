@@ -20,6 +20,13 @@ use crate::profile_live_qualification_v1::{
     RawContentIdentityV1, build_live_qualification_v1, decode_live_qualification_v1,
     encode_live_qualification_v1,
 };
+use crate::profile_wrapper_overhead_v1::{
+    ArtifactStateV1, BuildInputsV1 as WrapperOverheadBuildInputsV1, CaptureLossStateV1,
+    HostClockV1, InvocationEvidenceV1, InvocationKindV1, InvocationOutcomeV1,
+    MAX_WRAPPER_OVERHEAD_BYTES_V1, OrderPolicyV1, OverheadPolicyV1, PairOrderV1, TimingBoundaryV1,
+    TrialPhaseV1, WRAPPER_OVERHEAD_FILE_V1, WRAPPER_OVERHEAD_REDO_FILE_V1,
+    build_wrapper_overhead_v1, decode_wrapper_overhead_v1, encode_wrapper_overhead_v1,
+};
 use fe2o3_artifact_transaction::{NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1};
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
@@ -55,6 +62,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,6 +92,9 @@ const MAX_CAPABILITY_OUTPUT_BYTES_V1: usize = 1024 * 1024;
 const CAPABILITY_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 4096;
+const MAX_OVERHEAD_WARMUP_PAIRS_V1: u64 = 20;
+const MAX_OVERHEAD_MEASURED_PAIRS_V1: u64 = 100;
+const MAX_OVERHEAD_HARNESS_MS_V1: u64 = 3_600_000;
 const MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1: usize = 512;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const CAPTURE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
@@ -244,12 +255,20 @@ struct KirBinding {
     wave_width: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WrapperOverheadRequestV1 {
+    warmup_pairs: u16,
+    measured_pairs: u16,
+    candidate_budget_bps: u64,
+}
+
 #[derive(Debug)]
 struct Options {
     action: Action,
     authorization: Option<[u8; 32]>,
     pc_probe_authorization: Option<[u8; 32]>,
     pc_risk_acknowledgement: Option<[u8; 32]>,
+    repeated_execution_acknowledgement: Option<[u8; 32]>,
     tool: Option<PathBuf>,
     interpreter: Option<PathBuf>,
     pc_avail: Option<PathBuf>,
@@ -268,6 +287,7 @@ struct Options {
     artifact_path: Option<PathBuf>,
     source_isa_characteristic_path: Option<PathBuf>,
     direct_kfd_runtime_capture_path: Option<PathBuf>,
+    wrapper_overhead: Option<WrapperOverheadRequestV1>,
 }
 
 #[derive(Debug)]
@@ -1151,6 +1171,7 @@ impl ObservedGpuTargetProfileUnavailableReasonV1 {
 struct Plan {
     options: Options,
     working_directory: PathBuf,
+    working_directory_identity: ObjectIdentity,
     output_directory: PathBuf,
     tool: FilePin,
     interpreter: FilePin,
@@ -1159,6 +1180,7 @@ struct Plan {
     collector_tool_bytes: Vec<u8>,
     collector_tool_digest: [u8; 32],
     target: FilePin,
+    measurement_harness: Option<FilePin>,
     environment: Vec<EnvironmentEntry>,
     environment_bytes: Vec<u8>,
     environment_digest: [u8; 32],
@@ -1454,6 +1476,7 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
     let supplied_authorization = options.authorization;
     let supplied_pc_probe_authorization = options.pc_probe_authorization;
     let supplied_pc_risk_acknowledgement = options.pc_risk_acknowledgement;
+    let supplied_repeated_execution_acknowledgement = options.repeated_execution_acknowledgement;
     let action = options.action;
     let pc_probe = match options.pc_sampling {
         Some(request) => {
@@ -1507,11 +1530,20 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
             hex(&pc.risk_acknowledgement)
         ));
     }
+    if plan.options.wrapper_overhead.is_some() {
+        let expected = repeated_execution_acknowledgement_v1(&plan);
+        if supplied_repeated_execution_acknowledgement != Some(expected) {
+            return Err(format!(
+                "wrapper overhead collection requires the separate exact repeated-target-execution acknowledgement; rerun with --acknowledge-repeated-target-execution {}",
+                hex(&expected)
+            ));
+        }
+    }
     collect(plan)
 }
 
 fn usage() -> &'static str {
-    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att|pc-sampling] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [--direct-kfd-runtime-capture /absolute/new/capture.json] [PC: --pc-avail /absolute/path/to/rocprofv3-avail --authorize-pc-capability-probe HEX --pc-agent N --pc-method stochastic --pc-unit cycles --pc-interval N --artifact /absolute/path/to/kernel.hsaco --source-isa-characteristic /absolute/path/to/archive] [--collect --authorize-collection HEX [--acknowledge-pc-sampling-beta-risk HEX]] -- <program> [arguments...]"
+    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att|pc-sampling] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [--direct-kfd-runtime-capture /absolute/new/capture.json] [--measure-direct-kfd-wrapper-overhead --overhead-warmup-pairs N --overhead-measured-pairs N --overhead-candidate-budget-bps N] [PC: --pc-avail /absolute/path/to/rocprofv3-avail --authorize-pc-capability-probe HEX --pc-agent N --pc-method stochastic --pc-unit cycles --pc-interval N --artifact /absolute/path/to/kernel.hsaco --source-isa-characteristic /absolute/path/to/archive] [--collect --authorize-collection HEX [--acknowledge-pc-sampling-beta-risk HEX] [--acknowledge-repeated-target-execution HEX]] -- <program> [arguments...]"
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
@@ -1536,6 +1568,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut authorization = None;
     let mut pc_probe_authorization = None;
     let mut pc_risk_acknowledgement = None;
+    let mut repeated_execution_acknowledgement = None;
     let mut tool = None;
     let mut interpreter = None;
     let mut pc_avail = None;
@@ -1558,6 +1591,10 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut artifact_path = None;
     let mut source_isa_characteristic_path = None;
     let mut direct_kfd_runtime_capture_path = None;
+    let mut measure_wrapper_overhead = false;
+    let mut overhead_warmup_pairs = None;
+    let mut overhead_measured_pairs = None;
+    let mut overhead_candidate_budget_bps = None;
     let mut scalar_options = BTreeSet::new();
 
     let mut index = 0;
@@ -1574,6 +1611,13 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             }
             action = requested;
             action_explicit = true;
+        } else if argument == "--measure-direct-kfd-wrapper-overhead" {
+            if measure_wrapper_overhead {
+                return Err(
+                    "--measure-direct-kfd-wrapper-overhead was specified more than once".to_owned(),
+                );
+            }
+            measure_wrapper_overhead = true;
         } else if let Some(value) =
             option_value(args, &mut index, separator, "--authorize-collection")?
         {
@@ -1603,6 +1647,17 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 &mut pc_risk_acknowledgement,
                 parse_hex(value, "--acknowledge-pc-sampling-beta-risk")?,
                 "--acknowledge-pc-sampling-beta-risk",
+            )?;
+        } else if let Some(value) = option_value(
+            args,
+            &mut index,
+            separator,
+            "--acknowledge-repeated-target-execution",
+        )? {
+            set_once(
+                &mut repeated_execution_acknowledgement,
+                parse_hex(value, "--acknowledge-repeated-target-execution")?,
+                "--acknowledge-repeated-target-execution",
             )?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--tool")? {
             set_once(&mut tool, PathBuf::from(value), "--tool")?;
@@ -1696,6 +1751,45 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         } else if let Some(value) = option_value(args, &mut index, separator, "--storage-limit")? {
             require_first(&mut scalar_options, "--storage-limit")?;
             storage_limit = parse_u64(value, "--storage-limit", 1, MAX_STORAGE_LIMIT)?;
+        } else if let Some(value) =
+            option_value(args, &mut index, separator, "--overhead-warmup-pairs")?
+        {
+            set_once(
+                &mut overhead_warmup_pairs,
+                u16::try_from(parse_u64(
+                    value,
+                    "--overhead-warmup-pairs",
+                    1,
+                    MAX_OVERHEAD_WARMUP_PAIRS_V1,
+                )?)
+                .map_err(|_| "--overhead-warmup-pairs is out of range".to_owned())?,
+                "--overhead-warmup-pairs",
+            )?;
+        } else if let Some(value) =
+            option_value(args, &mut index, separator, "--overhead-measured-pairs")?
+        {
+            set_once(
+                &mut overhead_measured_pairs,
+                u16::try_from(parse_u64(
+                    value,
+                    "--overhead-measured-pairs",
+                    1,
+                    MAX_OVERHEAD_MEASURED_PAIRS_V1,
+                )?)
+                .map_err(|_| "--overhead-measured-pairs is out of range".to_owned())?,
+                "--overhead-measured-pairs",
+            )?;
+        } else if let Some(value) = option_value(
+            args,
+            &mut index,
+            separator,
+            "--overhead-candidate-budget-bps",
+        )? {
+            set_once(
+                &mut overhead_candidate_budget_bps,
+                parse_u64(value, "--overhead-candidate-budget-bps", 0, 1_000_000)?,
+                "--overhead-candidate-budget-bps",
+            )?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--kir-sha256")? {
             set_once(
                 &mut kir_digest,
@@ -1727,6 +1821,11 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     }
     if action == Action::Plan && pc_risk_acknowledgement.is_some() {
         return Err("--acknowledge-pc-sampling-beta-risk is valid only with --collect".to_owned());
+    }
+    if action == Action::Plan && repeated_execution_acknowledgement.is_some() {
+        return Err(
+            "--acknowledge-repeated-target-execution is valid only with --collect".to_owned(),
+        );
     }
     if action == Action::Collect && authorization.is_none() {
         return Err(
@@ -1800,11 +1899,62 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 .to_owned(),
         );
     }
+    let any_overhead_option = overhead_warmup_pairs.is_some()
+        || overhead_measured_pairs.is_some()
+        || overhead_candidate_budget_bps.is_some();
+    let wrapper_overhead = if measure_wrapper_overhead {
+        if kind != ProfileKind::DispatchJson {
+            return Err(
+                "direct-KFD wrapper overhead measurement requires --kind dispatch-json".to_owned(),
+            );
+        }
+        if direct_kfd_runtime_capture_path.is_some()
+            || kir_v7_path.is_some()
+            || kir_binding.is_some()
+            || pc_sampling.is_some()
+        {
+            return Err("direct-KFD wrapper overhead measurement cannot be combined with capture/import binding options".to_owned());
+        }
+        Some(WrapperOverheadRequestV1 {
+            warmup_pairs: overhead_warmup_pairs
+                .ok_or("overhead measurement requires --overhead-warmup-pairs")?,
+            measured_pairs: overhead_measured_pairs
+                .ok_or("overhead measurement requires --overhead-measured-pairs")?,
+            candidate_budget_bps: overhead_candidate_budget_bps
+                .ok_or("overhead measurement requires --overhead-candidate-budget-bps")?,
+        })
+    } else {
+        if repeated_execution_acknowledgement.is_some() {
+            return Err("--acknowledge-repeated-target-execution requires --measure-direct-kfd-wrapper-overhead".to_owned());
+        }
+        if any_overhead_option {
+            return Err(
+                "overhead policy options require --measure-direct-kfd-wrapper-overhead".to_owned(),
+            );
+        }
+        None
+    };
+    if let Some(overhead) = wrapper_overhead {
+        let processes = u64::from(overhead.warmup_pairs + overhead.measured_pairs) * 2;
+        let requested = processes
+            .checked_mul(
+                u64::try_from(timeout.as_millis())
+                    .map_err(|_| "profile timeout is out of range".to_owned())?,
+            )
+            .ok_or("overhead measurement timeout product overflow")?;
+        if requested > MAX_OVERHEAD_HARNESS_MS_V1 {
+            return Err(
+                "overhead pair count and per-process timeout exceed the one-hour harness bound"
+                    .to_owned(),
+            );
+        }
+    }
     Ok(Options {
         action,
         authorization,
         pc_probe_authorization,
         pc_risk_acknowledgement,
+        repeated_execution_acknowledgement,
         tool,
         interpreter,
         pc_avail,
@@ -1823,6 +1973,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         artifact_path,
         source_isa_characteristic_path,
         direct_kfd_runtime_capture_path,
+        wrapper_overhead,
     })
 }
 
@@ -2101,6 +2252,10 @@ fn prepare_plan(
     pc_probe_admission: Option<PcCapabilityProbeAdmissionV1>,
 ) -> Result<Plan, String> {
     let working_directory = resolve_directory(options.working_directory.as_deref(), "--cwd")?;
+    let working_directory_identity = ObjectIdentity::from_metadata(
+        &fs::symlink_metadata(&working_directory)
+            .map_err(|error| format!("failed to inspect canonical --cwd: {error}"))?,
+    );
     let output_directory = resolve_new_output(&options.output_directory)?;
     let selected_tool = options.tool.clone().unwrap_or_else(default_tool_path);
     require_absolute_named(&selected_tool, "--tool", "rocprofv3")?;
@@ -2190,6 +2345,21 @@ fn prepare_plan(
     };
     let target = FilePin::open(&target_path, "profile target", MAX_TARGET_BYTES, true)?;
     require_elf(&target, "profile target")?;
+    let measurement_harness = if options.wrapper_overhead.is_some() {
+        let executable = env::current_exe().map_err(|error| {
+            format!("failed to resolve measurement harness executable: {error}")
+        })?;
+        let harness = FilePin::open(
+            &executable,
+            "profile measurement harness",
+            MAX_TARGET_BYTES,
+            true,
+        )?;
+        require_elf(&harness, "profile measurement harness")?;
+        Some(harness)
+    } else {
+        None
+    };
     let pending_runtime_capture = match options.direct_kfd_runtime_capture_path.as_deref() {
         Some(path) => {
             if path.starts_with(&output_directory) {
@@ -2224,6 +2394,29 @@ fn prepare_plan(
     let collector_arguments =
         collector_arguments(options.kind, &output_directory, &target, &options)?;
     let mut configuration = canonical_configuration(options.kind, &devices);
+    if let Some(overhead) = options.wrapper_overhead {
+        append_field(
+            &mut configuration,
+            b"fe2o3-rocprof-wrapper-host-wall-policy-v1",
+        );
+        let harness = measurement_harness
+            .as_ref()
+            .ok_or("profile measurement harness is missing")?;
+        append_field(&mut configuration, &harness.digest);
+        append_field(&mut configuration, &harness.identity.size.to_le_bytes());
+        append_field(&mut configuration, &overhead.warmup_pairs.to_le_bytes());
+        append_field(&mut configuration, &overhead.measured_pairs.to_le_bytes());
+        append_field(
+            &mut configuration,
+            &overhead.candidate_budget_bps.to_le_bytes(),
+        );
+        append_field(
+            &mut configuration,
+            &u64::try_from(options.timeout.as_millis())
+                .map_err(|_| "profile timeout is out of range".to_owned())?
+                .to_le_bytes(),
+        );
+    }
     if let Some(capture) = &pending_runtime_capture {
         append_field(&mut configuration, b"direct-kfd-runtime-capture-v1");
         append_field(
@@ -2238,6 +2431,7 @@ fn prepare_plan(
     let authorization = authorization_digest(AuthorizationInputs {
         options: &options,
         working_directory: &working_directory,
+        working_directory_identity,
         output_directory: &output_directory,
         tool: &tool,
         interpreter: &interpreter,
@@ -2256,6 +2450,7 @@ fn prepare_plan(
     Ok(Plan {
         options,
         working_directory,
+        working_directory_identity,
         output_directory,
         tool,
         interpreter,
@@ -2264,6 +2459,7 @@ fn prepare_plan(
         collector_tool_bytes,
         collector_tool_digest,
         target,
+        measurement_harness,
         environment,
         environment_bytes,
         environment_digest,
@@ -2407,6 +2603,23 @@ fn pc_risk_acknowledgement_v1(authorization: [u8; 32], pc: &PcSamplingPlanV1) ->
     hash_field(&mut digest, &pc.capability.identity);
     hash_field(&mut digest, &pc.artifact.digest);
     hash_field(&mut digest, &pc.source_isa_characteristic.digest);
+    digest.finalize().into()
+}
+
+fn repeated_execution_acknowledgement_v1(plan: &Plan) -> [u8; 32] {
+    let overhead = plan
+        .options
+        .wrapper_overhead
+        .expect("repeated execution acknowledgement requires an overhead plan");
+    let mut digest = Sha256::new();
+    hash_field(
+        &mut digest,
+        b"fe2o3-repeated-target-execution-side-effect-acknowledgement-v1",
+    );
+    hash_field(&mut digest, &plan.authorization);
+    hash_field(&mut digest, &plan.target.digest);
+    hash_field(&mut digest, &overhead.warmup_pairs.to_le_bytes());
+    hash_field(&mut digest, &overhead.measured_pairs.to_le_bytes());
     digest.finalize().into()
 }
 
@@ -3465,6 +3678,24 @@ fn collector_arguments(
     target: &FilePin,
     options: &Options,
 ) -> Result<Vec<String>, String> {
+    collector_arguments_with_stem(kind, output, target, options, "capture")
+}
+
+fn collector_arguments_with_stem(
+    kind: ProfileKind,
+    output: &Path,
+    target: &FilePin,
+    options: &Options,
+    output_stem: &str,
+) -> Result<Vec<String>, String> {
+    if output_stem.is_empty()
+        || output_stem.len() > 128
+        || !output_stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("collector output stem violates the closed naming policy".to_owned());
+    }
     let output = output
         .to_str()
         .ok_or("canonical --output-dir must be valid UTF-8")?;
@@ -3496,7 +3727,7 @@ fn collector_arguments(
         "--output-directory".to_owned(),
         output.to_owned(),
         "--output-file".to_owned(),
-        "capture".to_owned(),
+        output_stem.to_owned(),
         "--".to_owned(),
         target,
     ]);
@@ -3590,6 +3821,7 @@ fn canonical_collector_tool(
 struct AuthorizationInputs<'a> {
     options: &'a Options,
     working_directory: &'a Path,
+    working_directory_identity: ObjectIdentity,
     output_directory: &'a Path,
     tool: &'a FilePin,
     interpreter: &'a FilePin,
@@ -3607,6 +3839,7 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
     let AuthorizationInputs {
         options,
         working_directory,
+        working_directory_identity,
         output_directory,
         tool,
         interpreter,
@@ -3644,6 +3877,12 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         &mut hasher,
         working_directory.as_os_str().as_encoded_bytes(),
     );
+    hash_field(
+        &mut hasher,
+        &working_directory_identity.device.to_le_bytes(),
+    );
+    hash_field(&mut hasher, &working_directory_identity.inode.to_le_bytes());
+    hash_field(&mut hasher, &working_directory_identity.mode.to_le_bytes());
     hash_field(&mut hasher, output_directory.as_os_str().as_encoded_bytes());
     hash_field(&mut hasher, environment);
     hash_field(&mut hasher, configuration);
@@ -4017,6 +4256,72 @@ fn render_plan(plan: &Plan) -> String {
     line(&mut output, "stdout-limit", plan.options.stdout_limit);
     line(&mut output, "stderr-limit", plan.options.stderr_limit);
     line(&mut output, "storage-limit", plan.options.storage_limit);
+    if let Some(overhead) = plan.options.wrapper_overhead {
+        line(
+            &mut output,
+            "measurement",
+            "rocprof-wrapper-host-wall-comparison-v1",
+        );
+        line(
+            &mut output,
+            "target-runtime-basis",
+            "caller-declared-direct-kfd-not-runtime-verified-by-this-harness",
+        );
+        line(&mut output, "overhead-warmup-pairs", overhead.warmup_pairs);
+        line(
+            &mut output,
+            "overhead-measured-pairs",
+            overhead.measured_pairs,
+        );
+        line(
+            &mut output,
+            "overhead-total-processes",
+            u32::from(overhead.warmup_pairs + overhead.measured_pairs) * 2,
+        );
+        line(
+            &mut output,
+            "overhead-total-harness-timeout-ms",
+            MAX_OVERHEAD_HARNESS_MS_V1,
+        );
+        line(
+            &mut output,
+            "overhead-order-policy",
+            "alternating-pairs-even-raw-first-odd-wrapped-first",
+        );
+        line(
+            &mut output,
+            "overhead-candidate-budget-bps",
+            overhead.candidate_budget_bps,
+        );
+        line(
+            &mut output,
+            "overhead-budget-authority",
+            "candidate-only-does-not-grant-production-qualification",
+        );
+        line(
+            &mut output,
+            "repeated-target-execution-risk",
+            "target-is-run-repeatedly-and-may-have-external-side-effects",
+        );
+        line(
+            &mut output,
+            "repeated-target-execution-acknowledgement",
+            hex(&repeated_execution_acknowledgement_v1(plan)),
+        );
+        line(
+            &mut output,
+            "overhead-scope",
+            "host-observed-rocprof-wrapper-process-overhead-only",
+        );
+        line(
+            &mut output,
+            "capture-overhead-scope",
+            "counter-pc-att-debugger-and-unadmitted-kernel-trace-capture-overhead-unavailable",
+        );
+        if let Some(harness) = &plan.measurement_harness {
+            identity_lines(&mut output, "measurement-harness", harness);
+        }
+    }
     line(
         &mut output,
         "environment-policy",
@@ -4349,7 +4654,462 @@ fn render_dispatch_import_plan(
 }
 
 fn collect(plan: Plan) -> Result<CommandReport, String> {
+    if plan.options.wrapper_overhead.is_some() {
+        return collect_wrapper_overhead_v1(plan, validate_device_bindings);
+    }
     collect_with_device_revalidator(plan, validate_device_bindings)
+}
+
+fn collect_wrapper_overhead_v1<F>(
+    plan: Plan,
+    device_revalidator: F,
+) -> Result<CommandReport, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
+    let request = plan
+        .options
+        .wrapper_overhead
+        .ok_or("wrapper overhead request is missing")?;
+    revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+    let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
+    let result = (|| {
+        let harness_started = monotonic_raw_ns_v1()?;
+        let harness_deadline = harness_started
+            .checked_add(MAX_OVERHEAD_HARNESS_MS_V1 * 1_000_000)
+            .ok_or("wrapper overhead harness deadline overflow")?;
+        let mut invocations =
+            Vec::with_capacity(usize::from(request.warmup_pairs + request.measured_pairs) * 2);
+        let mut inventory = Vec::<Artifact>::new();
+        for (phase, pairs) in [
+            (TrialPhaseV1::Warmup, request.warmup_pairs),
+            (TrialPhaseV1::Measured, request.measured_pairs),
+        ] {
+            for pair_index in 0..pairs {
+                let pair_order = if pair_index.is_multiple_of(2) {
+                    PairOrderV1::RawThenWrapped
+                } else {
+                    PairOrderV1::WrappedThenRaw
+                };
+                let order = match pair_order {
+                    PairOrderV1::RawThenWrapped => [
+                        InvocationKindV1::RawTarget,
+                        InvocationKindV1::RocprofWrappedTarget,
+                    ],
+                    PairOrderV1::WrappedThenRaw => [
+                        InvocationKindV1::RocprofWrappedTarget,
+                        InvocationKindV1::RawTarget,
+                    ],
+                };
+                for (leg, kind) in order.into_iter().enumerate() {
+                    if monotonic_raw_ns_v1()? >= harness_deadline {
+                        return Err(
+                            "wrapper overhead harness exceeded its one-hour deadline".to_owned()
+                        );
+                    }
+                    revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+                    let output_stem = format!(
+                        "overhead-{}-{pair_index:03}",
+                        match phase {
+                            TrialPhaseV1::Warmup => "warmup",
+                            TrialPhaseV1::Measured => "measured",
+                        }
+                    );
+                    let arguments = match kind {
+                        InvocationKindV1::RawTarget => target_argument_vector_v1(&plan),
+                        InvocationKindV1::RocprofWrappedTarget => collector_arguments_with_stem(
+                            plan.options.kind,
+                            &plan.output_directory,
+                            &plan.target,
+                            &plan.options,
+                            &output_stem,
+                        )?,
+                    };
+                    let started = monotonic_raw_ns_v1()?;
+                    let supervised = match kind {
+                        InvocationKindV1::RawTarget => {
+                            run_raw_target_v1(&plan, &device_revalidator)?
+                        }
+                        InvocationKindV1::RocprofWrappedTarget => {
+                            run_collector_with_arguments_v1(&plan, &device_revalidator, &arguments)?
+                        }
+                    };
+                    let finished = monotonic_raw_ns_v1()?;
+                    if finished > harness_deadline {
+                        return Err(
+                            "wrapper overhead harness exceeded its one-hour deadline".to_owned()
+                        );
+                    }
+                    let duration = finished
+                        .checked_sub(started)
+                        .filter(|duration| *duration > 0)
+                        .ok_or("CLOCK_MONOTONIC_RAW did not advance during an invocation")?;
+                    revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+                    let observed = scan_artifacts(&custody, plan.options.storage_limit)?;
+                    let artifacts = inventory_delta_v1(&inventory, &observed)?;
+                    if kind == InvocationKindV1::RawTarget && !artifacts.is_empty() {
+                        return Err(
+                            "raw target changed the rocprof wrapper output inventory".to_owned()
+                        );
+                    }
+                    inventory = observed;
+                    let artifact_state = match kind {
+                        InvocationKindV1::RawTarget => ArtifactStateV1::NotApplicableRawTarget,
+                        InvocationKindV1::RocprofWrappedTarget if artifacts.is_empty() => {
+                            ArtifactStateV1::InventoryCompleteNoArtifacts
+                        }
+                        InvocationKindV1::RocprofWrappedTarget => {
+                            ArtifactStateV1::InventoryCompleteArtifactsPresentUnadmitted
+                        }
+                    };
+                    let outcome = supervised_outcome_v1(&supervised);
+                    invocations.push(InvocationEvidenceV1 {
+                        phase,
+                        pair_index,
+                        pair_order,
+                        invocation_index_in_pair: leg as u8,
+                        kind,
+                        argv: RawContentIdentityV1::observed(&canonical_argument_vector_v1(
+                            &arguments,
+                        )?)
+                        .map_err(|error| error.to_string())?,
+                        host_wall_time_ns: duration,
+                        outcome,
+                        exit_code: supervised.status.and_then(|status| status.code()),
+                        exit_signal: supervised.status.and_then(|status| status.signal()),
+                        wait_error: supervised
+                            .wait_error
+                            .as_deref()
+                            .map(|error| RawContentIdentityV1::observed(error.as_bytes()))
+                            .transpose()
+                            .map_err(|error| error.to_string())?,
+                        stdout: RawContentIdentityV1::observed(&supervised.stdout.bytes)
+                            .map_err(|error| error.to_string())?,
+                        stdout_truncated: supervised.stdout.overflow,
+                        stderr: RawContentIdentityV1::observed(&supervised.stderr.bytes)
+                            .map_err(|error| error.to_string())?,
+                        stderr_truncated: supervised.stderr.overflow,
+                        artifact_state,
+                        capture_loss_state: match kind {
+                            InvocationKindV1::RawTarget => {
+                                CaptureLossStateV1::NotApplicableRawTarget
+                            }
+                            InvocationKindV1::RocprofWrappedTarget => {
+                                CaptureLossStateV1::UnavailableNoAdmittedCapture
+                            }
+                        },
+                        wrapped_output_inventory: artifacts
+                            .iter()
+                            .map(|artifact| CollectorArtifactV1 {
+                                relative_path: artifact.relative.clone(),
+                                content: RawContentIdentityV1 {
+                                    sha256: artifact.digest,
+                                    byte_len: artifact.length,
+                                },
+                            })
+                            .collect(),
+                    });
+                }
+            }
+        }
+        let target_argv = canonical_argument_vector_v1(&target_argument_vector_v1(&plan))?;
+        let topology = canonical_device_topology_v1(&plan.devices);
+        let working_directory = canonical_working_directory_v1(&plan);
+        let record = build_wrapper_overhead_v1(WrapperOverheadBuildInputsV1 {
+            plan_sha256: plan.authorization,
+            measurement_harness_executable: {
+                let harness = plan
+                    .measurement_harness
+                    .as_ref()
+                    .ok_or("profile measurement harness is missing")?;
+                RawContentIdentityV1 {
+                    sha256: harness.digest,
+                    byte_len: harness.identity.size,
+                }
+            },
+            target_executable: RawContentIdentityV1 {
+                sha256: plan.target.digest,
+                byte_len: plan.target.identity.size,
+            },
+            target_argv: RawContentIdentityV1::observed(&target_argv)
+                .map_err(|error| error.to_string())?,
+            collector_executable: RawContentIdentityV1 {
+                sha256: plan.tool.digest,
+                byte_len: plan.tool.identity.size,
+            },
+            collector_release: collector_release_v1(&plan),
+            collector_closure: RawContentIdentityV1 {
+                sha256: plan.collector_tool_digest,
+                byte_len: plan.collector_tool_bytes.len() as u64,
+            },
+            collector_configuration: RawContentIdentityV1 {
+                sha256: plan.configuration_digest,
+                byte_len: plan.configuration.len() as u64,
+            },
+            environment: RawContentIdentityV1 {
+                sha256: plan.environment_digest,
+                byte_len: plan.environment_bytes.len() as u64,
+            },
+            working_directory: RawContentIdentityV1::observed(&working_directory)
+                .map_err(|error| error.to_string())?,
+            device_topology: RawContentIdentityV1::observed(&topology)
+                .map_err(|error| error.to_string())?,
+            policy: OverheadPolicyV1 {
+                warmup_pairs: request.warmup_pairs,
+                measured_pairs: request.measured_pairs,
+                order_policy: OrderPolicyV1::AlternatingPairsEvenRawFirstOddWrappedFirst,
+                clock: HostClockV1::LinuxClockMonotonicRaw,
+                timing_boundary:
+                    TimingBoundaryV1::ImmediatelyBeforeSpawnThroughSupervisionAndBoundedOutputDrain,
+                per_process_timeout_ms: u64::try_from(plan.options.timeout.as_millis())
+                    .map_err(|_| "profile timeout does not fit u64".to_owned())?,
+                total_processes: (request.warmup_pairs + request.measured_pairs) * 2,
+                total_harness_timeout_ms: MAX_OVERHEAD_HARNESS_MS_V1,
+                candidate_wrapper_overhead_budget_bps: request.candidate_budget_bps,
+                excludes_outliers: false,
+            },
+            invocations,
+        })
+        .map_err(|error| error.to_string())?;
+        let bytes = encode_wrapper_overhead_v1(&record).map_err(|error| error.to_string())?;
+        let artifact_bytes = inventory
+            .iter()
+            .try_fold(0_u64, |total, artifact| total.checked_add(artifact.length));
+        let manifest = render_wrapper_overhead_manifest_v1(&plan, &record, &bytes, &inventory);
+        let total = artifact_bytes
+            .and_then(|total| total.checked_add(bytes.len() as u64))
+            .and_then(|total| total.checked_add(manifest.len() as u64))
+            .ok_or("wrapper overhead publication size overflow")?;
+        if total > plan.options.storage_limit {
+            return Err("wrapper overhead transaction exceeds the storage limit".to_owned());
+        }
+        revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+        custody.commit_record(
+            WRAPPER_OVERHEAD_FILE_V1,
+            WRAPPER_OVERHEAD_REDO_FILE_V1,
+            &bytes,
+            MAX_WRAPPER_OVERHEAD_BYTES_V1,
+        )?;
+        let durable =
+            custody.read_record(WRAPPER_OVERHEAD_FILE_V1, MAX_WRAPPER_OVERHEAD_BYTES_V1)?;
+        if durable != bytes
+            || decode_wrapper_overhead_v1(&durable).map_err(|error| error.to_string())? != record
+        {
+            return Err("durable wrapper overhead evidence changed".to_owned());
+        }
+        revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+        custody.write_manifest(manifest.as_bytes())?;
+        Ok::<_, String>((record, inventory))
+    })();
+    match result {
+        Ok((record, inventory)) => {
+            let summary = record.summary.as_ref();
+            let mut output = String::new();
+            line(&mut output, "schema", "fe2o3-profile-result-v1");
+            line(&mut output, "status", "completed");
+            line(
+                &mut output,
+                "measurement",
+                "rocprof-wrapper-host-wall-comparison-v1",
+            );
+            line(&mut output, "collector-artifacts", inventory.len());
+            line(
+                &mut output,
+                "wrapper-overhead-summary",
+                if summary.is_some() {
+                    "available"
+                } else {
+                    "unavailable"
+                },
+            );
+            if let Some(summary) = summary {
+                line(
+                    &mut output,
+                    "paired-overhead-median-bps",
+                    summary.paired_overhead_median_bps,
+                );
+            }
+            line(
+                &mut output,
+                "production-qualification",
+                "not-granted-candidate-budget-only",
+            );
+            Ok(CommandReport {
+                output,
+                succeeded: true,
+            })
+        }
+        Err(error) => {
+            let cleanup = custody.cleanup().err();
+            Err(match cleanup {
+                Some(cleanup) => format!(
+                    "wrapper overhead collection failed: {error}; cleanup also failed: {cleanup}"
+                ),
+                None => format!("wrapper overhead collection failed and was cleaned: {error}"),
+            })
+        }
+    }
+}
+
+fn target_argument_vector_v1(plan: &Plan) -> Vec<String> {
+    let mut arguments = Vec::with_capacity(plan.options.program_arguments.len() + 1);
+    arguments.push(plan.target.external_path().to_string_lossy().into_owned());
+    arguments.extend(plan.options.program_arguments.iter().cloned());
+    arguments
+}
+
+fn canonical_device_topology_v1(devices: &[DeviceIdentity]) -> Vec<u8> {
+    let mut bytes = b"fe2o3-profile-device-topology-v1\0".to_vec();
+    for device in devices {
+        append_field(&mut bytes, &device.node.to_le_bytes());
+        append_field(&mut bytes, &device.digest);
+        append_field(&mut bytes, &(device.bytes.len() as u64).to_le_bytes());
+        append_field(&mut bytes, device.target_profile_record().as_bytes());
+    }
+    bytes
+}
+
+fn canonical_working_directory_v1(plan: &Plan) -> Vec<u8> {
+    let mut bytes = b"fe2o3-profile-working-directory-v1\0".to_vec();
+    append_field(
+        &mut bytes,
+        plan.working_directory.as_os_str().as_encoded_bytes(),
+    );
+    append_field(
+        &mut bytes,
+        &plan.working_directory_identity.device.to_le_bytes(),
+    );
+    append_field(
+        &mut bytes,
+        &plan.working_directory_identity.inode.to_le_bytes(),
+    );
+    append_field(
+        &mut bytes,
+        &plan.working_directory_identity.mode.to_le_bytes(),
+    );
+    bytes
+}
+
+fn monotonic_raw_ns_v1() -> Result<u64, String> {
+    let mut observed = MaybeUninit::<libc::timespec>::zeroed();
+    // SAFETY: `observed` points to writable storage for one timespec and the clock id takes no
+    // caller-owned resources.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, observed.as_mut_ptr()) } != 0 {
+        return Err(format!(
+            "failed to observe CLOCK_MONOTONIC_RAW: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: successful clock_gettime initialized the timespec.
+    let observed = unsafe { observed.assume_init() };
+    let seconds = u64::try_from(observed.tv_sec)
+        .map_err(|_| "CLOCK_MONOTONIC_RAW seconds are negative".to_owned())?;
+    let nanoseconds = u64::try_from(observed.tv_nsec)
+        .map_err(|_| "CLOCK_MONOTONIC_RAW nanoseconds are negative".to_owned())?;
+    seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(nanoseconds))
+        .ok_or("CLOCK_MONOTONIC_RAW value overflow".to_owned())
+}
+
+fn supervised_outcome_v1(supervised: &Supervised) -> InvocationOutcomeV1 {
+    match supervised.reason {
+        StopReason::Timeout => InvocationOutcomeV1::TimedOut,
+        StopReason::WaitFailure => InvocationOutcomeV1::WaitFailed,
+        StopReason::OutputOverflow if supervised.stdout.overflow => {
+            InvocationOutcomeV1::StdoutLimitExceeded
+        }
+        StopReason::OutputOverflow => InvocationOutcomeV1::StderrLimitExceeded,
+        StopReason::Exited if supervised.status.is_some_and(|status| status.success()) => {
+            InvocationOutcomeV1::ExitedSuccess
+        }
+        StopReason::Exited => InvocationOutcomeV1::ExitedFailure,
+    }
+}
+
+fn inventory_delta_v1(
+    previous: &[Artifact],
+    observed: &[Artifact],
+) -> Result<Vec<Artifact>, String> {
+    for retained in previous {
+        if observed
+            .iter()
+            .find(|artifact| artifact.relative == retained.relative)
+            != Some(retained)
+        {
+            return Err(format!(
+                "collector output {} changed between repeated invocations",
+                retained.relative
+            ));
+        }
+    }
+    let mut added = observed
+        .iter()
+        .filter(|artifact| {
+            !previous
+                .iter()
+                .any(|retained| retained.relative == artifact.relative)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    added.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(added)
+}
+
+fn collector_release_v1(plan: &Plan) -> CollectorReleaseV1 {
+    let recognized = plan.collector_libraries.as_ref().is_some_and(|libraries| {
+        plan.tool.digest == INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1
+            && plan.tool.identity.size == INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1
+            && libraries.tool.digest == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1
+            && libraries.tool.identity.size == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1
+            && libraries.core.digest == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1
+            && libraries.core.identity.size == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1
+    });
+    if recognized {
+        CollectorReleaseV1::RocprofilerSdk1_1_0Git97f5574
+    } else {
+        CollectorReleaseV1::UnavailableUnrecognizedExactTool
+    }
+}
+
+fn render_wrapper_overhead_manifest_v1(
+    plan: &Plan,
+    record: &crate::profile_wrapper_overhead_v1::DirectKfdWrapperOverheadV1,
+    bytes: &[u8],
+    inventory: &[Artifact],
+) -> String {
+    let mut output = String::new();
+    let evidence_digest: [u8; 32] = Sha256::digest(bytes).into();
+    line(&mut output, "schema", "fe2o3-profile-manifest-v1");
+    line(&mut output, "status", "complete-manifest-written-last");
+    line(&mut output, "authorization", hex(&plan.authorization));
+    line(
+        &mut output,
+        "measurement",
+        "rocprof-wrapper-host-wall-comparison-v1",
+    );
+    line(
+        &mut output,
+        "evidence",
+        content_identity(&evidence_digest, bytes.len() as u64),
+    );
+    line(
+        &mut output,
+        "production-qualification",
+        record.grants_production_qualification,
+    );
+    for (index, artifact) in inventory.iter().enumerate() {
+        line(
+            &mut output,
+            &format!("collector-artifact[{index}]"),
+            format!(
+                "{}:{}",
+                artifact.relative,
+                content_identity(&artifact.digest, artifact.length)
+            ),
+        );
+    }
+    output
 }
 
 fn collect_with_device_revalidator<F>(
@@ -4684,6 +5444,7 @@ fn revalidate_collection_inputs_v1<F>(plan: &Plan, device_revalidator: &F) -> Re
 where
     F: Fn(&[DeviceIdentity]) -> Result<(), String>,
 {
+    validate_working_directory_v1(plan)?;
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
     plan.collector_execution.validate()?;
@@ -4691,6 +5452,9 @@ where
         libraries.validate()?;
     }
     plan.target.validate("profile target")?;
+    if let Some(harness) = &plan.measurement_harness {
+        harness.validate("profile measurement harness")?;
+    }
     if let Some(kir) = &plan.verified_kir_v7 {
         kir.revalidate()?;
     }
@@ -4698,6 +5462,24 @@ where
     revalidate_pc_sampling_plan_v1(plan, false)?;
     if let Some(capture) = &plan.pending_runtime_capture {
         capture.validate_parent()?;
+    }
+    Ok(())
+}
+
+fn validate_working_directory_v1(plan: &Plan) -> Result<(), String> {
+    let canonical = fs::canonicalize(&plan.working_directory)
+        .map_err(|error| format!("profile working directory changed: {error}"))?;
+    let metadata = fs::symlink_metadata(&plan.working_directory)
+        .map_err(|error| format!("profile working directory changed: {error}"))?;
+    let identity = ObjectIdentity::from_metadata(&metadata);
+    if canonical != plan.working_directory
+        || !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || identity.device != plan.working_directory_identity.device
+        || identity.inode != plan.working_directory_identity.inode
+        || identity.mode != plan.working_directory_identity.mode
+    {
+        return Err("profile working directory was substituted".to_owned());
     }
     Ok(())
 }
@@ -4908,6 +5690,17 @@ fn run_collector<F>(plan: &Plan, device_revalidator: &F) -> Result<Supervised, S
 where
     F: Fn(&[DeviceIdentity]) -> Result<(), String>,
 {
+    run_collector_with_arguments_v1(plan, device_revalidator, &plan.collector_arguments)
+}
+
+fn run_collector_with_arguments_v1<F>(
+    plan: &Plan,
+    device_revalidator: &F,
+    arguments: &[String],
+) -> Result<Supervised, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
     plan.target.validate("profile target")?;
@@ -4919,7 +5712,7 @@ where
     command
         .arg0(&plan.interpreter.canonical_path)
         .arg(plan.collector_execution.bootstrap_path())
-        .args(&plan.collector_arguments)
+        .args(arguments)
         .current_dir(&plan.working_directory)
         .env_clear()
         .envs(
@@ -4966,16 +5759,62 @@ where
     )
 }
 
+fn run_raw_target_v1<F>(plan: &Plan, device_revalidator: &F) -> Result<Supervised, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
+    plan.target.validate("profile target")?;
+    device_revalidator(&plan.devices)?;
+    let mut command = Command::new(plan.target.execution_path());
+    command
+        .arg0(plan.target.external_path())
+        .args(&plan.options.program_arguments)
+        .current_dir(&plan.working_directory)
+        .env_clear()
+        .envs(
+            plan.environment
+                .iter()
+                .map(|entry| (entry.name, &entry.value)),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    spawn_and_supervise_process_v1(
+        &mut command,
+        plan.options.timeout,
+        plan.options.stdout_limit,
+        plan.options.stderr_limit,
+        "pinned raw target",
+    )
+}
+
 fn spawn_and_supervise_collector_v1(
     command: &mut Command,
     timeout: Duration,
     stdout_limit: usize,
     stderr_limit: usize,
 ) -> Result<Supervised, String> {
+    spawn_and_supervise_process_v1(
+        command,
+        timeout,
+        stdout_limit,
+        stderr_limit,
+        "pinned rocprofv3 collector",
+    )
+}
+
+fn spawn_and_supervise_process_v1(
+    command: &mut Command,
+    timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    label: &str,
+) -> Result<Supervised, String> {
     let mut sigchld = CollectorSigchldScopeV1::enter()?;
     let result = (|| {
         let mut child = crate::process_execution::spawn(command)
-            .map_err(|error| format!("failed to spawn pinned rocprofv3 collector: {error}"))?;
+            .map_err(|error| format!("failed to spawn {label}: {error}"))?;
         supervise_with_sigchld_scope(
             &mut child,
             timeout,
@@ -6493,6 +7332,8 @@ fn scan_artifacts_with_entry_limit(
                 LIVE_QUALIFICATION_REDO_FILE_V1,
                 LIVE_RUNTIME_CAPTURE_FILE_V1,
                 LIVE_RUNTIME_CAPTURE_REDO_FILE_V1,
+                WRAPPER_OVERHEAD_FILE_V1,
+                WRAPPER_OVERHEAD_REDO_FILE_V1,
             ]
             .contains(&relative.as_str())
             {
@@ -8467,6 +9308,7 @@ Flags: interval pow2\n";
         plan.authorization = authorization_digest(AuthorizationInputs {
             options: &plan.options,
             working_directory: &plan.working_directory,
+            working_directory_identity: plan.working_directory_identity,
             output_directory: &plan.output_directory,
             tool: &plan.tool,
             interpreter: &plan.interpreter,

@@ -111,6 +111,59 @@ The opt-in `scripts/ci-local.sh hardware-smoke` lane runs a separate short
 producer/query acceptance with a fresh scope. It is deliberately distinct from
 the 5-warmup/30-repetition profiler-overhead protocol.
 
+## Rocprof wrapper host-wall comparison
+
+`cargo fe2o3 profile --measure-direct-kfd-wrapper-overhead` runs exact paired
+invocations of one caller-declared direct-KFD target without a collector and
+through the sealed rocprofv3 `--kernel-trace` wrapper. It is an explicitly
+authorized process-wall comparison, not a GPU capture-overhead measurement.
+The dry run binds the sealed harness, target, collector and native SDK closure,
+target and collector argument vectors, allowlisted environment, working
+directory identity, direct-KFD topology, limits, order, repetitions, and caller
+candidate budget. Collection additionally requires the plan-derived
+`--acknowledge-repeated-target-execution` digest because repeated targets may
+have external side effects.
+
+The required qualification shape is five warmup pairs followed by thirty
+measured pairs. Even pairs run raw then wrapped; odd pairs reverse the order.
+Every process uses the existing profile process-group supervisor, timeout, and
+bounded stdout/stderr capture. Timing uses `CLOCK_MONOTONIC_RAW` immediately
+before spawn through supervision and bounded pipe drain. No observations are
+discarded as outliers. The transaction has a one-hour harness limit and rejects
+a requested repetition/timeout product above that bound.
+
+```bash
+TARGET=/absolute/path/to/direct-kfd-target
+OUTPUT=/absolute/new/output-directory
+
+cargo fe2o3 profile --kind dispatch-json \
+  --tool /opt/rocm-7.2.4/bin/rocprofv3 \
+  --python /usr/bin/python3.12 \
+  --output-dir "$OUTPUT" --timeout-ms 30000 \
+  --measure-direct-kfd-wrapper-overhead \
+  --overhead-warmup-pairs 5 --overhead-measured-pairs 30 \
+  --overhead-candidate-budget-bps 1000 -- \
+  "$TARGET" TARGET_ARGS...
+```
+
+Use the printed `collection-authorization` and
+`repeated-target-execution-acknowledgement` in a second invocation with
+`--collect`. The durable
+`fe2o3-rocprof-wrapper-host-wall-comparison-v1.json` records every leg's exact
+outcome, duration, stream identities/truncation, and complete bounded wrapper
+output inventory. A failed or truncated warmup or measured leg suppresses the
+summary. The median signed per-pair delta and candidate comparison never grant
+production qualification.
+
+An empty rocprof output inventory means only that this exact wrapper execution
+created no admitted artifact. It is not proof that no GPU work occurred or
+that rocprof observed nothing internally. Kernel-trace capture overhead and
+loss/completeness remain typed unavailable without an admitted capture;
+counter, PC, ATT, and debugger overhead remain typed unmeasured. The harness
+records the target as caller-declared direct KFD and does not elevate that
+declaration into runtime evidence. See the checked-in
+[MI300X host-wall record](evidence/mi300x-rocprof-wrapper-host-wall-2026-09-03.md).
+
 ## ROCprof boundary
 
 `cargo fe2o3 profile` still owns strict rocprofv3 JSON/CSV and ATT-reference

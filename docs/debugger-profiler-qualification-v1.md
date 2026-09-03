@@ -122,6 +122,14 @@ self-consistency alone is not authenticity. T6 still needs approved budgets,
 real measurements, broader target/reset/loss qualification, and committed
 task-based usability studies. CPU performance prediction remains outside scope.
 
+The separate bounded
+[rocprof wrapper host-wall comparison](kfd-native-profiler-v1.md#rocprof-wrapper-host-wall-comparison)
+now supplies a real 5-warmup/30-measured-pair MI300X process-wall observation.
+It is not projected into the six-mode qualification manifest: the exact
+rocprof wrapper produced no admitted artifact, so it cannot establish
+no-capture, counter, PC, ATT, debugger, or instrumented capture overhead. Its
+caller candidate comparison is informative and non-authoritative only.
+
 The separate
 [2026-09-03 MI300X direct-KFD/rocprofv3 record](evidence/mi300x-direct-kfd-rocprof-2026-09-03.md)
 is produced by the plan-bound collection transaction rather than projected
