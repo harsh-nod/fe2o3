@@ -1025,16 +1025,15 @@ pub struct LiveGpuStoppedQueueUnavailableV3 {
 
 /// Address-free metadata for private, opaque direct-KFD checkpoint bytes.
 ///
-/// The bytes themselves are deliberately absent. `Complete` authenticates a
-/// bounded capture against the exact live session and artifact binding, but
-/// does not interpret the private gfx942 wave/register record layout.
+/// The bytes themselves are deliberately absent. `Complete` states that every
+/// announced byte extent was captured; it does not claim one coherent instant,
+/// observed artifact execution, or interpretation of the private gfx942 layout.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LiveGpuStoppedQueueOpaqueCheckpointV3 {
     Complete {
         checkpoint_identity: OpaqueIdentityV1,
         content_identity: OpaqueIdentityV1,
-        artifact_binding_identity: OpaqueIdentityV1,
         captured_bytes: u64,
         segment_count: u32,
         private_bytes_exposed: bool,
@@ -1355,7 +1354,6 @@ impl LiveGpuStoppedQueueEnvelopeV3 {
             LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
                 checkpoint_identity,
                 content_identity,
-                artifact_binding_identity,
                 captured_bytes,
                 segment_count,
                 private_bytes_exposed,
@@ -1363,8 +1361,7 @@ impl LiveGpuStoppedQueueEnvelopeV3 {
                 if !matches!(
                     &self.context_save,
                     LiveGpuStoppedQueueContextSaveV3::Available { .. }
-                ) || *artifact_binding_identity != session.binding_identity
-                    || *private_bytes_exposed
+                ) || *private_bytes_exposed
                     || *captured_bytes > MAX_LIVE_GPU_OPAQUE_CHECKPOINT_BYTES_V3
                     || *segment_count > MAX_LIVE_GPU_OPAQUE_CHECKPOINT_SEGMENTS_V3
                     || (*captured_bytes == 0) != (*segment_count == 0)
@@ -1395,7 +1392,10 @@ impl LiveGpuStoppedQueueEnvelopeV3 {
                     } => reason == context_reason,
                     LiveGpuStoppedQueueContextSaveV3::Available { .. } => matches!(
                         reason,
-                        LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadDenied
+                        LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial
+                            | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadDenied
                             | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadPartial
                             | LiveGpuStoppedQueueUnavailableReasonV3::CheckpointContentChanged
                     ),

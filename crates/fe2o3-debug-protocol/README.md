@@ -249,8 +249,9 @@ Program counters are code-object-relative, memory is allocation-relative, and
 the schema has no native process, descriptor, queue, or address authority.
 For direct KFD, `opaque_checkpoint_capture` reports whether a stopped queue's
 header-bounded CWSR segments were captured completely, truncated before any
-segment read, or unavailable. Complete metadata binds nonzero checkpoint and
-content identities to the exact session artifact binding and exposes only byte
-and segment counts. The 185,630,720-byte and 16-segment hard bounds are fixed;
-private bytes are never serialized. This does not make wave, lane, register,
-PC, source, or memory capabilities available.
+segment read, or unavailable. Complete metadata exposes nonzero checkpoint and
+content correlation identities plus byte and segment counts. The outer session
+separately carries its declared artifact binding; the checkpoint does not claim
+that artifact executed. The 185,630,720-byte and 16-segment hard bounds are
+fixed, and private bytes are never serialized. This does not make wave, lane,
+register, PC, source, or memory capabilities available.

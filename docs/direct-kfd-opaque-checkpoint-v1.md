@@ -18,7 +18,14 @@ validates every control-stack and wave-state range within the published
 3. Reads each non-empty segment twice and rejects content changes or partial
    reads.
 4. Rereads all eight headers and rejects range/binding substitution.
-5. Reobserves runtime, queue, device, and suspension ownership before returning.
+5. Reobserves the queue and device through direct KFD before returning.
+
+The local live-session state must still retain the authority produced by the
+prior successful suspend, but capture does not reobserve runtime or physical
+suspension state. Reads are sequential and non-atomic. Each adjacent pair is
+checked for equality, but changes outside that pair cannot be detected.
+`complete` therefore means every announced extent was captured, not that all
+segments represent one coherent hardware instant.
 
 The default content limit is 32 MiB. The hard limit is 185,630,720 bytes, the
 complete eight-XCC context extent, with at most 16 non-empty segments.
@@ -32,13 +39,15 @@ addresses, native IDs, descriptors, handles, or process IDs.
 
 Agents receive one of three typed results:
 
-- `complete`: checkpoint/content identities, exact artifact-binding identity,
-  byte count, segment count, and `private_bytes_exposed: false`;
+- `complete`: checkpoint/content correlation identities, byte count, segment
+  count, and `private_bytes_exposed: false`;
 - `truncated`: required and configured byte counts, with no partial content;
 - `unavailable`: an exact header, read, stability, or binding reason.
 
-This lets an agent cite and compare captures without gaining attach, resume,
-memory-read, or checkpoint-byte authority.
+The outer Live GPU session separately reports its declared artifact binding.
+The checkpoint does not claim that artifact was loaded or executed. This lets
+an agent cite and compare captures without gaining attach, resume, memory-read,
+or checkpoint-byte authority; the hashes provide correlation, not authentication.
 
 ## What remains unavailable
 

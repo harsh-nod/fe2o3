@@ -84,7 +84,7 @@ pub use live::{
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r22-v1\n",
-    "compute_session_sha256=ab5d1fc0b2fcdc4f3918d772f03156b14cb524da7c7660c39f29b539e6186289\n",
+    "compute_session_sha256=51d61a2f358440d4a1a5f4769d102372269f7915ee10937f3d09f0e6d5b4bf48\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -106,7 +106,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "275ca7f6b5c78542b1ed82fdd62f43e59708ef01c057d94f9369c2bf4f9d411c";
+    "c5a5a0a2ee7b456d8166bba20c46c084933e6270db05df87442acb737c49ea53";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -602,8 +602,9 @@ executable-GTT BO and the first CPU shadow page for each XCC.
 No mapping address, pointer, fd, event handle, or MMIO capability is public.
 
 Explicit cleanup first requires every completion batch recycled, then confirms
-queue DESTROY, event DESTROY, runtime disable, doorbell unmap, and complete
-CWSR/queue-resource/completion-arena unmap and FREE. The process-global
+queue DESTROY and event DESTROY, immediately zeroes, protects, and unmaps the
+separate event-payload page, then performs runtime disable, doorbell unmap, and
+complete CWSR/queue-resource/completion-arena unmap and FREE. The process-global
 guard remains held through resource return. Drop performs none of those native
 operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
 live on the selected MI300X while publishing zero packets and performing zero
@@ -611,6 +612,11 @@ MMIO stores. It also forks to confirm the doorbell, all 24 shadow VMAs, and the
 separate event-payload VMA are absent in the child. It accepts one unique ID or
 `--all`; the latter uses a
 separate process and queue lifecycle for every topology GPU.
+
+Unpublished install failure also explicitly zeroes and unmaps the payload page.
+Because published payload cleanup occurs at the event-destroy boundary, a later
+unrelated runtime, doorbell, BO, callback, or resource-release failure cannot
+strand that standalone writable mapping.
 
 A debugger-enabled target can consume `KfdTargetRuntimeDebugTokenV1` into the
 same native queue session. The token's admitted control descriptor remains
@@ -676,8 +682,13 @@ This is queue-exception preparation, not actual fault-delivery evidence. The
 direct-KFD stopped-state API can retain the KFD-header-bounded control-stack
 and wave-state bytes as a private, zeroizing opaque checkpoint after exact
 session-owned suspension. It double-reads every non-empty segment, rereads all
-headers, binds content to the exact runtime/queue/device/session snapshot, and
-returns explicit no-prefix truncation at a caller-selected bounded limit.
+headers, binds the checkpoint correlation identity to local admitted session
+state plus exact queue/device/header/content identities, and returns explicit
+no-prefix truncation at a caller-selected bounded limit. The direct KFD
+queue/device snapshots are reobserved before and after, but runtime and
+suspension are only local session invariants. Segment pairs are sequential and
+non-atomic; complete means every announced extent was captured, not one
+coherent stopped instant or authenticated hardware provenance.
 Neither the Linux KFD UAPI nor installed public headers specify the inner
 gfx942 record layout, so wave, lane, register, PC, and source values remain
 typed unavailable. Ordinary hardware CWSR preemption and restore remain

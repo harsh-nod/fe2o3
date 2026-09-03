@@ -40,23 +40,23 @@ pub const MAX_KFD_OPAQUE_CHECKPOINT_BYTES_V1: u64 =
 pub const KFD_STOPPED_STATE_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-direct-kfd-stopped-state-r2-v1\n",
     "target=linux-x86_64,gfx942,kfd-1.18,direct-kfd-no-hip-no-hsa\n",
-    "admission=exact-ptrace-owner,pidfd-bound-live-debug-session,session-owned-kfd-queue-suspension\n",
-    "capture=queue-device-and-runtime-snapshot-before,8-bounded-40-byte-process-vm-header-reads,bounded-empty-range-cursors,header-bounded-control-stack-and-wave-state-double-read,header-reread,queue-device-and-runtime-snapshot-after,exact-binding-substitution-check\n",
+    "admission=exact-ptrace-owner,pidfd-bound-live-debug-session,locally-retained-session-owned-prior-kfd-queue-suspension\n",
+    "capture=direct-kfd-queue-and-device-snapshot-before,8-bounded-40-byte-process-vm-header-reads,bounded-empty-range-cursors,header-bounded-control-stack-and-wave-state-adjacent-double-read,header-reread,direct-kfd-queue-and-device-snapshot-after,exact-queue-device-binding-substitution-check\n",
     "gfx942=target-version:90402,xcc-count:8,save-bytes-per-xcc:0x1621000,debug-bytes:0x5f000\n",
-    "observed=queue-exception-mask,ring-shape,queue-to-save-area-size,gfx-target,xcc-count,kfd-copied-header-and-control-stack,gpu-written-wave-state-opaque-content\n",
-    "identity=caller-scoped-domain-separated-sha256,exact-session-runtime-queue-device-header-range-and-content-binding,opaque-correlation-not-authentication-or-secrecy\n",
+    "observed=queue-exception-mask,ring-shape,queue-to-save-area-size,gfx-target,xcc-count,kfd-copied-header-and-control-stack,header-ranged-wave-state-opaque-bytes\n",
+    "identity=caller-scoped-domain-separated-sha256,local-session-state-and-exact-queue-device-header-range-content-binding,opaque-correlation-not-authentication-or-secrecy\n",
     "redaction=no-pid,gpu-id,queue-id,event-id,payload-address,save-address,ring-address,pointer,fd,handle,pc-or-register-value\n",
     "bounds=default-opaque-checkpoint:33554432,hard-opaque-checkpoint:185630720,segments:16,complete-or-explicit-truncated-no-partial-content-claim\n",
     "privacy=opaque-checkpoint-bytes-private-redacted-debug-zeroized-on-drop,agent-projection-content-identity-and-bounds-only\n",
     "unavailable=decoded-wave-records,lane-state,register-records,pc,source,memory-values\n",
-    "limitation=linux-kfd-uapi-publishes-header-ranges-but-no-inner-gfx942-wave-register-layout;opaque-content-is-not-a-decoded-stopped-wave-observation\n",
-    "ownership=detached-inert-snapshot;live-session-retains-and-must-explicitly-resume-suspended-queue\n",
+    "limitation=sequential-non-atomic-segment-capture,no-coherent-stopped-interval-or-runtime-reobservation,linux-kfd-uapi-publishes-header-ranges-but-no-inner-gfx942-wave-register-layout;opaque-content-is-not-a-decoded-stopped-wave-observation\n",
+    "ownership=detached-inert-snapshot;local-live-session-state-retains-prior-suspension-and-must-explicitly-resume-queue,no-capture-time-suspension-reobservation\n",
     "authority=observation-only,no-address-fd-ioctl-resume-or-target-memory-authority\n",
 );
 
 /// SHA-256 of [`KFD_STOPPED_STATE_MANIFEST_V1`].
 pub const KFD_STOPPED_STATE_MANIFEST_SHA256_V1: &str =
-    "8a5e32fb754aa48b13a139bc97759bfa16ae5060bade36810c39ad767b06761c";
+    "1e378593f7be201411298787ee8e5de4b6af38449230d286b190292a753eab74";
 
 /// Caller-selected correlation scope for redacted stopped-state identities.
 ///
@@ -177,9 +177,9 @@ impl std::error::Error for KfdStoppedStatePlanErrorV1 {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KfdStoppedSnapshotOwnershipV1 {
-    /// The queue was suspended by this session at both capture boundaries.
-    /// The detached report cannot resume it; the live session retains that
-    /// responsibility.
+    /// Local session state retains authority from a prior successful suspend.
+    /// This is not a capture-time hardware suspension reobservation. The
+    /// detached report cannot resume the queue.
     SessionRetainedSuspension,
 }
 
@@ -408,8 +408,8 @@ pub enum KfdStoppedContextSaveObservationV1 {
     Unavailable(KfdStoppedUnavailableReasonV1),
 }
 
-/// Detached, address-free observation captured while one queue remained
-/// suspended by the originating live session.
+/// Detached, address-free observation captured after the originating session
+/// successfully suspended a queue and while its local ownership stayed intact.
 #[derive(Debug)]
 pub struct KfdStoppedQueueSnapshotV1 {
     logical_identity: KfdStoppedLogicalIdentityV1,
@@ -1136,12 +1136,19 @@ fn checkpoint_segment_address(
         .ok_or(KfdStoppedUnavailableReasonV1::TargetAddressNotRepresentable)
 }
 
+#[derive(Clone, Copy)]
+struct OpaqueCheckpointBindingV1 {
+    queue: NativeQueueBindingV1,
+    session_identity: KfdStoppedLogicalIdentityV1,
+    queue_identity: KfdStoppedLogicalIdentityV1,
+    device_identity: KfdStoppedLogicalIdentityV1,
+}
+
 fn capture_opaque_checkpoint<R: TargetHeaderReaderV1>(
     reader: &mut R,
     scope: KfdStoppedStateScopeV1,
-    queue: NativeQueueBindingV1,
     context: &ValidatedContextCaptureV1,
-    session_identity: KfdStoppedLogicalIdentityV1,
+    binding: OpaqueCheckpointBindingV1,
     byte_limit: u64,
 ) -> KfdOpaqueCheckpointObservationV1 {
     let required_bytes = match checkpoint_required_bytes(context) {
@@ -1179,7 +1186,7 @@ fn capture_opaque_checkpoint<R: TargetHeaderReaderV1>(
                     KfdStoppedUnavailableReasonV1::ContextHeaderRangeOutOfBounds,
                 );
             }
-            let address = match checkpoint_segment_address(queue, xcc, range) {
+            let address = match checkpoint_segment_address(binding.queue, xcc, range) {
                 Ok(address) => address,
                 Err(reason) => return KfdOpaqueCheckpointObservationV1::Unavailable(reason),
             };
@@ -1250,7 +1257,7 @@ fn capture_opaque_checkpoint<R: TargetHeaderReaderV1>(
     }
     for (xcc, expected) in context.wire_headers.iter().enumerate() {
         let address = match checkpoint_segment_address(
-            queue,
+            binding.queue,
             xcc,
             KfdStoppedRelativeRangeV1 {
                 offset: 0,
@@ -1272,7 +1279,9 @@ fn capture_opaque_checkpoint<R: TargetHeaderReaderV1>(
     }
     let content_identity = finish_hash(content_hash);
     let mut checkpoint_hash = hash_start(b"opaque-checkpoint", scope);
-    checkpoint_hash.update(session_identity.as_bytes());
+    checkpoint_hash.update(binding.session_identity.as_bytes());
+    checkpoint_hash.update(binding.queue_identity.as_bytes());
+    checkpoint_hash.update(binding.device_identity.as_bytes());
     checkpoint_hash.update(context.save_identity.as_bytes());
     checkpoint_hash.update(content_identity.as_bytes());
     hash_u64(&mut checkpoint_hash, captured_bytes);
@@ -1300,9 +1309,13 @@ fn build_snapshot<R: TargetHeaderReaderV1>(
         Some(context) => capture_opaque_checkpoint(
             reader,
             scope,
-            queue,
             context,
-            session_identity,
+            OpaqueCheckpointBindingV1 {
+                queue,
+                session_identity,
+                queue_identity,
+                device_identity,
+            },
             checkpoint_byte_limit,
         ),
         None => match &context_capture.observation {
@@ -1369,7 +1382,9 @@ impl KfdLiveDebugSessionV1 {
     ///
     /// The method leaves the queue suspended. Call [`Self::resume_queues`]
     /// explicitly after consuming the report. A returned report is inert and
-    /// cannot retain, transfer, or release native suspension authority.
+    /// cannot retain, transfer, or release native suspension authority. KFD
+    /// queue/device snapshots are reobserved, but suspension and runtime state
+    /// are only local session invariants at this boundary.
     pub fn capture_stopped_queue_v1(
         &mut self,
         plan: KfdStoppedQueueCapturePlanV1,
@@ -1377,7 +1392,6 @@ impl KfdLiveDebugSessionV1 {
         if !self.owns_suspended_queue(plan.queue_id) {
             return Err(KfdStoppedStateErrorV1::QueueNotSuspendedBySession);
         }
-        let before_runtime = self.runtime_observation();
         let session_binding_identity = session_identity(plan.scope, self);
         let before_queues = self.queue_snapshot(KfdDebugExceptionMaskV1::NONE)?;
         let before_queue = find_queue(&before_queues, plan.queue_id)?;
@@ -1408,11 +1422,6 @@ impl KfdLiveDebugSessionV1 {
         let after_device = find_device(&after_devices, after_queue.gpu_id)?;
         if before_device != after_device {
             return Err(KfdStoppedStateErrorV1::DeviceBindingSubstituted);
-        }
-        if before_runtime != self.runtime_observation()
-            || session_binding_identity != session_identity(plan.scope, self)
-        {
-            return Err(KfdStoppedStateErrorV1::RuntimeBindingSubstituted);
         }
         if !self.owns_suspended_queue(plan.queue_id) {
             return Err(KfdStoppedStateErrorV1::SuspensionOwnershipLost);
@@ -1562,11 +1571,20 @@ mod tests {
     }
 
     fn snapshot(reader: &mut FixtureReader, byte_limit: u64) -> KfdStoppedQueueSnapshotV1 {
+        snapshot_with_bindings(reader, queue(), device(), byte_limit)
+    }
+
+    fn snapshot_with_bindings(
+        reader: &mut FixtureReader,
+        queue: NativeQueueBindingV1,
+        device: DeviceBindingV1,
+        byte_limit: u64,
+    ) -> KfdStoppedQueueSnapshotV1 {
         build_snapshot(
             reader,
             scope(),
-            queue(),
-            device(),
+            queue,
+            device,
             test_session_identity(),
             byte_limit,
         )
@@ -1753,6 +1771,50 @@ mod tests {
                 KfdStoppedUnavailableReasonV1::CheckpointContentChanged
             )
         ));
+    }
+
+    #[test]
+    fn checkpoint_identity_binds_exact_queue_and_device_observations() {
+        let mut first_reader = reader();
+        set_checkpoint_ranges(&mut first_reader);
+        let first = snapshot(&mut first_reader, DEFAULT_KFD_OPAQUE_CHECKPOINT_BYTES_V1);
+
+        let mut changed_queue = queue();
+        changed_queue.queue_id += 1;
+        let mut queue_reader = reader();
+        set_checkpoint_ranges(&mut queue_reader);
+        let queue_changed = snapshot_with_bindings(
+            &mut queue_reader,
+            changed_queue,
+            device(),
+            DEFAULT_KFD_OPAQUE_CHECKPOINT_BYTES_V1,
+        );
+
+        let mut changed_device = device();
+        changed_device.identity_words[0] += 1;
+        let mut device_reader = reader();
+        set_checkpoint_ranges(&mut device_reader);
+        let device_changed = snapshot_with_bindings(
+            &mut device_reader,
+            queue(),
+            changed_device,
+            DEFAULT_KFD_OPAQUE_CHECKPOINT_BYTES_V1,
+        );
+
+        let checkpoint_identities =
+            |snapshot: &KfdStoppedQueueSnapshotV1| match snapshot.opaque_checkpoint() {
+                KfdOpaqueCheckpointObservationV1::Complete(checkpoint) => {
+                    (checkpoint.logical_identity(), checkpoint.content_identity())
+                }
+                other => panic!("unexpected checkpoint observation: {other:?}"),
+            };
+        let (first_checkpoint, first_content) = checkpoint_identities(&first);
+        let (queue_checkpoint, queue_content) = checkpoint_identities(&queue_changed);
+        let (device_checkpoint, device_content) = checkpoint_identities(&device_changed);
+        assert_eq!(first_content, queue_content,);
+        assert_eq!(first_content, device_content,);
+        assert_ne!(first_checkpoint, queue_checkpoint);
+        assert_ne!(first_checkpoint, device_checkpoint);
     }
 
     #[test]

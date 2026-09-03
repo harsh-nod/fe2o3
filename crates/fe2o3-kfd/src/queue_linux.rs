@@ -907,6 +907,10 @@ pub(crate) struct LinuxCwsrShadowPagesV1 {
     active: bool,
 }
 
+pub(crate) struct LinuxCwsrShadowsAfterEventDestroyedV1 {
+    shadows: LinuxCwsrShadowPagesV1,
+}
+
 pub(crate) struct LinuxCwsrShadowsReadyForReleaseV1 {
     shadows: LinuxCwsrShadowPagesV1,
     runtime: LinuxKfdRuntimeDisabledV1,
@@ -993,30 +997,41 @@ impl LinuxCwsrShadowPagesV1 {
             .try_into()
             .map_err(|_| LinuxDoorbellErrorV1::Shadow("shadow page count"))?;
         let payload_page = map_cwsr_payload_page(plan.page_bytes)?;
-        let payload_pointer = payload_page.as_ptr().cast::<u64>();
-        let payload =
-            NonNull::new(payload_pointer).ok_or(LinuxDoorbellErrorV1::Shadow("payload address"))?;
-        let payload_observation =
-            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64)
-                .ok_or(LinuxDoorbellErrorV1::Shadow("payload admission"))?;
-        // SAFETY: the exact aligned payload word is exclusively owned and was
-        // not previously initialized as a Rust object.
-        unsafe { core::ptr::write_volatile(payload.as_ptr(), 0_u64) };
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
-            let page = pages[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
-            let header = gfx942_cwsr_header_bytes(xcc, payload_observation, event.binding.event_id)
-                .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header"))?;
-            debug_assert_eq!(header.len(), CWSR_HEADER_BYTES);
-            // SAFETY: each exact page has at least 40 writable bytes and no
-            // reference or pointer escapes this boundary.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    header.as_ptr(),
-                    page.as_ptr().cast::<u8>(),
-                    CWSR_HEADER_BYTES,
-                )
-            };
-        }
+        let setup = (|| {
+            let payload_pointer = payload_page.as_ptr().cast::<u64>();
+            let payload = NonNull::new(payload_pointer)
+                .ok_or(LinuxDoorbellErrorV1::Shadow("payload address"))?;
+            let payload_observation =
+                KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64)
+                    .ok_or(LinuxDoorbellErrorV1::Shadow("payload admission"))?;
+            // SAFETY: the exact aligned payload word is exclusively owned and
+            // was not previously initialized as a Rust object.
+            unsafe { core::ptr::write_volatile(payload.as_ptr(), 0_u64) };
+            for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+                let page = pages[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
+                let header =
+                    gfx942_cwsr_header_bytes(xcc, payload_observation, event.binding.event_id)
+                        .map_err(|_| LinuxDoorbellErrorV1::Shadow("typed header"))?;
+                debug_assert_eq!(header.len(), CWSR_HEADER_BYTES);
+                // SAFETY: each exact page has at least 40 writable bytes and
+                // no reference or pointer escapes this boundary.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        header.as_ptr(),
+                        page.as_ptr().cast::<u8>(),
+                        CWSR_HEADER_BYTES,
+                    )
+                };
+            }
+            Ok(payload)
+        })();
+        let payload = match setup {
+            Ok(payload) => payload,
+            Err(error) => {
+                discard_unpublished_cwsr_payload_page_or_abort(payload_page, plan.page_bytes);
+                return Err(error);
+            }
+        };
         let owner = Self {
             pages,
             payload_page,
@@ -1026,8 +1041,7 @@ impl LinuxCwsrShadowPagesV1 {
             payload_page_active: true,
             active: true,
         };
-        owner.validate_readback()?;
-        Ok(owner)
+        admit_installed_cwsr_shadows(owner)
     }
 
     /// Restores write access required by KFD's documented suspend operation.
@@ -1157,50 +1171,23 @@ impl LinuxCwsrShadowPagesV1 {
             .ok_or(LinuxDoorbellErrorV1::Shadow("queue exception reason"))
     }
 
-    pub(crate) fn after_event_and_runtime_destroy(
+    pub(crate) fn after_event_destroy(
         mut self,
         destroyed: LinuxDestroyedQueueExceptionEventV1,
-        runtime: LinuxKfdRuntimeDisabledV1,
-    ) -> Result<LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1> {
-        if !self.matches(destroyed.binding) || runtime.binding.opener_pid != self.binding.opener_pid
-        {
+    ) -> Result<LinuxCwsrShadowsAfterEventDestroyedV1, LinuxDoorbellErrorV1> {
+        if !self.matches(destroyed.binding) {
             return Err(LinuxDoorbellErrorV1::Shadow("destroyed event substitution"));
         }
         self.active = false;
-        Ok(LinuxCwsrShadowsReadyForReleaseV1 {
-            shadows: self,
-            runtime,
-        })
+        self.release_payload_page()?;
+        Ok(LinuxCwsrShadowsAfterEventDestroyedV1 { shadows: self })
     }
 
     fn release_payload_page(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
-        if self.active || !self.payload_page_active || self.binding.opener_pid != std::process::id()
-        {
+        if !self.payload_page_active || self.binding.opener_pid != std::process::id() {
             return Err(LinuxDoorbellErrorV1::Shadow("payload release state"));
         }
-        // SAFETY: the aligned word is exclusively owned and the event that
-        // could write it has already been destroyed.
-        unsafe { core::ptr::write_volatile(self.payload.as_ptr(), 0_u64) };
-        // SAFETY: the complete separately owned page is still mapped and no
-        // reference spans either protection change or unmap.
-        unsafe {
-            rustix::mm::mprotect(
-                self.payload_page.as_ptr(),
-                self.page_bytes,
-                MprotectFlags::empty(),
-            )
-        }
-        .map_err(|source| LinuxDoorbellErrorV1::ShadowSyscall {
-            operation: "mprotect CWSR payload inaccessible",
-            source,
-        })?;
-        // SAFETY: the exact mapping is linearly owned and no pointer escapes.
-        unsafe { rustix::mm::munmap(self.payload_page.as_ptr(), self.page_bytes) }.map_err(
-            |source| LinuxDoorbellErrorV1::ShadowSyscall {
-                operation: "munmap CWSR payload page",
-                source,
-            },
-        )?;
+        zero_protect_unmap_cwsr_payload_page(self.payload_page, self.page_bytes)?;
         self.payload_page_active = false;
         Ok(())
     }
@@ -1262,13 +1249,32 @@ impl LinuxCwsrShadowPagesV1 {
     }
 }
 
+impl LinuxCwsrShadowsAfterEventDestroyedV1 {
+    pub(crate) fn after_runtime_destroy(
+        self,
+        runtime: LinuxKfdRuntimeDisabledV1,
+    ) -> Result<LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1> {
+        if self.shadows.active
+            || self.shadows.payload_page_active
+            || self.shadows.binding.opener_pid != std::process::id()
+            || runtime.binding.opener_pid != self.shadows.binding.opener_pid
+        {
+            return Err(LinuxDoorbellErrorV1::Shadow("runtime/shadow release state"));
+        }
+        Ok(LinuxCwsrShadowsReadyForReleaseV1 {
+            shadows: self.shadows,
+            runtime,
+        })
+    }
+}
+
 impl LinuxCwsrShadowsReadyForReleaseV1 {
     pub(crate) fn validate_for_release(&self) -> Result<(), LinuxDoorbellErrorV1> {
         let cleanup_is_pending = self.runtime.completion_pending;
         if self.shadows.active
             || !cleanup_is_pending
             || self.shadows.binding.opener_pid != std::process::id()
-            || !self.shadows.payload_page_active
+            || self.shadows.payload_page_active
             || self.runtime.binding.opener_pid != self.shadows.binding.opener_pid
         {
             Err(LinuxDoorbellErrorV1::Shadow("release state"))
@@ -1277,9 +1283,8 @@ impl LinuxCwsrShadowsReadyForReleaseV1 {
         }
     }
 
-    pub(crate) fn complete(mut self) -> Result<(), LinuxDoorbellErrorV1> {
+    pub(crate) fn complete(self) -> Result<(), LinuxDoorbellErrorV1> {
         self.validate_for_release()?;
-        self.shadows.release_payload_page()?;
         self.runtime.complete();
         Ok(())
     }
@@ -1287,8 +1292,51 @@ impl LinuxCwsrShadowsReadyForReleaseV1 {
 
 impl Drop for LinuxCwsrShadowPagesV1 {
     fn drop(&mut self) {
-        // No implicit unmap. Full reservation and payload release remain
-        // explicit and are admitted only after queue and event destruction.
+        // No implicit unmap. Published payload release occurs explicitly just
+        // after event destruction; the full reservation has its own owner.
+    }
+}
+
+fn admit_installed_cwsr_shadows(
+    mut owner: LinuxCwsrShadowPagesV1,
+) -> Result<LinuxCwsrShadowPagesV1, LinuxDoorbellErrorV1> {
+    if let Err(error) = owner.validate_readback() {
+        if owner.release_payload_page().is_err() {
+            std::process::abort();
+        }
+        return Err(error);
+    }
+    Ok(owner)
+}
+
+fn zero_protect_unmap_cwsr_payload_page(
+    payload_page: NonNull<c_void>,
+    page_bytes: usize,
+) -> Result<(), LinuxDoorbellErrorV1> {
+    // SAFETY: the payload occupies the first aligned u64 of the exact retained
+    // private page, which is still writable at this transition.
+    unsafe { core::ptr::write_volatile(payload_page.as_ptr().cast::<u64>(), 0_u64) };
+    // SAFETY: no reference spans the exact page protection transition.
+    unsafe { rustix::mm::mprotect(payload_page.as_ptr(), page_bytes, MprotectFlags::empty()) }
+        .map_err(|source| LinuxDoorbellErrorV1::ShadowSyscall {
+            operation: "mprotect CWSR payload inaccessible",
+            source,
+        })?;
+    // SAFETY: the exact mapping is linearly owned and no pointer escapes.
+    unsafe { rustix::mm::munmap(payload_page.as_ptr(), page_bytes) }.map_err(|source| {
+        LinuxDoorbellErrorV1::ShadowSyscall {
+            operation: "munmap CWSR payload page",
+            source,
+        }
+    })
+}
+
+fn discard_unpublished_cwsr_payload_page_or_abort(
+    payload_page: NonNull<c_void>,
+    page_bytes: usize,
+) {
+    if zero_protect_unmap_cwsr_payload_page(payload_page, page_bytes).is_err() {
+        std::process::abort();
     }
 }
 
@@ -1713,6 +1761,70 @@ mod tests {
         (shadows, storage, payload_storage, event, file)
     }
 
+    type MappedDiagnosticShadowFixture = (
+        LinuxCwsrShadowPagesV1,
+        Vec<Box<[u8; 4096]>>,
+        LinuxQueueExceptionEventV1,
+        std::fs::File,
+    );
+
+    fn mapped_diagnostic_shadow_fixture() -> MappedDiagnosticShadowFixture {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let binding = QueueExceptionBindingV1 {
+            event_id: KfdSignalEventIdV1::new(7).unwrap(),
+            opener_pid: std::process::id(),
+            raw_fd: file.as_fd().as_raw_fd(),
+        };
+        let mut storage: Vec<Box<[u8; 4096]>> = (0..GFX942_CWSR_SHADOW_PAGES_V1)
+            .map(|_| Box::new([0_u8; 4096]))
+            .collect();
+        let payload_page = map_cwsr_payload_page(4096).unwrap();
+        let payload = NonNull::new(payload_page.as_ptr().cast::<u64>()).unwrap();
+        let payload_address =
+            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64).unwrap();
+        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
+            let page = &mut storage[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
+            let header = crate::queue::submit::gfx942_cwsr_header_bytes(
+                xcc,
+                payload_address,
+                binding.event_id,
+            )
+            .unwrap();
+            page[..header.len()].copy_from_slice(&header);
+        }
+        let pages: [NonNull<c_void>; GFX942_CWSR_SHADOW_PAGES_V1] = storage
+            .iter_mut()
+            .map(|page| NonNull::new(page.as_mut_ptr().cast::<c_void>()).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let shadows = LinuxCwsrShadowPagesV1 {
+            pages,
+            payload_page,
+            payload,
+            binding,
+            page_bytes: 4096,
+            payload_page_active: true,
+            active: true,
+        };
+        let event = LinuxQueueExceptionEventV1 {
+            binding,
+            active: true,
+            poisoned: false,
+            observation_used: false,
+        };
+        (shadows, storage, event, file)
+    }
+
+    fn assert_mapping_absent(address: NonNull<c_void>) {
+        let mut residency = [0_u8; 1];
+        // SAFETY: mincore only queries whether the saved page address is still
+        // mapped and does not dereference it.
+        let result = unsafe { libc::mincore(address.as_ptr(), 4096, residency.as_mut_ptr()) };
+        assert_eq!(result, -1);
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(12));
+    }
+
     #[test]
     fn shadow_plan_is_exact_and_hostile_geometry_fails_closed() {
         let plan = CwsrShadowPlanV1::from_owned_reservation(
@@ -1754,6 +1866,37 @@ mod tests {
         ] {
             assert!(result.is_err());
         }
+    }
+
+    #[test]
+    fn unpublished_payload_is_unmapped_when_final_admission_fails() {
+        let (shadows, mut storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+        let payload_page = shadows.payload_page;
+        storage[0][0] ^= 1;
+        assert!(admit_installed_cwsr_shadows(shadows).is_err());
+        assert_mapping_absent(payload_page);
+    }
+
+    #[test]
+    fn payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup() {
+        let (shadows, _storage, _event, file) = mapped_diagnostic_shadow_fixture();
+        let payload_page = shadows.payload_page;
+        let binding = shadows.binding;
+        let after_event = shadows
+            .after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding })
+            .unwrap();
+        assert_mapping_absent(payload_page);
+
+        let ready = after_event
+            .after_runtime_destroy(LinuxKfdRuntimeDisabledV1 {
+                binding: KfdRuntimeBindingV1 {
+                    opener_pid: std::process::id(),
+                    raw_fd: file.as_fd().as_raw_fd(),
+                },
+                completion_pending: true,
+            })
+            .unwrap();
+        ready.complete().unwrap();
     }
 
     #[test]

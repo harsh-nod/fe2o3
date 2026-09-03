@@ -48,10 +48,10 @@ use super::submit::{
 };
 use super::*;
 use crate::queue_linux::{
-    LinuxCwsrShadowPagesV1, LinuxCwsrShadowsReadyForReleaseV1, LinuxDestroyedQueueExceptionEventV1,
-    LinuxDoorbellErrorV1, LinuxDoorbellSliceV1, LinuxKfdRuntimeDisabledV1,
-    LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1, QueueExceptionWaitObservationV1,
-    arm_process_global_kfd_runtime_gate_for_teardown_v1,
+    LinuxCwsrShadowPagesV1, LinuxCwsrShadowsAfterEventDestroyedV1,
+    LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1, LinuxDoorbellSliceV1,
+    LinuxKfdRuntimeDisabledV1, LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1,
+    QueueExceptionWaitObservationV1, arm_process_global_kfd_runtime_gate_for_teardown_v1,
     permanently_poison_process_global_kfd_runtime_gate_v1,
 };
 use crate::shared_memory::{
@@ -124,10 +124,10 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
-    "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;no-drop-ioctl-store-munmap-or-free\n",
+    "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=active-queue-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence-before-publication,after-bounded-preparation,and-before-mmio;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-retain-full-device-topology-aperture-composite;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
-    "event-lifecycle=linear-private-kfd-event,no-kfd-event-page-mmap,separate-private-payload-page-zeroized-protected-and-unmapped-after-event-destroy,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
+    "event-lifecycle=linear-private-kfd-event,no-kfd-event-page-mmap,separate-private-payload-page-cleaned-on-unpublished-install-failure-or-zeroized-protected-and-unmapped-immediately-after-event-destroy-before-runtime-disable-and-independent-of-later-resource-release,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-create-address-except-exact-24-owned-fixed-private-anonymous-control-stack-pages,prot-none-then-dontfork-then-rw,whole-span-seal-then-exact-shadow-rw-restore;headers-and-control-stack-kfd-copy-targets,wave-state-remains-read-only-bo-mapped,event-payload-disjoint-from-all-control-stack-pages;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms-wait-and-terminal-timeout-direct-volatile-CWSR-reason,wait-and-payload-must-agree,unknown-reason-rejected,zero-reason-is-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
     "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-explicitly-classified-pre-side-effect-full-or-insufficient-space-retryable\n",
@@ -136,7 +136,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "ab5d1fc0b2fcdc4f3918d772f03156b14cb524da7c7660c39f29b539e6186289";
+    "51d61a2f358440d4a1a5f4769d102372269f7915ee10937f3d09f0e6d5b4bf48";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -1233,8 +1233,7 @@ type ExternalRuntimeV1<'a> = (
 struct QueueAfterEventDestroyedV1 {
     runtime: LinuxKfdRuntimeEnabledV1,
     runtime_control: Option<KfdWithAdmittedUapi>,
-    destroyed_event: LinuxDestroyedQueueExceptionEventV1,
-    shadows: LinuxCwsrShadowPagesV1,
+    shadows: LinuxCwsrShadowsAfterEventDestroyedV1,
     return_attached: bool,
     detached_return: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
 }
@@ -1250,8 +1249,7 @@ pub struct KfdTargetRuntimeDebugQueueTeardownV1 {
     session: Option<ComputeAqlQueueSessionV1>,
     runtime: Option<LinuxKfdRuntimeEnabledV1>,
     runtime_control: Option<KfdWithAdmittedUapi>,
-    destroyed_event: Option<LinuxDestroyedQueueExceptionEventV1>,
-    shadows: Option<LinuxCwsrShadowPagesV1>,
+    shadows: Option<LinuxCwsrShadowsAfterEventDestroyedV1>,
     thread_bound: PhantomData<Rc<()>>,
 }
 
@@ -1311,7 +1309,6 @@ impl KfdTargetRuntimeDebugQueueV1 {
             session: Some(session),
             runtime: Some(after_event.runtime),
             runtime_control: Some(runtime_control),
-            destroyed_event: Some(after_event.destroyed_event),
             shadows: Some(after_event.shadows),
             thread_bound: PhantomData,
         })
@@ -1352,12 +1349,6 @@ impl KfdTargetRuntimeDebugQueueTeardownV1 {
                     "missing debug runtime control descriptor",
                 ))?;
         let disabled = runtime.disable(control.opened.fd.as_fd(), control.opened.opener_pid)?;
-        let destroyed_event =
-            self.destroyed_event
-                .take()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing destroyed queue event",
-                ))?;
         let shadows = self
             .shadows
             .take()
@@ -1370,14 +1361,8 @@ impl KfdTargetRuntimeDebugQueueTeardownV1 {
             .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                 "missing destroyed debug queue session",
             ))?;
-        let (outcome, callback_result) = session.complete_destroy(
-            destroyed_event,
-            disabled,
-            shadows,
-            false,
-            None,
-            after_queue_destroyed,
-        )?;
+        let (outcome, callback_result) =
+            session.complete_destroy(disabled, shadows, false, None, after_queue_destroyed)?;
         match outcome {
             QueueDestroyOutcomeV1::Released(destroyed) => Ok((destroyed, callback_result)),
             QueueDestroyOutcomeV1::Returned(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -3758,7 +3743,6 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.opener_pid(),
         )?;
         let (outcome, callback_result) = self.complete_destroy(
-            after_event.destroyed_event,
             disabled_runtime,
             after_event.shadows,
             after_event.return_attached,
@@ -3794,7 +3778,6 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.opener_pid(),
         )?;
         let (outcome, ()) = self.complete_destroy(
-            after_event.destroyed_event,
             disabled_runtime,
             after_event.shadows,
             after_event.return_attached,
@@ -3876,12 +3859,12 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.kfd_fd(),
             engine.backend.session.opener_pid(),
         )?;
+        let shadows = exception.shadows.after_event_destroy(destroyed_event)?;
         exception.runtime.mark_event_destroyed()?;
         Ok(QueueAfterEventDestroyedV1 {
             runtime: exception.runtime,
             runtime_control: exception.runtime_control,
-            destroyed_event,
-            shadows: exception.shadows,
+            shadows,
             return_attached,
             detached_return,
         })
@@ -3889,17 +3872,15 @@ impl ComputeAqlQueueSessionV1 {
 
     fn complete_destroy<T>(
         mut self,
-        destroyed_event: LinuxDestroyedQueueExceptionEventV1,
         disabled_runtime: LinuxKfdRuntimeDisabledV1,
-        shadows: LinuxCwsrShadowPagesV1,
+        shadows: LinuxCwsrShadowsAfterEventDestroyedV1,
         return_attached: bool,
         detached_return: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
         after_queue_destroyed: impl FnOnce(
             &mut SharedGttMemorySessionV1,
         ) -> Result<T, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<(QueueDestroyOutcomeV1, T), ComputeAqlQueueSessionErrorV1> {
-        let shadow_release =
-            shadows.after_event_and_runtime_destroy(destroyed_event, disabled_runtime)?;
+        let shadow_release = shadows.after_runtime_destroy(disabled_runtime)?;
         self.doorbell
             .take()
             .ok_or(ComputeAqlQueueSessionErrorV1::Contract("missing doorbell"))?

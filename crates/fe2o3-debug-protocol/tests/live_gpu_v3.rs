@@ -166,7 +166,6 @@ fn stopped_queue_envelope() -> LiveGpuStoppedQueueEnvelopeV3 {
         opaque_checkpoint: LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
             checkpoint_identity: identity(60),
             content_identity: identity(61),
-            artifact_binding_identity: binding().binding_identity,
             captured_bytes: 0,
             segment_count: 0,
             private_bytes_exposed: false,
@@ -289,21 +288,6 @@ fn hostile_stopped_queue_envelopes_fail_closed() {
             .is_err()
     );
 
-    let mut substituted_artifact = stopped_queue_envelope();
-    let LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
-        artifact_binding_identity,
-        ..
-    } = &mut substituted_artifact.opaque_checkpoint
-    else {
-        unreachable!()
-    };
-    *artifact_binding_identity = identity(62);
-    assert!(
-        stopped_queue_response(substituted_artifact)
-            .validate(LiveGpuProtocolLimitsV3::default())
-            .is_err()
-    );
-
     let mut partial_prefix = stopped_queue_envelope();
     partial_prefix.opaque_checkpoint = LiveGpuStoppedQueueOpaqueCheckpointV3::Truncated {
         required_bytes: 384,
@@ -311,6 +295,32 @@ fn hostile_stopped_queue_envelopes_fail_closed() {
     };
     assert!(
         stopped_queue_response(partial_prefix)
+            .validate(LiveGpuProtocolLimitsV3::default())
+            .is_err()
+    );
+
+    for reason in [
+        LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied,
+        LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial,
+        LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted,
+    ] {
+        let mut reread_failure = stopped_queue_envelope();
+        reread_failure.opaque_checkpoint =
+            LiveGpuStoppedQueueOpaqueCheckpointV3::Unavailable { reason };
+        assert!(
+            stopped_queue_response(reread_failure)
+                .validate(LiveGpuProtocolLimitsV3::default())
+                .is_ok()
+        );
+    }
+
+    let mut impossible_available_context_reason = stopped_queue_envelope();
+    impossible_available_context_reason.opaque_checkpoint =
+        LiveGpuStoppedQueueOpaqueCheckpointV3::Unavailable {
+            reason: LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderRangeOutOfBounds,
+        };
+    assert!(
+        stopped_queue_response(impossible_available_context_reason)
             .validate(LiveGpuProtocolLimitsV3::default())
             .is_err()
     );

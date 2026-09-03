@@ -401,9 +401,10 @@ logical queue has retained session-owned suspension. It contains address-free
 queue/device/save-area/header identities, exception bits, ring and queue shape,
 gfx target, XCC count, relative header ranges, error-binding presence, and an
 `opaque_checkpoint` status. A complete checkpoint exposes only its scoped
-checkpoint/content identities, exact artifact-binding identity, byte and
-segment counts, and `private_bytes_exposed: false`; truncation exposes only the
-required and configured byte bounds and retains no prefix. It contains no PID,
+checkpoint/content correlation identities, byte and segment counts, and
+`private_bytes_exposed: false`; truncation exposes only the required and
+configured byte bounds and retains no prefix. The outer session separately
+carries its declared artifact binding, which is not observed execution. It contains no PID,
 native queue/device ID, descriptor, virtual address, PC, register, checkpoint
 bytes, source path, or target-memory value. The response
 identities use a fresh private random per-session correlation scope, not the
@@ -416,13 +417,17 @@ substitution invalidates the logical generation, terminally poisons the public
 session, and immediately enters the existing KFD session-finish cleanup; the
 facade never discards suspension ownership while the KFD engine still owns it.
 
-The CPU-visible capture is bounded and sequential: KFD queue/device/runtime
-snapshots bracket eight XCC header reads; each header-bounded control-stack and
-wave-state segment is read twice; and all headers are reread before the exact
-binding checks. A content change, partial/denied read, header change, runtime
-change, or queue/device substitution fails closed. The private Rust checkpoint
-segments are zeroized on drop and cannot appear through `Debug` or the agent
-protocol. This is authenticated opaque capture, not decoded hardware state.
+The CPU-visible capture is bounded, sequential, and non-atomic: direct-KFD
+queue/device snapshots bracket eight XCC header reads; each header-bounded
+control-stack and wave-state segment is read twice adjacently; and all headers
+are reread before the queue/device binding checks. A content change inside an
+adjacent pair, partial/denied read, header change, or queue/device substitution
+fails closed. `complete` means every announced extent was captured, not that
+all segments describe one coherent instant. Runtime and suspension are local
+session invariants here, not capture-time hardware reobservations. The private
+Rust checkpoint segments are zeroized on drop and cannot appear through
+`Debug` or the agent protocol. This is identity-bound opaque capture, not
+decoded or authenticated hardware state.
 Wave records, lane state, registers, PC, source, and memory remain separately
 typed unavailable because KFD 1.18 publishes no stable inner gfx942 decoder.
 The generic stopped anchor remains `session_not_stopped`, and stopped

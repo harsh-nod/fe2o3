@@ -125,9 +125,7 @@ fn convert_stopped_queue_capture<T: HardwareDebugTransportV2>(
             envelope,
         } => {
             let session = live_session(session, binding.binding_identity);
-            let Ok(envelope) =
-                project_stopped_queue_envelope(*envelope, queue, device, binding.binding_identity)
-            else {
+            let Ok(envelope) = project_stopped_queue_envelope(*envelope, queue, device) else {
                 return backend_protocol_error(
                     request_id,
                     operation,
@@ -162,7 +160,6 @@ fn project_stopped_queue_envelope(
     value: NativeStoppedQueueEnvelopeV2,
     queue: HardwareQueueIdV2,
     device: HardwareDeviceIdV2,
-    artifact_binding_identity: OpaqueIdentityV1,
 ) -> Result<LiveGpuStoppedQueueEnvelopeV3, ()> {
     let envelope_identity = opaque_stopped_identity(value.identity)?;
     let context_save = match value.context_save {
@@ -209,7 +206,6 @@ fn project_stopped_queue_envelope(
         } => LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
             checkpoint_identity: opaque_stopped_identity(identity)?,
             content_identity: opaque_stopped_identity(content_identity)?,
-            artifact_binding_identity,
             captured_bytes,
             segment_count,
             private_bytes_exposed: false,
@@ -1137,6 +1133,37 @@ mod tests {
         }
     }
 
+    fn native_available_context() -> NativeStoppedQueueContextSaveV2 {
+        const CONTEXT_BYTES: u32 = 0x162_1000;
+        const DEBUG_BYTES: u32 = 0x5_f000;
+        NativeStoppedQueueContextSaveV2::Available {
+            identity: [64; 32],
+            context_bytes_per_xcc: CONTEXT_BYTES,
+            total_allocation_bytes: u64::from(CONTEXT_BYTES) * 8 + u64::from(DEBUG_BYTES),
+            headers: (0_u32..8)
+                .map(
+                    |xcc_ordinal| crate::hardware_v2::NativeStoppedQueueXccHeaderV2 {
+                        xcc_ordinal,
+                        identity: [65 + u8::try_from(xcc_ordinal).unwrap(); 32],
+                        control_stack: NativeStoppedQueueRelativeRangeV2 {
+                            offset: 0x3000,
+                            bytes: 0,
+                        },
+                        wave_state: NativeStoppedQueueRelativeRangeV2 {
+                            offset: 0x3000,
+                            bytes: 0,
+                        },
+                        debug: NativeStoppedQueueRelativeRangeV2 {
+                            offset: CONTEXT_BYTES * (8 - xcc_ordinal),
+                            bytes: DEBUG_BYTES,
+                        },
+                        error_binding_present: true,
+                    },
+                )
+                .collect(),
+        }
+    }
+
     #[test]
     fn stopped_queue_projection_preserves_redaction_and_rejects_claim_upgrades() {
         let queue = HardwareQueueIdV2 {
@@ -1147,14 +1174,8 @@ mod tests {
             generation: 1,
             ordinal: 3,
         };
-        let artifact_binding_identity = identity(9);
-        let projected = project_stopped_queue_envelope(
-            native_stopped_envelope(),
-            queue,
-            device,
-            artifact_binding_identity,
-        )
-        .unwrap();
+        let projected =
+            project_stopped_queue_envelope(native_stopped_envelope(), queue, device).unwrap();
         assert_eq!(projected.queue, queue);
         assert_eq!(projected.device, device);
         assert_eq!(projected.exception_status_bits, 0x20);
@@ -1178,17 +1199,66 @@ mod tests {
 
         let mut hostile = native_stopped_envelope();
         hostile.waves = KfdStoppedAvailabilityV1::Available;
-        assert!(
-            project_stopped_queue_envelope(hostile, queue, device, artifact_binding_identity)
-                .is_err()
-        );
+        assert!(project_stopped_queue_envelope(hostile, queue, device).is_err());
 
         let mut zero_identity = native_stopped_envelope();
         zero_identity.queue_identity = [0; 32];
-        assert!(
-            project_stopped_queue_envelope(zero_identity, queue, device, artifact_binding_identity)
-                .is_err()
-        );
+        assert!(project_stopped_queue_envelope(zero_identity, queue, device).is_err());
+    }
+
+    #[test]
+    fn final_header_reread_failures_remain_typed_facade_results() {
+        let queue = HardwareQueueIdV2 {
+            generation: 1,
+            ordinal: 2,
+        };
+        let device = HardwareDeviceIdV2 {
+            generation: 1,
+            ordinal: 3,
+        };
+        for reason in [
+            KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied,
+            KfdStoppedUnavailableReasonV1::TargetHeaderReadPartial,
+            KfdStoppedUnavailableReasonV1::ContextHeaderBindingSubstituted,
+        ] {
+            let mut native = native_stopped_envelope();
+            native.context_save = native_available_context();
+            native.opaque_checkpoint = NativeOpaqueCheckpointV2::Unavailable(reason);
+            let projected = project_stopped_queue_envelope(native, queue, device).unwrap();
+            assert!(matches!(
+                projected.opaque_checkpoint,
+                LiveGpuStoppedQueueOpaqueCheckpointV3::Unavailable {
+                    reason: projected_reason,
+                } if projected_reason == stopped_reason(reason)
+            ));
+            let response = LiveGpuDebugResponseV3::Ok {
+                schema: LiveGpuResponseSchemaV3::V3,
+                request_id: 1,
+                operation: LiveGpuOperationV3::CaptureStoppedQueueEnvelope,
+                session: live_session(
+                    HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Running,
+                        commands_processed: 1,
+                        control_revision: 0,
+                        observation_sequence: 0,
+                        identity_generation: 1,
+                        runtime_enabled: true,
+                        hardware_observed: true,
+                        simulated: false,
+                        performance_prediction: false,
+                    },
+                    binding().binding_identity,
+                ),
+                result: Box::new(LiveGpuDebugResultV3::StoppedQueueEnvelope {
+                    envelope: projected,
+                }),
+            };
+            assert!(
+                response
+                    .validate(LiveGpuProtocolLimitsV3::default())
+                    .is_ok()
+            );
+        }
     }
 
     #[test]
