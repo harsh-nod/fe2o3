@@ -60,12 +60,17 @@ semantic MIR, canonical KIR V7 projection, and correspondence bytes. Its
 function and statement occurrence records retain the correspondence owner
 without changing or duplicating the physical Source, MIR, KIR, or ISA graph.
 
-The canonical binary decoder is byte- and count-bounded, checks the exact
-remaining encoded size before allocation, rejects unknown roles and nonzero
-reserved bytes, and revalidates every record identity and graph reference.
-Every owner has exactly one distinct kernel entry. A physical function may be
-associated with several owners only when every occurrence names the same
-semantic `InternalHelper`; kernel-entry reuse remains rejected.
+The canonical binary decoder returns
+`InertProductionSemanticDebugInstanceCustodyV1`. It is byte- and count-bounded,
+checks the exact remaining encoded size before allocation, rejects unknown
+roles and nonzero reserved bytes, and revalidates every claimed record identity
+and graph reference. The inert type exposes no occurrence records or query
+methods. Promotion requires complete equality with a fresh finalizer replay, so
+self-consistent owner/function claims and matching content hashes cannot create
+admitted custody. Every admitted owner has exactly one distinct kernel entry. A
+physical function may be associated with several owners only when every
+occurrence names the same semantic `InternalHelper`; kernel-entry reuse remains
+rejected.
 
 Forward queries return every owner of a semantic helper. Reverse queries return
 every owner of a physical KIR function or KIR statement node. Both are ordered

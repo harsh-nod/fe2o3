@@ -168,6 +168,7 @@ pub use reserved_fe2o3_symbols::{
     derive_device_ffi_contract_id_v1,
 };
 pub use semantic_debug_instance_custody_v1::{
+    InertProductionSemanticDebugInstanceCustodyV1,
     MAX_PRODUCTION_SEMANTIC_DEBUG_FUNCTION_INSTANCES_V1,
     MAX_PRODUCTION_SEMANTIC_DEBUG_INSTANCE_CUSTODY_BYTES_V1,
     MAX_PRODUCTION_SEMANTIC_DEBUG_STATEMENT_INSTANCES_V1,

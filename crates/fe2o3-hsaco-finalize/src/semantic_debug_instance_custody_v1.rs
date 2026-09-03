@@ -260,6 +260,74 @@ pub struct ProductionSemanticDebugInstanceCustodyV1 {
     canonical_bytes: Box<[u8]>,
 }
 
+/// Canonically decoded custody claims which have not been re-admitted by finalizer replay.
+///
+/// This type deliberately exposes no function or statement records. Content hashes authenticate
+/// bytes, not the claimed root/function roster; only [`Self::admit_exact_replay_v1`] can promote a
+/// claim to [`ProductionSemanticDebugInstanceCustodyV1`].
+pub struct InertProductionSemanticDebugInstanceCustodyV1 {
+    claimed: ProductionSemanticDebugInstanceCustodyV1,
+}
+
+impl fmt::Debug for InertProductionSemanticDebugInstanceCustodyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InertProductionSemanticDebugInstanceCustodyV1")
+            .field("claimed_identity", &self.claimed_identity())
+            .field("claimed_binding", &self.claimed_binding())
+            .finish_non_exhaustive()
+    }
+}
+
+impl InertProductionSemanticDebugInstanceCustodyV1 {
+    /// Strictly decodes canonical claims without granting root-instance custody.
+    pub fn from_canonical_bytes(
+        bytes: &[u8],
+        semantic_map_bytes: &[u8],
+    ) -> Result<Self, ProductionSemanticDebugInstanceCustodyErrorV1> {
+        Ok(Self {
+            claimed: ProductionSemanticDebugInstanceCustodyV1::decode_claimed_canonical_bytes(
+                bytes,
+                semantic_map_bytes,
+            )?,
+        })
+    }
+
+    /// Returns the identity claimed by the inert wire document.
+    pub const fn claimed_identity(&self) -> ProductionSemanticDebugInstanceCustodyIdentityV1 {
+        self.claimed.identity
+    }
+
+    /// Returns the exact content binding claimed by the inert wire document.
+    pub const fn claimed_binding(&self) -> ProductionSemanticDebugInstanceCustodyBindingV1 {
+        self.claimed.binding
+    }
+
+    /// Returns the retained canonical claims for persistence or transport.
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.claimed.canonical_bytes
+    }
+
+    /// Promotes claims only when they exactly equal a fresh finalizer replay.
+    pub fn admit_exact_replay_v1(
+        self,
+        exact: ProductionSemanticDebugInstanceCustodyV1,
+    ) -> Result<
+        ProductionSemanticDebugInstanceCustodyV1,
+        ProductionSemanticDebugInstanceCustodyErrorV1,
+    > {
+        if self.claimed != exact {
+            return Err(ProductionSemanticDebugInstanceCustodyErrorV1::ExactReplayMismatch);
+        }
+        Ok(exact)
+    }
+
+    /// An inert wire claim never grants execution or debugger-control authority.
+    pub const fn grants_execution_authority(&self) -> bool {
+        false
+    }
+}
+
 impl ProductionSemanticDebugInstanceCustodyV1 {
     pub(crate) fn from_replayed_inputs(
         binding: ProductionSemanticDebugInstanceCustodyBindingV1,
@@ -329,8 +397,7 @@ impl ProductionSemanticDebugInstanceCustodyV1 {
         })
     }
 
-    /// Strictly decodes canonical bytes and revalidates every graph reference.
-    pub fn from_canonical_bytes(
+    fn decode_claimed_canonical_bytes(
         bytes: &[u8],
         semantic_map_bytes: &[u8],
     ) -> Result<Self, ProductionSemanticDebugInstanceCustodyErrorV1> {
@@ -1008,6 +1075,7 @@ pub enum ProductionSemanticDebugInstanceCustodyErrorV1 {
     PhysicalFunctionOverlap,
     NodeOverlap,
     IncompleteCoverage,
+    ExactReplayMismatch,
     InvalidSemanticMap,
     ResourceLimit,
     AllocationFailure,
@@ -1207,11 +1275,16 @@ mod tests {
         let map = semantic_map();
         let custody = build(function_inputs(), statement_inputs(), &map).unwrap();
         let map_bytes = map.to_canonical_json_bytes().unwrap();
-        let decoded = ProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+        let inert = InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
             custody.canonical_bytes(),
             &map_bytes,
         )
         .unwrap();
+        assert_eq!(inert.claimed_identity(), custody.identity());
+        assert_eq!(inert.claimed_binding(), custody.binding());
+        assert_eq!(inert.canonical_bytes(), custody.canonical_bytes());
+        assert!(!inert.grants_execution_authority());
+        let decoded = inert.admit_exact_replay_v1(custody.clone()).unwrap();
 
         assert_eq!(decoded, custody);
         assert_eq!(decoded.functions().len(), 4);
@@ -1293,9 +1366,55 @@ mod tests {
         );
         reordered[records + FUNCTION_BYTES_V1..records + 2 * FUNCTION_BYTES_V1]
             .copy_from_slice(&first);
-        assert_eq!(
-            ProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(&reordered, &map_bytes,),
+        assert!(matches!(
+            InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+                &reordered, &map_bytes,
+            ),
             Err(ProductionSemanticDebugInstanceCustodyErrorV1::NonCanonicalOrder)
+        ));
+    }
+
+    #[test]
+    fn appended_no_statement_kernel_entry_remains_inert_and_cannot_be_admitted() {
+        let map = semantic_map();
+        let exact = build(function_inputs(), statement_inputs(), &map).unwrap();
+        let map_bytes = map.to_canonical_json_bytes().unwrap();
+        let forged_input = ProductionSemanticDebugFunctionInstanceInputV1 {
+            correspondence_owner: 3,
+            semantic_function: 3,
+            kernel_ir_function_ordinal: 3,
+            role: ProductionSemanticDebugFunctionInstanceRoleV1::KernelEntry,
+        };
+        let forged_record = ProductionSemanticDebugFunctionInstanceV1 {
+            identity: function_identity(exact.binding(), forged_input),
+            correspondence_owner: forged_input.correspondence_owner,
+            semantic_function: forged_input.semantic_function,
+            kernel_ir_function_ordinal: forged_input.kernel_ir_function_ordinal,
+            role: forged_input.role,
+        };
+        let mut encoded_record = Vec::new();
+        encoded_record.extend_from_slice(&forged_record.identity);
+        encoded_record.extend_from_slice(&forged_record.correspondence_owner.to_le_bytes());
+        encoded_record.extend_from_slice(&forged_record.semantic_function.to_le_bytes());
+        encoded_record.extend_from_slice(&forged_record.kernel_ir_function_ordinal.to_le_bytes());
+        encoded_record.push(forged_record.role.code());
+        encoded_record.extend_from_slice(&[0; 3]);
+        assert_eq!(encoded_record.len(), FUNCTION_BYTES_V1);
+
+        let mut forged = exact.canonical_bytes().to_vec();
+        forged[12..16].copy_from_slice(&5_u32.to_le_bytes());
+        let function_records = HEADER_BYTES_V1 + BINDING_FIELDS_V1 * CONTENT_IDENTITY_BYTES_V1;
+        let statements = function_records + 4 * FUNCTION_BYTES_V1;
+        forged.splice(statements..statements, encoded_record);
+
+        let inert = InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+            &forged, &map_bytes,
+        )
+        .unwrap();
+        assert_eq!(inert.claimed_binding(), exact.binding());
+        assert_eq!(
+            inert.admit_exact_replay_v1(exact),
+            Err(ProductionSemanticDebugInstanceCustodyErrorV1::ExactReplayMismatch)
         );
     }
 
@@ -1386,40 +1505,44 @@ mod tests {
 
         let mut changed_binding = custody.canonical_bytes().to_vec();
         changed_binding[HEADER_BYTES_V1 + CONTENT_IDENTITY_BYTES_V1] ^= 1;
-        assert_eq!(
-            ProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+        assert!(matches!(
+            InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
                 &changed_binding,
                 &map_bytes,
             ),
             Err(ProductionSemanticDebugInstanceCustodyErrorV1::BindingMismatch)
-        );
+        ));
 
         let mut changed_role = custody.canonical_bytes().to_vec();
         let first_role = HEADER_BYTES_V1 + BINDING_FIELDS_V1 * CONTENT_IDENTITY_BYTES_V1 + 44;
         changed_role[first_role] = 9;
-        assert_eq!(
-            ProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+        assert!(matches!(
+            InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
                 &changed_role,
                 &map_bytes,
             ),
             Err(ProductionSemanticDebugInstanceCustodyErrorV1::InvalidRole)
-        );
+        ));
 
         let mut oversize = custody.canonical_bytes().to_vec();
         oversize[12..16].copy_from_slice(
             &(u32::try_from(MAX_PRODUCTION_SEMANTIC_DEBUG_FUNCTION_INSTANCES_V1).unwrap() + 1)
                 .to_le_bytes(),
         );
-        assert_eq!(
-            ProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(&oversize, &map_bytes),
+        assert!(matches!(
+            InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+                &oversize, &map_bytes,
+            ),
             Err(ProductionSemanticDebugInstanceCustodyErrorV1::ResourceLimit)
-        );
+        ));
 
         let mut truncated = custody.canonical_bytes().to_vec();
         truncated.pop();
-        assert_eq!(
-            ProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(&truncated, &map_bytes,),
+        assert!(matches!(
+            InertProductionSemanticDebugInstanceCustodyV1::from_canonical_bytes(
+                &truncated, &map_bytes,
+            ),
             Err(ProductionSemanticDebugInstanceCustodyErrorV1::InvalidLength)
-        );
+        ));
     }
 }
