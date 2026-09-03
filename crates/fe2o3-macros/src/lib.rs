@@ -364,7 +364,7 @@ const MAX_TYPED_KERNEL_SYMBOL_STEM_BYTES: usize = 128;
 const MAX_WORKGROUP_THREADS_V1: u64 = 1_024;
 const MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1: u16 = 64;
 const GENERAL_TYPED_DEFAULT_BLOCK_V1: [u32; 3] = [256, 1, 1];
-const GENERAL_TYPED_WAVE64_BLOCK_V1: [u32; 3] = [64, 1, 1];
+const GENERAL_TYPED_MAX_BLOCK_THREADS_V1: u32 = 256;
 const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
 const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
 const GENERAL_TYPED_SLICE_SIZE_V1: u64 = 16;
@@ -2802,6 +2802,9 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         [segment] if segment.ident == "DeviceGlobalMutPtr" => {
             (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
         }
+        [segment] if is_unsupported_general_typed_device_pointer_v1(&segment.ident) => {
+            return Err(());
+        }
         [namespace, segment]
             if namespace.ident == "fe2o3_device"
                 && matches!(namespace.arguments, PathArguments::None)
@@ -2822,6 +2825,13 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
                 && segment.ident == "DeviceGlobalMutPtr" =>
         {
             (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
+        }
+        [namespace, segment]
+            if namespace.ident == "fe2o3_device"
+                && matches!(namespace.arguments, PathArguments::None)
+                && is_unsupported_general_typed_device_pointer_v1(&segment.ident) =>
+        {
+            return Err(());
         }
         _ => return Ok(GeneralTypedArgumentKindV1::CompilerLaidOutByValue),
     };
@@ -2873,6 +2883,18 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
             Ok(GeneralTypedArgumentKindV1::GlobalMutPointer(scalar))
         }
     }
+}
+
+fn is_unsupported_general_typed_device_pointer_v1(identifier: &syn::Ident) -> bool {
+    matches!(
+        identifier.to_string().as_str(),
+        "DeviceGlobalConstPtr"
+            | "DeviceConstantPtr"
+            | "DeviceWorkgroupConstPtr"
+            | "DeviceWorkgroupMutPtr"
+            | "DevicePrivateConstPtr"
+            | "DevicePrivateMutPtr"
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3410,10 +3432,14 @@ fn exact_general_typed_block_v1(
             "general typed V1 explicit launch requires identical required and max dimensions",
         ));
     }
-    if required != GENERAL_TYPED_DEFAULT_BLOCK_V1 && required != GENERAL_TYPED_WAVE64_BLOCK_V1 {
+    if required[0] == 0
+        || required[0] > GENERAL_TYPED_MAX_BLOCK_THREADS_V1
+        || required[1] != 1
+        || required[2] != 1
+    {
         return Err(syn::Error::new_spanned(
             span,
-            "general typed V1 supports only exact 64x1x1 or 256x1x1 launch dimensions",
+            "general typed V1 requires exact [N, 1, 1] launch dimensions with N in 1..=256",
         ));
     }
     Ok(required)
@@ -6415,13 +6441,20 @@ mod tests {
     }
 
     #[test]
-    fn required_only_exact_launches_preserve_wg64_and_wg256_compatibility() {
+    fn required_only_exact_launches_admit_bounded_1d_extents_and_preserve_compatibility() {
         let input: ItemFn = parse_quote! {
             pub fn general(input: &[u16], output: DisjointSlice<f32>) {
                 let _ = (input, output);
             }
         };
-        for dimensions in [[64_u32, 1, 1], [256_u32, 1, 1]] {
+        for dimensions in [
+            [1_u32, 1, 1],
+            [3, 1, 1],
+            [64, 1, 1],
+            [65, 1, 1],
+            [255, 1, 1],
+            [256, 1, 1],
+        ] {
             let x = dimensions[0];
             let options = parse_kernel_options(
                 syn::parse_str::<syn::MetaList>(&format!("launch(required = [{x}, 1, 1])"))
@@ -6825,6 +6858,23 @@ mod tests {
                 input.sig.ident,
             );
         }
+        for pointer in [
+            "DeviceGlobalConstPtr",
+            "DeviceConstantPtr",
+            "DeviceWorkgroupConstPtr",
+            "DeviceWorkgroupMutPtr",
+            "DevicePrivateConstPtr",
+            "DevicePrivateMutPtr",
+        ] {
+            let input: ItemFn = syn::parse_str(&format!(
+                "pub fn wrong_address_space(value: {pointer}<u32>) {{ let _ = value; }}"
+            ))
+            .unwrap();
+            assert!(
+                model_general_typed_signature_v1(&input, &options, [0x71; 32]).is_err(),
+                "unexpectedly accepted {pointer}",
+            );
+        }
     }
 
     #[test]
@@ -6913,7 +6963,7 @@ mod tests {
             .unwrap(),
             parse_kernel_options(quote!(
                 typed,
-                launch(required = [128, 1, 1], max = [128, 1, 1])
+                launch(required = [257, 1, 1], max = [257, 1, 1])
             ))
             .unwrap(),
             parse_kernel_options(quote!(

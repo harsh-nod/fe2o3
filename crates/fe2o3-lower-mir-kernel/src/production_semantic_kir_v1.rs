@@ -4309,11 +4309,12 @@ fn neutral_workgroup_recipe_contracts_v1(
                 );
             }
         };
+        let extent_is_supported = elements != 0
+            && elements <= 256
+            && (kind != NeutralWorkgroupRecipeKindV1::Reduction || elements.is_power_of_two());
         if *producer_dynamic_lds != *dynamic_lds
             || *producer_storage != *element_storage
-            || elements == 0
-            || elements > 256
-            || !elements.is_power_of_two()
+            || !extent_is_supported
         {
             return Err(
                 ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch {
@@ -5412,9 +5413,7 @@ fn replay_neutral_workgroup_scan_recipe_v1(
         effect_ordinal,
     )?;
     effect_ordinal += 1;
-    let expected_effects = contract
-        .elements
-        .ilog2()
+    let expected_effects = workgroup_scan_rounds_v1(contract.elements)
         .checked_mul(5)
         .and_then(|effects| effects.checked_add(4))
         .ok_or_else(|| mismatch(effect_ordinal))?;
@@ -21351,9 +21350,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "target-neutral workgroup collective input differs from its LDS element type",
             ));
         }
-        let size =
-            validate_workgroup_reduction_geometry_v1(self.required_workgroup, Some(elements), None)
-                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let size = match kind {
+            NeutralWorkgroupRecipeKindV1::Reduction => validate_workgroup_reduction_geometry_v1(
+                self.required_workgroup,
+                Some(elements),
+                None,
+            ),
+            NeutralWorkgroupRecipeKindV1::InclusiveScan
+            | NeutralWorkgroupRecipeKindV1::ExclusiveScan => {
+                validate_workgroup_scan_geometry_v1(self.required_workgroup, Some(elements))
+            }
+        }
+        .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
         let result = match kind {
             NeutralWorkgroupRecipeKindV1::Reduction => {
                 self.emit_workgroup_reduce_sum_tree(operations, base, value, scalar.clone(), size)?
@@ -23778,6 +23786,32 @@ fn validate_workgroup_reduction_geometry_v1(
         );
     }
     Ok(size)
+}
+
+fn validate_workgroup_scan_geometry_v1(
+    required_workgroup: Option<[u32; 3]>,
+    compiler_lds_slots: Option<u32>,
+) -> Result<u32, &'static str> {
+    let Some([size, y, z]) = required_workgroup else {
+        return Err("workgroup scan requires an exact source launch contract");
+    };
+    if y != 1 || z != 1 || size == 0 || size > 256 {
+        return Err("workgroup scan requires a one-dimensional workgroup no larger than 256");
+    }
+    if compiler_lds_slots != Some(size) {
+        return Err(
+            "workgroup scan scratch slot count differs from the exact source launch contract",
+        );
+    }
+    Ok(size)
+}
+
+const fn workgroup_scan_rounds_v1(size: u32) -> u32 {
+    if size <= 1 {
+        0
+    } else {
+        u32::BITS - (size - 1).leading_zeros()
+    }
 }
 
 const fn semantic_operand_type(operand: &SemanticOperandV1) -> SemanticTypeIdV1 {
@@ -29800,6 +29834,28 @@ mod resource_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn workgroup_scan_geometry_accepts_every_bounded_1d_extent_and_rejects_substitution() {
+        for size in [1_u32, 3, 65, 255, 256] {
+            assert_eq!(
+                validate_workgroup_scan_geometry_v1(Some([size, 1, 1]), Some(size)),
+                Ok(size)
+            );
+        }
+        for dimensions in [[0, 1, 1], [257, 1, 1], [3, 2, 1], [3, 1, 2]] {
+            assert!(
+                validate_workgroup_scan_geometry_v1(Some(dimensions), Some(dimensions[0])).is_err()
+            );
+        }
+        assert!(validate_workgroup_scan_geometry_v1(None, Some(3)).is_err());
+        assert!(validate_workgroup_scan_geometry_v1(Some([3, 1, 1]), Some(4)).is_err());
+        assert!(validate_workgroup_reduction_geometry_v1(Some([3, 1, 1]), Some(3), None).is_err());
+        assert_eq!(
+            [1_u32, 3, 65, 255, 256].map(workgroup_scan_rounds_v1),
+            [0, 2, 7, 8, 8]
+        );
     }
 
     struct NeutralRecipeReplayFixtureV1 {

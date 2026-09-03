@@ -298,7 +298,9 @@ impl Verify for HierarchyIdOp {
 /// The operation does not authorize a launch. It records the compiler's
 /// retained global domain and physical workgroup shape independently from any
 /// SSA use of an invocation coordinate. A zero global extent denotes a dynamic
-/// axis; workgroup extents and subgroup width are static and nonzero. At most
+/// axis; workgroup extents and subgroup width are static and nonzero. The final
+/// subgroup in a workgroup may be partial; its active lanes are derived from
+/// the exact workgroup volume and subgroup width. At most
 /// `FullPhysicalWorkgroups` records authenticated launch provenance separately
 /// from those logical extents; absence of that attribute is conservatively
 /// `PotentiallyPartial`. At most one operation may appear in a kernel entry;
@@ -455,15 +457,10 @@ impl Verify for ExecutionLayoutOp {
         let workgroup_size = workgroup_extents
             .into_iter()
             .try_fold(1_u64, u64::checked_mul);
-        if workgroup_extents.contains(&0)
-            || workgroup_size.is_none()
-            || subgroup_size.size() == 0
-            || workgroup_size.is_some_and(|size| subgroup_size.size() > size)
-            || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size.size()))
-        {
+        if workgroup_extents.contains(&0) || workgroup_size.is_none() || subgroup_size.size() == 0 {
             return verify_err!(
                 self.loc(context),
-                "gpu.execution_layout requires nonzero workgroup axes and an integral number of subgroups"
+                "gpu.execution_layout requires nonzero workgroup axes, finite volume, and nonzero subgroup width"
             );
         }
         if domain == ExecutionDomainAttr::FullPhysicalWorkgroups

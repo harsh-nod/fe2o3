@@ -224,7 +224,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "launch maximum dimensions are duplicated",
                 "general typed V1 explicit launch requires required dimensions",
                 "general typed V1 explicit launch requires identical required and max dimensions",
-                "general typed V1 supports only exact 64x1x1 or 256x1x1 launch dimensions",
+                "general typed V1 requires exact [N, 1, 1] launch dimensions with N in 1..=256",
                 "the typed vecadd V2 profile requires an exact 256x1x1 launch contract",
             ],
         ),

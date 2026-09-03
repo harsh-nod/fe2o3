@@ -4,8 +4,9 @@
 //! while target operations remain compiler-recognized hooks that panic closed
 //! on a host or unsupported compilation path. The target-neutral workgroup
 //! profile admits reduction plus inclusive and exclusive scan sum over `u32`,
-//! `i32`, and `f32` in one-dimensional, power-of-two workgroups no larger than
-//! 256 invocations. Its compiler expansion uses shared LDS state and a uniform
+//! `i32`, and `f32` in one-dimensional workgroups no larger than 256
+//! invocations. Reduction retains its power-of-two restriction; scan supports
+//! every nonzero extent in that range. Compiler expansion uses shared LDS state and a uniform
 //! acquire-release barrier phase before and after every tree update. gfx942
 //! retains its additional wave64-only operations as a separate compatibility
 //! contract.
@@ -632,11 +633,13 @@ impl WorkgroupCollectives {
 
     /// Returns the inclusive prefix sum in increasing linear work-item rank.
     ///
-    /// The geometry, LDS ownership, uniformity, type, target-binding, and
-    /// barrier requirements of [`Self::reduce_sum_portable`] apply. Integer
-    /// addition wraps at 32 bits. `f32` uses the authenticated target's strict
-    /// scalar-add policy and the fixed Hillis-Steele association recorded by
-    /// the compiler; unsupported numerical modes fail before execution.
+    /// The source launch must require an exact `[N, 1, 1]` workgroup for any
+    /// `N` in `1..=256`, including partial waves and non-power-of-two extents.
+    /// LDS ownership, uniformity, type, target-binding, and barrier requirements
+    /// otherwise match [`Self::reduce_sum_portable`]. Integer addition wraps at
+    /// 32 bits. `f32` uses the authenticated target's strict scalar-add policy
+    /// and the fixed Hillis-Steele association recorded by the compiler;
+    /// unsupported numerical modes fail before execution.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_inclusive_scan_sum_v1"]
     pub fn inclusive_scan_sum<T: WorkgroupCollectiveElement>(

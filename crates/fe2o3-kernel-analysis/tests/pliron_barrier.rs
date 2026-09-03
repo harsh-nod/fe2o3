@@ -123,6 +123,29 @@ fn unconditional_barrier_is_convergent_for_a_static_launch() {
 }
 
 #[test]
+fn unconditional_workgroup_barrier_accepts_partial_final_subgroups() {
+    for workgroup_size in [3_u64, 65, 255] {
+        let context = &mut setup();
+        let function = function_with_domain(
+            context,
+            "partial_final_subgroup_barrier",
+            workgroup_size,
+            workgroup_size,
+            64,
+        );
+        let entry = function.get_entry_block(context);
+        let invocation = InvocationIndexOp::new(context, 0, workgroup_size);
+        let sync = barrier(context);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &invocation);
+        append(context, entry, &sync);
+        append(context, entry, &ret);
+        let report = run_pliron_barrier_convergence_check_v1(context, &function);
+        assert!(report.is_clean(), "{workgroup_size}: {report:?}");
+    }
+}
+
+#[test]
 fn invocation_varying_branch_reports_exact_divergent_witnesses() {
     let context = &mut setup();
     let function = function(context, "divergent_barrier");

@@ -264,6 +264,29 @@ fn d1_d3_linearization_and_tail_masks_are_canonical() {
 }
 
 #[test]
+fn exact_odd_workgroups_encode_partial_final_wave_masks() {
+    for (size, waves, final_mask) in [
+        (3_u32, 1_u64, 0b111_u64),
+        (65, 2, 1),
+        (255, 4, (1_u64 << 63) - 1),
+    ] {
+        let geometry = LaunchGeometryV1::new([1, 1, 1], [size, 1, 1], WaveWidthV1::Wave64).unwrap();
+        assert_eq!(geometry.waves_per_workgroup(), waves);
+        for wave in 0..waves.saturating_sub(1) {
+            assert_eq!(
+                geometry.valid_lane_mask([0, 0, 0], wave as u32),
+                Some(u64::MAX)
+            );
+        }
+        assert_eq!(
+            geometry.valid_lane_mask([0, 0, 0], (waves - 1) as u32),
+            Some(final_mask)
+        );
+        assert_eq!(geometry.valid_lane_mask([0, 0, 0], waves as u32), None);
+    }
+}
+
+#[test]
 fn exact_logical_grid_controls_d2_d3_multiwave_tail_masks() {
     let d2 =
         LaunchGeometryV1::new_exact([10, 9, 1], [2, 2, 1], [8, 8, 1], WaveWidthV1::Wave32).unwrap();

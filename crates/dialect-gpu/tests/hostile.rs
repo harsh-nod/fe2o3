@@ -229,8 +229,11 @@ fn execution_layout_distinguishes_dynamic_global_axes_from_physical_workgroups()
 
     let zero_workgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [0, 1, 1], 1);
     assert!(verify_op(&zero_workgroup, &context).is_err());
-    let partial_subgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [8, 8, 1], 48);
-    assert!(verify_op(&partial_subgroup, &context).is_err());
+    let partial_final_subgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [8, 8, 1], 48);
+    verify_op(&partial_final_subgroup, &context)
+        .expect("an exact workgroup may end in a partial physical subgroup");
+    let zero_subgroup = ExecutionLayoutOp::new(&mut context, 9, [64, 1, 1], [8, 8, 1], 0);
+    assert!(verify_op(&zero_subgroup, &context).is_err());
 }
 
 #[test]

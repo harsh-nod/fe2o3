@@ -63,6 +63,12 @@ fn admitted(module: Module) -> AdmittedSimulationModuleV1 {
         .expect("admitted fixture")
 }
 
+fn admitted_v10(module: Module) -> AdmittedSimulationModuleV1 {
+    let canonical = VerifiedCanonicalKernelIrV10::from_module(module).expect("verified fixture");
+    AdmittedSimulationModuleV1::admit_v10(canonical, SimulationLimitsV1::default())
+        .expect("admitted exact V10 fixture")
+}
+
 fn dynamic_domain_1d() -> LaunchDomain {
     LaunchDomain::D1 {
         x: LaunchExtent::Dynamic,
@@ -3053,8 +3059,7 @@ fn lds_exchange_module(include_barrier: bool) -> Module {
     module
 }
 
-fn workgroup_scan_module(scalar: ScalarType, exclusive: bool) -> Module {
-    const LANES: u32 = 8;
+fn workgroup_scan_module(scalar: ScalarType, exclusive: bool, lanes: u32) -> Module {
     let scalar_ty = Type::Scalar(scalar);
     let global_pointer = Type::pointer(
         scalar_ty.clone(),
@@ -3082,7 +3087,7 @@ fn workgroup_scan_module(scalar: ScalarType, exclusive: bool) -> Module {
         workgroup_pointer.clone(),
         OperationKind::WorkgroupMemory(WorkgroupMemory {
             element: scalar_ty.clone(),
-            extent: WorkgroupMemoryExtent::Static(LANES),
+            extent: WorkgroupMemoryExtent::Static(lanes),
             alignment: 4,
         }),
     );
@@ -3138,7 +3143,7 @@ fn workgroup_scan_module(scalar: ScalarType, exclusive: bool) -> Module {
     ));
 
     let mut offset = 1_u32;
-    while offset < LANES {
+    while offset < lanes {
         let offset_value = push!(
             Type::INDEX,
             OperationKind::Constant(Constant::Index(u64::from(offset))),
@@ -3365,7 +3370,7 @@ fn workgroup_scan_module(scalar: ScalarType, exclusive: bool) -> Module {
     );
     function.required_capabilities = capabilities.clone();
     let mut kernel = Kernel::new("workgroup_scan", "workgroup_scan_impl", dynamic_domain_1d());
-    kernel.workgroup_size = Some(WorkgroupSize::new(LANES, 1, 1));
+    kernel.workgroup_size = Some(WorkgroupSize::new(lanes, 1, 1));
     kernel.required_capabilities = capabilities.clone();
     let mut module = Module::new("sim-tests::workgroup-scan");
     module.required_capabilities = capabilities;
@@ -3384,95 +3389,100 @@ fn scan_buffer_v1(scalar: ScalarType, bits: &[u32]) -> BufferArgumentV1 {
 }
 
 fn scan_request_v1(scalar: ScalarType, bits: &[u32]) -> SimulationRequestV1 {
+    let lanes = u32::try_from(bits.len()).unwrap();
     SimulationRequestV1::new(
         "workgroup_scan",
-        [8, 1, 1],
-        [8, 1, 1],
+        [u64::from(lanes), 1, 1],
+        [lanes, 1, 1],
         vec![
             SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, bits)),
-            SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, &[0; 8])),
+            SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, &vec![0; bits.len()])),
         ],
     )
 }
 
+fn scan_input_bits_v1(scalar: ScalarType, lanes: u32) -> Vec<u32> {
+    match scalar {
+        ScalarType::U32 => (1..=lanes).collect(),
+        ScalarType::I32 => [-4_i32, 7, -2, 9, -3, 1, 6, -5]
+            .into_iter()
+            .cycle()
+            .take(lanes as usize)
+            .map(|value| value as u32)
+            .collect(),
+        ScalarType::F32 => vec![1.0_f32.to_bits(); lanes as usize],
+        _ => unreachable!("scan test uses the admitted scalar matrix"),
+    }
+}
+
+fn expected_scan_bits_v1(scalar: ScalarType, input: &[u32], exclusive: bool) -> Vec<u32> {
+    let mut expected = Vec::with_capacity(input.len());
+    let mut running = 0_u32;
+    for (rank, bits) in input.iter().copied().enumerate() {
+        if exclusive {
+            expected.push(running);
+        }
+        running = match scalar {
+            ScalarType::U32 => running.wrapping_add(bits),
+            ScalarType::I32 => (running as i32).wrapping_add(bits as i32) as u32,
+            ScalarType::F32 => ((rank + 1) as f32).to_bits(),
+            _ => unreachable!("scan test uses the admitted scalar matrix"),
+        };
+        if !exclusive {
+            expected.push(running);
+        }
+    }
+    expected
+}
+
 #[test]
 fn workgroup_scans_are_exact_under_canonical_seeded_and_replay_schedules() {
-    for scalar in [ScalarType::U32, ScalarType::I32, ScalarType::F32] {
-        let input = match scalar {
-            ScalarType::U32 => (1_u32..=8).collect::<Vec<_>>(),
-            ScalarType::I32 => [-4_i32, 7, -2, 9, -3, 1, 6, -5]
-                .map(|value| value as u32)
-                .to_vec(),
-            ScalarType::F32 => [1.0_f32; 8].map(f32::to_bits).to_vec(),
-            _ => unreachable!(),
-        };
-        for exclusive in [false, true] {
-            let module = admitted(workgroup_scan_module(scalar, exclusive));
-            let request = scan_request_v1(scalar, &input);
-            let canonical = module
-                .simulate(
-                    &request,
-                    SimulationTargetV1::amdgpu_64(),
-                    SimulationLimitsV1::default(),
-                )
-                .unwrap();
-            let seeded = module
-                .simulate_scheduled(
-                    &request,
-                    SimulationTargetV1::amdgpu_64(),
-                    SimulationLimitsV1::default(),
-                    SimulationScheduleRequestV1::RecordSeeded {
-                        seed: 0x5ca1,
-                        max_decisions: 10_000,
-                    },
-                )
-                .unwrap();
-            let replayed = module
-                .simulate_scheduled(
-                    &request,
-                    SimulationTargetV1::amdgpu_64(),
-                    SimulationLimitsV1::default(),
-                    SimulationScheduleRequestV1::Replay(seeded.schedule_record().unwrap()),
-                )
-                .unwrap();
-            assert_eq!(canonical.arguments(), seeded.arguments());
-            assert_eq!(seeded.arguments(), replayed.arguments());
+    for lanes in [3_u32, 65, 255] {
+        for scalar in [ScalarType::U32, ScalarType::I32, ScalarType::F32] {
+            let input = scan_input_bits_v1(scalar, lanes);
+            for exclusive in [false, true] {
+                let module = admitted_v10(workgroup_scan_module(scalar, exclusive, lanes));
+                let request = scan_request_v1(scalar, &input);
+                let canonical = module
+                    .simulate(
+                        &request,
+                        SimulationTargetV1::amdgpu_64(),
+                        SimulationLimitsV1::default(),
+                    )
+                    .unwrap();
+                let seeded = module
+                    .simulate_scheduled(
+                        &request,
+                        SimulationTargetV1::amdgpu_64(),
+                        SimulationLimitsV1::default(),
+                        SimulationScheduleRequestV1::RecordSeeded {
+                            seed: 0x5ca1,
+                            max_decisions: 1_000_000,
+                        },
+                    )
+                    .unwrap();
+                let replayed = module
+                    .simulate_scheduled(
+                        &request,
+                        SimulationTargetV1::amdgpu_64(),
+                        SimulationLimitsV1::default(),
+                        SimulationScheduleRequestV1::Replay(seeded.schedule_record().unwrap()),
+                    )
+                    .unwrap();
+                assert_eq!(canonical.arguments(), seeded.arguments());
+                assert_eq!(seeded.arguments(), replayed.arguments());
 
-            let expected = match scalar {
-                ScalarType::U32 => {
-                    let inclusive = [1_u32, 3, 6, 10, 15, 21, 28, 36];
-                    if exclusive {
-                        [0_u32, 1, 3, 6, 10, 15, 21, 28]
-                    } else {
-                        inclusive
-                    }
-                }
-                ScalarType::I32 => {
-                    let inclusive = [-4_i32, 3, 1, 10, 7, 8, 14, 9].map(|value| value as u32);
-                    if exclusive {
-                        [0_i32, -4, 3, 1, 10, 7, 8, 14].map(|value| value as u32)
-                    } else {
-                        inclusive
-                    }
-                }
-                ScalarType::F32 => {
-                    if exclusive {
-                        [0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0].map(f32::to_bits)
-                    } else {
-                        [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0].map(f32::to_bits)
-                    }
-                }
-                _ => unreachable!(),
-            };
-            assert_eq!(words(canonical.buffer(1).unwrap().bytes()), expected);
+                let expected = expected_scan_bits_v1(scalar, &input, exclusive);
+                assert_eq!(words(canonical.buffer(1).unwrap().bytes()), expected);
+            }
         }
     }
 }
 
 #[test]
 fn workgroup_scan_debug_records_retain_lane_lds_barrier_and_schedule_evidence() {
-    let module = admitted(workgroup_scan_module(ScalarType::U32, false));
-    let request = scan_request_v1(ScalarType::U32, &(1_u32..=8).collect::<Vec<_>>());
+    let module = admitted_v10(workgroup_scan_module(ScalarType::U32, false, 65));
+    let request = scan_request_v1(ScalarType::U32, &(1_u32..=65).collect::<Vec<_>>());
     let mut debug = DebugCollector::default();
     let execution = module
         .simulate_debugged_scheduled_with_sink(
@@ -3481,7 +3491,7 @@ fn workgroup_scan_debug_records_retain_lane_lds_barrier_and_schedule_evidence() 
             SimulationLimitsV1::default(),
             SimulationScheduleRequestV1::RecordSeeded {
                 seed: 0xd38,
-                max_decisions: 10_000,
+                max_decisions: 1_000_000,
             },
             SimulationDebugCaptureLimitsV1::new(64, 4_096, 64, 65_536).unwrap(),
             &mut debug,
@@ -3501,12 +3511,17 @@ fn workgroup_scan_debug_records_retain_lane_lds_barrier_and_schedule_evidence() 
             record.kind,
             SimulationDebugRecordKindV1::WorkgroupBarrier {
                 action: fe2o3_kir_sim::SimulationDebugBarrierActionV1::Release,
-                participants: 8,
+                participants: 65,
                 ..
             }
         )
     }));
-    assert!(debug.0.iter().any(|record| record.invocation.local[0] == 7));
+    assert!(
+        debug
+            .0
+            .iter()
+            .any(|record| record.invocation.local[0] == 64)
+    );
     assert!(debug.0.iter().all(|record| {
         record.schedule.identity
             == SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1
@@ -3516,7 +3531,7 @@ fn workgroup_scan_debug_records_retain_lane_lds_barrier_and_schedule_evidence() 
 
 #[test]
 fn workgroup_scan_rejects_workgroup_and_replay_input_substitution() {
-    let module = admitted(workgroup_scan_module(ScalarType::U32, false));
+    let module = admitted_v10(workgroup_scan_module(ScalarType::U32, false, 8));
     let request = scan_request_v1(ScalarType::U32, &(1_u32..=8).collect::<Vec<_>>());
     let wrong_workgroup = SimulationRequestV1::new(
         "workgroup_scan",
