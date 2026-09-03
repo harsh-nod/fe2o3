@@ -2522,6 +2522,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::MathF32(_)
+        | ProductionTerminalExpansionV1::RustcFabsF32
         | ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
@@ -2758,7 +2759,7 @@ fn write_only_disjoint_operation_v1<'tcx>(
     )
 }
 
-const fn semantic_f32_math_function_v1(
+fn semantic_f32_math_function_v1(
     function: fe2o3_kernel_ir::F32MathFunction,
 ) -> SemanticF32MathFunctionV1 {
     use fe2o3_kernel_ir::F32MathFunction as Kernel;
