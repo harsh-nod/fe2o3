@@ -890,6 +890,7 @@ pub struct AgentKfdProfilerCursorV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "response", rename_all = "snake_case", deny_unknown_fields)]
+#[allow(clippy::large_enum_variant)]
 pub enum AgentKfdProfilerResponseBodyV1 {
     Capabilities {
         capabilities: Vec<AgentKfdProfilerCapabilityV1>,
@@ -981,13 +982,13 @@ fn answer_agent_operation_v1(
 ) -> Result<AgentKfdProfilerResponseBodyV1, AgentKfdProfilerErrorV1> {
     let body = match request.operation {
         AgentKfdProfilerOperationV1::DiscoverCapabilities => {
-            reject_selectors(&request, false, false)?;
+            reject_selectors(request, false, false)?;
             AgentKfdProfilerResponseBodyV1::Capabilities {
                 capabilities: capabilities(capture.host_content_mode),
             }
         }
         AgentKfdProfilerOperationV1::InspectCapture => {
-            reject_selectors(&request, false, false)?;
+            reject_selectors(request, false, false)?;
             AgentKfdProfilerResponseBodyV1::Capture {
                 capture_identity,
                 device: capture.device.clone(),
@@ -1401,12 +1402,14 @@ mod tests {
             let teardown = capture
                 .events
                 .iter()
-                .position(|event| match (&event.event, parent) {
-                    (KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }, 0)
-                    | (KfdRuntimeProfileEventKindV1::StreamDestroyed { .. }, 1)
-                    | (KfdRuntimeProfileEventKindV1::AllocationReleased { .. }, 2)
-                    | (KfdRuntimeProfileEventKindV1::ModuleUnloaded { .. }, 3) => true,
-                    _ => false,
+                .position(|event| {
+                    matches!(
+                        (&event.event, parent),
+                        (KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }, 0)
+                            | (KfdRuntimeProfileEventKindV1::StreamDestroyed { .. }, 1)
+                            | (KfdRuntimeProfileEventKindV1::AllocationReleased { .. }, 2)
+                            | (KfdRuntimeProfileEventKindV1::ModuleUnloaded { .. }, 3)
+                    )
                 })
                 .unwrap();
             let teardown = capture.events.remove(teardown);
