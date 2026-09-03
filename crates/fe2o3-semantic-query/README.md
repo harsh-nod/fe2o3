@@ -461,28 +461,54 @@ wire inputs, bounds, rejection policy, and remaining T3 limitations.
 
 ## Additive Variant V3 production KIR bridge
 
-The library-only `ProfilerVariantTreatmentInputV3` extends Variant V2 with an
-optional already-admitted production V7-to-V8 structural bridge, its exact
-Source/ISA catalog, and the corresponding production Characteristic
-projection. The comparator recomputes V2, requires every Bundle V4 dispatch KIR
-claim to match the bridge's exact V7 identity, and resolves each positive PC or
-decoded-ATT occurrence through the bridge's exact function/block/operation and
-catalog queries. It accepts one unique catalog record only and binds the V7,
+`ProfilerVariantTreatmentInputV3` extends Variant V2 with an optional
+already-admitted production V7-to-V8 structural bridge, its exact Source/ISA
+catalog, and the corresponding production Characteristic projection. The
+comparator recomputes V2, requires every Bundle V4 dispatch KIR claim to match
+the bridge's exact V7 identity, and resolves each positive PC or decoded-ATT
+occurrence through the bridge's exact function/block/operation and catalog
+queries. It accepts one unique catalog record only and binds the V7,
 neutral/target V8, source-map, artifact, structural, catalog, correlation, and
 semantic-map identities in the result.
 
 Complete Characteristic input is re-admitted against producer evidence.
 Partial input can contribute only a uniquely catalog-matched positive
-structural occurrence and remains typed incomplete. Structural changes are
-positive co-observations, not causality, schedule execution, superiority, or
-complete add/remove deltas. The API grants no execution or collection
-authority.
+structural occurrence and remains typed incomplete. `compare_variants`
+therefore remains positive co-observation only.
 
-There is intentionally no `variant-v3-jsonl` mode yet. Canonical bridge and
-catalog bytes decode to inert claims and cannot be promoted to admitted
-production evidence by a read-only service. See
-[`docs/profiler-variant-v3.md`](../../docs/profiler-variant-v3.md) for the trust
-boundary and exact behavior.
+The additive `ProfilerCompleteStructuralComparisonV1` contract can report an
+added or removed classified target-KIR occurrence without consulting profiler
+absence. It requires two fully admitted archive owners, internally verifies
+the complete catalog projections and complete Characteristic scans, and
+requires the exact content-bound workload and archive-derived stable
+source/MIR site universe to match. Each side's exact Source Map V2 identity is
+retained but may differ because it also binds that side's canonical KIR. It
+compares a multiset keyed by structural kind plus the complete stable source/MIR
+site set. A count change retains every exact duplicate occurrence identity on
+both sides instead of pretending to identify continuity between
+indistinguishable duplicates. If either catalog/scan is incomplete, a
+classified occurrence has no source/MIR key, the domains differ, or the result
+would exceed its bound, it returns no partial delta and a stable typed
+unavailable code. Schedule execution and causality remain typed unavailable.
+
+`fe2o3-profiler-service variant-v3-jsonl` provides the separate bounded
+fresh-process route. An `open_structural_archive` request supplies canonical
+lowercase hex plus the expected content identity of one
+`ProductionProfilerKirArchiveV1`. The service verifies both, reruns the
+complete Worker V3 finalizer replay, and retains at most two fully admitted
+structural owners. Typed producer gaps are returned without retaining a query
+owner. `compare_variants` cites those exact archive identities while embedding
+the unchanged V2 treatment wire. `compare_complete_structural_catalogs` uses
+the same treatment and archive references, recomputes Variant V3, and exposes
+the complete-catalog multiset contract. Requests are revisioned and unique;
+every response is content-identified and independently verifiable.
+
+The archive makes finalizer-derived structural evidence restartable. It does
+not authenticate external provenance, prove live capture, or grant execution,
+attach, scheduling, collection, decoder, publication, load, launch, dispatch,
+or runtime authority. See
+[`docs/profiler-variant-v3.md`](../../docs/profiler-variant-v3.md) and
+[`docs/production-profiler-kir-archive-v1.md`](../../docs/production-profiler-kir-archive-v1.md).
 
 ## Distributed-overlap extension
 

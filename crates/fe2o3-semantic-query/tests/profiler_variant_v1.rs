@@ -1782,6 +1782,23 @@ fn run_variant_v2_service(requests: &[JsonValue]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn run_variant_v3_service(requests: &[JsonValue]) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-service"))
+        .arg("variant-v3-jsonl")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for request in requests {
+        serde_json::to_writer(&mut input, request).unwrap();
+        input.write_all(b"\n").unwrap();
+    }
+    drop(input);
+    child.wait_with_output().unwrap()
+}
+
 #[test]
 fn variant_v2_preserves_v1_and_refuses_causal_or_absence_upgrades() {
     let workload = b"variant-v2-workload";
@@ -1963,6 +1980,150 @@ fn additive_variant_v2_jsonl_is_deterministic_strict_and_v1_independent() {
         comparison["causal_attribution"],
         "positive_co_observations_do_not_prove_causation"
     );
+}
+
+#[test]
+fn additive_variant_v3_jsonl_replays_v2_and_withholds_complete_deltas_without_owners() {
+    let workload = b"variant-v3-service-workload";
+    let source = dispatch_source(140, 260);
+    let baseline = treatment(
+        workload,
+        &source,
+        hsaco(7, 0),
+        1,
+        b"schedule-a",
+        b"isa-a",
+        None,
+    );
+    let candidate = treatment(
+        workload,
+        &source,
+        hsaco(8, 1),
+        2,
+        b"schedule-b",
+        b"isa-b",
+        None,
+    );
+    let treatment_v3 = |treatment: &Treatment| {
+        serde_json::json!({
+            "treatment_v2": treatment_json(treatment),
+            "structural_archive": null,
+        })
+    };
+    let requests = [
+        serde_json::json!({
+            "operation": "discover_capabilities",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 1,
+            "expected_revision": 0,
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 2,
+            "expected_revision": 1,
+            "baseline": treatment_v3(&baseline),
+            "candidate": treatment_v3(&candidate),
+        }),
+        serde_json::json!({
+            "operation": "compare_complete_structural_catalogs",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 3,
+            "expected_revision": 2,
+            "baseline": treatment_v3(&baseline),
+            "candidate": treatment_v3(&candidate),
+        }),
+        serde_json::json!({
+            "operation": "compare_complete_structural_catalogs",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 4,
+            "expected_revision": 3,
+            "baseline": {
+                "treatment_v2": treatment_json(&baseline),
+                "structural_archive": {
+                    "scheme": "domain_separated_sha256",
+                    "format_version": 1,
+                    "digest": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+                    "canonical_len": 1,
+                },
+            },
+            "candidate": treatment_v3(&candidate),
+        }),
+    ];
+    let first = run_variant_v3_service(&requests);
+    let second = run_variant_v3_service(&requests);
+    assert!(first.status.success(), "{:?}", first.stderr);
+    assert_eq!(first.stdout, second.stdout);
+    let responses = output_json_lines(&first.stdout);
+    assert_eq!(responses.len(), 4);
+    for line in first
+        .stdout
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        validate_agent_profiler_variant_response_line_v3(line).unwrap();
+    }
+    let comparison = &responses[1]["value"]["comparison"];
+    assert_eq!(comparison["schema_version"], 3);
+    assert_eq!(comparison["comparison_v2"]["schema_version"], 2);
+    assert!(
+        comparison["structural_bindings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        comparison["unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["kind"] == "baseline_production_structural_evidence_missing" })
+    );
+    assert!(
+        comparison["unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["kind"] == "candidate_production_structural_evidence_missing" })
+    );
+    let complete = &responses[2]["value"]["comparison"];
+    assert_eq!(
+        responses[2]["value"]["comparison_schema"],
+        "fe2o3-profiler-complete-structural-comparison-v1"
+    );
+    assert_eq!(complete["schema_version"], 1);
+    assert!(complete["comparison_domain"].is_null());
+    assert!(complete["added"].as_array().unwrap().is_empty());
+    assert!(complete["removed"].as_array().unwrap().is_empty());
+    assert!(
+        complete["absence_basis"]
+            .as_str()
+            .unwrap()
+            .contains("sampled_pc_and_partial_or_lossy_att_absence_excluded")
+    );
+    for (kind, code) in [
+        (
+            "baseline_complete_catalog_coverage",
+            "baseline_complete_catalog_coverage_unavailable",
+        ),
+        (
+            "candidate_complete_catalog_coverage",
+            "candidate_complete_catalog_coverage_unavailable",
+        ),
+        ("schedule_execution", "schedule_execution_unavailable"),
+        ("causal_attribution", "causal_attribution_unavailable"),
+    ] {
+        assert!(
+            complete["unavailable"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| fact["kind"] == kind && fact["reason_code"] == code)
+        );
+    }
+    assert_eq!(responses[3]["status"], "error");
+    assert_eq!(responses[3]["code"], "unknown_structural_archive");
+    assert_eq!(responses[3]["terminal"], false);
 }
 use std::io::Write;
 use std::process::{Command, Stdio};

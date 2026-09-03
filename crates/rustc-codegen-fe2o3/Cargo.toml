@@ -50,7 +50,10 @@ pliron.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-host.workspace = true
+fe2o3-kir-sim-cli.workspace = true
+fe2o3-kir-sim.workspace = true
 fe2o3-runtime.workspace = true
+fe2o3-sim-differential.workspace = true
 fe2o3-sim-runtime.workspace = true
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
 rmpv = { version = "1.3.1", default-features = false }
@@ -75,6 +78,9 @@ name = "production_general_matrix_driver_v1"
 
 [[test]]
 name = "production_ranked_bounds_driver_v1"
+
+[[test]]
+name = "production_semantic_conformance_v3"
 
 [[test]]
 name = "reference_binding_v1"

@@ -3458,6 +3458,16 @@ fn write_exploration_input<W: Write + ?Sized>(
             write_lower_hex(writer, &subject_sha256, false)?;
             writer.write_all(b"\",\"kir_sha256\":\"")?;
         }
+        PersistedSimulationScheduleArtifactV1::SimulationBundleV5 {
+            bundle_sha256,
+            subject_sha256,
+        } => {
+            writer.write_all(b"{\"kind\":\"simulation_bundle_v5\",\"bundle_sha256\":\"")?;
+            write_lower_hex(writer, &bundle_sha256, false)?;
+            writer.write_all(b"\",\"subject_sha256\":\"")?;
+            write_lower_hex(writer, &subject_sha256, false)?;
+            writer.write_all(b"\",\"kir_sha256\":\"")?;
+        }
     }
     write_lower_hex(writer, &binding.kir_sha256(), false)?;
     write!(

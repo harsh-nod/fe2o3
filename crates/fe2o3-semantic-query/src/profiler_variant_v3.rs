@@ -504,7 +504,7 @@ fn admit_treatment_structural_evidence(
     Ok(output)
 }
 
-fn validate_production_pair(
+pub(crate) fn validate_production_pair(
     evidence: ProfilerVariantProductionKirEvidenceV3<'_>,
 ) -> Result<(), ProfilerVariantErrorV3> {
     let characteristic = evidence.characteristic;

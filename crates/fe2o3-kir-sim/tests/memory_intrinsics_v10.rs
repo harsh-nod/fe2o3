@@ -1022,35 +1022,51 @@ fn v10_copy_schedule_records_round_trip_with_explicit_v10_custody() {
             SimulationScheduleRequestV1::RecordCanonical { max_decisions: 16 },
         )
         .unwrap();
-    let binding = PersistedSimulationScheduleBindingV1::new(
-        PersistedSimulationScheduleArtifactV1::CanonicalKirV10,
-        *admitted.identity(),
-        [0x31; 32],
-        101,
-        target,
-        limits,
-    );
-    let encoded = PersistedSimulationScheduleDocumentV1::encode_record(
-        binding,
-        execution.schedule_record().unwrap(),
-    )
-    .unwrap();
-    assert!(
-        std::str::from_utf8(&encoded)
-            .unwrap()
-            .contains("\"kind\":\"canonical_kir_v10\"")
-    );
-    let decoded = PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&encoded).unwrap();
-    assert_eq!(decoded.binding(), binding);
-    assert_eq!(decoded.record(), execution.schedule_record().unwrap());
-    admitted
-        .simulate_scheduled(
-            &request,
+    for (artifact, kind) in [
+        (
+            PersistedSimulationScheduleArtifactV1::CanonicalKirV10,
+            "canonical_kir_v10",
+        ),
+        (
+            PersistedSimulationScheduleArtifactV1::SimulationBundleV5 {
+                bundle_sha256: [0x41; 32],
+                subject_sha256: [0x42; 32],
+            },
+            "simulation_bundle_v5",
+        ),
+    ] {
+        let binding = PersistedSimulationScheduleBindingV1::new(
+            artifact,
+            *admitted.identity(),
+            [0x31; 32],
+            101,
             target,
             limits,
-            SimulationScheduleRequestV1::Replay(decoded.record()),
+        );
+        let encoded = PersistedSimulationScheduleDocumentV1::encode_record(
+            binding,
+            execution.schedule_record().unwrap(),
         )
         .unwrap();
+        assert!(
+            std::str::from_utf8(&encoded)
+                .unwrap()
+                .contains(&format!("\"kind\":\"{kind}\""))
+        );
+        let decoded =
+            PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&encoded).unwrap();
+        assert_eq!(decoded.binding(), binding);
+        assert_eq!(decoded.record(), execution.schedule_record().unwrap());
+        assert_eq!(decoded.to_canonical_bytes().unwrap(), encoded);
+        admitted
+            .simulate_scheduled(
+                &request,
+                target,
+                limits,
+                SimulationScheduleRequestV1::Replay(decoded.record()),
+            )
+            .unwrap();
+    }
 }
 
 #[test]

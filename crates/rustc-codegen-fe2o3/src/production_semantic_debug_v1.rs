@@ -2,6 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use fe2o3_compiler_lineage::{
+    MultiRootCanonicalKirVersionV2, MultiRootCorrespondenceFunctionRoleV2,
+    MultiRootCorrespondencePayloadV2, MultiRootCorrespondenceSyntheticRuleV2,
+    MultiRootProofRosterKindV2, MultiRootProofRosterTranscriptV2,
+};
 use fe2o3_kernel_ir::{
     DebugSourceMapDocumentV2, DebugSourceMapErrorV2, DebugSourceMapKirSiteV1, DebugSourceMapSpanV1,
     MAX_PRODUCTION_SEMANTIC_DEBUG_CARRIER_BYTES_V1, MAX_SEMANTIC_DEBUG_BOUNDARIES_V1,
@@ -16,9 +21,10 @@ use fe2o3_kernel_ir::{
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalMirToKirCorrespondenceEvidenceV5, MirToKirFunctionRoleEvidenceV5,
-    ProductionSemanticKirOwnerV1,
+    InertCanonicalMirToKirCorrespondenceEvidenceV5, ProductionCanonicalKernelIrVersionV1,
+    ProductionSemanticKirOwnerV1, SemanticKirFunctionRoleV1, SemanticKirSyntheticOperationRuleV1,
 };
+use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use sha2::{Digest, Sha256};
 
 use crate::production_pipeline::ProductionPipelineError;
@@ -174,9 +180,41 @@ const fn semantic_fragment_resource_error(error: ProductionSemanticDebugFragment
     )
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn prepare_production_semantic_debug_v1(
     lowered: &ProductionSemanticKirOwnerV1,
     correspondence: &InertCanonicalMirToKirCorrespondenceEvidenceV5,
+    source_map: DebugSourceMapDocumentV2,
+    canonical_kir: &VerifiedCanonicalKernelIrV7,
+) -> Result<PreparedProductionSemanticDebugV1, ProductionPipelineError> {
+    correspondence
+        .validate_against_module(lowered.module())
+        .map_err(|_| correspondence_error("V5 correspondence differs from the live KIR roster"))?;
+    let nested = correspondence.nested_v4();
+    if nested.semantic_sha256() != lowered.semantic().semantic().semantic_sha256().as_bytes()
+        || nested.canonical_kernel_ir_identity() != lowered.canonical_kernel_ir_identity()
+    {
+        return Err(correspondence_error(
+            "V5 correspondence names different semantic MIR or production KIR",
+        ));
+    }
+    prepare_production_semantic_debug_from_live_v1(lowered, source_map, canonical_kir)
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn prepare_production_semantic_debug_multi_root_v1(
+    lowered: &ProductionSemanticKirOwnerV1,
+    correspondence_roster: &[u8],
+    source_map: DebugSourceMapDocumentV2,
+    canonical_kir: &VerifiedCanonicalKernelIrV7,
+) -> Result<PreparedProductionSemanticDebugV1, ProductionPipelineError> {
+    validate_multi_root_correspondence_v1(lowered, correspondence_roster)?;
+    prepare_production_semantic_debug_from_live_v1(lowered, source_map, canonical_kir)
+}
+
+#[allow(clippy::result_large_err)]
+fn prepare_production_semantic_debug_from_live_v1(
+    lowered: &ProductionSemanticKirOwnerV1,
     source_map: DebugSourceMapDocumentV2,
     canonical_kir: &VerifiedCanonicalKernelIrV7,
 ) -> Result<PreparedProductionSemanticDebugV1, ProductionPipelineError> {
@@ -194,33 +232,10 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         };
     }
 
-    let nested_v4 = correspondence.nested_v4();
-    correspondence
-        .validate_against_module(lowered.module())
-        .map_err(|_| {
-            ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "V5 correspondence does not exactly match the live KIR function roster",
-            )
-        })?;
-    if correspondence.functions().is_empty() {
+    let live = lowered.correspondence();
+    if live.lowered_functions().is_empty() {
         return Ok(PreparedProductionSemanticDebugV1::Unavailable(
             ProductionSemanticDebugProducerGapV1::NoStatementCorrespondence,
-        ));
-    }
-    let owner = correspondence.functions()[0].correspondence_owner();
-    if correspondence
-        .functions()
-        .iter()
-        .any(|record| record.correspondence_owner() != owner)
-        || correspondence
-            .functions()
-            .iter()
-            .filter(|record| record.role() == MirToKirFunctionRoleEvidenceV5::KernelEntry)
-            .count()
-            != 1
-    {
-        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "V5 singleton correspondence has ambiguous function ownership",
         ));
     }
     let defined_function_count = lowered
@@ -229,36 +244,41 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         .iter()
         .filter(|function| function.body.is_some())
         .count();
-    if defined_function_count != correspondence.functions().len() {
+    if defined_function_count != live.lowered_functions().len() {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "V5 correspondence does not cover every defined KIR function",
+            "live correspondence does not cover every defined KIR function",
         ));
     }
     let mut function_layouts = Vec::new();
     if function_layouts
-        .try_reserve_exact(correspondence.functions().len())
+        .try_reserve_exact(live.lowered_functions().len())
         .is_err()
     {
         return Ok(PreparedProductionSemanticDebugV1::Unavailable(
             ProductionSemanticDebugProducerGapV1::ResourceLimit,
         ));
     }
-    for record in correspondence.functions() {
-        let ordinal = usize::try_from(record.kernel_ir_function_ordinal()).map_err(|_| {
-            ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "KIR function ordinal exceeds the host address space",
-            )
-        })?;
-        let function = lowered.module().functions.get(ordinal).ok_or(
-            ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "V5 correspondence names an unknown KIR function ordinal",
-            ),
-        )?;
+    let mut owners = BTreeMap::<u32, usize>::new();
+    for record in live.lowered_functions() {
+        let mut matches = lowered
+            .module()
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| &function.id == record.kernel_ir_function());
+        let Some((ordinal, function)) = matches.next() else {
+            return Err(correspondence_error(
+                "correspondence names an unknown KIR function",
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(correspondence_error(
+                "correspondence KIR symbol is ambiguous",
+            ));
+        }
         let expected_role = match record.role() {
-            MirToKirFunctionRoleEvidenceV5::KernelEntry => {
-                fe2o3_kernel_ir::FunctionRole::KernelEntry
-            }
-            MirToKirFunctionRoleEvidenceV5::InternalHelper => {
+            SemanticKirFunctionRoleV1::KernelEntry => fe2o3_kernel_ir::FunctionRole::KernelEntry,
+            SemanticKirFunctionRoleV1::InternalHelper => {
                 fe2o3_kernel_ir::FunctionRole::InternalHelper
             }
         };
@@ -267,10 +287,19 @@ pub(crate) fn prepare_production_semantic_debug_v1(
                 "V5 correspondence names a KIR declaration",
             ),
         )?;
-        if function.id.as_str() != record.kernel_ir_function() || function.role != expected_role {
+        if function.role != expected_role {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "V5 correspondence KIR function identity or role differs",
+                "correspondence KIR function role differs",
             ));
+        }
+        if record.role() == SemanticKirFunctionRoleV1::KernelEntry {
+            *owners
+                .entry(record.correspondence_owner().index())
+                .or_default() += 1;
+        } else {
+            owners
+                .entry(record.correspondence_owner().index())
+                .or_default();
         }
         let block_ordinals = body
             .blocks
@@ -284,10 +313,16 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             ));
         }
         function_layouts.push((
-            record.semantic_function(),
-            u64::from(record.kernel_ir_function_ordinal()),
+            record.semantic_function().index(),
+            u64::try_from(ordinal)
+                .map_err(|_| correspondence_error("KIR function ordinal overflow"))?,
             body,
             block_ordinals,
+        ));
+    }
+    if owners.values().any(|entry_count| *entry_count != 1) {
+        return Err(correspondence_error(
+            "each correspondence root must own exactly one KIR entry",
         ));
     }
     function_layouts.sort_unstable_by_key(|layout| layout.0);
@@ -296,7 +331,7 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         .any(|pair| pair[0].0 >= pair[1].0)
     {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "V5 correspondence semantic functions are ambiguous",
+            "semantic functions shared across correspondence roots are ambiguous",
         ));
     }
 
@@ -318,15 +353,7 @@ pub(crate) fn prepare_production_semantic_debug_v1(
     }
     let context = debug_identity_context(&source_map_v2, canonical_kir.canonical_bytes());
 
-    if *nested_v4.semantic_sha256() != *lowered.semantic().semantic().semantic_sha256().as_bytes()
-        || nested_v4.canonical_kernel_ir_identity() != lowered.canonical_kernel_ir_identity()
-    {
-        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "V4 correspondence names different semantic MIR or production KIR",
-        ));
-    }
-
-    let counts = nested_v4.statement_spans().iter().try_fold(
+    let counts = live.statement_operation_spans().iter().try_fold(
         (0_usize, 0_usize),
         |(statements, operations), span| {
             Some((
@@ -367,9 +394,9 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             ProductionSemanticDebugProducerGapV1::ResourceLimit,
         ));
     }
-    for span in nested_v4.statement_spans() {
+    for span in live.statement_operation_spans() {
         let (_, function_ordinal, body, block_ordinals) = function_layouts
-            .binary_search_by_key(&span.semantic_function(), |layout| layout.0)
+            .binary_search_by_key(&span.semantic_function().index(), |layout| layout.0)
             .ok()
             .and_then(|index| function_layouts.get(index))
             .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -379,12 +406,12 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             .semantic()
             .resolve_statement(
                 fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1::from_index(
-                    span.semantic_function(),
+                    span.semantic_function().index(),
                 ),
                 fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1::from_index(
-                    span.semantic_block(),
+                    span.semantic_block().index(),
                 ),
-                span.statement(),
+                span.statement_ordinal(),
             )
             .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "statement debug correspondence does not resolve in semantic MIR",
@@ -419,17 +446,17 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         let source_id = node_identity(
             context,
             1,
-            u64::from(span.semantic_function()),
-            u64::from(span.semantic_block()),
-            u64::from(span.statement()),
+            u64::from(span.semantic_function().index()),
+            u64::from(span.semantic_block().index()),
+            u64::from(span.statement_ordinal()),
             0,
         );
         let mir_id = node_identity(
             context,
             2,
-            u64::from(span.semantic_function()),
-            u64::from(span.semantic_block()),
-            u64::from(span.statement()),
+            u64::from(span.semantic_function().index()),
+            u64::from(span.semantic_block().index()),
+            u64::from(span.statement_ordinal()),
             0,
         );
         nodes.push(semantic_map_value!(SemanticDebugNodeV1::new(
@@ -439,9 +466,9 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         nodes.push(semantic_map_value!(SemanticDebugNodeV1::new(
             mir_id,
             SemanticDebugLocationV1::Mir {
-                body_ordinal: u64::from(span.semantic_function()),
-                block_ordinal: u64::from(span.semantic_block()),
-                statement_ordinal: u64::from(span.statement()),
+                body_ordinal: u64::from(span.semantic_function().index()),
+                block_ordinal: u64::from(span.semantic_block().index()),
+                statement_ordinal: u64::from(span.statement_ordinal()),
             },
         )));
         mappings.push(semantic_map_value!(SemanticDebugMappingV1::new(
@@ -472,11 +499,11 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             continue;
         }
 
-        let block_index = *block_ordinals
-            .get(&fe2o3_kernel_ir::BlockId(span.kernel_ir_block()))
-            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+        let block_index = *block_ordinals.get(&span.kernel_ir_block()).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "statement debug correspondence names an unknown KIR block",
-            ))?;
+            ),
+        )?;
         let block_ordinal = u64::try_from(block_index).map_err(|_| {
             ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "KIR block ordinal exceeds the semantic debug wire",
@@ -493,7 +520,7 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             ));
         }
         let operation_end = span
-            .first_operation()
+            .first_operation_ordinal()
             .checked_add(span.operation_count())
             .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "statement KIR operation range overflows",
@@ -507,7 +534,7 @@ pub(crate) fn prepare_production_semantic_debug_v1(
                 "statement KIR operation range exceeds its exact function body",
             ));
         }
-        for operation in span.first_operation()..operation_end {
+        for operation in span.first_operation_ordinal()..operation_end {
             let site = DebugSourceMapKirSiteV1::operation(
                 *function_ordinal,
                 block_ordinal,
@@ -587,6 +614,315 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             boundaries,
         },
     ))
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_multi_root_correspondence_v1(
+    lowered: &ProductionSemanticKirOwnerV1,
+    correspondence_roster: &[u8],
+) -> Result<(), ProductionPipelineError> {
+    let roster = MultiRootProofRosterTranscriptV2::decode(correspondence_roster)
+        .map_err(|_| correspondence_error("invalid multi-root correspondence roster"))?;
+    let kir = lowered.canonical_kernel_ir_identity();
+    if roster.kind() != MultiRootProofRosterKindV2::Correspondence
+        || roster.root_count() < 2
+        || roster.semantic_mir_sha256()
+            != *lowered.semantic().semantic().semantic_sha256().as_bytes()
+        || roster.neutral_kir().version() != MultiRootCanonicalKirVersionV2::V8
+        || kir.version() != ProductionCanonicalKernelIrVersionV1::V8
+        || roster.neutral_kir().digest() != *kir.digest()
+        || roster.neutral_kir().canonical_length() != kir.canonical_length()
+    {
+        return Err(correspondence_error(
+            "multi-root correspondence roster names different semantic MIR or production KIR",
+        ));
+    }
+
+    let live = lowered.correspondence();
+    let mut owners = Vec::new();
+    let mut semantic_functions = Vec::new();
+    owners
+        .try_reserve_exact(roster.root_count())
+        .map_err(|_| correspondence_error("multi-root correspondence resource limit"))?;
+    semantic_functions
+        .try_reserve_exact(live.lowered_functions().len())
+        .map_err(|_| correspondence_error("multi-root correspondence resource limit"))?;
+    for ordinal in 0..roster.root_count() {
+        let root = roster
+            .root(ordinal)
+            .ok_or_else(|| correspondence_error("missing multi-root correspondence root"))?;
+        let payload = MultiRootCorrespondencePayloadV2::decode(root.payload())
+            .map_err(|_| correspondence_error("invalid multi-root correspondence root payload"))?;
+        let expected_ordinal = u32::try_from(ordinal)
+            .map_err(|_| correspondence_error("multi-root correspondence ordinal overflow"))?;
+        if payload.root_ordinal() != expected_ordinal
+            || payload.correspondence_owner() != root.semantic_root()
+        {
+            return Err(correspondence_error(
+                "multi-root correspondence root header was reordered or substituted",
+            ));
+        }
+        let induction =
+            InertCanonicalSemanticU32InductionEvidenceV1::decode(payload.induction())
+                .map_err(|_| correspondence_error("invalid multi-root induction evidence"))?;
+        if induction.semantic_mir_sha256()
+            != lowered.semantic().semantic().semantic_sha256().as_bytes()
+            || induction.grants_authority()
+        {
+            return Err(correspondence_error(
+                "multi-root induction evidence changed semantic identity or authority",
+            ));
+        }
+        let function = lowered
+            .semantic()
+            .semantic()
+            .functions()
+            .get(root.semantic_root() as usize)
+            .ok_or_else(|| {
+                correspondence_error("multi-root roster names an unknown semantic root")
+            })?;
+        if function.identity().as_bytes() != &root.semantic_root_identity() {
+            return Err(correspondence_error(
+                "multi-root roster substituted a semantic root identity",
+            ));
+        }
+        if !owners.is_empty()
+            && owners
+                .last()
+                .is_some_and(|owner| *owner >= root.semantic_root())
+        {
+            return Err(correspondence_error(
+                "multi-root correspondence roots are duplicated or reordered",
+            ));
+        }
+        owners.push(root.semantic_root());
+
+        let mut payload_functions = payload
+            .functions()
+            .iter()
+            .map(|record| {
+                (
+                    record.semantic_function(),
+                    match record.role() {
+                        MultiRootCorrespondenceFunctionRoleV2::KernelEntry => 1_u8,
+                        MultiRootCorrespondenceFunctionRoleV2::InternalHelper => 2_u8,
+                    },
+                    record.kernel_ir_function(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut live_functions = live
+            .lowered_functions()
+            .iter()
+            .filter(|record| record.correspondence_owner().index() == root.semantic_root())
+            .map(|record| {
+                (
+                    record.semantic_function().index(),
+                    match record.role() {
+                        SemanticKirFunctionRoleV1::KernelEntry => 1_u8,
+                        SemanticKirFunctionRoleV1::InternalHelper => 2_u8,
+                    },
+                    record.kernel_ir_function().as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        payload_functions.sort_unstable();
+        live_functions.sort_unstable();
+        if payload_functions != live_functions
+            || payload_functions
+                .iter()
+                .filter(|(_, role, symbol)| *role == 1 && *symbol == root.kernel_id())
+                .count()
+                != 1
+        {
+            return Err(correspondence_error(
+                "multi-root function closure differs from live correspondence",
+            ));
+        }
+        for (semantic_function, _, _) in payload_functions {
+            if semantic_functions.contains(&semantic_function) {
+                return Err(correspondence_error(
+                    "a semantic helper is shared across multi-root closures",
+                ));
+            }
+            semantic_functions.push(semantic_function);
+        }
+
+        let mut payload_blocks = payload
+            .blocks()
+            .iter()
+            .map(|record| {
+                (
+                    record.semantic_function(),
+                    record.semantic_block(),
+                    record.kernel_ir_block(),
+                    record.source_statement_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut live_blocks = live
+            .blocks()
+            .iter()
+            .filter(|record| record.correspondence_owner().index() == root.semantic_root())
+            .map(|record| {
+                (
+                    record.semantic_function().index(),
+                    record.semantic_block().index(),
+                    record.kernel_ir_block().0,
+                    record.source_statement_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        payload_blocks.sort_unstable();
+        live_blocks.sort_unstable();
+        let mut payload_statements = payload.statements().to_vec();
+        let mut live_statements = live
+            .statement_operation_spans()
+            .iter()
+            .filter(|record| record.correspondence_owner().index() == root.semantic_root())
+            .map(|record| {
+                (
+                    record.semantic_function().index(),
+                    record.semantic_block().index(),
+                    record.statement_ordinal(),
+                    record.kernel_ir_block().0,
+                    record.first_operation_ordinal(),
+                    record.operation_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        payload_statements.sort_unstable();
+        live_statements.sort_unstable();
+        let payload_statement_tuples = payload_statements
+            .iter()
+            .map(|record| {
+                (
+                    record.semantic_function(),
+                    record.semantic_block(),
+                    record.statement(),
+                    record.kernel_ir_block(),
+                    record.first_operation(),
+                    record.operation_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut payload_terminators = payload
+            .terminators()
+            .iter()
+            .map(|record| {
+                (
+                    record.semantic_function(),
+                    record.semantic_block(),
+                    record.kernel_ir_block(),
+                    record.first_operation(),
+                    record.operation_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut live_terminators = live
+            .terminator_operation_spans()
+            .iter()
+            .filter(|record| record.correspondence_owner().index() == root.semantic_root())
+            .map(|record| {
+                (
+                    record.semantic_function().index(),
+                    record.semantic_block().index(),
+                    record.kernel_ir_block().0,
+                    record.first_operation_ordinal(),
+                    record.operation_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        payload_terminators.sort_unstable();
+        live_terminators.sort_unstable();
+        let mut payload_synthetics = payload
+            .synthetics()
+            .iter()
+            .map(|record| {
+                (
+                    record.semantic_function(),
+                    match record.rule() {
+                        MultiRootCorrespondenceSyntheticRuleV2::EnumPayloadStorage => 1_u8,
+                        MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap => 2_u8,
+                    },
+                    record.kernel_ir_block(),
+                    record.first_operation(),
+                    record.operation_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut live_synthetics = live
+            .synthetic_operation_spans()
+            .iter()
+            .filter(|record| record.correspondence_owner().index() == root.semantic_root())
+            .map(|record| {
+                (
+                    record.semantic_function().index(),
+                    match record.rule() {
+                        SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => 1_u8,
+                        SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => 2_u8,
+                    },
+                    record.kernel_ir_block().0,
+                    record.first_operation_ordinal(),
+                    record.operation_count(),
+                )
+            })
+            .collect::<Vec<_>>();
+        payload_synthetics.sort_unstable();
+        live_synthetics.sort_unstable();
+        let mut payload_parameters = payload
+            .parameters()
+            .iter()
+            .map(|record| {
+                (
+                    record.semantic_function(),
+                    record.semantic_local(),
+                    record.kernel_ir_value(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut live_parameters = live
+            .parameter_bindings()
+            .iter()
+            .filter(|record| record.correspondence_owner().index() == root.semantic_root())
+            .map(|record| {
+                (
+                    record.semantic_function().index(),
+                    record.semantic_local().index(),
+                    record.kernel_ir_value().0,
+                )
+            })
+            .collect::<Vec<_>>();
+        payload_parameters.sort_unstable();
+        live_parameters.sort_unstable();
+        if payload_blocks != live_blocks
+            || payload_statement_tuples != live_statements
+            || payload_terminators != live_terminators
+            || payload_synthetics != live_synthetics
+            || payload_parameters != live_parameters
+        {
+            return Err(correspondence_error(
+                "multi-root block, operation, synthetic, or parameter custody differs from live correspondence",
+            ));
+        }
+    }
+    let mut live_owners = live
+        .lowered_functions()
+        .iter()
+        .map(|record| record.correspondence_owner().index())
+        .collect::<Vec<_>>();
+    live_owners.sort_unstable();
+    live_owners.dedup();
+    if owners != live_owners {
+        return Err(correspondence_error(
+            "multi-root roster does not cover every live correspondence owner",
+        ));
+    }
+    Ok(())
+}
+
+const fn correspondence_error(message: &'static str) -> ProductionPipelineError {
+    ProductionPipelineError::SimulationDebugMapCorrespondence(message)
 }
 
 const fn source_map_resource_error(error: DebugSourceMapErrorV2) -> bool {

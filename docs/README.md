@@ -46,6 +46,8 @@ documentation.
 
 - [Source-to-simulator bundle V1](simulation-bundle-v1.md): production
   extraction into an authority-free simulation bundle.
+- [Production semantic CPU conformance V3](simulator-production-conformance-v3.md):
+  exact ordinary-source Bundle V5/KIR V10 output checks and typed producer gaps.
 - [Semantic schedule V1](semantic-schedule-v1.md): deterministic schedule
   recording and replay.
 - [Authority-free virtual runtime V1](virtual-runtime-v1.md): bounded
@@ -55,6 +57,8 @@ documentation.
   read-only diagnosis and bounded witness paging for exact races and virtual
   host-lifetime incidents.
 - [Debugger and profiler architecture](debugger-profiler-architecture-v1.md)
+- [Profiler Variant V3](profiler-variant-v3.md): finalizer-replayed production KIR comparison.
+- [Production profiler KIR archive V1](production-profiler-kir-archive-v1.md): bounded self-contained structural-owner replay.
 - [Semantic debug transformation map V2](semantic-debug-transformation-map-v2.md): exact
   cross-layer cardinality separated from producer-authenticated optimization classification.
 - [Debugger and profiler task matrix](debugger-profiler-task-matrix-v1.md)

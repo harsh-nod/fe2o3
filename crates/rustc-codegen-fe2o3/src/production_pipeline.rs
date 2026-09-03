@@ -1377,27 +1377,6 @@ struct ExactDebugMapFunctionV1<'a> {
     block_ordinals: BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
 }
 
-fn sole_storage_map_body_v1(
-    module: &fe2o3_kernel_ir::Module,
-) -> Result<(usize, &fe2o3_kernel_ir::FunctionBody), ProductionPipelineError> {
-    let mut bodies = module
-        .functions
-        .iter()
-        .enumerate()
-        .filter_map(|(ordinal, function)| function.body.as_ref().map(|body| (ordinal, body)));
-    let body = bodies
-        .next()
-        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "lowered KIR has no function body",
-        ))?;
-    if bodies.next().is_some() {
-        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "this legacy storage-map contract does not distinguish multiple KIR function bodies",
-        ));
-    }
-    Ok(body)
-}
-
 fn exact_debug_map_functions_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
 ) -> Result<
@@ -1494,6 +1473,44 @@ fn exact_debug_map_functions_v1(
         ));
     }
     Ok(layouts)
+}
+
+fn kernel_storage_map_body_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    selected_root: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    selected_body: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+) -> Result<(usize, &fe2o3_kernel_ir::FunctionBody), ProductionPipelineError> {
+    let layouts = exact_debug_map_functions_v1(lowered)?;
+    let mut entries = lowered
+        .correspondence()
+        .lowered_functions()
+        .iter()
+        .filter(|record| {
+            record.role() == fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::KernelEntry
+                && record.correspondence_owner() == selected_root
+                && record.semantic_function() == selected_body
+        });
+    let entry = entries
+        .next()
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected semantic kernel has no exact KIR function correspondence",
+        ))?;
+    if entries.next().is_some() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected semantic kernel has ambiguous KIR function correspondence",
+        ));
+    }
+    let layout = layouts
+        .get(&(entry.correspondence_owner(), entry.semantic_function()))
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected semantic kernel has no exact KIR function layout",
+        ))?;
+    let ordinal = usize::try_from(layout.function_ordinal).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected KIR function ordinal does not fit this host",
+        )
+    })?;
+    Ok((ordinal, layout.body))
 }
 
 fn prepare_production_semantic_debug_inputs_v1(
@@ -2036,7 +2053,8 @@ fn compiler_semantic_storage_map_v1(
         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
             "typed storage map semantic body is absent",
         ))?;
-    let (kir_function_ordinal, kir_body) = sole_storage_map_body_v1(lowered.module())?;
+    let (kir_function_ordinal, kir_body) =
+        kernel_storage_map_body_v1(lowered, selection.root(), selection.body())?;
     let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
         ProductionPipelineError::SimulationDebugMapCorrespondence(
             "typed storage map KIR function is absent",
@@ -2227,7 +2245,8 @@ fn compiler_semantic_storage_map_v2(
         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
             MAP_ERROR,
         ))?;
-    let (kir_function_ordinal, kir_body) = sole_storage_map_body_v1(lowered.module())?;
+    let (kir_function_ordinal, kir_body) =
+        kernel_storage_map_body_v1(lowered, selection.root(), selection.body())?;
     let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
         ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
     )?;
@@ -3204,38 +3223,6 @@ impl RankedVerifiedProductionCompilation {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn debug_map_test_function(name: &str) -> fe2o3_kernel_ir::Function {
-        fe2o3_kernel_ir::Function::kernel_entry(
-            name,
-            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
-            vec![],
-            vec![fe2o3_kernel_ir::BasicBlock::new(fe2o3_kernel_ir::BlockId(
-                0,
-            ))],
-        )
-    }
-
-    #[test]
-    fn legacy_storage_map_body_selection_remains_single_function() {
-        let empty = fe2o3_kernel_ir::Module::new("empty");
-        assert!(matches!(
-            sole_storage_map_body_v1(&empty),
-            Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "lowered KIR has no function body"
-            ))
-        ));
-
-        let mut multiple = fe2o3_kernel_ir::Module::new("multiple");
-        multiple.functions.push(debug_map_test_function("kernel"));
-        multiple.functions.push(debug_map_test_function("helper"));
-        assert!(matches!(
-            sole_storage_map_body_v1(&multiple),
-            Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "this legacy storage-map contract does not distinguish multiple KIR function bodies"
-            ))
-        ));
-    }
 
     #[test]
     fn explicit_v2_simulation_export_requires_complete_source_capture() {

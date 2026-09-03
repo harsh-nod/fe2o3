@@ -461,6 +461,9 @@ const fn map_semantic_debug_map_error(
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5
         }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2
+        }
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8
         }
@@ -813,6 +816,10 @@ mod tests {
             (
                 FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5,
                 SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2,
             ),
             (
                 FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8,

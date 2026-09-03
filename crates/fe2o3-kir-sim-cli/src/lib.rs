@@ -84,6 +84,16 @@ impl AdmittedSimulationInputV1 {
             self.simulation_bundle_subject,
         ) {
             (None, None) => PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+            (Some(bundle_sha256), Some(subject_sha256))
+                if self
+                    .simulation_bundle_evidence
+                    .is_some_and(|evidence| evidence.envelope_version == 5) =>
+            {
+                PersistedSimulationScheduleArtifactV1::SimulationBundleV5 {
+                    bundle_sha256,
+                    subject_sha256,
+                }
+            }
             (Some(bundle_sha256), Some(subject_sha256)) => {
                 PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
                     bundle_sha256,

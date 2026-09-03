@@ -54,12 +54,15 @@ use fe2o3_compiler_lineage::{
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
     FinalizedSemanticDebugMapErrorV1, InertProductionKirV7StructuralBridgeV1,
-    InertProductionSourceIsaCatalogV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
-    ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
+    InertProductionProfilerKirArchiveV1, InertProductionSourceIsaCatalogV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
+    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
     ProductionKirV7BridgeAdmissionV1, ProductionKirV7BridgeCatalogQueryUnavailableV1,
-    ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeSiteV1, ProductionSemanticAnchorAdmissionV1,
-    ProductionSemanticAnchorErrorV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
+    ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeSiteV1,
+    ProductionProfilerKirArchiveAdmissionV1, ProductionProfilerKirArchiveErrorV1,
+    ProductionProfilerKirArchiveUnavailableClassV1, ProductionProfilerKirArchiveUnavailableV1,
+    ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
+    ProductionSemanticAnchorUnavailableV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
     ProductionSourceIsaCatalogAdmissionV1, ProductionSourceIsaCatalogErrorV1,
     ProductionSourceIsaCatalogPointV1, ProductionSourceIsaCatalogRecordKindV1,
     ProductionSourceIsaCatalogTargetV1, ProductionSourceIsaCatalogTransformationV1,
@@ -72,6 +75,7 @@ use fe2o3_hsaco_finalize::{
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    prepare_production_profiler_kir_archive_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -2206,6 +2210,82 @@ fn source_isa_correlation_preserves_exact_source_carrier_unavailability() {
     ));
 }
 
+#[test]
+fn production_profiler_kir_archive_replays_finalizer_and_preserves_typed_unavailability() {
+    let finalized = finalized_with_optional_semantic_debug(
+        slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+        OptionalSemanticDebugFixture::Available,
+    );
+    let prepared = prepare_production_profiler_kir_archive_v1(finalized).unwrap();
+    let expected_identity = prepared.identity();
+    let bytes = prepared.into_canonical_bytes();
+    let inert = InertProductionProfilerKirArchiveV1::decode_canonical(&bytes).unwrap();
+    assert_eq!(inert.identity(), expected_identity);
+    let ProductionProfilerKirArchiveAdmissionV1::Unavailable(reason) =
+        inert.admit_exact_replay_v1().unwrap()
+    else {
+        panic!("synthetic archive unexpectedly produced structural owners")
+    };
+    assert!(matches!(
+        reason,
+        ProductionProfilerKirArchiveUnavailableV1::SourceIsaCatalog(
+            ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(
+                ProductionSemanticAnchorUnavailableV1::CompilerInstrumentationAbsent
+            )
+        )
+    ));
+    assert_eq!(
+        reason.class(),
+        ProductionProfilerKirArchiveUnavailableClassV1::SourceIsaCatalog
+    );
+    assert_eq!(
+        reason.reason_code(),
+        "semantic_anchors_compiler_instrumentation_absent"
+    );
+
+    let mut substituted = bytes;
+    mutate_profiler_archive_finalized_hsaco_and_reseal(&mut substituted);
+    assert_eq!(
+        InertProductionProfilerKirArchiveV1::decode_owned_canonical(substituted)
+            .unwrap()
+            .admit_exact_replay_v1()
+            .unwrap_err(),
+        ProductionProfilerKirArchiveErrorV1::FinalizerReplay
+    );
+}
+
+fn mutate_profiler_archive_finalized_hsaco_and_reseal(bytes: &mut [u8]) {
+    const HEADER_BYTES: usize = 80;
+    const SECTION_HEADER_BYTES: usize = 12;
+    const CHECKSUM_BYTES: usize = 32;
+    const CHECKSUM_DOMAIN: &[u8] = b"FE2O3/PRODUCTION-PROFILER-KIR-ARCHIVE-CHECKSUM/V1\0";
+    let section_count = u16::from_le_bytes(bytes[76..78].try_into().unwrap()) as usize;
+    let mut offset = HEADER_BYTES;
+    let checksum_offset = bytes.len() - CHECKSUM_BYTES;
+    let mut mutated = false;
+    for _ in 0..section_count {
+        let tag = bytes[offset];
+        let length = usize::try_from(u64::from_le_bytes(
+            bytes[offset + 4..offset + SECTION_HEADER_BYTES]
+                .try_into()
+                .unwrap(),
+        ))
+        .unwrap();
+        let payload = offset + SECTION_HEADER_BYTES;
+        if tag == 4 {
+            bytes[payload] ^= 1;
+            mutated = true;
+        }
+        offset = payload + length;
+    }
+    assert!(mutated);
+    assert_eq!(offset, checksum_offset);
+    let mut digest = Sha256::new();
+    digest.update(CHECKSUM_DOMAIN);
+    digest.update(&bytes[..checksum_offset]);
+    bytes[checksum_offset..].copy_from_slice(&digest.finalize());
+}
+
 fn production_bridge_inputs(
     finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
@@ -3059,6 +3139,37 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert!(!summary.retains_correlation_records());
         assert!(!summary.grants_publication_authority());
         assert!(!summary.grants_runtime_authority());
+
+        let prepared = prepare_production_profiler_kir_archive_v1(finalized).unwrap();
+        let archive_identity = prepared.identity();
+        let archive_bytes = prepared.into_canonical_bytes();
+        let admitted = match InertProductionProfilerKirArchiveV1::decode_canonical(&archive_bytes)
+            .unwrap()
+            .admit_exact_replay_v1()
+            .unwrap()
+        {
+            ProductionProfilerKirArchiveAdmissionV1::Admitted(value) => value,
+            ProductionProfilerKirArchiveAdmissionV1::Unavailable(reason) => {
+                panic!("real Worker profiler archive unexpectedly unavailable: {reason:?}")
+            }
+        };
+        assert_eq!(admitted.identity(), archive_identity);
+        assert_eq!(admitted.canonical_len(), archive_bytes.len() as u64);
+        assert_eq!(
+            admitted.bridge().catalog_identity(),
+            admitted.catalog().identity()
+        );
+        assert_eq!(
+            admitted.characteristic().structural_bridge_identity(),
+            admitted.bridge().identity()
+        );
+        assert!(!admitted.authenticates_external_provenance());
+        assert!(!admitted.grants_compiler_authority());
+        assert!(!admitted.grants_publication_authority());
+        assert!(!admitted.grants_load_authority());
+        assert!(!admitted.grants_launch_authority());
+        assert!(!admitted.grants_profiler_collection_authority());
+        assert!(!admitted.grants_runtime_authority());
 
         let (v9_handoff, v9_descriptor_source, _) =
             semantic_anchor_handoff_with_version(profile, ProductionReplayKernelIrVersionV1::V9);

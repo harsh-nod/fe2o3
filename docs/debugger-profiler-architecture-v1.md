@@ -213,16 +213,26 @@ schedule identity is content-bound but caller-declared; the profiler-KIR to
 Characteristic-KIR structural bridge and producer authentication remain
 unavailable.
 
-The additive [Profiler Variant V3](profiler-variant-v3.md) library path resolves
-that profiler-KIR/Characteristic-KIR version boundary only when the caller
-already owns the production-admitted V7-to-V8 bridge, exact catalog, and
-Characteristic producer projection. It replays Variant V2, binds Bundle V4's
-V7 claim to the bridge, and requires a unique catalog match for every upgraded
-positive occurrence. The result remains structural co-observation: partial
-absence, schedule execution, and causality are typed unavailable. A JSONL
-service cannot safely accept inert bridge/catalog bytes as equivalent evidence,
-so agent transport remains open until an authenticated self-contained archive
-can re-establish those admitted owners.
+The additive [Profiler Variant V3](profiler-variant-v3.md) path resolves that
+profiler-KIR/Characteristic-KIR version boundary only through a
+production-admitted V7-to-V8 bridge, exact catalog, and Characteristic producer
+projection. Its self-contained archive records all finalizer replay inputs; the
+fresh-process JSONL service verifies its exact identity, reruns the complete
+Worker V3 finalizer derivation, and retains only the reconstructed read-only
+owners. It replays Variant V2, binds Bundle V4's V7 claim to the bridge, and
+requires a unique catalog match for every upgraded positive occurrence. The
+result remains structural co-observation: external provenance, partial
+absence, schedule execution, and causality are typed unavailable.
+
+The V3 fresh-process service now also exposes the bounded
+`ProfilerCompleteStructuralComparisonV1` contract. Only two fully admitted
+archive owners with complete catalog projections, complete supported-
+Characteristic scans, and the same exact workload plus archive-derived stable
+source/MIR site universe can produce an added/removed structural multiplicity.
+It preserves all archive-local identities for duplicate occurrences and never
+uses missing PC or ATT observations as absence. Cross-domain identity,
+incomplete coverage, unkeyed occurrences, schedule execution, causality, and
+result overflow remain stable typed unavailable states.
 
 The additive KFD/Source-ISA V1 query service now admits exact canonical
 direct-KFD runtime profiles and Source/ISA Observation V1 collections, follows
@@ -266,7 +276,7 @@ contract and an unavailable response are both tested here.
 | Track | Exit evidence | Current closure gap |
 | --- | --- | --- |
 | T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | a caller-pinned, fixed-role evidence archive and isolated fresh-process reference acceptance cover open/query/diagnose/compare/plan without checkout paths; the bounded qualification assessment makes every component and capture-mode gap directly queryable, but authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
-| T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | bounded collection inspection preserves a synthetic six-frame gfx942/gfx950 rendering fixture plus typed unavailable/error outcomes and rejects hostile bytes; the additive [characteristic V2 contract](source-isa-characteristic-acceptance-v2.md) implements the ordinary attributed-Rust production adapter, exact forward/reverse occurrence and interval queries, producer/Broker binding, and nineteen hostile substitutions. The additive [Transformation Map V2](semantic-debug-transformation-map-v2.md) retains exact one-to-one, one-to-many, many-to-one, many-to-many, and eliminated relations independently from classification; production V4 correspondence authenticates elimination but correctly leaves multi-operation expansion unclassified. The [multi-function V1 contract](production-multifunction-semantic-debug-v1.md) now carries exact singleton entry/helper owners, absolute KIR ordinals, roles, and names through production source maps, finalizer replay, simulator helper stops, two-frame stacks, and KIR-to-source queries, with hostile duplicate/reorder/sparse/substitution coverage. Multi-root custody, helper closures with unqualified V4 synthetic spans, MIR call-terminator transformation nodes, the protected 3x2 run, authenticated semantic duplication, and fused/inlined/moved/outlined producers remain open, so T1 remains open |
+| T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | bounded collection inspection preserves a synthetic six-frame gfx942/gfx950 rendering fixture plus typed unavailable/error outcomes and rejects hostile bytes; the additive [characteristic V2 contract](source-isa-characteristic-acceptance-v2.md) implements the ordinary attributed-Rust production adapter, exact forward/reverse occurrence and interval queries, producer/Broker binding, and nineteen hostile substitutions. The additive [Transformation Map V2](semantic-debug-transformation-map-v2.md) retains exact one-to-one, one-to-many, many-to-one, many-to-many, and eliminated relations independently from classification; production correspondence authenticates elimination but correctly leaves multi-operation expansion unclassified. The [multi-function V1 contract](production-multifunction-semantic-debug-v1.md) now carries exact singleton and disjoint multi-root entry/helper owners, absolute KIR ordinals, roles, names, and function-qualified multi-root synthetic spans through production source maps and independent finalizer replay, with hostile duplicate/reorder/overlap/substitution rejection. Shared helpers across roots, MIR call-terminator transformation nodes, the protected 3x2 run, authenticated semantic duplication, and fused/inlined/moved/outlined producers remain open, so T1 remains open |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | V4 exact KFD publication-to-structured-MI correlation is implemented. Additive V5 pins structured register and scalar-local queries to that exact stop/thread/wave, redacts absolute PC and pointer-like locals, and retains typed source/ISA/memory boundaries. Installed ROCgdb exposes the MI commands but still reports typed stopped-state unavailability for the direct-KFD target, so physical V5 capture, authenticated source/ISA, allocation-relative memory, and general cooperative live-kernel acceptance remain incomplete |
 | T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | Variant V2 composes two exact V1 treatments with optional exact PC or decoded-ATT Source/ISA sessions, retains sampling/loss/completeness, and reports changed semantic/KIR/LLVM/ISA occurrences only for unique positive pairs at one exact source-plus-MIR key with evidence IDs. Variant V3 additionally requires an already-admitted production V7-to-V8 structural bridge and exact catalog/Characteristic producer projection, then binds every positive occurrence to one unique catalog record. Direct-KFD dispatches also join through kernel/module to exact-artifact compilation units; admitted rocprof PC samples and decoded ATT records have separate exact HSACO/kernel-symbol/Characteristic correlation paths. Canonical direct-KFD runtime evidence has bounded queue/stream/allocation, host-staging, completion, and inferred lifecycle-edge queries. One MI300X run transactionally archived three complete runtime-observed direct-KFD dispatches beside an exact successful ROCprofiler SDK 1.1.0 invocation whose complete collector inventory was empty; it retains unavailable dispatch/code-object/clock joins and makes no universal SDK claim. A self-contained authenticated V3 transport, authenticated decoder/Characteristic production, live PC/ATT capture, authenticated semantic schedule execution, device-copy/dependency producers, complete coverage, and causal end-to-end acceptance remain incomplete |
 | T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | process-isolated reference acceptance covers seeded OOB, barrier divergence, exact Variant V1 and V2 schedule/resource comparisons, bounded paging, and the minimum ambiguous capture plan. V2 capability discovery and complete response replay preserve absent correlation sessions, the profiler-KIR bridge, and causality as typed unavailable; authenticated positive PC/ATT correlation and producer-authentication acceptance plus operating-system sandbox deployment remain external |
@@ -304,7 +314,10 @@ profiler Variant extensions instead carry all exact bytes as canonical
 lowercase hex, so a mutable path is never evidence. The V2 query uses a
 separate fresh child with independent capability discovery, request/revision
 association, response-identity validation, and complete local replay against
-the retained artifact and schedule bytes.
+the retained artifact and schedule bytes. Variant V3 separately opens at most
+two caller-pinned finalizer archives, reruns the complete finalizer replay, and
+retains only exact Source/ISA catalog, KIR bridge, and Characteristic query
+owners. It exposes no archive path, compiler, or runtime operation.
 
 Debugger and profiler executables are admitted once as bounded singly-linked
 regular files with executable permission, no-follow and close-on-exec flags,
