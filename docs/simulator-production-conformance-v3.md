@@ -39,9 +39,10 @@ bounds path and exact scalar/buffer layout.
 Failure tests reject duplicate and oversized expectations, wrong scalar types,
 missing output ordinals, corrupt bundle bytes, and requests naming a kernel
 from another artifact. They also preserve typed unavailability for current
-ordinary producer gaps: `i128`/`u128`, f16/bf16, switch fallback traps, core
-atomic RMW projection, pointer distance, volatile access, copy-nonoverlap, and
-recursive aggregate Bundle V5 input.
+ordinary producer gaps: `i128`/`u128`, f16/bf16, core atomic RMW projection,
+pointer distance, volatile access, copy-nonoverlap, and recursive aggregate
+Bundle V5 input. Ordinary `u32` switch lowering is covered as an exact
+production conformance case.
 
 This evidence is CPU simulation only. It makes no performance prediction and
 does not authenticate compiler execution, a GPU result, or KFD load/launch.

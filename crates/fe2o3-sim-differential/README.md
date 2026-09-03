@@ -69,12 +69,14 @@ them:
 | --- | --- |
 | `i128`/`u128` source arguments | type not retained by the current typed frontend ABI |
 | f16/bf16 source arguments | type not retained by the current typed frontend ABI |
-| integer switch | emitted fallback trap remains an unsupported external call for simulator preflight |
 | core atomic RMW | ordinary semantic-to-ranked projection remains incomplete |
 | pointer distance | `MemoryOffsetFrom` is rejected by the ordinary semantic importer |
 | volatile load/store | ordinary intrinsic expansion is rejected |
 | copy-nonoverlap | ordinary intrinsic expansion is rejected |
 | recursive aggregate Bundle V5 input | outside this scalar conformance contract |
+
+The exact production cases include ordinary `u32` switch lowering through
+Bundle V5 and KIR V10.
 
 These dispositions do not infer hardware behavior or performance. The suite
 does not compile on the CPU, predict GPU performance, use HIP/HSA, or grant

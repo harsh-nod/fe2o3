@@ -29,7 +29,6 @@ pub enum ProductionSemanticUnavailableReasonV3 {
     OrdinaryFrontendTypeNotRetained,
     BundleAggregateInputNotAdmitted,
     OrdinaryFrontendProjectionIncomplete,
-    SimulatorUnsupportedExternalCall,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -65,10 +64,7 @@ pub fn production_semantic_capabilities_v3() -> ProductionSemanticCapabilitiesV3
             exact("f32_f64_corner_tables"),
             exact("scalar_and_buffer_layout"),
             exact("bounds_checked_access"),
-            unavailable(
-                "integer_switch",
-                ProductionSemanticUnavailableReasonV3::SimulatorUnsupportedExternalCall,
-            ),
+            exact("integer_switch"),
             unavailable(
                 "atomic_rmw_u32",
                 ProductionSemanticUnavailableReasonV3::OrdinaryFrontendProjectionIncomplete,
@@ -499,6 +495,11 @@ mod tests {
         let capabilities = production_semantic_capabilities_v3();
         assert!(!capabilities.hardware_observed);
         assert!(!capabilities.performance_prediction);
+        assert!(capabilities.cases.iter().any(|case| {
+            case.family == "integer_switch"
+                && case.disposition == ProductionSemanticDispositionV3::ExactConformance
+                && case.reason.is_none()
+        }));
         assert!(capabilities.cases.iter().any(|case| {
             case.family == "volatile_memory"
                 && case.disposition == ProductionSemanticDispositionV3::ProducerUnavailable

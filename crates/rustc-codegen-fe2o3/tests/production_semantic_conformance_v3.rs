@@ -519,7 +519,7 @@ fn ordinary_bundle_v5_checked_output_bounds_and_hostile_expectations_are_typed()
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn unsupported_ordinary_producers_and_cross_artifact_inputs_fail_closed() {
+fn ordinary_producer_boundaries_and_cross_artifact_inputs_fail_closed() {
     let scratch = Scratch::new();
     for (feature, diagnostic) in [
         ("atomic-u32", "call terminator"),
@@ -554,18 +554,20 @@ fn unsupported_ordinary_producers_and_cross_artifact_inputs_fail_closed() {
         bytes: &expected,
         initialized: &initialized,
     }];
-    let error = run_production_semantic_conformance_v3(
+    let report = run_production_semantic_conformance_v3(
         &admitted,
         ProductionSemanticCaseV3 {
-            case_id: "switch-u32-unavailable",
+            case_id: "switch-u32-exact",
             outputs: &outputs,
         },
     )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        ProductionSemanticConformanceErrorV3::Simulation(_)
-    ));
+    .expect("run exact ordinary switch conformance case");
+    assert_eq!(report.status, "agreement");
+    assert!(!report.hardware_observed);
+    assert!(!report.performance_prediction);
+    assert_eq!(report.bundle_version, 5);
+    assert_eq!(report.kir_version, 10);
+    assert_eq!(report.expected_bytes, LANES * 4);
 
     let integer_bundle = require_export(&scratch, "integer-u32");
     let cross_artifact =
