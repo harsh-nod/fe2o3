@@ -16,29 +16,6 @@ fe2o3-sim-differential semantic-run-v2 --seed 0
 fe2o3-sim-differential semantic-replay-v2 --seed 0 --case CASE --kir-sha256 SHA256
 ```
 
-The physical V1 API prepares one identity-bound simulator run for comparison
-with a sealed observation returned only by the production generated-host
-Worker V3 direct-KFD completion path. It requires Bundle V4 plus the admitted
-V8-production-to-V7-simulator structural bridge, verifies generated scalar and
-slice packing without retaining native addresses, and distinguishes agreement,
-discrepancy, and typed hardware unavailability. An unavailable GPU or protected
-verifier contributes zero hardware and parity passes.
-A completed direct-KFD execution that disagrees with the simulator reports one
-hardware pass and zero parity passes; runtime failure or ambiguous completion
-cannot mint an observation and is never converted into a mismatch.
-
-```text
-fe2o3-sim-differential physical-capabilities-v1
-```
-
-The normal protected Worker V3 application verifier is not wired yet, so the
-capability response reports `protected_verifier_unavailable`. The legacy
-handwritten LLVM vecadd fixture is deliberately excluded and cannot be used as
-same-body parity evidence.
-Generated hosts can inspect
-`GeneratedWorkerV3KfdInvocation::differential_availability` before launch and
-can obtain a sealed observation only through `execute_for_differential`.
-
 It covers `i8/i16/i32/i64/i128`, `u8/u16/u32/u64/u128`, 32-bit and 64-bit
 target `index`, and `bool`; exact finite additions for `f16`, `bf16`, `f32`,
 and `f64`; global pointer load/GEP/store; conditional branches, block

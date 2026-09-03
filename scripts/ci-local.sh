@@ -126,6 +126,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-service-host
   fe2o3-service-model
   fe2o3-sim-differential
+  fe2o3-sim-physical-differential
   fe2o3-sim-runtime
   fe2o3-source-isa-observation
   fe2o3-semantic-import

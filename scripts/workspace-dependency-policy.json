@@ -128,6 +128,7 @@
         "fe2o3-semantic-import",
         "fe2o3-semantic-query",
         "fe2o3-sim-differential",
+        "fe2o3-sim-physical-differential",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
         "fe2o3-virtual-runtime-cli",
