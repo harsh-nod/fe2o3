@@ -110,6 +110,7 @@ enum UnsupportedFeatureCode {
     WorkgroupMemory,
     DynamicWorkgroupMemory,
     Matrix,
+    UnsupportedNumericalContract,
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
@@ -2797,6 +2798,9 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
             UnsupportedFeatureCode::DynamicWorkgroupMemory
         }
         UnsupportedFeatureV1::Matrix => UnsupportedFeatureCode::Matrix,
+        UnsupportedFeatureV1::UnsupportedNumericalContract => {
+            UnsupportedFeatureCode::UnsupportedNumericalContract
+        }
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
         UnsupportedFeatureV1::Gfx950LdsTranspose => UnsupportedFeatureCode::Gfx950LdsTranspose,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
@@ -4599,6 +4603,13 @@ mod tests {
             ))
             .unwrap(),
             "dynamic_workgroup_memory"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(
+                &UnsupportedFeatureV1::UnsupportedNumericalContract
+            ))
+            .unwrap(),
+            "unsupported_numerical_contract"
         );
         assert_eq!(
             serde_json::to_value(unsupported_code(

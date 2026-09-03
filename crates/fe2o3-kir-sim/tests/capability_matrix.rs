@@ -129,6 +129,65 @@ fn f32_wave_ownership_is_explicitly_additive_v9_and_v10() {
 }
 
 #[test]
+fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
+    let matrix = semantic_capability_matrix_v1();
+    for profile in matrix
+        .top_level_rows
+        .iter()
+        .map(|row| row.profile)
+        .collect::<BTreeSet<_>>()
+    {
+        let capability = |version, operation| {
+            &matrix
+                .top_level_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == version
+                        && row.operation == operation
+                })
+                .unwrap()
+                .capability
+        };
+        for version in [
+            SimulationKirWireVersionV1::V7,
+            SimulationKirWireVersionV1::V9,
+            SimulationKirWireVersionV1::V10,
+        ] {
+            assert!(matches!(
+                capability(version, SimulationOperationSurfaceV1::Matrix),
+                SimulationCapabilityDispositionV1::Owned {
+                    typed_rejections,
+                    ..
+                } if *typed_rejections
+                    == [SimulationUnsupportedReasonCodeV1::UnsupportedNumericalContract]
+            ));
+        }
+        assert!(matches!(
+            capability(
+                SimulationKirWireVersionV1::V7,
+                SimulationOperationSurfaceV1::Gfx950LdsTranspose
+            ),
+            SimulationCapabilityDispositionV1::Unsupported {
+                reason: SimulationUnsupportedReasonCodeV1::Gfx950LdsTranspose
+            }
+        ));
+        for version in [
+            SimulationKirWireVersionV1::V9,
+            SimulationKirWireVersionV1::V10,
+        ] {
+            assert!(matches!(
+                capability(version, SimulationOperationSurfaceV1::Gfx950LdsTranspose),
+                SimulationCapabilityDispositionV1::Owned {
+                    typed_rejections,
+                    ..
+                } if typed_rejections.is_empty()
+            ));
+        }
+    }
+}
+
+#[test]
 fn json_command_emits_the_same_stable_matrix() {
     let first = Command::new(env!("CARGO_BIN_EXE_fe2o3-kir-sim-capabilities"))
         .output()

@@ -64,6 +64,7 @@ pub enum UnsupportedFeatureV1 {
     WorkgroupMemory,
     DynamicWorkgroupMemory,
     Matrix,
+    UnsupportedNumericalContract,
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
@@ -582,25 +583,36 @@ fn validate_workgroup_resources(
         else {
             continue;
         };
-        for memory in body
+        for (element, elements) in body
             .blocks
             .iter()
             .flat_map(|block| &block.operations)
             .filter_map(|operation| match &operation.kind {
-                OperationKind::WorkgroupMemory(memory) => Some(memory),
+                OperationKind::WorkgroupMemory(memory) => {
+                    let (Type::Scalar(element), fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements)) =
+                        (&memory.element, memory.extent)
+                    else {
+                        return None;
+                    };
+                    Some((*element, elements))
+                }
+                OperationKind::Gfx950LdsTranspose(
+                    fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1 {
+                        kind:
+                            fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current {
+                                format,
+                            },
+                        ..
+                    },
+                ) => Some((ScalarType::U8, format.lds_bytes())),
                 _ => None,
             })
         {
-            let (Type::Scalar(element), fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements)) =
-                (&memory.element, memory.extent)
-            else {
-                continue;
-            };
             let bytes = usize::try_from(elements)
                 .ok()
                 .and_then(|elements| {
                     target
-                        .scalar_bytes(*element)
+                        .scalar_bytes(element)
                         .and_then(|width| elements.checked_mul(width))
                 })
                 .ok_or(SimulationPreflightErrorV1::ResourceLimit {
@@ -1601,11 +1613,16 @@ fn scan_operation(
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
-        OperationKind::Matrix(_) => reject!(UnsupportedFeatureV1::Matrix),
+        OperationKind::Matrix(matrix) => match matrix.kind {
+            fe2o3_kernel_ir::MatrixOperationKind::LdsLoad { .. }
+            | fe2o3_kernel_ir::MatrixOperationKind::LdsStore { .. } => {}
+            fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
+            | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                reject!(UnsupportedFeatureV1::UnsupportedNumericalContract)
+            }
+        },
         OperationKind::Wave(_) => {}
-        OperationKind::Gfx950LdsTranspose(_) => {
-            reject!(UnsupportedFeatureV1::Gfx950LdsTranspose)
-        }
+        OperationKind::Gfx950LdsTranspose(_) => {}
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
     }
     Ok(())
@@ -2213,7 +2230,7 @@ mod tests {
     }
 
     #[test]
-    fn gfx950_lds_transpose_has_an_explicit_unsupported_classification() {
+    fn gfx950_lds_transpose_is_owned_by_the_exact_cooperative_profile() {
         let function = Function::kernel_entry(
             "gfx950_transpose",
             fe2o3_kernel_ir::Signature::new(vec![], vec![]),
@@ -2261,13 +2278,48 @@ mod tests {
         .unwrap();
 
         let report = findings.finish().unwrap();
+        assert_eq!(report.total_findings(), 0);
+        assert!(report.findings().is_empty());
+    }
+
+    #[test]
+    fn matrix_multiply_has_a_precise_numerical_contract_rejection() {
+        let function = Function::kernel_entry(
+            "matrix_multiply",
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+            vec![],
+            vec![],
+        );
+        let operation = Operation::new(
+            vec![],
+            OperationKind::Matrix(fe2o3_kernel_ir::MatrixOperation::multiply_accumulate(
+                [ValueId(0); 4],
+                [ValueId(1); 4],
+                [ValueId(2); 4],
+            )),
+        );
+        let mut findings = UnsupportedCollectorV1::new().unwrap();
+        scan_operation(
+            &function,
+            BlockId(0),
+            0,
+            &operation,
+            &HashMap::new(),
+            &Module::new("matrix_multiply"),
+            &HashMap::new(),
+            &mut Vec::new(),
+            &mut [true],
+            &mut 1,
+            1,
+            &mut findings,
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+        let report = findings.finish().unwrap();
         assert_eq!(report.total_findings(), 1);
-        assert_eq!(report.findings()[0].function.as_str(), "gfx950_transpose");
-        assert_eq!(report.findings()[0].block, Some(BlockId(0)));
-        assert_eq!(report.findings()[0].operation, Some(0));
         assert_eq!(
             report.findings()[0].feature,
-            UnsupportedFeatureV1::Gfx950LdsTranspose
+            UnsupportedFeatureV1::UnsupportedNumericalContract
         );
     }
 

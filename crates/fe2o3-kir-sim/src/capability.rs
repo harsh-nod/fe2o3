@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_746_086;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_746_898;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -234,6 +234,7 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     WorkgroupMemory,
     DynamicWorkgroupMemory,
     Matrix,
+    UnsupportedNumericalContract,
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
@@ -275,6 +276,9 @@ impl UnsupportedFeatureV1 {
                 SimulationUnsupportedReasonCodeV1::DynamicWorkgroupMemory
             }
             Self::Matrix => SimulationUnsupportedReasonCodeV1::Matrix,
+            Self::UnsupportedNumericalContract => {
+                SimulationUnsupportedReasonCodeV1::UnsupportedNumericalContract
+            }
             Self::Wave => SimulationUnsupportedReasonCodeV1::Wave,
             Self::Gfx950LdsTranspose => SimulationUnsupportedReasonCodeV1::Gfx950LdsTranspose,
             Self::InlineAssembly => SimulationUnsupportedReasonCodeV1::InlineAssembly,
@@ -553,8 +557,14 @@ fn top_level_capability(
             Owner::WorkgroupCooperative,
             &[Reason::DynamicWorkgroupMemory, Reason::NonScalarMemory],
         ),
-        Surface::Matrix => unsupported(Reason::Matrix),
-        Surface::Gfx950LdsTranspose => unsupported(Reason::Gfx950LdsTranspose),
+        Surface::Matrix => owned(
+            Owner::WaveCooperative,
+            &[Reason::UnsupportedNumericalContract],
+        ),
+        Surface::Gfx950LdsTranspose if kir_wire_version == SimulationKirWireVersionV1::V7 => {
+            unsupported(Reason::Gfx950LdsTranspose)
+        }
+        Surface::Gfx950LdsTranspose => owned(Owner::WorkgroupCooperative, &[]),
         Surface::Wave if kir_wire_version == SimulationKirWireVersionV1::V7 => {
             owned(Owner::WaveCooperative, &[Reason::Wave])
         }
