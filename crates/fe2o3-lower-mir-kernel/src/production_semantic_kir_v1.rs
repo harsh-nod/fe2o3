@@ -24748,6 +24748,7 @@ mod resource_tests {
                 declarations: &[],
                 values: &[],
                 types: &[],
+                local_bindings: None,
             },
             Some(BlockId(2)),
             None,
