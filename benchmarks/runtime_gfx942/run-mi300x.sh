@@ -129,11 +129,14 @@ printf 'context schema=fe2o3.runtime-gfx942-benchmark.v1 git_commit=%s target=gf
   "${rocm_version}" "${rustc_version}" "${cargo_version}" "${gpu_busy_before}" "${max_busy}" \
   "${element_count}" "${warmups}" "${samples}" "${launches}"
 
-printf 'context phase=kfd gpu_busy_start_percent=%s\n' "$(require_idle_gpu)"
+phase_busy="$(require_idle_gpu)"
+printf 'context phase=kfd gpu_busy_start_percent=%s\n' "${phase_busy}"
 "${build_dir}/target/release/examples/gfx942-runtime-vecadd-benchmark" \
   "${unique_id}" "${warmups}" "${samples}" "${launches}"
-printf 'context phase=kfd gpu_busy_end_percent=%s\n' "$(require_idle_gpu)"
-printf 'context phase=hsa gpu_busy_start_percent=%s\n' "$(require_idle_gpu)"
+phase_busy="$(require_idle_gpu)"
+printf 'context phase=kfd gpu_busy_end_percent=%s\n' "${phase_busy}"
+phase_busy="$(require_idle_gpu)"
+printf 'context phase=hsa gpu_busy_start_percent=%s\n' "${phase_busy}"
 HIP_VISIBLE_DEVICES=0 \
 ROCR_VISIBLE_DEVICES="${gpu_index}" \
 FE2O3_RUN_GFX942_RUNTIME_HSA_QUALIFICATION=1 \
@@ -145,10 +148,13 @@ FE2O3_RUNTIME_LAUNCHES_PER_SAMPLE="${launches}" \
     --test gfx942_runtime_context_hardware \
     qualification::gfx942_runtime_context_exact_fixture_executes_dependencies_wraps_and_times \
     -- --ignored --exact --nocapture --test-threads=1
-printf 'context phase=hsa gpu_busy_end_percent=%s\n' "$(require_idle_gpu)"
-printf 'context phase=hip gpu_busy_start_percent=%s\n' "$(require_idle_gpu)"
+phase_busy="$(require_idle_gpu)"
+printf 'context phase=hsa gpu_busy_end_percent=%s\n' "${phase_busy}"
+phase_busy="$(require_idle_gpu)"
+printf 'context phase=hip gpu_busy_start_percent=%s\n' "${phase_busy}"
 HIP_VISIBLE_DEVICES="${gpu_index}" "${build_dir}/vecadd-module-hip" \
   "${fixture}" "${element_count}" "${warmups}" "${samples}" "${launches}"
-printf 'context phase=hip gpu_busy_end_percent=%s\n' "$(require_idle_gpu)"
+phase_busy="$(require_idle_gpu)"
+printf 'context phase=hip gpu_busy_end_percent=%s\n' "${phase_busy}"
 gpu_busy_after="$(require_idle_gpu)"
 printf 'context gpu_busy_after_percent=%s\n' "${gpu_busy_after}"

@@ -85,9 +85,14 @@ higher bandwidth is better. Thus a 10x speedup policy uses
 `--max-latency-ratio 0.10` and/or `--min-bandwidth-ratio 10.0`; it is not
 silently weakened to a parity-only bound. The checker rejects missing or
 duplicate backend rows, nonpositive metrics or thresholds, mismatched device
-IDs, warmup/sample counts, and any KFD p50/p95 latency or p50 bandwidth ratio
-outside the supplied bounds. Multi-device copy and XGMI logs use their
-corresponding schema names and require the same ordered pair of device IDs.
+IDs, warmup/sample counts, incomplete pre/post phase-load observations, and any
+KFD p50/p95 latency or p50 bandwidth ratio outside the supplied bounds. It
+also requires one canonical run context binding the rows to an exact commit,
+target/XNACK mode, device roster, ROCm and Rust versions, queue profile or XGMI
+timing scope, and load ceiling. Decimal arithmetic prevents binary-float
+overflow or underflow from satisfying a bound. Multi-device copy and XGMI logs
+use their corresponding schema names and require the same ordered pair of
+device IDs.
 
 A passing threshold is evidence only for the rows, devices, timing boundary,
 software stack, and workload encoded in that input. It does not establish a
