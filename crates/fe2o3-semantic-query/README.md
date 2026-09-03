@@ -82,13 +82,23 @@ one canonical Source/ISA Observation V1 collection. `open_evidence` accepts the
 exact inputs as canonical lowercase hex; subsequent `inspect_binding`,
 `list_dispatches`, and `inspect_dispatch` requests use revision checks,
 duplicate-request rejection, and capture-bound pagination cursors.
+Every input record, including malformed or noncanonical JSON, consumes the
+64-record session budget; the next record receives a typed terminal
+`request_budget_exhausted` response. A response that cannot fit the 4 MiB wire
+bound is replaced, before any partial bytes are written, by a small typed
+terminal `response_too_large` response.
 
 The join follows observed dispatch to resolved kernel, loaded module, and exact
 artifact content identity. It returns every admitted compilation unit for that
 artifact rather than selecting one by name. Each unit retains its collection,
 frame, unit, correlation, structural-map, neutral-KIR, target-KIR, target, and
 coverage evidence. Artifact or target substitution returns a typed unavailable
-relation. An incomplete source/ISA collection remains visibly incomplete.
+relation. Target admission requires the exact canonical target identity
+(`gfx942:xnack-` or `gfx950:xnack-`) and Wave64; feature suffixes are not prefix
+matched. An incomplete Source/ISA collection remains visibly incomplete. The
+session retains compact dispatch metadata and compilation frames once per
+artifact, builds summaries only for the requested page, and expands compilation
+units only for the inspected dispatch.
 
 Direct-KFD profiles do not contain an observed PC or semantic execution event,
 so the service never turns an artifact match into a source-site claim. Source,

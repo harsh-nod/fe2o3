@@ -206,10 +206,16 @@ each observed dispatch through its resolved kernel and loaded module, and joins
 the loaded artifact content identity to every matching admitted compilation
 unit. It binds pagination to both exact inputs and rejects artifact, target,
 cursor, and encoding substitution. Collection incompleteness is retained. A
-loaded-artifact join is not a stopped/sampled instruction observation, so the
-service explicitly leaves source, MIR, KIR-operation, schedule, LLVM, and ISA
-interval attribution unavailable without an independently admitted PC, ATT, or
-semantic event.
+target match requires the exact canonical `gfx942:xnack-` or `gfx950:xnack-`
+identity and Wave64. The admitted index retains each compilation frame once per
+artifact and compact metadata per dispatch; summaries and a single dispatch's
+compilation-unit expansion are produced on request. Malformed and noncanonical
+records consume the same 64-record session budget as parsed requests, and an
+oversize result becomes a typed terminal response before any partial record is
+written. A loaded-artifact join is not a stopped/sampled instruction
+observation, so the service explicitly leaves source, MIR, KIR-operation,
+schedule, LLVM, and ISA interval attribution unavailable without an
+independently admitted PC, ATT, or semantic event.
 
 ## Closure matrix
 

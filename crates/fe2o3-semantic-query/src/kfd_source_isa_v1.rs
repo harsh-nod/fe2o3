@@ -6,18 +6,19 @@
 //! its exact loaded artifact, while keeping site attribution explicitly
 //! unavailable. It never guesses a source site from a kernel name.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Write};
 
 use fe2o3_profiler_protocol::{
-    KfdProfileLaunchV1, KfdRuntimeProfileEventKindV1, KfdRuntimeProfileV1,
-    MAX_KFD_RUNTIME_PROFILE_BYTES_V1, ProfileContentIdentityV1, ProfileIdentityV1,
-    decode_kfd_runtime_profile_v1, kfd_runtime_profile_content_identity_v1,
+    KfdProfileLaunchV1, KfdRuntimeProfileEventKindV1, MAX_KFD_RUNTIME_PROFILE_BYTES_V1,
+    ProfileContentIdentityV1, ProfileIdentityV1, decode_kfd_runtime_profile_v1,
+    kfd_runtime_profile_content_identity_v1,
 };
 use fe2o3_source_isa_observation::wire_v1::{
-    MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1, SourceIsaObservationCollectionV1,
+    AdmittedSourceIsaObservationV1, MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
+    SourceIsaObservationCollectionV1, SourceIsaObservationFrameV1,
     SourceIsaObservationKirVersionV1, SourceIsaObservationOutcomeV1,
     SourceIsaObservationTargetProfileV1,
 };
@@ -312,12 +313,31 @@ impl AgentKfdSourceIsaResponseV1 {
 }
 
 struct AdmittedKfdSourceIsaV1 {
-    capture: KfdRuntimeProfileV1,
-    collection: SourceIsaObservationCollectionV1,
+    target_profile: String,
+    collection_coverage: KfdSourceIsaCollectionCoverageV1,
+    admitted_compilation_units: bool,
+    source_artifacts: BTreeMap<ProfileIdentityV1, IndexedSourceArtifactV1>,
+    dispatches: Vec<IndexedKfdDispatchV1>,
     capture_input: KfdSourceIsaContentIdentityV1,
     capture_content: KfdSourceIsaContentIdentityV1,
     collection_input: KfdSourceIsaContentIdentityV1,
     binding_identity: [u8; 32],
+}
+
+struct IndexedSourceArtifactV1 {
+    matching_compilation_units: Vec<KfdSourceIsaFrameV1>,
+    observed_with_other_target: bool,
+}
+
+#[derive(Clone, Copy)]
+struct IndexedKfdDispatchV1 {
+    dispatch: ProfileIdentityV1,
+    event: ProfileIdentityV1,
+    kernel: ProfileIdentityV1,
+    module: ProfileIdentityV1,
+    artifact: ProfileContentIdentityV1,
+    launch: KfdProfileLaunchV1,
+    binding_count: u64,
 }
 
 impl AdmittedKfdSourceIsaV1 {
@@ -343,9 +363,100 @@ impl AdmittedKfdSourceIsaV1 {
         hasher.update(capture_input.digest.as_bytes());
         hasher.update(collection_input.digest.as_bytes());
         let binding_identity = hasher.finalize().into();
+
+        let collection_coverage =
+            if collection.failure().is_none() && collection.missing_units().is_empty() {
+                KfdSourceIsaCollectionCoverageV1::Complete
+            } else {
+                KfdSourceIsaCollectionCoverageV1::Incomplete
+            };
+        let mut source_artifacts: BTreeMap<ProfileIdentityV1, IndexedSourceArtifactV1> =
+            BTreeMap::new();
+        let mut admitted_compilation_units = false;
+        for frame in collection.frames() {
+            let SourceIsaObservationOutcomeV1::Admitted(admitted) = frame.outcome() else {
+                continue;
+            };
+            admitted_compilation_units = true;
+            let source_artifact = admitted.artifact();
+            let expected = ProfileContentIdentityV1::observed_sha256(
+                source_artifact.byte_len(),
+                source_artifact.sha256(),
+            )
+            .map_err(|_| AgentKfdSourceIsaErrorCodeV1::SourceIsaAdmission)?;
+            let indexed = source_artifacts.entry(expected.digest).or_insert_with(|| {
+                IndexedSourceArtifactV1 {
+                    matching_compilation_units: Vec::new(),
+                    observed_with_other_target: false,
+                }
+            });
+            if target_matches(
+                &capture.device.target_profile,
+                capture.device.wave_width,
+                admitted.structural().target_profile(),
+            ) {
+                indexed
+                    .matching_compilation_units
+                    .push(source_frame(frame, &admitted));
+            } else {
+                indexed.observed_with_other_target = true;
+            }
+        }
+        for artifact in source_artifacts.values_mut() {
+            artifact.matching_compilation_units.sort_by(|left, right| {
+                left.compilation_unit_identity
+                    .cmp(&right.compilation_unit_identity)
+            });
+        }
+
+        let mut modules = BTreeMap::new();
+        let mut kernels = BTreeMap::new();
+        let mut dispatches = Vec::new();
+        dispatches
+            .try_reserve_exact(capture.events.len())
+            .map_err(|_| AgentKfdSourceIsaErrorCodeV1::CaptureAdmission)?;
+        for event in &capture.events {
+            match &event.event {
+                KfdRuntimeProfileEventKindV1::ModuleLoaded { module, artifact } => {
+                    modules.insert(*module, *artifact);
+                }
+                KfdRuntimeProfileEventKindV1::KernelResolved { kernel, module, .. } => {
+                    let artifact = modules
+                        .get(module)
+                        .copied()
+                        .ok_or(AgentKfdSourceIsaErrorCodeV1::CaptureAdmission)?;
+                    kernels.insert(*kernel, (*module, artifact));
+                }
+                KfdRuntimeProfileEventKindV1::DispatchPublished {
+                    dispatch,
+                    kernel,
+                    launch,
+                    bindings,
+                    ..
+                } => {
+                    let (module, artifact) = kernels
+                        .get(kernel)
+                        .copied()
+                        .ok_or(AgentKfdSourceIsaErrorCodeV1::CaptureAdmission)?;
+                    dispatches.push(IndexedKfdDispatchV1 {
+                        dispatch: *dispatch,
+                        event: event.identity,
+                        kernel: *kernel,
+                        module,
+                        artifact,
+                        launch: *launch,
+                        binding_count: bindings.len() as u64,
+                    });
+                }
+                _ => {}
+            }
+        }
         Ok(Self {
-            capture,
-            collection,
+            target_profile: capture.device.target_profile,
+            collection_coverage,
+            admitted_compilation_units,
+            source_artifacts,
+            dispatches,
             capture_input,
             capture_content,
             collection_input,
@@ -354,149 +465,50 @@ impl AdmittedKfdSourceIsaV1 {
     }
 
     fn collection_coverage(&self) -> KfdSourceIsaCollectionCoverageV1 {
-        if self.collection.failure().is_none() && self.collection.missing_units().is_empty() {
-            KfdSourceIsaCollectionCoverageV1::Complete
-        } else {
-            KfdSourceIsaCollectionCoverageV1::Incomplete
-        }
+        self.collection_coverage
     }
 
-    fn dispatches(&self) -> Vec<KfdSourceIsaDispatchV1> {
-        self.capture
-            .events
-            .iter()
-            .filter_map(|event| {
-                let KfdRuntimeProfileEventKindV1::DispatchPublished {
-                    dispatch,
-                    kernel,
-                    launch,
-                    bindings,
-                    ..
-                } = &event.event
-                else {
-                    return None;
-                };
-                let (module, artifact) = self.kernel_artifact(*kernel)?;
-                let semantic_binding = self.artifact_binding(artifact);
-                let summary = KfdSourceIsaDispatchSummaryV1 {
-                    dispatch_identity: profile_identity(*dispatch),
-                    dispatch_event_identity: profile_identity(event.identity),
-                    kernel_identity: profile_identity(*kernel),
-                    module_identity: profile_identity(module),
-                    artifact: profile_content(artifact),
-                    artifact_relation: semantic_binding.relation,
-                    unavailable_reason: semantic_binding.unavailable_reason,
-                    matching_compilation_unit_count: semantic_binding
-                        .matching_compilation_units
-                        .len() as u64,
-                };
-                Some(KfdSourceIsaDispatchV1 {
-                    summary,
-                    launch: *launch,
-                    binding_count: bindings.len() as u64,
-                    semantic_binding,
-                })
-            })
-            .collect()
-    }
-
-    fn kernel_artifact(
+    fn artifact_relation(
         &self,
-        kernel_identity: ProfileIdentityV1,
-    ) -> Option<(ProfileIdentityV1, ProfileContentIdentityV1)> {
-        let module = self
-            .capture
-            .events
-            .iter()
-            .find_map(|event| match event.event {
-                KfdRuntimeProfileEventKindV1::KernelResolved { kernel, module, .. }
-                    if kernel == kernel_identity =>
-                {
-                    Some(module)
-                }
-                _ => None,
-            })?;
-        let artifact = self
-            .capture
-            .events
-            .iter()
-            .find_map(|event| match event.event {
-                KfdRuntimeProfileEventKindV1::ModuleLoaded {
-                    module: candidate,
-                    artifact,
-                } if candidate == module => Some(artifact),
-                _ => None,
-            })?;
-        Some((module, artifact))
+        artifact: ProfileContentIdentityV1,
+    ) -> (
+        KfdSourceIsaArtifactRelationV1,
+        Option<KfdSourceIsaUnavailableReasonV1>,
+        usize,
+    ) {
+        let indexed = self.source_artifacts.get(&artifact.digest);
+        let matching = indexed.map_or(0, |item| item.matching_compilation_units.len());
+        let unavailable = if matching != 0 {
+            None
+        } else if indexed.is_some_and(|item| item.observed_with_other_target) {
+            Some(KfdSourceIsaUnavailableReasonV1::TargetProfileMismatch)
+        } else if !self.admitted_compilation_units {
+            Some(KfdSourceIsaUnavailableReasonV1::NoAdmittedCompilationUnit)
+        } else {
+            Some(KfdSourceIsaUnavailableReasonV1::NoMatchingArtifact)
+        };
+        (
+            if unavailable.is_none() {
+                KfdSourceIsaArtifactRelationV1::Exact
+            } else {
+                KfdSourceIsaArtifactRelationV1::Unavailable
+            },
+            unavailable,
+            matching,
+        )
     }
 
     fn artifact_binding(
         &self,
         artifact: ProfileContentIdentityV1,
     ) -> KfdSourceIsaArtifactBindingV1 {
-        let mut matching_compilation_units = Vec::new();
-        let mut artifact_seen_with_other_target = false;
-        let mut admitted_seen = false;
-        for frame in self.collection.frames() {
-            let SourceIsaObservationOutcomeV1::Admitted(admitted) = frame.outcome() else {
-                continue;
-            };
-            admitted_seen = true;
-            let source_artifact = admitted.artifact();
-            let Ok(expected) = ProfileContentIdentityV1::observed_sha256(
-                source_artifact.byte_len(),
-                source_artifact.sha256(),
-            ) else {
-                continue;
-            };
-            if expected != artifact {
-                continue;
-            }
-            let structural = admitted.structural();
-            if !target_matches(
-                &self.capture.device.target_profile,
-                structural.target_profile(),
-            ) {
-                artifact_seen_with_other_target = true;
-                continue;
-            }
-            let counts = admitted.counts().records();
-            matching_compilation_units.push(KfdSourceIsaFrameV1 {
-                frame_identity: hex(&frame.identity()),
-                compilation_unit_identity: hex(&frame.context().unit()),
-                correlation_identity: hex(&admitted.correlation()),
-                artifact_sha256: hex(&source_artifact.sha256()),
-                artifact_byte_len: source_artifact.byte_len(),
-                structural_map_identity: hex(&structural.identity()),
-                target_profile: source_target(structural.target_profile()),
-                kir_version: source_kir_version(structural.kir_version()),
-                neutral_kir: source_content(structural.neutral_kir()),
-                target_kir: source_content(structural.target_kir()),
-                source_anchored_records: counts.source_anchored,
-                eliminated_records: counts.eliminated,
-                records_without_source: counts.no_source,
-                isa_references: counts.isa_references,
-            });
-        }
-        matching_compilation_units.sort_by(|left, right| {
-            left.compilation_unit_identity
-                .cmp(&right.compilation_unit_identity)
-        });
-        let unavailable_reason = if !matching_compilation_units.is_empty() {
-            None
-        } else if artifact_seen_with_other_target {
-            Some(KfdSourceIsaUnavailableReasonV1::TargetProfileMismatch)
-        } else if !admitted_seen {
-            Some(KfdSourceIsaUnavailableReasonV1::NoAdmittedCompilationUnit)
-        } else {
-            Some(KfdSourceIsaUnavailableReasonV1::NoMatchingArtifact)
-        };
+        let (relation, unavailable_reason, _) = self.artifact_relation(artifact);
+        let matching_compilation_units = self
+            .source_artifacts
+            .get(&artifact.digest)
+            .map_or_else(Vec::new, |item| item.matching_compilation_units.clone());
         KfdSourceIsaArtifactBindingV1 {
-            relation: if unavailable_reason.is_none() {
-                KfdSourceIsaArtifactRelationV1::Exact
-            } else {
-                KfdSourceIsaArtifactRelationV1::Unavailable
-            },
+            relation,
             unavailable_reason,
             collection_coverage: self.collection_coverage(),
             matching_compilation_units,
@@ -506,12 +518,36 @@ impl AdmittedKfdSourceIsaV1 {
         }
     }
 
+    fn dispatch_summary(&self, dispatch: &IndexedKfdDispatchV1) -> KfdSourceIsaDispatchSummaryV1 {
+        let (artifact_relation, unavailable_reason, matching) =
+            self.artifact_relation(dispatch.artifact);
+        KfdSourceIsaDispatchSummaryV1 {
+            dispatch_identity: profile_identity(dispatch.dispatch),
+            dispatch_event_identity: profile_identity(dispatch.event),
+            kernel_identity: profile_identity(dispatch.kernel),
+            module_identity: profile_identity(dispatch.module),
+            artifact: profile_content(dispatch.artifact),
+            artifact_relation,
+            unavailable_reason,
+            matching_compilation_unit_count: matching as u64,
+        }
+    }
+
+    fn dispatch(&self, dispatch: &IndexedKfdDispatchV1) -> KfdSourceIsaDispatchV1 {
+        KfdSourceIsaDispatchV1 {
+            summary: self.dispatch_summary(dispatch),
+            launch: dispatch.launch,
+            binding_count: dispatch.binding_count,
+            semantic_binding: self.artifact_binding(dispatch.artifact),
+        }
+    }
+
     fn summary(&self) -> KfdSourceIsaBindingSummaryV1 {
-        let dispatches = self.dispatches();
-        let exact = dispatches
+        let exact = self
+            .dispatches
             .iter()
             .filter(|dispatch| {
-                dispatch.summary.artifact_relation == KfdSourceIsaArtifactRelationV1::Exact
+                self.artifact_relation(dispatch.artifact).0 == KfdSourceIsaArtifactRelationV1::Exact
             })
             .count() as u64;
         KfdSourceIsaBindingSummaryV1 {
@@ -519,11 +555,11 @@ impl AdmittedKfdSourceIsaV1 {
             capture_input: self.capture_input.clone(),
             capture_content_identity: self.capture_content.clone(),
             source_isa_collection_input: self.collection_input.clone(),
-            target_profile: self.capture.device.target_profile.clone(),
+            target_profile: self.target_profile.clone(),
             collection_coverage: self.collection_coverage(),
-            observed_dispatch_count: dispatches.len() as u64,
+            observed_dispatch_count: self.dispatches.len() as u64,
             exact_artifact_dispatch_count: exact,
-            unavailable_dispatch_count: dispatches.len() as u64 - exact,
+            unavailable_dispatch_count: self.dispatches.len() as u64 - exact,
             authority:
                 KfdSourceIsaAuthorityV1::ReadOnlyNoCompilerProofLoadDispatchAttachOrCollectionAuthority,
         }
@@ -665,16 +701,16 @@ impl AgentKfdSourceIsaServiceV1 {
                         None => return self.error(Some(request_id), AgentKfdSourceIsaErrorCodeV1::CursorMismatch, false),
                     },
                 };
-                let dispatches = evidence.dispatches();
-                if start > dispatches.len() {
+                if start > evidence.dispatches.len() {
                     return self.error(Some(request_id), AgentKfdSourceIsaErrorCodeV1::CursorMismatch, false);
                 }
-                let end = start.saturating_add(limit as usize).min(dispatches.len());
-                let items = dispatches[start..end]
+                let end = start.saturating_add(limit as usize).min(evidence.dispatches.len());
+                let items = evidence.dispatches[start..end]
                     .iter()
-                    .map(|dispatch| dispatch.summary.clone())
+                    .map(|dispatch| evidence.dispatch_summary(dispatch))
                     .collect();
-                let next_cursor = (end < dispatches.len()).then(|| cursor_for(evidence.binding_identity, end));
+                let next_cursor = (end < evidence.dispatches.len())
+                    .then(|| cursor_for(evidence.binding_identity, end));
                 AgentKfdSourceIsaResultV1::DispatchPage {
                     binding_identity: hex(&evidence.binding_identity),
                     items,
@@ -688,19 +724,38 @@ impl AgentKfdSourceIsaServiceV1 {
                 let Some(dispatch_identity) = parse_identity(&dispatch_identity) else {
                     return self.error(Some(request_id), AgentKfdSourceIsaErrorCodeV1::InvalidDispatchIdentity, false);
                 };
-                let dispatch = evidence.dispatches().into_iter().find(|dispatch| {
-                    dispatch.summary.dispatch_identity == hex(&dispatch_identity)
-                });
+                let dispatch = evidence
+                    .dispatches
+                    .iter()
+                    .find(|dispatch| dispatch.dispatch.as_bytes() == dispatch_identity);
                 let Some(dispatch) = dispatch else {
                     return self.error(Some(request_id), AgentKfdSourceIsaErrorCodeV1::UnknownDispatch, false);
                 };
                 AgentKfdSourceIsaResultV1::Dispatch {
                     binding_identity: hex(&evidence.binding_identity),
-                    dispatch,
+                    dispatch: evidence.dispatch(dispatch),
                 }
             }
         };
         self.ok(request_id, value)
+    }
+
+    fn reject_record(&mut self, request_id: Option<u64>) -> AgentKfdSourceIsaResponseV1 {
+        if self.remaining_requests == 0 {
+            return self.error(
+                request_id,
+                AgentKfdSourceIsaErrorCodeV1::RequestBudgetExhausted,
+                true,
+            );
+        }
+        self.remaining_requests -= 1;
+        let code = match request_id {
+            Some(request_id) if request_id != 0 && !self.seen_request_ids.insert(request_id) => {
+                AgentKfdSourceIsaErrorCodeV1::DuplicateRequestId
+            }
+            _ => AgentKfdSourceIsaErrorCodeV1::InvalidRequest,
+        };
+        self.error(request_id, code, false)
     }
 
     fn ok(
@@ -753,38 +808,44 @@ pub fn run_agent_kfd_source_isa_jsonl_v1<R: BufRead, W: Write>(
         if line.last() != Some(&b'\n')
             || line.len() as u64 > MAX_AGENT_KFD_SOURCE_ISA_REQUEST_BYTES_V1 + 1
         {
-            let response = service.error(None, AgentKfdSourceIsaErrorCodeV1::InvalidRequest, true);
-            write_response(output, &response)?;
+            let mut response = service.reject_record(None);
+            if let AgentKfdSourceIsaResponseV1::Error { terminal, .. } = &mut response {
+                *terminal = true;
+            }
+            write_response_with_size_fallback(output, &mut service, &response)?;
             return Ok(());
         }
         line.pop();
         if line.last() == Some(&b'\r') || line.is_empty() {
-            let response = service.error(None, AgentKfdSourceIsaErrorCodeV1::InvalidRequest, false);
-            write_response(output, &response)?;
+            let response = service.reject_record(None);
+            let terminal = write_response_with_size_fallback(output, &mut service, &response)?;
+            if terminal {
+                return Ok(());
+            }
             continue;
         }
         let request: AgentKfdSourceIsaRequestV1 = match serde_json::from_slice(&line) {
             Ok(request) => request,
             Err(_) => {
-                let response =
-                    service.error(None, AgentKfdSourceIsaErrorCodeV1::InvalidRequest, false);
-                write_response(output, &response)?;
+                let response = service.reject_record(None);
+                let terminal = write_response_with_size_fallback(output, &mut service, &response)?;
+                if terminal {
+                    return Ok(());
+                }
                 continue;
             }
         };
         if serde_json::to_vec(&request).map_err(|_| AgentKfdSourceIsaServiceErrorV1::Json)? != line
         {
-            let response = service.error(
-                Some(request.request_id()),
-                AgentKfdSourceIsaErrorCodeV1::InvalidRequest,
-                false,
-            );
-            write_response(output, &response)?;
+            let response = service.reject_record(Some(request.request_id()));
+            let terminal = write_response_with_size_fallback(output, &mut service, &response)?;
+            if terminal {
+                return Ok(());
+            }
             continue;
         }
         let response = service.handle(request);
-        let terminal = response.is_terminal();
-        write_response(output, &response)?;
+        let terminal = write_response_with_size_fallback(output, &mut service, &response)?;
         if terminal {
             return Ok(());
         }
@@ -795,19 +856,77 @@ fn write_response(
     output: &mut impl Write,
     response: &AgentKfdSourceIsaResponseV1,
 ) -> Result<(), AgentKfdSourceIsaServiceErrorV1> {
-    let bytes = serde_json::to_vec(response).map_err(|_| AgentKfdSourceIsaServiceErrorV1::Json)?;
-    if bytes.len() as u64 > MAX_AGENT_KFD_SOURCE_ISA_RESPONSE_BYTES_V1 {
-        return Err(AgentKfdSourceIsaServiceErrorV1::ResponseTooLarge);
-    }
+    let bytes = encode_response(response)?;
     output
         .write_all(&bytes)
         .map_err(|_| AgentKfdSourceIsaServiceErrorV1::Io)?;
     output
-        .write_all(b"\n")
-        .map_err(|_| AgentKfdSourceIsaServiceErrorV1::Io)?;
-    output
         .flush()
         .map_err(|_| AgentKfdSourceIsaServiceErrorV1::Io)
+}
+
+fn write_response_with_size_fallback(
+    output: &mut impl Write,
+    service: &mut AgentKfdSourceIsaServiceV1,
+    response: &AgentKfdSourceIsaResponseV1,
+) -> Result<bool, AgentKfdSourceIsaServiceErrorV1> {
+    match write_response(output, response) {
+        Ok(()) => Ok(response.is_terminal()),
+        Err(AgentKfdSourceIsaServiceErrorV1::ResponseTooLarge) => {
+            let terminal =
+                service.error(None, AgentKfdSourceIsaErrorCodeV1::ResponseTooLarge, true);
+            write_response(output, &terminal)?;
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn encode_response(
+    response: &AgentKfdSourceIsaResponseV1,
+) -> Result<Vec<u8>, AgentKfdSourceIsaServiceErrorV1> {
+    let mut output = Vec::new();
+    let mut writer = BoundedResponseWriterV1 {
+        output: &mut output,
+        max: MAX_AGENT_KFD_SOURCE_ISA_RESPONSE_BYTES_V1 - 1,
+        exceeded: false,
+    };
+    serde_json::to_writer(&mut writer, response).map_err(|_| {
+        if writer.exceeded {
+            AgentKfdSourceIsaServiceErrorV1::ResponseTooLarge
+        } else {
+            AgentKfdSourceIsaServiceErrorV1::Json
+        }
+    })?;
+    output.push(b'\n');
+    Ok(output)
+}
+
+struct BoundedResponseWriterV1<'a> {
+    output: &'a mut Vec<u8>,
+    max: u64,
+    exceeded: bool,
+}
+
+impl Write for BoundedResponseWriterV1<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let byte_len = u64::try_from(bytes.len())
+            .map_err(|_| io::Error::other("response write length is not representable"))?;
+        let current = self.output.len() as u64;
+        if current
+            .checked_add(byte_len)
+            .is_none_or(|total| total > self.max)
+        {
+            self.exceeded = true;
+            return Err(io::Error::other("response exceeded its byte bound"));
+        }
+        self.output.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn decode_hex(value: &str, max_bytes: u64) -> Result<Vec<u8>, AgentKfdSourceIsaErrorCodeV1> {
@@ -887,10 +1006,35 @@ fn source_content(
     }
 }
 
+fn source_frame(
+    frame: &SourceIsaObservationFrameV1,
+    admitted: &AdmittedSourceIsaObservationV1,
+) -> KfdSourceIsaFrameV1 {
+    let source_artifact = admitted.artifact();
+    let structural = admitted.structural();
+    let counts = admitted.counts().records();
+    KfdSourceIsaFrameV1 {
+        frame_identity: hex(&frame.identity()),
+        compilation_unit_identity: hex(&frame.context().unit()),
+        correlation_identity: hex(&admitted.correlation()),
+        artifact_sha256: hex(&source_artifact.sha256()),
+        artifact_byte_len: source_artifact.byte_len(),
+        structural_map_identity: hex(&structural.identity()),
+        target_profile: source_target(structural.target_profile()),
+        kir_version: source_kir_version(structural.kir_version()),
+        neutral_kir: source_content(structural.neutral_kir()),
+        target_kir: source_content(structural.target_kir()),
+        source_anchored_records: counts.source_anchored,
+        eliminated_records: counts.eliminated,
+        records_without_source: counts.no_source,
+        isa_references: counts.isa_references,
+    }
+}
+
 fn source_target(target: SourceIsaObservationTargetProfileV1) -> &'static str {
     match target {
-        SourceIsaObservationTargetProfileV1::Gfx942 => "gfx942",
-        SourceIsaObservationTargetProfileV1::Gfx950 => "gfx950",
+        SourceIsaObservationTargetProfileV1::Gfx942 => "gfx942:xnack-",
+        SourceIsaObservationTargetProfileV1::Gfx950 => "gfx950:xnack-",
     }
 }
 
@@ -901,12 +1045,12 @@ fn source_kir_version(version: SourceIsaObservationKirVersionV1) -> u16 {
     }
 }
 
-fn target_matches(runtime: &str, source: SourceIsaObservationTargetProfileV1) -> bool {
-    let base = source_target(source);
-    runtime == base
-        || runtime
-            .strip_prefix(base)
-            .is_some_and(|suffix| suffix.starts_with(':'))
+fn target_matches(
+    runtime: &str,
+    runtime_wave_width: u16,
+    source: SourceIsaObservationTargetProfileV1,
+) -> bool {
+    runtime_wave_width == 64 && runtime == source_target(source)
 }
 
 fn cursor_for(binding: [u8; 32], next_ordinal: usize) -> KfdSourceIsaCursorV1 {
@@ -951,9 +1095,8 @@ mod tests {
         resource_identity_v1,
     };
     use fe2o3_source_isa_observation::wire_v1::{
-        AdmittedSourceIsaObservationV1, SourceIsaObservationAttemptV1,
-        SourceIsaObservationContentIdentityV1, SourceIsaObservationContextV1,
-        SourceIsaObservationCountsV1, SourceIsaObservationFrameV1,
+        SourceIsaObservationAttemptV1, SourceIsaObservationContentIdentityV1,
+        SourceIsaObservationContextV1, SourceIsaObservationCountsV1,
         SourceIsaObservationInvocationV1, SourceIsaObservationQueryCountsV1,
         SourceIsaObservationRecordCountsV1, SourceIsaObservationSessionV1,
         SourceIsaObservationStructuralBindingV1, SourceIsaObservationStructuralCountsV1,
@@ -962,6 +1105,15 @@ mod tests {
     fn fixture(
         artifact_byte: u8,
         source_target: SourceIsaObservationTargetProfileV1,
+    ) -> (Vec<u8>, Vec<u8>, String) {
+        fixture_with_runtime(artifact_byte, source_target, "gfx942:xnack-", 64)
+    }
+
+    fn fixture_with_runtime(
+        artifact_byte: u8,
+        source_target: SourceIsaObservationTargetProfileV1,
+        runtime_target: &str,
+        wave_width: u16,
     ) -> (Vec<u8>, Vec<u8>, String) {
         let scope = ProfileIdentityV1::new([1; 32]).unwrap();
         let queue = resource_identity_v1(scope, KfdProfileResourceKindV1::NativeQueue, 1).unwrap();
@@ -1015,7 +1167,7 @@ mod tests {
         }
         let capture = KfdRuntimeProfileV1::new(
             scope,
-            KfdProfileDeviceV1::observed(7, "gfx942:xnack-", 64).unwrap(),
+            KfdProfileDeviceV1::observed(7, runtime_target, wave_width).unwrap(),
             KfdProfileHostContentModeV1::RangeOnly,
             events,
             0,
@@ -1088,12 +1240,162 @@ mod tests {
         (capture, collection, profile_identity(dispatch))
     }
 
+    fn near_limit_fixture() -> (Vec<u8>, Vec<u8>) {
+        const DISPATCHES: usize = 4_096;
+        const SOURCE_UNITS: usize = 1_024;
+
+        let scope = ProfileIdentityV1::new([31; 32]).unwrap();
+        let queue = resource_identity_v1(scope, KfdProfileResourceKindV1::NativeQueue, 1).unwrap();
+        let stream = resource_identity_v1(scope, KfdProfileResourceKindV1::Stream, 2).unwrap();
+        let module = resource_identity_v1(scope, KfdProfileResourceKindV1::Module, 3).unwrap();
+        let kernel = resource_identity_v1(scope, KfdProfileResourceKindV1::Kernel, 4).unwrap();
+        let artifact = SourceIsaObservationContentIdentityV1::new([32; 32], 65_536).unwrap();
+        let profile_artifact =
+            ProfileContentIdentityV1::observed_sha256(artifact.byte_len(), artifact.sha256())
+                .unwrap();
+        let name = ProfileContentIdentityV1::observed(b"near-limit-kernel").unwrap();
+        let signature = ProfileContentIdentityV1::observed(b"near-limit-signature").unwrap();
+        let shape = ProfileContentIdentityV1::observed(b"near-limit-shape").unwrap();
+        let mut events = Vec::new();
+        for event in [
+            KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue },
+            KfdRuntimeProfileEventKindV1::StreamCreated { stream },
+            KfdRuntimeProfileEventKindV1::ModuleLoaded {
+                module,
+                artifact: profile_artifact,
+            },
+            KfdRuntimeProfileEventKindV1::KernelResolved {
+                kernel,
+                module,
+                name,
+                signature,
+            },
+        ] {
+            push_observed_event_v1(scope, &mut events, event).unwrap();
+        }
+        for ordinal in 0..DISPATCHES {
+            let dispatch = resource_identity_v1(
+                scope,
+                KfdProfileResourceKindV1::Dispatch,
+                10_000 + ordinal as u64,
+            )
+            .unwrap();
+            for event in [
+                KfdRuntimeProfileEventKindV1::DispatchPublished {
+                    dispatch,
+                    queue,
+                    stream,
+                    kernel,
+                    dispatch_shape: shape,
+                    launch: KfdProfileLaunchV1 {
+                        grid: [64, 1, 1],
+                        workgroup: [64, 1, 1],
+                        dynamic_shared_bytes: 0,
+                    },
+                    bindings: Vec::new(),
+                },
+                KfdRuntimeProfileEventKindV1::DispatchCompleted {
+                    dispatch,
+                    host_timing: Default::default(),
+                },
+                KfdRuntimeProfileEventKindV1::SubmissionReleased { dispatch },
+            ] {
+                push_observed_event_v1(scope, &mut events, event).unwrap();
+            }
+        }
+        for event in [
+            KfdRuntimeProfileEventKindV1::ModuleUnloaded { module },
+            KfdRuntimeProfileEventKindV1::StreamDestroyed { stream },
+            KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue },
+        ] {
+            push_observed_event_v1(scope, &mut events, event).unwrap();
+        }
+        let capture = KfdRuntimeProfileV1::new(
+            scope,
+            KfdProfileDeviceV1::observed(33, "gfx942:xnack-", 64).unwrap(),
+            KfdProfileHostContentModeV1::RangeOnly,
+            events,
+            0,
+        )
+        .unwrap();
+        let capture = fe2o3_profiler_protocol::encode_kfd_runtime_profile_v1(&capture).unwrap();
+
+        let structural = SourceIsaObservationStructuralBindingV1::new(
+            [34; 32],
+            SourceIsaObservationTargetProfileV1::Gfx942,
+            SourceIsaObservationKirVersionV1::V9,
+            SourceIsaObservationContentIdentityV1::new([35; 32], 40).unwrap(),
+            SourceIsaObservationContentIdentityV1::new([36; 32], 44).unwrap(),
+            SourceIsaObservationStructuralCountsV1 {
+                functions: 1,
+                defined_bodies: 1,
+                blocks: 1,
+                operations: 1,
+            },
+        )
+        .unwrap();
+        let counts = SourceIsaObservationCountsV1::new(
+            SourceIsaObservationRecordCountsV1 {
+                records: 1,
+                source_anchored: 1,
+                eliminated: 0,
+                no_source: 0,
+                source_anchored_without_isa: 1,
+                isa_references: 0,
+            },
+            SourceIsaObservationQueryCountsV1 {
+                distinct_source_nodes: 1,
+                distinct_source_spans: 1,
+                distinct_isa_points: 0,
+                max_source_node_cardinality: 1,
+                max_source_span_cardinality: 1,
+                max_exact_pc_cardinality: 0,
+            },
+        )
+        .unwrap();
+        let config = [37; 32];
+        let session = SourceIsaObservationSessionV1::from_bytes([38; 16]);
+        let attempt = SourceIsaObservationAttemptV1::new(
+            1,
+            session,
+            SourceIsaObservationInvocationV1::from_bytes([39; 32]),
+        )
+        .unwrap();
+        let mut frames = Vec::new();
+        for ordinal in 0..SOURCE_UNITS {
+            let mut unit = [0; 32];
+            unit[24..].copy_from_slice(&(ordinal as u64 + 1).to_be_bytes());
+            let context =
+                SourceIsaObservationContextV1::new(config, unit, attempt, [40; 32]).unwrap();
+            let admitted =
+                AdmittedSourceIsaObservationV1::new([41; 32], artifact, structural, counts, None)
+                    .unwrap();
+            frames.push((
+                unit,
+                SourceIsaObservationFrameV1::new(
+                    context,
+                    SourceIsaObservationOutcomeV1::Admitted(admitted),
+                ),
+            ));
+        }
+        let collection = SourceIsaObservationCollectionV1::from_collected(
+            config,
+            session,
+            frames,
+            Vec::new(),
+            None,
+        )
+        .encode_canonical()
+        .unwrap();
+        (capture, collection)
+    }
+
     #[test]
     fn exact_artifact_join_preserves_site_unavailability() {
         let (capture, collection, dispatch) =
             fixture(7, SourceIsaObservationTargetProfileV1::Gfx942);
         let evidence = AdmittedKfdSourceIsaV1::new(&capture, &collection).unwrap();
-        let item = evidence.dispatches().pop().unwrap();
+        let item = evidence.dispatch(evidence.dispatches.last().unwrap());
         assert_eq!(item.summary.dispatch_identity, dispatch);
         assert_eq!(
             item.summary.artifact_relation,
@@ -1111,28 +1413,110 @@ mod tests {
     }
 
     #[test]
+    fn near_limit_admission_and_summary_do_not_expand_dispatch_frame_products() {
+        let (capture, collection) = near_limit_fixture();
+        let evidence = AdmittedKfdSourceIsaV1::new(&capture, &collection).unwrap();
+        let binding = evidence.summary();
+        assert_eq!(binding.observed_dispatch_count, 4_096);
+        assert_eq!(binding.exact_artifact_dispatch_count, 4_096);
+        assert_eq!(evidence.source_artifacts.len(), 1);
+        assert_eq!(
+            evidence
+                .source_artifacts
+                .values()
+                .next()
+                .unwrap()
+                .matching_compilation_units
+                .len(),
+            1_024
+        );
+
+        let summaries = evidence
+            .dispatches
+            .iter()
+            .map(|dispatch| evidence.dispatch_summary(dispatch))
+            .collect::<Vec<_>>();
+        assert_eq!(summaries.len(), 4_096);
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| summary.matching_compilation_unit_count == 1_024)
+        );
+        let page = AgentKfdSourceIsaResponseV1::Ok {
+            schema: AGENT_KFD_SOURCE_ISA_RESPONSE_SCHEMA_V1,
+            request_id: 1,
+            response_revision: 1,
+            value: Box::new(AgentKfdSourceIsaResultV1::DispatchPage {
+                binding_identity: hex(&evidence.binding_identity),
+                items: summaries,
+                next_cursor: None,
+            }),
+        };
+        assert!(encode_response(&page).is_ok());
+
+        let inspected = evidence.dispatch(evidence.dispatches.last().unwrap());
+        assert_eq!(
+            inspected.semantic_binding.matching_compilation_units.len(),
+            1_024
+        );
+    }
+
+    #[test]
     fn artifact_and_target_substitution_fail_closed() {
         let (capture, _, _) = fixture(7, SourceIsaObservationTargetProfileV1::Gfx942);
         let (_, other_artifact, _) = fixture(8, SourceIsaObservationTargetProfileV1::Gfx942);
         let (_, wrong_target, _) = fixture(7, SourceIsaObservationTargetProfileV1::Gfx950);
-        let artifact = AdmittedKfdSourceIsaV1::new(&capture, &other_artifact)
-            .unwrap()
-            .dispatches()
-            .pop()
-            .unwrap();
+        let artifact = AdmittedKfdSourceIsaV1::new(&capture, &other_artifact).unwrap();
+        let artifact = artifact.dispatch(artifact.dispatches.last().unwrap());
         assert_eq!(
             artifact.summary.unavailable_reason,
             Some(KfdSourceIsaUnavailableReasonV1::NoMatchingArtifact)
         );
-        let target = AdmittedKfdSourceIsaV1::new(&capture, &wrong_target)
-            .unwrap()
-            .dispatches()
-            .pop()
-            .unwrap();
+        let target = AdmittedKfdSourceIsaV1::new(&capture, &wrong_target).unwrap();
+        let target = target.dispatch(target.dispatches.last().unwrap());
         assert_eq!(
             target.summary.unavailable_reason,
             Some(KfdSourceIsaUnavailableReasonV1::TargetProfileMismatch)
         );
+    }
+
+    #[test]
+    fn target_feature_and_wave_substitution_fail_closed() {
+        for (source_target, runtime_target) in [
+            (SourceIsaObservationTargetProfileV1::Gfx942, "gfx942:xnack-"),
+            (SourceIsaObservationTargetProfileV1::Gfx950, "gfx950:xnack-"),
+        ] {
+            let (capture, collection, _) =
+                fixture_with_runtime(7, source_target, runtime_target, 64);
+            let evidence = AdmittedKfdSourceIsaV1::new(&capture, &collection).unwrap();
+            let dispatch = evidence.dispatch(evidence.dispatches.last().unwrap());
+            assert_eq!(
+                dispatch.summary.artifact_relation,
+                KfdSourceIsaArtifactRelationV1::Exact
+            );
+        }
+
+        let (_, collection, _) = fixture(7, SourceIsaObservationTargetProfileV1::Gfx942);
+        for (runtime_target, wave_width) in [
+            ("gfx942:xnack+", 64),
+            ("gfx942:unknown+", 64),
+            ("gfx942:", 64),
+            ("gfx942:xnack-", 32),
+        ] {
+            let (capture, _, _) = fixture_with_runtime(
+                7,
+                SourceIsaObservationTargetProfileV1::Gfx942,
+                runtime_target,
+                wave_width,
+            );
+            let evidence = AdmittedKfdSourceIsaV1::new(&capture, &collection).unwrap();
+            let dispatch = evidence.dispatch(evidence.dispatches.last().unwrap());
+            assert_eq!(
+                dispatch.summary.unavailable_reason,
+                Some(KfdSourceIsaUnavailableReasonV1::TargetProfileMismatch),
+                "runtime target {runtime_target:?} wave width {wave_width} was not rejected"
+            );
+        }
     }
 
     #[test]
@@ -1205,5 +1589,92 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn malformed_records_exhaust_the_same_bounded_request_budget() {
+        let input = b"{}\n".repeat(MAX_AGENT_KFD_SOURCE_ISA_REQUESTS_V1 as usize + 1);
+        let mut output = Vec::new();
+        run_agent_kfd_source_isa_jsonl_v1(&mut std::io::Cursor::new(input), &mut output).unwrap();
+        let responses = output
+            .split(|byte| *byte == b'\n')
+            .filter(|row| !row.is_empty())
+            .map(|row| serde_json::from_slice::<serde_json::Value>(row).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            responses.len(),
+            MAX_AGENT_KFD_SOURCE_ISA_REQUESTS_V1 as usize + 1
+        );
+        assert_eq!(responses[0]["code"], "invalid_request");
+        assert_eq!(responses[0]["response_revision"], 1);
+        assert_eq!(responses[0]["terminal"], false);
+        assert_eq!(responses[63]["code"], "invalid_request");
+        assert_eq!(responses[63]["response_revision"], 64);
+        assert_eq!(responses[63]["terminal"], false);
+        assert_eq!(responses[64]["code"], "request_budget_exhausted");
+        assert_eq!(responses[64]["response_revision"], 65);
+        assert_eq!(responses[64]["terminal"], true);
+    }
+
+    #[test]
+    fn noncanonical_records_exhaust_the_same_bounded_request_budget() {
+        let mut input = Vec::new();
+        for request_id in 1..=u64::from(MAX_AGENT_KFD_SOURCE_ISA_REQUESTS_V1) + 1 {
+            input.push(b' ');
+            input.extend_from_slice(
+                &serde_json::to_vec(&AgentKfdSourceIsaRequestV1::DiscoverCapabilities {
+                    schema: AGENT_KFD_SOURCE_ISA_REQUEST_SCHEMA_V1.to_owned(),
+                    request_id,
+                    expected_revision: request_id - 1,
+                })
+                .unwrap(),
+            );
+            input.push(b'\n');
+        }
+        let mut output = Vec::new();
+        run_agent_kfd_source_isa_jsonl_v1(&mut std::io::Cursor::new(input), &mut output).unwrap();
+        let responses = output
+            .split(|byte| *byte == b'\n')
+            .filter(|row| !row.is_empty())
+            .map(|row| serde_json::from_slice::<serde_json::Value>(row).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            responses.len(),
+            MAX_AGENT_KFD_SOURCE_ISA_REQUESTS_V1 as usize + 1
+        );
+        assert_eq!(responses[63]["code"], "invalid_request");
+        assert_eq!(responses[63]["terminal"], false);
+        assert_eq!(responses[64]["code"], "request_budget_exhausted");
+        assert_eq!(responses[64]["response_revision"], 65);
+        assert_eq!(responses[64]["terminal"], true);
+    }
+
+    #[test]
+    fn oversized_response_is_replaced_by_a_small_typed_terminal_record() {
+        let (capture, collection, _) = fixture(7, SourceIsaObservationTargetProfileV1::Gfx942);
+        let evidence = AdmittedKfdSourceIsaV1::new(&capture, &collection).unwrap();
+        let summary = evidence.dispatch_summary(evidence.dispatches.last().unwrap());
+        let response = AgentKfdSourceIsaResponseV1::Ok {
+            schema: AGENT_KFD_SOURCE_ISA_RESPONSE_SCHEMA_V1,
+            request_id: 1,
+            response_revision: 1,
+            value: Box::new(AgentKfdSourceIsaResultV1::DispatchPage {
+                binding_identity: hex(&evidence.binding_identity),
+                items: vec![summary; MAX_AGENT_KFD_SOURCE_ISA_PAGE_ITEMS_V1 as usize * 4],
+                next_cursor: None,
+            }),
+        };
+        assert_eq!(
+            encode_response(&response),
+            Err(AgentKfdSourceIsaServiceErrorV1::ResponseTooLarge)
+        );
+        let mut service = AgentKfdSourceIsaServiceV1::new();
+        let mut output = Vec::new();
+        assert!(write_response_with_size_fallback(&mut output, &mut service, &response).unwrap());
+        assert!(output.len() < 512);
+        let decoded: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(decoded["status"], "error");
+        assert_eq!(decoded["code"], "response_too_large");
+        assert_eq!(decoded["terminal"], true);
     }
 }
