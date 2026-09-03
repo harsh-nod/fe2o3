@@ -3860,6 +3860,59 @@ impl ComputeAqlQueueSessionV1 {
         Ok(())
     }
 
+    /// Samples correlated KFD clock domains while this exact queue remains
+    /// operational. The observation is bracketed by live runtime/event checks.
+    /// It is a host publication/completion calibration input, not a GPU kernel
+    /// start or end timestamp.
+    pub fn observe_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+        }
+        let result = (|| {
+            let engine = self
+                .engine
+                .as_mut()
+                .ok_or(Gfx942CompletionErrorV1::Currentness)?;
+            if engine.authority_poisoned
+                || engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active)
+            {
+                return Err(Gfx942CompletionErrorV1::Currentness);
+            }
+            let exception = self
+                .exception
+                .as_ref()
+                .ok_or(Gfx942CompletionErrorV1::Currentness)?;
+            let validate_queue = |session: &SharedGttMemorySessionV1| {
+                exception
+                    .runtime
+                    .validate_queue_live_process(session.opener_pid())
+                    .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
+                exception
+                    .event
+                    .validate_live_with_shadows(
+                        session.kfd_fd(),
+                        session.opener_pid(),
+                        &exception.shadows,
+                    )
+                    .map_err(|_| Gfx942CompletionErrorV1::Currentness)
+            };
+            validate_queue(&engine.backend.session)?;
+            let observation = engine
+                .backend
+                .session
+                .observe_queue_clock_correlation()
+                .map_err(|_| Gfx942CompletionErrorV1::Currentness)?;
+            validate_queue(&engine.backend.session)?;
+            Ok(observation)
+        })();
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
     /// Private bridge for the later dispatch composition. The public queue API
     /// cannot submit packets or access counters, slots, addresses, or MMIO.
     #[allow(dead_code)]

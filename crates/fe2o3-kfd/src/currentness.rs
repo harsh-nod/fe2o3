@@ -158,6 +158,58 @@ pub struct ObservableDeviceCurrentnessV1 {
     vram_lost_counter: u32,
 }
 
+/// One KFD-correlated GPU/CPU/system clock observation.
+///
+/// The counters are sampled by one `GET_CLOCK_COUNTERS` ioctl under selected
+/// device currentness checks. This supports clock-domain calibration only; it
+/// does not identify dispatch publication, start, or completion boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdClockCorrelationObservationV1 {
+    gpu_clock_counter: u64,
+    cpu_clock_counter: u64,
+    system_clock_counter: u64,
+    system_clock_frequency_hz: u64,
+    gpu_id: u32,
+}
+
+impl KfdClockCorrelationObservationV1 {
+    pub const fn gpu_clock_counter(self) -> u64 {
+        self.gpu_clock_counter
+    }
+
+    pub const fn cpu_clock_counter(self) -> u64 {
+        self.cpu_clock_counter
+    }
+
+    pub const fn system_clock_counter(self) -> u64 {
+        self.system_clock_counter
+    }
+
+    pub const fn system_clock_frequency_hz(self) -> u64 {
+        self.system_clock_frequency_hz
+    }
+
+    pub const fn gpu_id(self) -> u32 {
+        self.gpu_id
+    }
+}
+
+fn admit_clock_correlation(
+    raw: fe2o3_kfd_uapi::KfdIoctlGetClockCountersArgs,
+    selected_gpu: u32,
+) -> Option<KfdClockCorrelationObservationV1> {
+    if raw.gpu_id != selected_gpu || raw.pad != 0 || raw.system_clock_freq == 0 {
+        return None;
+    }
+    Some(KfdClockCorrelationObservationV1 {
+        gpu_clock_counter: raw.gpu_clock_counter,
+        cpu_clock_counter: raw.cpu_clock_counter,
+        system_clock_counter: raw.system_clock_counter,
+        system_clock_frequency_hz: raw.system_clock_freq,
+        gpu_id: raw.gpu_id,
+    })
+}
+
 impl ObservableDeviceCurrentnessV1 {
     /// Returns the contracted destructive-reset observation.
     ///
@@ -168,6 +220,23 @@ impl ObservableDeviceCurrentnessV1 {
 }
 
 impl CheckedGfx942XnackMinusDevice {
+    /// Samples the three KFD clock domains for this exact selected GPU.
+    pub fn observe_clock_correlation(
+        &mut self,
+    ) -> Result<KfdClockCorrelationObservationV1, DeviceBindingError> {
+        self.check_operational_currentness()?;
+        let selected_gpu = self.observation.kfd_gpu_id();
+        let raw = crate::linux::observe_clock_counters(&self.kfd.opened.fd, selected_gpu)?;
+        let Some(observation) = admit_clock_correlation(raw, selected_gpu) else {
+            self.currentness_poisoned = true;
+            return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "KFD clock-counter correlation",
+            ));
+        };
+        self.check_operational_currentness()?;
+        Ok(observation)
+    }
+
     pub(crate) fn check_gfx942_xgmi_publication_currentness(
         &mut self,
     ) -> Result<(), DeviceBindingError> {
@@ -520,5 +589,54 @@ mod tests {
             latch.observe(LatchInput::Clear),
             Err(DeviceBindingError::CurrentnessFencePoisoned)
         ));
+    }
+
+    #[test]
+    fn clock_correlation_requires_exact_gpu_zero_pad_and_frequency() {
+        let raw = fe2o3_kfd_uapi::KfdIoctlGetClockCountersArgs {
+            gpu_clock_counter: 11,
+            cpu_clock_counter: 12,
+            system_clock_counter: 13,
+            system_clock_freq: 1_000_000_000,
+            gpu_id: 7,
+            pad: 0,
+        };
+        let admitted = admit_clock_correlation(raw, 7).unwrap();
+        assert_eq!(admitted.gpu_clock_counter(), 11);
+        assert_eq!(admitted.cpu_clock_counter(), 12);
+        assert_eq!(admitted.system_clock_counter(), 13);
+        assert_eq!(admitted.system_clock_frequency_hz(), 1_000_000_000);
+        assert_eq!(admitted.gpu_id(), 7);
+        assert!(
+            admit_clock_correlation(
+                fe2o3_kfd_uapi::KfdIoctlGetClockCountersArgs { gpu_id: 8, ..raw },
+                7
+            )
+            .is_none()
+        );
+        assert!(
+            admit_clock_correlation(
+                fe2o3_kfd_uapi::KfdIoctlGetClockCountersArgs { pad: 1, ..raw },
+                7
+            )
+            .is_none()
+        );
+        assert!(
+            admit_clock_correlation(
+                fe2o3_kfd_uapi::KfdIoctlGetClockCountersArgs {
+                    system_clock_freq: 0,
+                    ..raw
+                },
+                7
+            )
+            .is_none()
+        );
+
+        type QueueClockObserver =
+            fn(
+                &mut crate::ComputeAqlQueueSessionV1,
+            )
+                -> Result<KfdClockCorrelationObservationV1, crate::ComputeAqlQueueSessionErrorV1>;
+        let _: QueueClockObserver = crate::ComputeAqlQueueSessionV1::observe_clock_correlation;
     }
 }

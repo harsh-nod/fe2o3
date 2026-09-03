@@ -90,6 +90,14 @@ impl LinuxMemoryBackend {
         self.device.observation().aperture().gpuvm()
     }
 
+    pub(super) fn observe_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, MemorySessionError> {
+        self.device
+            .observe_clock_correlation()
+            .map_err(MemorySessionError::Device)
+    }
+
     pub(super) fn sdma_engine_inventory(&self) -> (Option<u32>, Option<u32>) {
         let unique_id = self.device.observation().unique_id();
         self.device

@@ -54,6 +54,55 @@ fn percentile(values: &[u128], numerator: usize, denominator: usize) -> Option<u
     values.get(rank.checked_sub(1)?).copied()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn report_measurement(
+    unique_ids: [u64; 2],
+    copy_bytes: usize,
+    depth: usize,
+    warmups: usize,
+    samples: usize,
+    measurement: &str,
+    mapping_lifetime: &str,
+    prime_batches: usize,
+    mut forward_ns: Vec<u128>,
+    mut reverse_ns: Vec<u128>,
+) -> BenchmarkResult<()> {
+    forward_ns.sort_unstable();
+    reverse_ns.sort_unstable();
+    let forward_p50 = percentile(&forward_ns, 1, 2).ok_or("missing forward p50")?;
+    let forward_p95 = percentile(&forward_ns, 19, 20).ok_or("missing forward p95")?;
+    let reverse_p50 = percentile(&reverse_ns, 1, 2).ok_or("missing reverse p50")?;
+    let reverse_p95 = percentile(&reverse_ns, 19, 20).ok_or("missing reverse p95")?;
+    if forward_p50 == 0 || reverse_p50 == 0 {
+        return Err("zero XGMI benchmark duration".into());
+    }
+    let bytes_per_round = copy_bytes
+        .checked_mul(depth)
+        .ok_or("XGMI bytes per round overflow")?;
+    println!(
+        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion",
+        unique_ids[0],
+        unique_ids[1],
+        copy_bytes,
+        depth,
+        depth,
+        depth,
+        depth,
+        warmups,
+        samples,
+        measurement,
+        mapping_lifetime,
+        prime_batches,
+        forward_p50,
+        forward_p95,
+        bytes_per_round as f64 / forward_p50 as f64,
+        reverse_p50,
+        reverse_p95,
+        bytes_per_round as f64 / reverse_p50 as f64,
+    );
+    Ok(())
+}
+
 fn guarded_bytes(copy_bytes: usize, outer: u8, inner: u8) -> BenchmarkResult<Vec<u8>> {
     let total = copy_bytes
         .checked_add(2 * CANARY_BYTES)
@@ -185,6 +234,9 @@ fn run_direction(
                 .map_err(facade_error)?,
         );
     }
+    context
+        .flush_stream(resources.streams[0])
+        .map_err(facade_error)?;
     for submission in &mut submissions {
         let status = context
             .wait(submission, COMPLETION_TIMEOUT)
@@ -269,9 +321,6 @@ fn main() -> BenchmarkResult<()> {
         return Err("XGMI benchmark controls are out of range".into());
     }
     let rounds = warmups.checked_add(samples).ok_or("round count overflow")?;
-    let bytes_per_round = copy_bytes
-        .checked_mul(depth)
-        .ok_or("XGMI bytes per round overflow")?;
     let total_bytes = copy_bytes
         .checked_add(2 * CANARY_BYTES)
         .and_then(|value| u64::try_from(value).ok())
@@ -297,55 +346,106 @@ fn main() -> BenchmarkResult<()> {
 
     let forward = allocate_direction(&mut context, devices[0], devices[1], total_bytes, depth)?;
     let reverse = allocate_direction(&mut context, devices[1], devices[0], total_bytes, depth)?;
-    let mut forward_ns = Vec::with_capacity(samples);
-    let mut reverse_ns = Vec::with_capacity(samples);
+    let mut remap_forward_ns = Vec::with_capacity(samples);
+    let mut remap_reverse_ns = Vec::with_capacity(samples);
     for round in 0..rounds {
         prepare_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
         let elapsed = run_direction(&mut context, &forward, copy_bytes as u64)?;
         validate_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
         if round >= warmups {
-            forward_ns.push(elapsed);
+            remap_forward_ns.push(elapsed);
         }
 
         prepare_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
         let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64)?;
         validate_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
         if round >= warmups {
-            reverse_ns.push(elapsed);
+            remap_reverse_ns.push(elapsed);
         }
     }
+
+    // Establish one mapped, completed batch in each direction, then time only
+    // repetitions with no intervening host access. Final readback validates the
+    // exact payload and canaries after the entire persistent-hot sequence.
+    let hot_pattern_round = rounds.checked_add(1).ok_or("hot pattern round overflow")?;
+    prepare_direction(
+        &mut context,
+        &forward,
+        copy_bytes,
+        hot_pattern_round,
+        0,
+        0x17,
+        0xa5,
+    )?;
+    prepare_direction(
+        &mut context,
+        &reverse,
+        copy_bytes,
+        hot_pattern_round,
+        1,
+        0x71,
+        0x5a,
+    )?;
+    let _ = run_direction(&mut context, &forward, copy_bytes as u64)?;
+    let _ = run_direction(&mut context, &reverse, copy_bytes as u64)?;
+    let mut hot_forward_ns = Vec::with_capacity(samples);
+    let mut hot_reverse_ns = Vec::with_capacity(samples);
+    for round in 0..rounds {
+        let forward_elapsed = run_direction(&mut context, &forward, copy_bytes as u64)?;
+        let reverse_elapsed = run_direction(&mut context, &reverse, copy_bytes as u64)?;
+        if round >= warmups {
+            hot_forward_ns.push(forward_elapsed);
+            hot_reverse_ns.push(reverse_elapsed);
+        }
+    }
+    validate_direction(
+        &mut context,
+        &forward,
+        copy_bytes,
+        hot_pattern_round,
+        0,
+        0x17,
+        0xa5,
+    )?;
+    validate_direction(
+        &mut context,
+        &reverse,
+        copy_bytes,
+        hot_pattern_round,
+        1,
+        0x71,
+        0x5a,
+    )?;
 
     release_direction(&mut context, reverse)?;
     release_direction(&mut context, forward)?;
     let mut backend = context.shutdown().map_err(facade_error)?;
     backend.shutdown_native_v1().map_err(facade_error)?;
 
-    forward_ns.sort_unstable();
-    reverse_ns.sort_unstable();
-    let forward_p50 = percentile(&forward_ns, 1, 2).ok_or("missing forward p50")?;
-    let forward_p95 = percentile(&forward_ns, 19, 20).ok_or("missing forward p95")?;
-    let reverse_p50 = percentile(&reverse_ns, 1, 2).ok_or("missing reverse p50")?;
-    let reverse_p95 = percentile(&reverse_ns, 19, 20).ok_or("missing reverse p95")?;
-    if forward_p50 == 0 || reverse_p50 == 0 {
-        return Err("zero XGMI benchmark duration".into());
-    }
-    println!(
-        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size=1 direction=forward-then-reverse concurrency={} warmups={} samples={} peer_access=topology-xgmi doorbells_per_batch=1 forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-submit-through-observed-completion",
-        unique_ids[0],
-        unique_ids[1],
+    report_measurement(
+        unique_ids,
         copy_bytes,
-        depth,
-        depth,
         depth,
         warmups,
         samples,
-        forward_p50,
-        forward_p95,
-        bytes_per_round as f64 / forward_p50 as f64,
-        reverse_p50,
-        reverse_p95,
-        bytes_per_round as f64 / reverse_p50 as f64,
-    );
+        "remap-per-round",
+        "host-access-between-rounds",
+        0,
+        remap_forward_ns,
+        remap_reverse_ns,
+    )?;
+    report_measurement(
+        unique_ids,
+        copy_bytes,
+        depth,
+        warmups,
+        samples,
+        "persistent-hot",
+        "persistent-no-host-access-between-timed-rounds",
+        1,
+        hot_forward_ns,
+        hot_reverse_ns,
+    )?;
     Ok(())
 }
 

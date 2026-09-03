@@ -147,7 +147,7 @@ pub use target_debug_telemetry_v1::*;
 pub use target_debug_telemetry_v2::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use currentness::ObservableDeviceCurrentnessV1;
+pub use currentness::{KfdClockCorrelationObservationV1, ObservableDeviceCurrentnessV1};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use device::*;

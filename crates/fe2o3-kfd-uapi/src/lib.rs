@@ -1126,6 +1126,34 @@ impl KfdIoctlGetVersionArgs {
     }
 }
 
+/// C layout of `struct kfd_ioctl_get_clock_counters_args`.
+///
+/// These are one ioctl's correlated clock samples. They do not identify a
+/// dispatch boundary and therefore are not kernel start/end timestamps.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlGetClockCountersArgs {
+    pub gpu_clock_counter: u64,
+    pub cpu_clock_counter: u64,
+    pub system_clock_counter: u64,
+    pub system_clock_freq: u64,
+    pub gpu_id: u32,
+    pub pad: u32,
+}
+
+impl KfdIoctlGetClockCountersArgs {
+    pub const fn new(gpu_id: u32) -> Self {
+        Self {
+            gpu_clock_counter: 0,
+            cpu_clock_counter: 0,
+            system_clock_counter: 0,
+            system_clock_freq: 0,
+            gpu_id,
+            pad: 0,
+        }
+    }
+}
+
 /// Opaque userspace addresses and device-derived auxiliary sizes for a
 /// compute-AQL queue creation request.
 ///
@@ -1639,6 +1667,14 @@ pub const AMDKFD_IOC_GET_VERSION: IoctlRequest = encode_admitted_ioctl(
     size_of::<KfdIoctlGetVersionArgs>(),
 );
 
+/// Request for `_IOWR('K', 0x05, struct kfd_ioctl_get_clock_counters_args)`.
+pub const AMDKFD_IOC_GET_CLOCK_COUNTERS: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x05,
+    size_of::<KfdIoctlGetClockCountersArgs>(),
+);
+
 /// Request for `_IOWR('K', 0x02, struct kfd_ioctl_create_queue_args)`.
 ///
 /// This constant is intentionally not exposed through [`AdmittedKfdUapi`]: a
@@ -1936,7 +1972,17 @@ const _: () = {
     assert!(offset_of!(KfdIoctlSmiEventsArgs, gpu_id) == 0);
     assert!(offset_of!(KfdIoctlSmiEventsArgs, anon_fd) == 4);
 
+    assert!(size_of::<KfdIoctlGetClockCountersArgs>() == 40);
+    assert!(align_of::<KfdIoctlGetClockCountersArgs>() == 8);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, gpu_clock_counter) == 0);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, cpu_clock_counter) == 8);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, system_clock_counter) == 16);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, system_clock_freq) == 24);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, gpu_id) == 32);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, pad) == 36);
+
     assert!(AMDKFD_IOC_GET_VERSION == 0x8008_4b01);
+    assert!(AMDKFD_IOC_GET_CLOCK_COUNTERS == 0xc028_4b05);
     assert!(AMDKFD_IOC_CREATE_QUEUE == 0xc060_4b02);
     assert!(AMDKFD_IOC_DESTROY_QUEUE == 0xc008_4b03);
     assert!(AMDKFD_IOC_UPDATE_QUEUE == 0x4018_4b07);

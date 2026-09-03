@@ -6,9 +6,9 @@ use fe2o3_drm_uapi::{
     DrmAmdgpuInfo, DrmVersion,
 };
 use fe2o3_kfd_uapi::{
-    AMDKFD_IOC_GET_PROCESS_APERTURES_NEW, AMDKFD_IOC_GET_VERSION, AMDKFD_IOC_SET_XNACK_MODE,
-    KfdIoctlGetProcessAperturesNewArgs, KfdIoctlGetVersionArgs, KfdIoctlSetXnackModeArgs,
-    KfdProcessDeviceApertures, KfdUapiVersion,
+    AMDKFD_IOC_GET_CLOCK_COUNTERS, AMDKFD_IOC_GET_PROCESS_APERTURES_NEW, AMDKFD_IOC_GET_VERSION,
+    AMDKFD_IOC_SET_XNACK_MODE, KfdIoctlGetClockCountersArgs, KfdIoctlGetProcessAperturesNewArgs,
+    KfdIoctlGetVersionArgs, KfdIoctlSetXnackModeArgs, KfdProcessDeviceApertures, KfdUapiVersion,
 };
 use fe2o3_runtime_model::DeviceNodeV1;
 use rustix::fd::OwnedFd;
@@ -22,6 +22,7 @@ use crate::device::{
 use crate::{KfdAdapterError, KfdNodeObservation, OpenedKfd};
 
 const GET_VERSION_OPCODE: Opcode = AMDKFD_IOC_GET_VERSION as Opcode;
+const GET_CLOCK_COUNTERS_OPCODE: Opcode = AMDKFD_IOC_GET_CLOCK_COUNTERS as Opcode;
 const GET_APERTURES_OPCODE: Opcode = AMDKFD_IOC_GET_PROCESS_APERTURES_NEW as Opcode;
 const SET_XNACK_OPCODE: Opcode = AMDKFD_IOC_SET_XNACK_MODE as Opcode;
 const DRM_VERSION_OPCODE: Opcode = DRM_IOCTL_VERSION as Opcode;
@@ -78,6 +79,21 @@ pub(super) fn observe_uapi(fd: &OwnedFd) -> Result<KfdUapiVersion, KfdAdapterErr
     // separately subjected to exact version admission.
     unsafe { rustix::ioctl::ioctl(fd, request) }.map_err(KfdAdapterError::GetVersion)?;
     Ok(output.reported_version())
+}
+
+pub(super) fn observe_clock_counters(
+    fd: &OwnedFd,
+    gpu_id: u32,
+) -> Result<KfdIoctlGetClockCountersArgs, DeviceBindingError> {
+    let mut output = KfdIoctlGetClockCountersArgs::new(gpu_id);
+    // SAFETY: the opcode and the initialized C-layout in/out record are pinned
+    // by the fe2o3-kfd-uapi ABI and oracle tests. The owned KFD descriptor and
+    // exclusive output borrow remain live for the complete ioctl.
+    let request = unsafe { Updater::<GET_CLOCK_COUNTERS_OPCODE, _>::new(&mut output) };
+    // SAFETY: the request's exact in/out contract is established above.
+    unsafe { rustix::ioctl::ioctl(fd, request) }
+        .map_err(|source| binding_syscall("KFD GET_CLOCK_COUNTERS", source))?;
+    Ok(output)
 }
 
 fn binding_syscall(operation: &'static str, source: rustix::io::Errno) -> DeviceBindingError {

@@ -3557,6 +3557,16 @@ impl SharedGttMemorySessionV1 {
         self.engine.check_operational_currentness()
     }
 
+    pub(crate) fn observe_queue_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, MemorySessionError> {
+        self.engine.require_active()?;
+        match self.engine.backend.observe_clock_correlation() {
+            Ok(observation) => Ok(observation),
+            Err(error) => self.engine.quarantine(error),
+        }
+    }
+
     pub(crate) fn quarantine_queue_composition(
         &mut self,
         detail: &'static str,

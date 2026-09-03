@@ -10,6 +10,18 @@ int main(void) {
            offsetof(struct kfd_ioctl_get_version_args, minor_version),
            (unsigned long)AMDKFD_IOC_GET_VERSION);
 
+    printf("get_clock_counters:size=%zu align=%zu gpu_clock=%zu cpu_clock=%zu "
+           "system_clock=%zu system_freq=%zu gpu_id=%zu pad=%zu request=%#lx\n",
+           sizeof(struct kfd_ioctl_get_clock_counters_args),
+           _Alignof(struct kfd_ioctl_get_clock_counters_args),
+           offsetof(struct kfd_ioctl_get_clock_counters_args, gpu_clock_counter),
+           offsetof(struct kfd_ioctl_get_clock_counters_args, cpu_clock_counter),
+           offsetof(struct kfd_ioctl_get_clock_counters_args, system_clock_counter),
+           offsetof(struct kfd_ioctl_get_clock_counters_args, system_clock_freq),
+           offsetof(struct kfd_ioctl_get_clock_counters_args, gpu_id),
+           offsetof(struct kfd_ioctl_get_clock_counters_args, pad),
+           (unsigned long)AMDKFD_IOC_GET_CLOCK_COUNTERS);
+
     printf("create_queue:size=%zu align=%zu ring_base=%zu write_pointer=%zu "
            "read_pointer=%zu doorbell_offset=%zu ring_size=%zu gpu_id=%zu "
            "queue_type=%zu queue_percentage=%zu queue_priority=%zu queue_id=%zu "

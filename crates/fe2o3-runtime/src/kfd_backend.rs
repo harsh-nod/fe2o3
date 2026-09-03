@@ -7,7 +7,7 @@
 //! advertises atomic or collective execution.
 
 use core::fmt;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,15 +21,16 @@ use fe2o3_hsaco::{ArgumentAccess, ExplicitValueKind};
 use fe2o3_kfd::topology::Gfx942XgmiRouteV1;
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, ComputeAqlQueueSessionV1, DeviceSelector,
-    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
-    Gfx942CompletedDispatchReadRequestV1, Gfx942DeviceContentDescriptorV1,
-    Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryUnmappedV1,
-    Gfx942DispatchBatchV1, Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1,
-    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942NativeXgmiSdmaQueueV1,
-    Gfx942RecycledDispatchWriteRequestV1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
-    Gfx942SdmaCopyPollV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaMemoryPoolObservationV1,
-    Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1,
-    Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiUnmapRecoveryV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
+    Gfx942DeviceMemoryUnmappedV1, Gfx942DispatchBatchV1, Gfx942DispatchBufferBindingV1,
+    Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
+    Gfx942NativeXgmiSdmaQueueV1, Gfx942RecycledDispatchWriteRequestV1, Gfx942SdmaBufferKindV1,
+    Gfx942SdmaBufferV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyTicketV1,
+    Gfx942SdmaMemoryPoolObservationV1, Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiCopyFailureV1,
+    Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1, Gfx942XgmiMappedDeviceMemoryV1,
+    Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
     OpenedKfd, SharedGttMemorySessionV1,
 };
 use fe2o3_profiler_protocol::{
@@ -44,7 +45,7 @@ use crate::{
     BackendPollV1, KfdRuntimeProfileRecorderV1, KfdRuntimeProfilerConfigV1,
     MAX_RUNTIME_DEPENDENCIES_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
     RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
-    RuntimeExecutionCapabilitiesV1, RuntimeMemoryKindV1,
+    RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1, RuntimeMemoryKindV1,
 };
 
 const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
@@ -891,7 +892,7 @@ impl KfdRuntimeBackendV1 {
             &self.description.target,
             64,
         )
-        .map_err(|detail| Self::capacity(detail))?;
+        .map_err(Self::capacity)?;
         self.profiler = Some(recorder);
         Ok(())
     }
@@ -4055,6 +4056,8 @@ pub struct KfdMultiDeviceRuntimeBackendV1 {
 
 enum XgmiAllocationAuthorityV1 {
     Unmapped(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>),
+    /// Fully mapped into the exact two-device roster and available for reuse.
+    Mapped(Gfx942XgmiMappedDeviceMemoryV1),
     QuarantinedMapped(Gfx942XgmiMappedDeviceMemoryV1),
 }
 
@@ -4266,6 +4269,219 @@ fn next_xgmi_dependency_depth_v1(
     Ok(next)
 }
 
+fn xgmi_submission_is_ready_v1(
+    submission: &XgmiRuntimeSubmissionV1,
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    direction: usize,
+) -> bool {
+    submission.direction == direction
+        && submission.ticket.is_none()
+        && submission.dependencies.iter().all(|dependency| {
+            completed
+                .get(dependency)
+                .is_some_and(|record| record.status == BackendPollV1::Succeeded)
+        })
+}
+
+#[cfg(test)]
+fn ready_xgmi_batch_ids_v1(
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    direction: usize,
+    limit: usize,
+) -> Result<Vec<u64>, XgmiBatchSelectionErrorV1> {
+    let limit = limit.min(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+    let mut ids = Vec::new();
+    ids.try_reserve_exact(limit)
+        .map_err(|_| XgmiBatchSelectionErrorV1::Capacity)?;
+    if limit == 0 {
+        return Ok(ids);
+    }
+    for submission in active
+        .values()
+        .filter(|submission| xgmi_submission_is_ready_v1(submission, completed, direction))
+    {
+        let insertion = ids.partition_point(|id| *id < submission.id);
+        if ids.len() < limit {
+            ids.insert(insertion, submission.id);
+        } else if insertion < limit {
+            ids.pop();
+            ids.insert(insertion, submission.id);
+        }
+    }
+    Ok(ids)
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XgmiBatchSelectionErrorV1 {
+    Capacity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XgmiFlushAdmissionV1 {
+    NoReadyWork,
+    Publish { ready: usize },
+    InFlight,
+    Capacity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XgmiBatchPublicationOutcomeV1 {
+    NoReadyWork,
+    Published,
+    AlreadyInFlight,
+    RecoveredPrepublicationFailure,
+}
+
+const fn classify_xgmi_flush_v1(
+    ready: usize,
+    in_flight: bool,
+    limit: usize,
+) -> XgmiFlushAdmissionV1 {
+    if ready == 0 {
+        XgmiFlushAdmissionV1::NoReadyWork
+    } else if in_flight {
+        XgmiFlushAdmissionV1::InFlight
+    } else if ready > limit {
+        XgmiFlushAdmissionV1::Capacity
+    } else {
+        XgmiFlushAdmissionV1::Publish { ready }
+    }
+}
+
+const fn xgmi_direction_for_destination_v1(destination: usize) -> Option<usize> {
+    match destination {
+        0 => Some(1),
+        1 => Some(0),
+        _ => None,
+    }
+}
+
+fn indexed_xgmi_progress_id_v1(in_flight: &[u64], focus: u64) -> Option<u64> {
+    if in_flight.binary_search(&focus).is_ok() {
+        Some(focus)
+    } else {
+        in_flight.first().copied()
+    }
+}
+
+fn insert_ordered_xgmi_id_v1(ids: &mut Vec<u64>, id: u64) {
+    match ids.binary_search(&id) {
+        Ok(_) => std::process::abort(),
+        Err(index) => {
+            if ids.len() == ids.capacity() {
+                std::process::abort();
+            }
+            ids.insert(index, id);
+        }
+    }
+}
+
+fn remove_ordered_xgmi_id_v1(ids: &mut Vec<u64>, id: u64) -> bool {
+    let Ok(index) = ids.binary_search(&id) else {
+        return false;
+    };
+    ids.remove(index);
+    true
+}
+
+fn enqueue_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) {
+    if ids.len() == ids.capacity() {
+        std::process::abort();
+    }
+    ids.push_back(id);
+}
+
+fn remove_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) -> bool {
+    let Some(index) = ids.iter().position(|candidate| *candidate == id) else {
+        return false;
+    };
+    ids.remove(index);
+    true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XgmiCompletionReservationErrorV1 {
+    Capacity,
+}
+
+fn reserve_xgmi_completion_slot_v1(
+    submissions: &mut HashMap<u64, SubmissionRecordV1>,
+    reservations: &mut usize,
+) -> Result<(), XgmiCompletionReservationErrorV1> {
+    let next = reservations
+        .checked_add(1)
+        .ok_or(XgmiCompletionReservationErrorV1::Capacity)?;
+    submissions
+        .try_reserve(next)
+        .map_err(|_| XgmiCompletionReservationErrorV1::Capacity)?;
+    *reservations = next;
+    Ok(())
+}
+
+fn release_xgmi_dependencies_v1(
+    dependency_retain_counts: &mut HashMap<u64, usize>,
+    dependencies: &[u64],
+) {
+    for dependency in dependencies {
+        let remove = {
+            let count = dependency_retain_counts
+                .get_mut(dependency)
+                .expect("active XGMI dependency remains retained");
+            *count -= 1;
+            *count == 0
+        };
+        if remove {
+            dependency_retain_counts.remove(dependency);
+        }
+    }
+}
+
+#[cfg(test)]
+fn finish_failed_xgmi_batch_records_v1(
+    dependency_retain_counts: &mut HashMap<u64, usize>,
+    submissions: &mut HashMap<u64, SubmissionRecordV1>,
+    completion_reservations: &mut usize,
+    active_batch: impl IntoIterator<Item = XgmiRuntimeSubmissionV1>,
+) {
+    for active in active_batch {
+        settle_xgmi_submission_record_v1(
+            dependency_retain_counts,
+            submissions,
+            completion_reservations,
+            active,
+            BackendPollV1::Failed {
+                code: COOPERATIVE_COPY_FAILURE_CODE_V1,
+            },
+        );
+    }
+}
+
+fn settle_xgmi_submission_record_v1(
+    dependency_retain_counts: &mut HashMap<u64, usize>,
+    submissions: &mut HashMap<u64, SubmissionRecordV1>,
+    completion_reservations: &mut usize,
+    active: XgmiRuntimeSubmissionV1,
+    status: BackendPollV1,
+) {
+    if *completion_reservations == 0
+        || submissions.capacity().saturating_sub(submissions.len()) < *completion_reservations
+        || submissions.contains_key(&active.id)
+    {
+        std::process::abort();
+    }
+    release_xgmi_dependencies_v1(dependency_retain_counts, &active.dependencies);
+    submissions.insert(
+        active.id,
+        SubmissionRecordV1 {
+            stream: active.stream,
+            status,
+        },
+    );
+    *completion_reservations -= 1;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum XgmiCancellationDispositionV1 {
     CancelPrepublication,
@@ -4293,6 +4509,11 @@ struct XgmiLogicalResourceCountsV1 {
     events: usize,
     dependency_retains: usize,
     dependency_depths: usize,
+    dependency_waiters: usize,
+    completion_reservations: usize,
+    ready_index_entries: usize,
+    in_flight_index_entries: usize,
+    directional_active: usize,
 }
 
 impl XgmiLogicalResourceCountsV1 {
@@ -4304,6 +4525,11 @@ impl XgmiLogicalResourceCountsV1 {
             && self.events == 0
             && self.dependency_retains == 0
             && self.dependency_depths == 0
+            && self.dependency_waiters == 0
+            && self.completion_reservations == 0
+            && self.ready_index_entries == 0
+            && self.in_flight_index_entries == 0
+            && self.directional_active == 0
     }
 }
 
@@ -4318,8 +4544,9 @@ fn native_xgmi_execution_capabilities_v1() -> RuntimeExecutionCapabilitiesV1 {
 /// Exact two-device, copy-only gfx942 native-XGMI runtime backend.
 ///
 /// This owner acquires both process VMs before allocating memory, retains the
-/// two directional topology routes, and keeps PUBLIC VRAM unmapped except while
-/// a native peer copy owns it. It intentionally does not expose compute launch
+/// two directional topology routes, and retains successful PUBLIC VRAM peer
+/// mappings across copies until host access or allocation release requires an
+/// explicit unmap. It intentionally does not expose compute launch
 /// or same-device copy: the current low-level XGMI queue requires raw access to
 /// both VM sessions, while the compute adapter consumes a session into its queue.
 #[must_use = "native XGMI backends must remain owned through quiescence"]
@@ -4335,13 +4562,29 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     allocations: HashMap<u64, XgmiRuntimeAllocationV1>,
     submissions: HashMap<u64, SubmissionRecordV1>,
     active: HashMap<u64, XgmiRuntimeSubmissionV1>,
+    ready_by_direction: [VecDeque<u64>; 2],
+    in_flight_by_direction: [Vec<u64>; 2],
+    active_by_direction: [usize; 2],
+    completion_reservations: usize,
     events: HashMap<u64, EventRecordV1>,
     dependency_retain_counts: HashMap<u64, usize>,
     dependency_depths: HashMap<u64, usize>,
+    dependency_waiters: HashMap<u64, Vec<u64>>,
 }
 
 impl fmt::Debug for KfdNativeXgmiRuntimeBackendV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mapped_allocations = self
+            .allocations
+            .values()
+            .filter(|allocation| {
+                matches!(
+                    allocation.authority.as_ref(),
+                    Some(XgmiAllocationAuthorityV1::Mapped(mapping))
+                        if mapping.is_fully_mapped()
+                )
+            })
+            .count();
         let quarantined_mappings = self
             .allocations
             .values()
@@ -4367,10 +4610,14 @@ impl fmt::Debug for KfdNativeXgmiRuntimeBackendV1 {
             )
             .field("streams", &self.streams.len())
             .field("allocations", &self.allocations.len())
+            .field("mapped_allocations", &mapped_allocations)
             .field("quarantined_mappings", &quarantined_mappings)
             .field("max_alignment", &max_alignment)
             .field("submissions", &self.submissions.len())
             .field("active", &self.active.len())
+            .field("ready_by_direction", &self.ready_by_direction)
+            .field("in_flight_by_direction", &self.in_flight_by_direction)
+            .field("completion_reservations", &self.completion_reservations)
             .field("events", &self.events.len())
             .field("dependency_depths", &self.dependency_depths.len())
             .field("terminal", &self.terminal)
@@ -5598,9 +5845,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             allocations: HashMap::new(),
             submissions: HashMap::new(),
             active: HashMap::new(),
+            ready_by_direction: [VecDeque::new(), VecDeque::new()],
+            in_flight_by_direction: [Vec::new(), Vec::new()],
+            active_by_direction: [0, 0],
+            completion_reservations: 0,
             events: HashMap::new(),
             dependency_retain_counts: HashMap::new(),
             dependency_depths: HashMap::new(),
+            dependency_waiters: HashMap::new(),
         })
     }
 
@@ -5620,6 +5872,13 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             KfdRuntimeBackendErrorKindV1::Terminal,
             detail,
         ))
+    }
+
+    fn quiescent_error(
+        kind: KfdRuntimeBackendErrorKindV1,
+        detail: impl Into<String>,
+    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+        RuntimeBackendFailureV1::Quiescent(KfdRuntimeBackendErrorV1::new(kind, detail))
     }
 
     fn require_live(&self) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
@@ -5706,13 +5965,33 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Ok(())
     }
 
+    fn restore_mapped(
+        &mut self,
+        allocation: u64,
+        mapping: Gfx942XgmiMappedDeviceMemoryV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !mapping.is_fully_mapped() {
+            self.quarantine_mapping(allocation, mapping);
+            return Err(self.terminal_error("incomplete XGMI mapping cannot become reusable"));
+        }
+        let Some(record) = self.allocations.get_mut(&allocation) else {
+            return Err(self.terminal_error("XGMI allocation disappeared"));
+        };
+        if record.authority.is_some() {
+            // There is no safe place to return a second linear native owner.
+            std::process::abort();
+        }
+        record.authority = Some(XgmiAllocationAuthorityV1::Mapped(mapping));
+        Ok(())
+    }
+
     fn map_allocation(
         &mut self,
         allocation: u64,
         direction: usize,
     ) -> Result<Gfx942XgmiMappedDeviceMemoryV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
-        let (owner, lease) = {
+        let (owner, authority) = {
             let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
                 Self::rejected(
                     KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -5725,11 +6004,18 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                     "native XGMI allocation is retained by pending work",
                 )
             })?;
-            let XgmiAllocationAuthorityV1::Unmapped(lease) = authority else {
-                record.authority = Some(authority);
+            (record.device, authority)
+        };
+        let lease = match authority {
+            XgmiAllocationAuthorityV1::Mapped(mapping) => return Ok(mapping),
+            XgmiAllocationAuthorityV1::Unmapped(lease) => lease,
+            authority @ XgmiAllocationAuthorityV1::QuarantinedMapped(_) => {
+                self.allocations
+                    .get_mut(&allocation)
+                    .expect("indexed XGMI allocation")
+                    .authority = Some(authority);
                 return Err(self.terminal_error("quarantined XGMI mapping was reused"));
-            };
-            (record.device, lease)
+            }
         };
         let route = self.routes[direction];
         let result = {
@@ -5802,7 +6088,43 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn unmap_copy_pair(
+    fn ensure_allocation_unmapped(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let authority = self
+            .allocations
+            .get_mut(&allocation)
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                    "unknown native XGMI allocation",
+                )
+            })?
+            .authority
+            .take()
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "native XGMI allocation is retained by pending work",
+                )
+            })?;
+        match authority {
+            XgmiAllocationAuthorityV1::Unmapped(lease) => self.restore_unmapped(allocation, lease),
+            XgmiAllocationAuthorityV1::Mapped(mapping) => {
+                self.unmap_allocation(allocation, 0, mapping)
+            }
+            authority @ XgmiAllocationAuthorityV1::QuarantinedMapped(_) => {
+                self.allocations
+                    .get_mut(&allocation)
+                    .expect("indexed XGMI allocation")
+                    .authority = Some(authority);
+                Err(self.terminal_error("quarantined XGMI mapping cannot be unmapped normally"))
+            }
+        }
+    }
+
+    fn restore_mapped_copy_pair(
         &mut self,
         source_allocation: u64,
         destination_allocation: u64,
@@ -5810,44 +6132,116 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         source: Gfx942XgmiMappedDeviceMemoryV1,
         destination: Gfx942XgmiMappedDeviceMemoryV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if let Err(failure) = self.unmap_allocation(source_allocation, direction, source) {
-            // The first transition made the session state untrustworthy. Do
-            // not issue another ioctl; retain the still-mapped peer token.
+        let _ = direction;
+        if let Err(failure) = self.restore_mapped(source_allocation, source) {
             self.quarantine_mapping(destination_allocation, destination);
             return Err(failure);
         }
-        self.unmap_allocation(destination_allocation, direction, destination)
+        self.restore_mapped(destination_allocation, destination)
     }
 
-    fn release_dependencies(&mut self, dependencies: &[u64]) {
-        for dependency in dependencies {
-            let remove = {
-                let count = self
-                    .dependency_retain_counts
-                    .get_mut(dependency)
-                    .expect("active XGMI dependency remains retained");
-                *count -= 1;
-                *count == 0
+    fn reserve_directional_index_slot(
+        &mut self,
+        direction: usize,
+    ) -> Result<usize, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let next = self.active_by_direction[direction]
+            .checked_add(1)
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "native XGMI directional active count",
+                )
+            })?;
+        let ready = &mut self.ready_by_direction[direction];
+        if ready.capacity() < next {
+            ready.try_reserve_exact(next - ready.len()).map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "native XGMI directional ready queue",
+                )
+            })?;
+        }
+        let in_flight = &mut self.in_flight_by_direction[direction];
+        let in_flight_needed = next.min(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+        if in_flight.capacity() < in_flight_needed {
+            in_flight
+                .try_reserve_exact(in_flight_needed - in_flight.len())
+                .map_err(|_| {
+                    Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::Capacity,
+                        "native XGMI directional in-flight index",
+                    )
+                })?;
+        }
+        Ok(next)
+    }
+
+    fn remove_directional_indexes(&mut self, active: &XgmiRuntimeSubmissionV1) {
+        let ready =
+            remove_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
+        let in_flight = remove_ordered_xgmi_id_v1(
+            &mut self.in_flight_by_direction[active.direction],
+            active.id,
+        );
+        if ready && in_flight || self.active_by_direction[active.direction] == 0 {
+            std::process::abort();
+        }
+        self.active_by_direction[active.direction] -= 1;
+    }
+
+    fn wake_dependency_waiters(&mut self, dependency: u64) {
+        let Some(waiters) = self.dependency_waiters.remove(&dependency) else {
+            return;
+        };
+        for waiter in waiters {
+            let Some(active) = self.active.get(&waiter) else {
+                continue;
             };
-            if remove {
-                self.dependency_retain_counts.remove(dependency);
+            if xgmi_submission_is_ready_v1(active, &self.submissions, active.direction) {
+                enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
             }
         }
     }
 
+    fn unregister_dependency_waiter(&mut self, active: &XgmiRuntimeSubmissionV1) {
+        for dependency in &active.dependencies {
+            let remove_entry = self
+                .dependency_waiters
+                .get_mut(dependency)
+                .is_some_and(|waiters| {
+                    let _ = remove_ordered_xgmi_id_v1(waiters, active.id);
+                    waiters.is_empty()
+                });
+            if remove_entry {
+                self.dependency_waiters.remove(dependency);
+            }
+        }
+    }
+
+    fn settle_submission(
+        &mut self,
+        active: XgmiRuntimeSubmissionV1,
+        status: BackendPollV1,
+    ) -> BackendPollV1 {
+        let id = active.id;
+        self.unregister_dependency_waiter(&active);
+        self.remove_directional_indexes(&active);
+        settle_xgmi_submission_record_v1(
+            &mut self.dependency_retain_counts,
+            &mut self.submissions,
+            &mut self.completion_reservations,
+            active,
+            status,
+        );
+        self.wake_dependency_waiters(id);
+        status
+    }
+
     fn finish_failed(&mut self, active: XgmiRuntimeSubmissionV1) -> BackendPollV1 {
-        self.release_dependencies(&active.dependencies);
         let status = BackendPollV1::Failed {
             code: COOPERATIVE_COPY_FAILURE_CODE_V1,
         };
-        self.submissions.insert(
-            active.id,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status,
-            },
-        );
-        status
+        self.settle_submission(active, status)
     }
 
     fn allocation_active(&self, allocation: u64) -> bool {
@@ -5861,82 +6255,184 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             .authority = Some(XgmiAllocationAuthorityV1::QuarantinedMapped(mapping));
     }
 
-    fn publish_peer_copy(
+    fn restore_prepared_xgmi_batch(
         &mut self,
-        mut active: XgmiRuntimeSubmissionV1,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        self.ensure_queue(active.direction)?;
-        let source = match self.map_allocation(active.source, active.direction) {
-            Ok(mapping) => mapping,
-            Err(RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_)) => {
-                return Ok(self.finish_failed(active));
-            }
-            Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => return Err(failure),
-        };
-        let destination = match self.map_allocation(active.destination, active.direction) {
-            Ok(mapping) => mapping,
-            Err(failure) => {
-                self.unmap_allocation(active.source, active.direction, source)?;
-                return match failure {
-                    RuntimeBackendFailureV1::Rejected(_)
-                    | RuntimeBackendFailureV1::Quiescent(_) => Ok(self.finish_failed(active)),
-                    failure @ RuntimeBackendFailureV1::Terminal(_) => Err(failure),
-                };
-            }
-        };
-        let result = {
-            let (source_session, destination_session) =
-                Self::session_pair(&mut self.sessions, active.direction);
-            self.queues[active.direction]
-                .as_mut()
-                .expect("directional XGMI queue was established")
-                .submit(
-                    source_session,
-                    destination_session,
-                    source,
-                    active.source_offset,
-                    destination,
-                    active.destination_offset,
-                    active.byte_len,
-                )
-        };
-        match result {
-            Ok(ticket) => {
-                active.ticket = Some(ticket);
-                self.active.insert(active.id, active);
-                Ok(BackendPollV1::Pending)
-            }
-            Err(Gfx942XgmiCopyFailureV1::Recoverable {
-                error,
+        active_batch: Vec<XgmiRuntimeSubmissionV1>,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if active_batch.len() != requests.len() {
+            std::process::abort();
+        }
+        for (active, request) in active_batch.into_iter().zip(requests) {
+            let (source, destination) = request.into_mappings();
+            self.restore_mapped_copy_pair(
+                active.source,
+                active.destination,
+                active.direction,
                 source,
                 destination,
-            }) => {
-                self.unmap_copy_pair(
-                    active.source,
-                    active.destination,
-                    active.direction,
-                    source,
-                    destination,
-                )?;
-                let _ = error;
-                Ok(self.finish_failed(active))
+            )?;
+            enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
+            self.active.insert(active.id, active);
+        }
+        Ok(())
+    }
+
+    /// Publishes every currently ready submission for one direction in a
+    /// single native SDMA reservation and doorbell store. The maintained
+    /// FIFO ready queue makes selection O(batch) and independent of total
+    /// active work; the ordered in-flight index remains bounded to 63 tickets.
+    fn publish_ready_peer_batch(
+        &mut self,
+        direction: usize,
+    ) -> Result<XgmiBatchPublicationOutcomeV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        if !self.in_flight_by_direction[direction].is_empty() {
+            return Ok(XgmiBatchPublicationOutcomeV1::AlreadyInFlight);
+        }
+        let batch_len = self.ready_by_direction[direction]
+            .len()
+            .min(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+        if batch_len == 0 {
+            return Ok(XgmiBatchPublicationOutcomeV1::NoReadyWork);
+        }
+        let mut active_batch = Vec::new();
+        let mut requests = Vec::new();
+        active_batch.try_reserve_exact(batch_len).map_err(|_| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "native XGMI active batch",
+            )
+        })?;
+        requests.try_reserve_exact(batch_len).map_err(|_| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "native XGMI request batch",
+            )
+        })?;
+        self.ensure_queue(direction)?;
+        for _ in 0..batch_len {
+            let id = self.ready_by_direction[direction]
+                .pop_front()
+                .expect("non-empty XGMI ready queue");
+            let active = self
+                .active
+                .remove(&id)
+                .expect("selected XGMI submission remains active");
+            let source = match self.map_allocation(active.source, direction) {
+                Ok(mapping) => mapping,
+                Err(failure) => {
+                    // Every earlier pair is restored before the current item is
+                    // settled, so a recoverable map rejection cannot strand or
+                    // drop any allocation authority selected for this batch.
+                    self.restore_prepared_xgmi_batch(active_batch, requests)?;
+                    return match failure {
+                        RuntimeBackendFailureV1::Rejected(_)
+                        | RuntimeBackendFailureV1::Quiescent(_) => {
+                            self.finish_failed(active);
+                            Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
+                        }
+                        failure @ RuntimeBackendFailureV1::Terminal(_) => {
+                            enqueue_xgmi_ready_id_v1(
+                                &mut self.ready_by_direction[active.direction],
+                                active.id,
+                            );
+                            self.active.insert(active.id, active);
+                            Err(failure)
+                        }
+                    };
+                }
+            };
+            let destination = match self.map_allocation(active.destination, direction) {
+                Ok(mapping) => mapping,
+                Err(failure) => {
+                    // Restore the current source and all earlier pairs before
+                    // resolving the current logical submission.
+                    self.restore_mapped(active.source, source)?;
+                    self.restore_prepared_xgmi_batch(active_batch, requests)?;
+                    return match failure {
+                        RuntimeBackendFailureV1::Rejected(_)
+                        | RuntimeBackendFailureV1::Quiescent(_) => {
+                            self.finish_failed(active);
+                            Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
+                        }
+                        failure @ RuntimeBackendFailureV1::Terminal(_) => {
+                            enqueue_xgmi_ready_id_v1(
+                                &mut self.ready_by_direction[active.direction],
+                                active.id,
+                            );
+                            self.active.insert(active.id, active);
+                            Err(failure)
+                        }
+                    };
+                }
+            };
+            let request = Gfx942XgmiSdmaCopyRequestV1::new(
+                source,
+                active.source_offset,
+                destination,
+                active.destination_offset,
+                active.byte_len,
+            );
+            active_batch.push(active);
+            requests.push(request);
+        }
+        let result = {
+            let (source_session, destination_session) =
+                Self::session_pair(&mut self.sessions, direction);
+            self.queues[direction]
+                .as_mut()
+                .expect("directional XGMI queue was established")
+                .submit_batch(source_session, destination_session, requests)
+        };
+        match result {
+            Ok(tickets) => {
+                if tickets.len() != active_batch.len() {
+                    // Native publication retained mappings, but correspondence
+                    // to logical submissions is no longer recoverable.
+                    std::process::abort();
+                }
+                for (mut active, ticket) in active_batch.into_iter().zip(tickets) {
+                    active.ticket = Some(ticket);
+                    insert_ordered_xgmi_id_v1(
+                        &mut self.in_flight_by_direction[active.direction],
+                        active.id,
+                    );
+                    self.active.insert(active.id, active);
+                }
+                Ok(XgmiBatchPublicationOutcomeV1::Published)
             }
-            Err(Gfx942XgmiCopyFailureV1::Retained { error, ticket }) => {
-                active.ticket = Some(ticket);
-                self.active.insert(active.id, active);
-                Err(self.terminal_error(format!(
-                    "native XGMI publication retained a ticket: {error}"
-                )))
+            Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error: _, requests }) => {
+                if requests.len() != active_batch.len() {
+                    std::process::abort();
+                }
+                for (active, request) in active_batch.into_iter().zip(requests) {
+                    let (source, destination) = request.into_mappings();
+                    self.restore_mapped_copy_pair(
+                        active.source,
+                        active.destination,
+                        active.direction,
+                        source,
+                        destination,
+                    )?;
+                    self.finish_failed(active);
+                }
+                Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
             }
-            Err(Gfx942XgmiCopyFailureV1::CompletedCurrentnessIndeterminate {
-                error,
-                completed,
-            }) => {
-                let (source, destination) = completed.into_mappings();
-                self.quarantine_mapping(active.source, source);
-                self.quarantine_mapping(active.destination, destination);
+            Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets }) => {
+                if tickets.len() != active_batch.len() {
+                    std::process::abort();
+                }
+                for (mut active, ticket) in active_batch.into_iter().zip(tickets) {
+                    active.ticket = Some(ticket);
+                    insert_ordered_xgmi_id_v1(
+                        &mut self.in_flight_by_direction[active.direction],
+                        active.id,
+                    );
+                    self.active.insert(active.id, active);
+                }
                 Err(self.terminal_error(format!(
-                    "native XGMI publication completion currentness became ambiguous: {error}"
+                    "native XGMI batch publication retained tickets: {error}"
                 )))
             }
         }
@@ -5963,23 +6459,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 }
                 Ok(Gfx942XgmiCopyPollV1::Completed(completed)) => {
                     let (source, destination) = completed.into_mappings();
-                    self.unmap_copy_pair(
+                    self.restore_mapped_copy_pair(
                         active.source,
                         active.destination,
                         active.direction,
                         source,
                         destination,
                     )?;
-                    self.release_dependencies(&active.dependencies);
                     let status = BackendPollV1::Succeeded;
-                    self.submissions.insert(
-                        active.id,
-                        SubmissionRecordV1 {
-                            stream: active.stream,
-                            status,
-                        },
-                    );
-                    Ok(status)
+                    Ok(self.settle_submission(active, status))
                 }
                 Err(Gfx942XgmiCopyFailureV1::Retained { error, ticket }) => {
                     active.ticket = Some(ticket);
@@ -6021,7 +6509,26 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 BackendPollV1::Failed { .. } => return Ok(self.finish_failed(active)),
             }
         }
-        self.publish_peer_copy(active)
+        let id = active.id;
+        let direction = active.direction;
+        enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[direction], id);
+        self.active.insert(id, active);
+        let _ = self.publish_ready_peer_batch(direction)?;
+        if let Some(record) = self.submissions.get(&id) {
+            return Ok(record.status);
+        }
+        let progress_id = indexed_xgmi_progress_id_v1(&self.in_flight_by_direction[direction], id);
+        if let Some(progress_id) = progress_id {
+            let published = self
+                .active
+                .remove(&progress_id)
+                .expect("selected published XGMI submission remains active");
+            let _ = self.progress_peer_copy(published)?;
+        }
+        Ok(self
+            .submissions
+            .get(&id)
+            .map_or(BackendPollV1::Pending, |record| record.status))
     }
 
     /// Destroys both directional queues after every logical handle is released.
@@ -6037,6 +6544,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             events: self.events.len(),
             dependency_retains: self.dependency_retain_counts.len(),
             dependency_depths: self.dependency_depths.len(),
+            dependency_waiters: self.dependency_waiters.len(),
+            completion_reservations: self.completion_reservations,
+            ready_index_entries: self.ready_by_direction.iter().map(|ids| ids.len()).sum(),
+            in_flight_index_entries: self.in_flight_by_direction.iter().map(Vec::len).sum(),
+            directional_active: self.active_by_direction.iter().sum(),
         };
         if !resources.permits_shutdown() {
             return Err(Self::rejected(
@@ -6179,6 +6691,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "native XGMI allocation is retained by pending work",
             ));
         }
+        self.ensure_allocation_unmapped(allocation)?;
         let (device, authority) = {
             let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
                 Self::rejected(
@@ -6214,6 +6727,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "XGMI allocation pending",
             ));
         }
+        self.ensure_allocation_unmapped(allocation)?;
         let (device, byte_len) = self
             .allocations
             .get(&allocation)
@@ -6277,6 +6791,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "XGMI allocation pending",
             ));
         }
+        self.ensure_allocation_unmapped(allocation)?;
         let record = self.allocations.get(&allocation).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -6362,12 +6877,44 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         if let Some(record) = self.submissions.get(&submission) {
             return Ok(record.status);
         }
-        let active = self.active.remove(&submission).ok_or_else(|| {
+        let active = self.active.get(&submission).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown XGMI submission",
             )
         })?;
+        if active.ticket.is_none()
+            && xgmi_submission_is_ready_v1(active, &self.submissions, active.direction)
+        {
+            let direction = active.direction;
+            let _ = self.publish_ready_peer_batch(direction)?;
+            if let Some(record) = self.submissions.get(&submission) {
+                return Ok(record.status);
+            }
+            if self
+                .active
+                .get(&submission)
+                .is_some_and(|active| active.ticket.is_none())
+            {
+                if let Some(progress_id) =
+                    indexed_xgmi_progress_id_v1(&self.in_flight_by_direction[direction], submission)
+                {
+                    let published = self
+                        .active
+                        .remove(&progress_id)
+                        .expect("indexed XGMI ticket remains active");
+                    let _ = self.progress_peer_copy(published)?;
+                }
+                return Ok(self
+                    .submissions
+                    .get(&submission)
+                    .map_or(BackendPollV1::Pending, |record| record.status));
+            }
+        }
+        let active = self
+            .active
+            .remove(&submission)
+            .expect("validated XGMI submission remains active");
         self.progress_peer_copy(active)
     }
 
@@ -6558,12 +7105,6 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         self.active.try_reserve(1).map_err(|_| {
             Self::rejected(KfdRuntimeBackendErrorKindV1::Capacity, "XGMI active table")
         })?;
-        self.submissions.try_reserve(1).map_err(|_| {
-            Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "XGMI completion table",
-            )
-        })?;
         self.dependency_retain_counts
             .try_reserve(dependency_submissions.len())
             .map_err(|_| {
@@ -6588,18 +7129,103 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "XGMI dependency retain count overflow",
             ));
         }
-        let id = self.next_id()?;
+        let next_direction_active = self.reserve_directional_index_slot(direction)?;
+
+        // Preallocate every dependency-wakeup insertion before acquiring any
+        // logical submission custody. Existing waiter lists remain sorted
+        // because submission handles are monotonically increasing.
+        let mut active_dependencies = Vec::new();
+        active_dependencies
+            .try_reserve_exact(dependency_submissions.len())
+            .map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "XGMI active-dependency preparation",
+                )
+            })?;
+        active_dependencies.extend(
+            dependency_submissions
+                .iter()
+                .copied()
+                .filter(|dependency| self.active.contains_key(dependency)),
+        );
+        self.dependency_waiters
+            .try_reserve(active_dependencies.len())
+            .map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "XGMI dependency-waiter index",
+                )
+            })?;
+        let mut new_waiter_lists = Vec::new();
+        new_waiter_lists
+            .try_reserve_exact(active_dependencies.len())
+            .map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "XGMI dependency-waiter preparation",
+                )
+            })?;
+        for dependency in &active_dependencies {
+            if let Some(waiters) = self.dependency_waiters.get_mut(dependency) {
+                waiters.try_reserve(1).map_err(|_| {
+                    Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::Capacity,
+                        "XGMI dependency-waiter list",
+                    )
+                })?;
+            } else {
+                let mut waiters = Vec::new();
+                waiters.try_reserve_exact(1).map_err(|_| {
+                    Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::Capacity,
+                        "XGMI dependency-waiter list",
+                    )
+                })?;
+                new_waiter_lists.push((*dependency, waiters));
+            }
+        }
+        reserve_xgmi_completion_slot_v1(&mut self.submissions, &mut self.completion_reservations)
+            .map_err(|XgmiCompletionReservationErrorV1::Capacity| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "XGMI completion table",
+            )
+        })?;
+        let id = self.next_handle;
+        let Some(next_handle) = id.checked_add(1) else {
+            self.completion_reservations -= 1;
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "native XGMI handle space exhausted",
+            ));
+        };
+        self.next_handle = next_handle;
+        for (dependency, waiters) in new_waiter_lists {
+            if self
+                .dependency_waiters
+                .insert(dependency, waiters)
+                .is_some()
+            {
+                std::process::abort();
+            }
+        }
+        for dependency in &active_dependencies {
+            let waiters = self
+                .dependency_waiters
+                .get_mut(dependency)
+                .expect("prepared XGMI dependency-waiter list");
+            if waiters.last().is_some_and(|waiter| *waiter >= id) {
+                std::process::abort();
+            }
+            waiters.push(id);
+        }
         for dependency in &dependency_submissions {
             let count = self
                 .dependency_retain_counts
                 .entry(*dependency)
                 .or_insert(0);
-            *count = count.checked_add(1).ok_or_else(|| {
-                Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::Capacity,
-                    "XGMI dependency count",
-                )
-            })?;
+            *count += 1;
         }
         self.dependency_depths.insert(id, dependency_depth);
         let active = XgmiRuntimeSubmissionV1 {
@@ -6615,16 +7241,15 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             dependency_cursor: 0,
             ticket: None,
         };
-        let all_ready = active.dependencies.iter().all(|dependency| {
-            self.submissions
-                .get(dependency)
-                .is_some_and(|record| record.status == BackendPollV1::Succeeded)
-        });
-        if all_ready {
-            self.publish_peer_copy(active)?;
-        } else {
-            self.active.insert(id, active);
+        if xgmi_submission_is_ready_v1(&active, &self.submissions, direction) {
+            enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[direction], id);
         }
+        self.active_by_direction[direction] = next_direction_active;
+        // Publication is intentionally deferred to the first progress call.
+        // This gives adjacent facade submissions a bounded coalescing window;
+        // all ready copies in the same direction are then published with one
+        // native write-pointer update and one doorbell store.
+        self.active.insert(id, active);
         Ok(id)
     }
 }
@@ -6641,6 +7266,53 @@ impl RuntimeAsyncCopyBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             KfdRuntimeBackendErrorKindV1::Unsupported,
             "copy-only XGMI backend has no same-device SDMA owner",
         ))
+    }
+}
+
+impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+    fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        let destination = *self.streams.get(&stream).ok_or_else(|| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "unknown native XGMI stream",
+            )
+        })?;
+        let direction = xgmi_direction_for_destination_v1(destination)
+            .ok_or_else(|| self.terminal_error("native XGMI stream lost destination binding"))?;
+
+        match classify_xgmi_flush_v1(
+            self.ready_by_direction[direction].len(),
+            !self.in_flight_by_direction[direction].is_empty(),
+            GFX942_SDMA_MAX_IN_FLIGHT_V1,
+        ) {
+            XgmiFlushAdmissionV1::NoReadyWork => return Ok(()),
+            XgmiFlushAdmissionV1::InFlight => {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "native XGMI direction already has a published batch",
+                ));
+            }
+            XgmiFlushAdmissionV1::Capacity => {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "native XGMI ready flush exceeds ring admission",
+                ));
+            }
+            XgmiFlushAdmissionV1::Publish { .. } => {}
+        }
+        match self.publish_ready_peer_batch(direction)? {
+            XgmiBatchPublicationOutcomeV1::Published => Ok(()),
+            XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure => {
+                Err(Self::quiescent_error(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    "native XGMI flush recovered a prepublication failure",
+                ))
+            }
+            XgmiBatchPublicationOutcomeV1::NoReadyWork
+            | XgmiBatchPublicationOutcomeV1::AlreadyInFlight => Err(self
+                .terminal_error("native XGMI flush admission changed without concurrent access")),
+        }
     }
 }
 
@@ -6672,14 +7344,7 @@ impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             .active
             .remove(&submission)
             .expect("prepublication XGMI submission remains active");
-        self.release_dependencies(&active.dependencies);
-        self.submissions.insert(
-            submission,
-            SubmissionRecordV1 {
-                stream: active.stream,
-                status: BackendPollV1::Failed { code: -2 },
-            },
-        );
+        self.settle_submission(active, BackendPollV1::Failed { code: -2 });
         Ok(crate::BackendCancellationV1::Cancelled)
     }
 
@@ -6702,6 +7367,14 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
             || !self.events.is_empty()
             || !self.dependency_retain_counts.is_empty()
             || !self.dependency_depths.is_empty()
+            || !self.dependency_waiters.is_empty()
+            || self.completion_reservations != 0
+            || self.ready_by_direction.iter().any(|ids| !ids.is_empty())
+            || self
+                .in_flight_by_direction
+                .iter()
+                .any(|ids| !ids.is_empty())
+            || self.active_by_direction != [0, 0]
         {
             std::process::abort();
         }
@@ -7914,7 +8587,10 @@ mod tests {
 
         fn assert_runtime_extensions<T>()
         where
-            T: RuntimeBackendV1 + RuntimeAsyncCopyBackendV1 + RuntimeCancellationBackendV1,
+            T: RuntimeBackendV1
+                + RuntimeAsyncCopyBackendV1
+                + RuntimeCancellationBackendV1
+                + RuntimeFlushBackendV1,
         {
         }
         assert_runtime_extensions::<KfdNativeXgmiRuntimeBackendV1>();
@@ -7928,6 +8604,243 @@ mod tests {
         assert!(!capabilities.profiling);
         assert!(!capabilities.atomics);
         assert!(!capabilities.collectives);
+    }
+
+    #[test]
+    fn native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered() {
+        let mut active = HashMap::new();
+        active.insert(9, synthetic_xgmi_submission_v1(9, 1, 10, 11, vec![]));
+        active.insert(3, synthetic_xgmi_submission_v1(3, 2, 12, 13, vec![70]));
+        active.insert(5, synthetic_xgmi_submission_v1(5, 3, 14, 15, vec![71]));
+        let mut reverse = synthetic_xgmi_submission_v1(4, 4, 16, 17, vec![]);
+        reverse.direction = 1;
+        active.insert(4, reverse);
+
+        let mut completed = HashMap::new();
+        completed.insert(
+            70,
+            SubmissionRecordV1 {
+                stream: 8,
+                status: BackendPollV1::Succeeded,
+            },
+        );
+        completed.insert(
+            71,
+            SubmissionRecordV1 {
+                stream: 8,
+                status: BackendPollV1::Pending,
+            },
+        );
+
+        assert_eq!(
+            ready_xgmi_batch_ids_v1(&active, &completed, 0, 8).unwrap(),
+            vec![3, 9]
+        );
+        assert_eq!(
+            ready_xgmi_batch_ids_v1(&active, &completed, 0, 1).unwrap(),
+            vec![3]
+        );
+        assert_eq!(
+            ready_xgmi_batch_ids_v1(&active, &completed, 1, 8).unwrap(),
+            vec![4]
+        );
+        assert!(
+            ready_xgmi_batch_ids_v1(&active, &completed, 2, 8)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut oversized = HashMap::new();
+        for id in 1..=GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64 + 2 {
+            oversized.insert(
+                id,
+                synthetic_xgmi_submission_v1(id, id, id * 2, id * 2 + 1, vec![]),
+            );
+        }
+        let admitted =
+            ready_xgmi_batch_ids_v1(&oversized, &HashMap::new(), 0, GFX942_SDMA_MAX_IN_FLIGHT_V1)
+                .unwrap();
+        assert_eq!(admitted.len(), GFX942_SDMA_MAX_IN_FLIGHT_V1);
+        assert_eq!(admitted[0], 1);
+        assert_eq!(
+            admitted[GFX942_SDMA_MAX_IN_FLIGHT_V1 - 1],
+            GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64
+        );
+
+        // A caller focused beyond the first admitted ring batch advances one
+        // published ticket per poll instead of waiting on an unrelated handle
+        // forever. Once that batch drains, the focus can enter the next batch.
+        let focus = GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64 + 2;
+        for completed in 0..GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64 {
+            let in_flight =
+                (completed + 1..=GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64).collect::<Vec<_>>();
+            assert_eq!(
+                indexed_xgmi_progress_id_v1(&in_flight, focus),
+                Some(completed + 1)
+            );
+        }
+        assert_eq!(indexed_xgmi_progress_id_v1(&[], focus), None);
+    }
+
+    #[test]
+    fn native_xgmi_recoverable_batch_failure_settles_every_logical_owner() {
+        let first = synthetic_xgmi_submission_v1(40, 4, 10, 11, vec![70]);
+        let second = synthetic_xgmi_submission_v1(41, 5, 12, 13, vec![70, 71]);
+        let mut dependency_retains = HashMap::from([(70, 2), (71, 1)]);
+        let mut submissions = HashMap::new();
+        let mut completion_reservations = 0;
+        reserve_xgmi_completion_slot_v1(&mut submissions, &mut completion_reservations).unwrap();
+        reserve_xgmi_completion_slot_v1(&mut submissions, &mut completion_reservations).unwrap();
+        let completion_capacity = submissions.capacity();
+
+        finish_failed_xgmi_batch_records_v1(
+            &mut dependency_retains,
+            &mut submissions,
+            &mut completion_reservations,
+            [first, second],
+        );
+
+        assert!(dependency_retains.is_empty());
+        assert_eq!(completion_reservations, 0);
+        assert_eq!(submissions.capacity(), completion_capacity);
+        let first = submissions.get(&40).expect("first failure record");
+        assert_eq!(first.stream, 4);
+        assert_eq!(
+            first.status,
+            BackendPollV1::Failed {
+                code: COOPERATIVE_COPY_FAILURE_CODE_V1,
+            }
+        );
+        let second = submissions.get(&41).expect("second failure record");
+        assert_eq!(second.stream, 5);
+        assert_eq!(
+            second.status,
+            BackendPollV1::Failed {
+                code: COOPERATIVE_COPY_FAILURE_CODE_V1,
+            }
+        );
+    }
+
+    #[test]
+    fn native_xgmi_completion_slots_cover_every_outstanding_submission() {
+        const OUTSTANDING: u64 = 1_024;
+
+        let mut submissions = HashMap::new();
+        let mut completion_reservations = 0;
+        let active = (1..=OUTSTANDING)
+            .map(|id| synthetic_xgmi_submission_v1(id, id, id * 2, id * 2 + 1, vec![]))
+            .collect::<Vec<_>>();
+        for expected in 1..=OUTSTANDING as usize {
+            reserve_xgmi_completion_slot_v1(&mut submissions, &mut completion_reservations)
+                .unwrap();
+            assert_eq!(completion_reservations, expected);
+            assert!(
+                submissions.capacity().saturating_sub(submissions.len()) >= completion_reservations
+            );
+        }
+
+        let reserved_capacity = submissions.capacity();
+        let mut dependency_retains = HashMap::new();
+        for (settled, active) in active.into_iter().enumerate() {
+            settle_xgmi_submission_record_v1(
+                &mut dependency_retains,
+                &mut submissions,
+                &mut completion_reservations,
+                active,
+                BackendPollV1::Succeeded,
+            );
+            assert_eq!(completion_reservations, OUTSTANDING as usize - settled - 1);
+            assert_eq!(submissions.capacity(), reserved_capacity);
+            assert!(
+                submissions.capacity().saturating_sub(submissions.len()) >= completion_reservations
+            );
+        }
+        assert_eq!(submissions.len(), OUTSTANDING as usize);
+        assert_eq!(completion_reservations, 0);
+    }
+
+    #[test]
+    fn native_xgmi_ready_and_in_flight_indexes_remain_bounded_under_stress() {
+        const READY: u64 = 16_384;
+
+        let mut ready = VecDeque::new();
+        ready.try_reserve_exact(READY as usize).unwrap();
+        for id in 1..=READY {
+            enqueue_xgmi_ready_id_v1(&mut ready, id);
+        }
+        assert!(remove_xgmi_ready_id_v1(&mut ready, READY / 2));
+        enqueue_xgmi_ready_id_v1(&mut ready, READY / 2);
+
+        let mut observed = 0;
+        while !ready.is_empty() {
+            let batch_len = ready.len().min(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+            let mut in_flight = Vec::new();
+            in_flight.try_reserve_exact(batch_len).unwrap();
+            for _ in 0..batch_len {
+                let id = ready.pop_front().unwrap();
+                insert_ordered_xgmi_id_v1(&mut in_flight, id);
+            }
+            assert!(in_flight.len() <= GFX942_SDMA_MAX_IN_FLIGHT_V1);
+            let focus = READY + 1;
+            while let Some(id) = indexed_xgmi_progress_id_v1(&in_flight, focus) {
+                assert!(remove_ordered_xgmi_id_v1(&mut in_flight, id));
+                observed += 1;
+            }
+        }
+        assert_eq!(observed, READY);
+    }
+
+    #[test]
+    fn native_xgmi_flush_admission_is_complete_bounded_and_nonmutating() {
+        assert_eq!(xgmi_direction_for_destination_v1(0), Some(1));
+        assert_eq!(xgmi_direction_for_destination_v1(1), Some(0));
+        assert_eq!(xgmi_direction_for_destination_v1(2), None);
+        assert_eq!(
+            classify_xgmi_flush_v1(0, false, GFX942_SDMA_MAX_IN_FLIGHT_V1),
+            XgmiFlushAdmissionV1::NoReadyWork
+        );
+        assert_eq!(
+            classify_xgmi_flush_v1(1, true, GFX942_SDMA_MAX_IN_FLIGHT_V1),
+            XgmiFlushAdmissionV1::InFlight
+        );
+
+        let mut active = HashMap::new();
+        for id in 1..=GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64 + 1 {
+            active.insert(
+                id,
+                synthetic_xgmi_submission_v1(id, id, id * 2, id * 2 + 1, vec![]),
+            );
+        }
+        let before: Vec<_> = {
+            let mut ids: Vec<_> = active.keys().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(
+            classify_xgmi_flush_v1(active.len(), false, GFX942_SDMA_MAX_IN_FLIGHT_V1),
+            XgmiFlushAdmissionV1::Capacity
+        );
+        let mut after: Vec<_> = active.keys().copied().collect();
+        after.sort_unstable();
+        assert_eq!(after, before);
+        assert!(
+            active
+                .values()
+                .all(|submission| submission.ticket.is_none())
+        );
+
+        active.remove(&(GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64 + 1));
+        assert_eq!(
+            classify_xgmi_flush_v1(active.len(), false, GFX942_SDMA_MAX_IN_FLIGHT_V1),
+            XgmiFlushAdmissionV1::Publish {
+                ready: GFX942_SDMA_MAX_IN_FLIGHT_V1,
+            }
+        );
+        assert_eq!(
+            ready_xgmi_batch_ids_v1(&active, &HashMap::new(), 0, GFX942_SDMA_MAX_IN_FLIGHT_V1,)
+                .unwrap(),
+            (1..=GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -8114,7 +9027,7 @@ mod tests {
         );
 
         assert!(XgmiLogicalResourceCountsV1::default().permits_shutdown());
-        for occupied in 0..7 {
+        for occupied in 0..12 {
             let mut resources = XgmiLogicalResourceCountsV1::default();
             match occupied {
                 0 => resources.streams = 1,
@@ -8124,6 +9037,11 @@ mod tests {
                 4 => resources.events = 1,
                 5 => resources.dependency_retains = 1,
                 6 => resources.dependency_depths = 1,
+                7 => resources.dependency_waiters = 1,
+                8 => resources.completion_reservations = 1,
+                9 => resources.ready_index_entries = 1,
+                10 => resources.in_flight_index_entries = 1,
+                11 => resources.directional_active = 1,
                 _ => unreachable!(),
             }
             assert!(!resources.permits_shutdown());
