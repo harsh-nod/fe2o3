@@ -1198,7 +1198,7 @@ fn characteristic_matrix_v2_contract_is_lossless_and_production_adapter_is_wired
         vec![
             (
                 fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Duplicated,
-                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::Representable,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
             ),
             (
                 fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Fused,
