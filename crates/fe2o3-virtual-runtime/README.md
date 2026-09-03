@@ -9,6 +9,10 @@ views are validated and storage-bounded before preparation. Host access remains
 blocked while a dispatch retains an allocation, and ambiguous writable ranges
 remain uninitialized after quiesced settlement.
 
+An expired completion wait records a typed ambiguity reason. It never claims
+that virtual or physical execution stopped and never releases retained storage
+until the queue is explicitly quiescent.
+
 The crate accepts only `AdmittedSimulationModuleV1`; it does not compile source
 or parse unverified KIR. Handles are runtime-identity-bound ordinals, never host
 pointers or GPU virtual addresses. Every successful outcome reports semantic

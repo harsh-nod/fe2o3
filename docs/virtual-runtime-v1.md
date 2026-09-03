@@ -34,10 +34,13 @@ The runtime:
 - cancels only prepared work through the canonical pre-publication abort
   transition, releases its retained resources exactly once, and propagates the
   terminal failure to dependent dispatches;
-- propagates failed dependencies without executing dependent kernels; and
+- propagates failed dependencies without executing dependent kernels;
 - invalidates every potentially written byte when completion becomes ambiguous,
   requires explicit queue quiescence before settling it, and never promotes
-  those unknown bytes back to initialized state; and
+  those unknown bytes back to initialized state;
+- distinguishes an injected unknown outcome from an expired host wait while
+  treating both as published ambiguity; timeout does not claim cancellation or
+  stopped execution; and
 - refuses to quiesce a queue while it has prepared work, so teardown cannot
   strand a dispatch that the lifecycle model can no longer publish.
 
@@ -100,7 +103,7 @@ criteria. It is not a closure claim.
 | C1 scalar interpreter | Verified KIR admission, structured CFG/calls/scalars, canonical/seeded/replay schedules, bounded errors, generated wrapping-`i32` expressions, and a fixed V2 corpus covering every admitted fixed-width integer type, both target `index` widths, `bool`, exact finite additions for `f16`/`bf16`/`f32`/`f64`, multi-block CFG/block arguments/integer switch/internal calls, global memory, shared-view aliasing, and typed adversarial failures | Float rounding-edge/nonfinite matrices, casts, broader operation combinations, concurrency families, and universal coverage remain incomplete and are explicit typed exclusions |
 | C2 typed memory/Rust | Allocation provenance, initialization, bounds, alignment, buffer views, source/KIR diagnostics for the admitted subset | Aggregate/enum/layout coverage and complete conformance-corpus qualification remain incomplete |
 | C3 wave/workgroup | Wave32/Wave64 masks and selected collectives, LDS, barriers, integer atomics/fences, race/HB exploration | General divergence/reconvergence, matrix/MFMA, dynamic/general LDS, and remaining intrinsics stay typed unsupported |
-| C4 virtual runtime | This crate and CLI cover bounded allocation/copy/queue/dependency/dispatch/completion plus pre-publication cancellation, early-release, and ambiguous-completion recovery | Normal generated host-interface integration, explicit timeout/reset workflows, and #182-defined multi-device plans remain open |
+| C4 virtual runtime | This crate and CLI cover bounded allocation/copy/queue/dependency/dispatch/completion plus pre-publication cancellation, typed timeout ambiguity, early-release, and quiesced recovery | Normal generated host-interface integration, reset workflows, and #182-defined multi-device plans remain open |
 | C5 debugger/agent | Bounded JSONL simulator debugger, semantic scopes, replay/reverse inspection, race and source evidence | End-to-end seeded reduction and all requested query families are not complete |
 | C6 differential | The bounded V1/V2 harnesses bind exact case, KIR, expected-output, observed-output, and rejection sequences; emit reduced machine-readable diagnostics; require exact seed/case/KIR identity for replay; and expose an agent-readable capability/exclusion query | No exact simulator-versus-physical KFD matrix covers every supported semantic family; the V2 report is CPU model agreement only |
 

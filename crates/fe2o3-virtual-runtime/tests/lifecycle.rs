@@ -7,9 +7,10 @@ use fe2o3_kernel_ir::{
 use fe2o3_kir_sim::{AdmittedSimulationModuleV1, ScalarBitsV1, SimulationLimitsV1};
 use fe2o3_runtime_model::{IdentityDigestV1, TransitionErrorV1};
 use fe2o3_virtual_runtime::{
-    VirtualArgumentV1, VirtualBufferAccessV1, VirtualCompletionStateV1, VirtualDispatchRequestV1,
-    VirtualRunProgressV1, VirtualRuntimeConfigV1, VirtualRuntimeErrorV1, VirtualRuntimeLimitsV1,
-    VirtualRuntimeV1, VirtualTargetProfileV1,
+    VirtualArgumentV1, VirtualBufferAccessV1, VirtualCompletionAmbiguityV1,
+    VirtualCompletionStateV1, VirtualDispatchRequestV1, VirtualRunProgressV1,
+    VirtualRuntimeConfigV1, VirtualRuntimeErrorV1, VirtualRuntimeLimitsV1, VirtualRuntimeV1,
+    VirtualTargetProfileV1,
 };
 
 fn operation(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -370,6 +371,44 @@ fn ambiguous_completion_retains_resources_until_explicit_quiescence() {
         VirtualCompletionStateV1::FailedQuiescent
     );
     runtime.release_buffer(buffer).unwrap();
+}
+
+#[test]
+fn timeout_observation_does_not_claim_execution_stopped() {
+    let mut runtime = runtime(17);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[7; 4]).unwrap();
+    let completion = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+
+    runtime.observe_completion_timeout(completion).unwrap();
+    assert_eq!(
+        runtime.completion_state(completion).unwrap(),
+        VirtualCompletionStateV1::Ambiguous
+    );
+    assert_eq!(
+        runtime.completion_ambiguity(completion).unwrap(),
+        Some(VirtualCompletionAmbiguityV1::WaitDeadlineExpired)
+    );
+    assert!(matches!(
+        runtime.buffer_snapshot(buffer),
+        Err(VirtualRuntimeErrorV1::HostAccessWhileRetained { .. })
+    ));
+    runtime.quiesce_queue(queue).unwrap();
+    runtime.settle_ambiguous_completion(completion).unwrap();
+    assert_eq!(
+        runtime.completion_ambiguity(completion).unwrap(),
+        Some(VirtualCompletionAmbiguityV1::WaitDeadlineExpired)
+    );
+    assert!(matches!(
+        runtime.buffer_snapshot(buffer),
+        Ok(snapshot) if snapshot.initialized == [false; 4]
+    ));
 }
 
 #[test]

@@ -260,6 +260,15 @@ pub enum VirtualCompletionStateV1 {
     FailedQuiescent,
 }
 
+/// Why a published virtual dispatch no longer has a conclusive completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualCompletionAmbiguityV1 {
+    /// The caller injected an unknown publication/completion outcome.
+    PublicationOutcomeUnknown,
+    /// A bounded host wait expired; this does not assert that execution stopped.
+    WaitDeadlineExpired,
+}
+
 /// Compact successful observation from one deterministic CPU execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VirtualSimulationSummaryV1 {
@@ -502,6 +511,7 @@ struct DispatchRecordLocalV1 {
     request: VirtualDispatchRequestV1,
     retained_buffers: Vec<usize>,
     state: VirtualCompletionStateV1,
+    ambiguity: Option<VirtualCompletionAmbiguityV1>,
     summary: Option<VirtualSimulationSummaryV1>,
 }
 
@@ -931,6 +941,7 @@ impl VirtualRuntimeV1 {
             request,
             retained_buffers,
             state: VirtualCompletionStateV1::Prepared,
+            ambiguity: None,
             summary: None,
         });
         Ok(completion)
@@ -1009,6 +1020,13 @@ impl VirtualRuntimeV1 {
         Ok(self.dispatch(completion)?.summary.as_ref())
     }
 
+    pub fn completion_ambiguity(
+        &self,
+        completion: VirtualCompletionHandleV1,
+    ) -> Result<Option<VirtualCompletionAmbiguityV1>, VirtualRuntimeErrorV1> {
+        Ok(self.dispatch(completion)?.ambiguity)
+    }
+
     /// Cancels work that has not crossed the modeled publication boundary.
     pub fn cancel_completion(
         &mut self,
@@ -1032,6 +1050,31 @@ impl VirtualRuntimeV1 {
     pub fn mark_completion_ambiguous(
         &mut self,
         completion: VirtualCompletionHandleV1,
+    ) -> Result<(), VirtualRuntimeErrorV1> {
+        self.transition_to_ambiguous(
+            completion,
+            VirtualCompletionAmbiguityV1::PublicationOutcomeUnknown,
+        )
+    }
+
+    /// Records an expired completion wait after modeled publication.
+    ///
+    /// Expiry is an observation about the bounded host wait only. It neither
+    /// cancels the dispatch nor asserts that device execution stopped.
+    pub fn observe_completion_timeout(
+        &mut self,
+        completion: VirtualCompletionHandleV1,
+    ) -> Result<(), VirtualRuntimeErrorV1> {
+        self.transition_to_ambiguous(
+            completion,
+            VirtualCompletionAmbiguityV1::WaitDeadlineExpired,
+        )
+    }
+
+    fn transition_to_ambiguous(
+        &mut self,
+        completion: VirtualCompletionHandleV1,
+        reason: VirtualCompletionAmbiguityV1,
     ) -> Result<(), VirtualRuntimeErrorV1> {
         let index = self.dispatch_index(completion)?;
         if self.dispatches[index].state != VirtualCompletionStateV1::Prepared {
@@ -1059,6 +1102,7 @@ impl VirtualRuntimeV1 {
                 completion: model_completion,
             })?;
         self.dispatches[index].state = VirtualCompletionStateV1::Ambiguous;
+        self.dispatches[index].ambiguity = Some(reason);
         for (buffer_index, start, end) in writable_ranges {
             self.buffers[buffer_index].initialized[start..end].fill(false);
         }
