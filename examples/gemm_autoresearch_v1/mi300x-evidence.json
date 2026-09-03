@@ -1,0 +1,285 @@
+{
+  "schema": "fe2o3.gemm-autoresearch.campaign.v1",
+  "campaign_date_utc": "2026-09-03",
+  "host": "sharkmi300x-1",
+  "device": "AMD Instinct MI300X",
+  "target": "gfx942:xnack-",
+  "rocm_version": "7.2.4",
+  "protocol": {
+    "fresh_processes_per_variant": 3,
+    "warmups_per_size": 10,
+    "event_samples_per_process": 11,
+    "sizes": [
+      256,
+      512,
+      1024
+    ],
+    "score": "median across processes of the per-process geometric mean GFLOP/s"
+  },
+  "variants": [
+    {
+      "schema": "fe2o3.gemm-autoresearch.mi300x.v1",
+      "timestamp_utc": "2026-09-03T16:16:15+00:00",
+      "label": "direct-mfma",
+      "status": "pass",
+      "host": "sharkmi300x-1",
+      "target": "gfx942:xnack-",
+      "visible_device": "5",
+      "base_commit": "2df6130c5f897b5120cdf6ade44d53030690fa8b",
+      "candidate_sha256": "4b8ef3ac0a921df6ca616fca7c7c596dc53e2747296dcd7e9a2f21f73c11ccd8",
+      "evaluator_sha256": "9f6adae002ca33d03928810b939793f514f2afdf4a4331e6bbeb14f34ce6921f",
+      "reference_sha256": "80674fede2edfd020254e82637b77618bede8674d67b79e7d5c20ed780c1b5bc",
+      "replicates": [
+        {
+          "correctness_shape": "19x21x23",
+          "max_abs_error": 0.0,
+          "benchmarks": [
+            {
+              "size": 256,
+              "median_us": 46.007,
+              "p10_us": 43.797,
+              "p90_us": 56.07,
+              "gflops": 729.34
+            },
+            {
+              "size": 512,
+              "median_us": 105.43,
+              "p10_us": 64.54,
+              "p90_us": 111.915,
+              "gflops": 2546.11
+            },
+            {
+              "size": 1024,
+              "median_us": 180.951,
+              "p10_us": 172.111,
+              "p90_us": 296.31,
+              "gflops": 11867.79
+            }
+          ],
+          "geometric_mean_gflops": 2803.66
+        },
+        {
+          "correctness_shape": "19x21x23",
+          "max_abs_error": 0.0,
+          "benchmarks": [
+            {
+              "size": 256,
+              "median_us": 48.454,
+              "p10_us": 36.989,
+              "p90_us": 51.633,
+              "gflops": 692.5
+            },
+            {
+              "size": 512,
+              "median_us": 71.723,
+              "p10_us": 64.744,
+              "p90_us": 77.071,
+              "gflops": 3742.67
+            },
+            {
+              "size": 1024,
+              "median_us": 194.21,
+              "p10_us": 174.194,
+              "p90_us": 206.615,
+              "gflops": 11057.53
+            }
+          ],
+          "geometric_mean_gflops": 3060.22
+        },
+        {
+          "correctness_shape": "19x21x23",
+          "max_abs_error": 0.0,
+          "benchmarks": [
+            {
+              "size": 256,
+              "median_us": 49.043,
+              "p10_us": 44.503,
+              "p90_us": 52.378,
+              "gflops": 684.18
+            },
+            {
+              "size": 512,
+              "median_us": 72.232,
+              "p10_us": 65.266,
+              "p90_us": 96.969,
+              "gflops": 3716.3
+            },
+            {
+              "size": 1024,
+              "median_us": 186.439,
+              "p10_us": 175.89,
+              "p90_us": 263.487,
+              "gflops": 11518.45
+            }
+          ],
+          "geometric_mean_gflops": 3082.42
+        }
+      ],
+      "median_geometric_mean_gflops": 3060.22,
+      "measurement_boundary": "Device-event timing on one visible MI300X. Re-run on an idle, clock-controlled host before making a performance or state-of-the-art claim.",
+      "raw_output_sha256": [
+        "6b7dc7178a4a83990c9b2e9bea37fe9b7ae869ef0d7e30cb3cf141cb2d84b82b",
+        "4354afce18f0e02d42cb806ee6591974a557d2dd0a079af34eeb87cc892a8bdf",
+        "56f4bb8cea609e8881e22f87889ced11415daf17775e19fb7b88fd51fd505c3b"
+      ],
+      "decision": "keep",
+      "source_path": "examples/gemm_autoresearch_v1/src/kernel.rs"
+    },
+    {
+      "schema": "fe2o3.gemm-autoresearch.mi300x.v1",
+      "timestamp_utc": "2026-09-03T16:16:57+00:00",
+      "label": "two-slot-lds",
+      "status": "pass",
+      "host": "sharkmi300x-1",
+      "target": "gfx942:xnack-",
+      "visible_device": "5",
+      "base_commit": "2df6130c5f897b5120cdf6ade44d53030690fa8b",
+      "candidate_sha256": "1f18f3eb2f5e3e403fff06265794ff108edab3c2d2861a2c0071c61dca07042a",
+      "evaluator_sha256": "9f6adae002ca33d03928810b939793f514f2afdf4a4331e6bbeb14f34ce6921f",
+      "reference_sha256": "80674fede2edfd020254e82637b77618bede8674d67b79e7d5c20ed780c1b5bc",
+      "replicates": [
+        {
+          "correctness_shape": "19x21x23",
+          "max_abs_error": 0.0,
+          "benchmarks": [
+            {
+              "size": 256,
+              "median_us": 98.651,
+              "p10_us": 65.85,
+              "p90_us": 98.778,
+              "gflops": 340.13
+            },
+            {
+              "size": 512,
+              "median_us": 98.88,
+              "p10_us": 68.042,
+              "p90_us": 104.741,
+              "gflops": 2714.76
+            },
+            {
+              "size": 1024,
+              "median_us": 199.792,
+              "p10_us": 198.724,
+              "p90_us": 200.727,
+              "gflops": 10748.6
+            }
+          ],
+          "geometric_mean_gflops": 2149.04
+        },
+        {
+          "correctness_shape": "19x21x23",
+          "max_abs_error": 0.0,
+          "benchmarks": [
+            {
+              "size": 256,
+              "median_us": 68.368,
+              "p10_us": 65.646,
+              "p90_us": 122.038,
+              "gflops": 490.79
+            },
+            {
+              "size": 512,
+              "median_us": 71.198,
+              "p10_us": 65.93,
+              "p90_us": 103.575,
+              "gflops": 3770.25
+            },
+            {
+              "size": 1024,
+              "median_us": 199.017,
+              "p10_us": 198.283,
+              "p90_us": 200.873,
+              "gflops": 10790.44
+            }
+          ],
+          "geometric_mean_gflops": 2712.91
+        },
+        {
+          "correctness_shape": "19x21x23",
+          "max_abs_error": 0.0,
+          "benchmarks": [
+            {
+              "size": 256,
+              "median_us": 97.369,
+              "p10_us": 75.132,
+              "p90_us": 121.876,
+              "gflops": 344.61
+            },
+            {
+              "size": 512,
+              "median_us": 102.377,
+              "p10_us": 96.336,
+              "p90_us": 126.493,
+              "gflops": 2622.03
+            },
+            {
+              "size": 1024,
+              "median_us": 321.707,
+              "p10_us": 179.722,
+              "p90_us": 624.158,
+              "gflops": 6675.28
+            }
+          ],
+          "geometric_mean_gflops": 1820.31
+        }
+      ],
+      "median_geometric_mean_gflops": 2149.04,
+      "measurement_boundary": "Device-event timing on one visible MI300X. Re-run on an idle, clock-controlled host before making a performance or state-of-the-art claim.",
+      "raw_output_sha256": [
+        "f206ead853d50880ae31a1f1b12dabd4ffe30cd142aa50fc1d971962db981cb1",
+        "a99a49aa75431847f08cc33f4ac072dcfc6cf45acde04c14e7fbd33a5785ae9b",
+        "ec7d783643915361af51281fd3028bdc939c8503c7c0c86539f4dc7b844cfa72"
+      ],
+      "decision": "reject",
+      "source_path": "examples/gemm_autoresearch_v1/experiments/double_buffer.rs"
+    }
+  ],
+  "comparison": {
+    "direct_over_lds_score_speedup": 1.423994,
+    "direct_score_gain_percent": 42.3994,
+    "process_median_latency_us": {
+      "direct": {
+        "256": 48.454,
+        "512": 72.232,
+        "1024": 186.439
+      },
+      "two_slot_lds": {
+        "256": 97.369,
+        "512": 98.88,
+        "1024": 199.792
+      }
+    },
+    "direct_latency_reduction_percent": {
+      "256": 50.2367,
+      "512": 26.9498,
+      "1024": 6.6835
+    }
+  },
+  "environment": {
+    "shared_host": true,
+    "all_eight_gpus_observed_busy": true,
+    "gpu_busy_percent_after_campaign": [
+      92,
+      84,
+      92,
+      81,
+      93,
+      93,
+      93,
+      72
+    ]
+  },
+  "claim_boundary": "Both variants passed the exact production lowering and bounded numerical oracle. Timings are tutorial evidence from a contended shared host, not a clean performance publication or SOTA claim.",
+  "final_artifact": {
+    "hsaco_sha256": "17f8ebdac53e744ae87542e46fc43c448f54d8d62545e44ddef94e298512a769",
+    "target": "amdgcn-amd-amdhsa--gfx942:xnack-",
+    "symbol": "gemm_autoresearch_v1",
+    "mfma_instruction": "v_mfma_f32_16x16x16_bf16",
+    "mfma_static_occurrences": 1,
+    "lds_instruction_occurrences": 0,
+    "barrier_instruction_occurrences": 0,
+    "sgpr_count": 54,
+    "vgpr_count": 36,
+    "group_segment_fixed_size": 0
+  }
+}

@@ -1,0 +1,2 @@
+timestamp_utc	candidate_sha256	label	status	median_geomean_gflops	note
+2026-09-03T00:00:00Z	<sha256>	baseline	keep	0.00	Replace with the first measured baseline.

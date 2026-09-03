@@ -1,0 +1,27 @@
+[package]
+name = "fe2o3-gemm-autoresearch-v1"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/harsh-nod/fe2o3"
+rust-version = "1.94"
+publish = false
+
+[workspace]
+members = []
+resolver = "3"
+
+[dependencies]
+fe2o3-device = { path = "../../crates/fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-core = { path = "../../crates/fe2o3-core", features = ["qualification-unsafe-launch"] }
+fe2o3-host = { path = "../../crates/fe2o3-host" }
+
+[[bin]]
+name = "fe2o3-gemm-autoresearch-v1"
+path = "src/main.rs"
+
+[lib]
+name = "fe2o3_gemm_autoresearch_v1"
+path = "src/lib.rs"
