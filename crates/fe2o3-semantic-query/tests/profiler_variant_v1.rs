@@ -1756,5 +1756,213 @@ fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
 fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
+
+fn variant_v2_input(treatment: &Treatment) -> ProfilerVariantTreatmentInputV2<'_> {
+    ProfilerVariantTreatmentInputV2 {
+        treatment: treatment.input(),
+        pc_source_isa: None,
+        decoded_att_source_isa: None,
+    }
+}
+
+fn run_variant_v2_service(requests: &[JsonValue]) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-service"))
+        .arg("variant-v2-jsonl")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for request in requests {
+        serde_json::to_writer(&mut input, request).unwrap();
+        input.write_all(b"\n").unwrap();
+    }
+    drop(input);
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn variant_v2_preserves_v1_and_refuses_causal_or_absence_upgrades() {
+    let workload = b"variant-v2-workload";
+    let source = dispatch_source(140, 260);
+    let baseline = treatment(
+        workload,
+        &source,
+        hsaco(7, 0),
+        1,
+        b"schedule-baseline",
+        b"isa-baseline",
+        None,
+    );
+    let candidate = treatment(
+        workload,
+        &source,
+        hsaco(11, 2),
+        2,
+        b"schedule-candidate",
+        b"isa-candidate",
+        None,
+    );
+    let request = build_profiler_variant_request_v2(
+        workload,
+        variant_v2_input(&baseline),
+        variant_v2_input(&candidate),
+    )
+    .unwrap();
+    let result = compare_profiler_variants_v2(
+        request,
+        variant_v2_input(&baseline),
+        variant_v2_input(&candidate),
+    )
+    .unwrap();
+
+    assert!(result.comparison_v1.comparable);
+    assert_ne!(
+        result.baseline_schedule.semantic_schedule_identity,
+        result.candidate_schedule.semantic_schedule_identity
+    );
+    assert!(result.baseline_occurrences.is_empty());
+    assert!(result.candidate_occurrences.is_empty());
+    assert!(result.changed_occurrences.is_empty());
+    assert_eq!(
+        result.causal_attribution,
+        ProfilerVariantCausalUnavailableReasonV2::PositiveCoObservationsDoNotProveCausation
+    );
+    assert!(result.unavailable.iter().any(|fact| {
+        fact.kind == ProfilerVariantUnavailableKindV2::CausalAttribution
+            && fact.origin == TruthOriginV1::Unavailable
+    }));
+    let encoded = serde_json::to_value(&result).unwrap();
+    assert!(encoded.get("added_occurrences").is_none());
+    assert!(encoded.get("removed_occurrences").is_none());
+}
+
+#[test]
+fn variant_v2_binds_optional_evidence_and_rejects_duplicate_selectors() {
+    let workload = b"variant-v2-hostile-workload";
+    let source = dispatch_source(140, 260);
+    let treatment = treatment(workload, &source, hsaco(7, 0), 1, b"schedule", b"isa", None);
+    let selector = CaptureIdentityV1::new([71; 32]).unwrap();
+    let relation = b"exact-relation";
+    let characteristic = b"exact-characteristic";
+    let input = ProfilerVariantTreatmentInputV2 {
+        treatment: treatment.input(),
+        pc_source_isa: Some(ProfilerVariantPcSourceIsaEvidenceV2 {
+            source: &treatment.raw_source,
+            relation,
+            characteristic,
+            sample_identities: &[selector],
+        }),
+        decoded_att_source_isa: None,
+    };
+    let request = build_profiler_variant_request_v2(workload, input, input).unwrap();
+    let substituted_relation = b"other-relation";
+    let substituted = ProfilerVariantTreatmentInputV2 {
+        treatment: treatment.input(),
+        pc_source_isa: Some(ProfilerVariantPcSourceIsaEvidenceV2 {
+            source: &treatment.raw_source,
+            relation: substituted_relation,
+            characteristic,
+            sample_identities: &[selector],
+        }),
+        decoded_att_source_isa: None,
+    };
+    assert_eq!(
+        compare_profiler_variants_v2(request, input, substituted).unwrap_err(),
+        ProfilerVariantErrorV2::RequestMismatch
+    );
+    let duplicate = [selector, selector];
+    let duplicate_input = ProfilerVariantTreatmentInputV2 {
+        treatment: treatment.input(),
+        pc_source_isa: Some(ProfilerVariantPcSourceIsaEvidenceV2 {
+            source: &treatment.raw_source,
+            relation,
+            characteristic,
+            sample_identities: &duplicate,
+        }),
+        decoded_att_source_isa: None,
+    };
+    assert_eq!(
+        build_profiler_variant_request_v2(workload, duplicate_input, input).unwrap_err(),
+        ProfilerVariantErrorV2::DuplicateSelector
+    );
+    assert_eq!(
+        compare_profiler_variants_v2(request, input, input).unwrap_err(),
+        ProfilerVariantErrorV2::MissingPcCapture
+    );
+}
+
+#[test]
+fn additive_variant_v2_jsonl_is_deterministic_strict_and_v1_independent() {
+    assert!(decode_agent_profiler_variant_request_line_v2(
+        br#"{"operation":"discover_capabilities","schema":"fe2o3-agent-profiler-variant-request-v2","request_id":1,"expected_revision":0,"unknown":true}
+"#,
+    )
+    .is_err());
+    let workload = b"variant-v2-service-workload";
+    let source = dispatch_source(140, 260);
+    let baseline = treatment(
+        workload,
+        &source,
+        hsaco(7, 0),
+        1,
+        b"schedule-a",
+        b"isa-a",
+        None,
+    );
+    let candidate = treatment(
+        workload,
+        &source,
+        hsaco(8, 1),
+        2,
+        b"schedule-b",
+        b"isa-b",
+        None,
+    );
+    let requests = [
+        serde_json::json!({
+            "operation": "discover_capabilities",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V2,
+            "request_id": 1,
+            "expected_revision": 0,
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V2,
+            "request_id": 2,
+            "expected_revision": 1,
+            "baseline": treatment_json(&baseline),
+            "candidate": treatment_json(&candidate),
+        }),
+    ];
+    let first = run_variant_v2_service(&requests);
+    let second = run_variant_v2_service(&requests);
+    assert!(first.status.success());
+    assert!(first.stderr.is_empty());
+    assert_eq!(first.stdout, second.stdout);
+    let responses = output_json_lines(&first.stdout);
+    assert_eq!(responses.len(), 2);
+    for line in first
+        .stdout
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        validate_agent_profiler_variant_response_line_v2(line).unwrap();
+    }
+    assert_eq!(
+        responses[0]["value"]["capabilities"]["authority"],
+        "read_only_no_execution_attach_scheduling_collection_or_decoder_authority"
+    );
+    let comparison = &responses[1]["value"]["comparison"];
+    assert_eq!(comparison["schema_version"], 2);
+    assert_eq!(comparison["comparison_v1"]["schema_version"], 1);
+    assert!(comparison.get("added_occurrences").is_none());
+    assert!(comparison.get("removed_occurrences").is_none());
+    assert_eq!(
+        comparison["causal_attribution"],
+        "positive_co_observations_do_not_prove_causation"
+    );
+}
 use std::io::Write;
 use std::process::{Command, Stdio};

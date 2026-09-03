@@ -1494,7 +1494,7 @@ impl fmt::Display for AgentPcSourceIsaServiceErrorV1 {
 impl Error for AgentPcSourceIsaServiceErrorV1 {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use fe2o3_semantic_import::{
         ArtifactClaimV1, ImportLimitsV1, RocprofCaptureBindingV1, RocprofPcSampleCaptureBindingV3,
@@ -1511,23 +1511,24 @@ mod tests {
         SourceIsaCharacteristicTargetV1,
     };
 
-    const ARTIFACT: &[u8] =
+    pub(crate) const ARTIFACT: &[u8] =
         include_bytes!("../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
     const ROCPROF: &[u8] = include_bytes!(
         "../../fe2o3-semantic-import/tests/fixtures/rocprofv3-1.1-stochastic-pc-sampling.json"
     );
 
-    struct EvidenceV1 {
-        source: Vec<u8>,
-        capture: Vec<u8>,
-        relation: Vec<u8>,
-        characteristic: Vec<u8>,
-        samples: Vec<CaptureIdentityV1>,
+    pub(crate) struct EvidenceV1 {
+        pub(crate) source: Vec<u8>,
+        pub(crate) capture: Vec<u8>,
+        pub(crate) relation: Vec<u8>,
+        pub(crate) characteristic: Vec<u8>,
+        pub(crate) samples: Vec<CaptureIdentityV1>,
     }
 
     #[derive(Clone, Copy)]
-    enum CorrelationFixtureV1 {
+    pub(crate) enum CorrelationFixtureV1 {
         UniqueSource,
+        UniqueSourceShifted,
         UniqueNoSource,
         Duplicated,
         Ambiguous,
@@ -1665,9 +1666,15 @@ mod tests {
         target_profile: SourceIsaCharacteristicTargetProfileV1,
         artifact_sha: [u8; 32],
     ) -> Vec<u8> {
-        let interval = SourceIsaCharacteristicIsaIntervalV1::new(0, 0, 4).unwrap();
+        let interval = if matches!(kind, CorrelationFixtureV1::UniqueSourceShifted) {
+            SourceIsaCharacteristicIsaIntervalV1::new(0, 4, 8).unwrap()
+        } else {
+            SourceIsaCharacteristicIsaIntervalV1::new(0, 0, 4).unwrap()
+        };
         let mut correlations = match kind {
-            CorrelationFixtureV1::UniqueSource | CorrelationFixtureV1::Partial => {
+            CorrelationFixtureV1::UniqueSource
+            | CorrelationFixtureV1::UniqueSourceShifted
+            | CorrelationFixtureV1::Partial => {
                 vec![correlation(
                     0,
                     true,
@@ -1776,7 +1783,7 @@ mod tests {
         collection.encode_canonical().unwrap()
     }
 
-    fn evidence(kind: CorrelationFixtureV1) -> EvidenceV1 {
+    pub(crate) fn evidence(kind: CorrelationFixtureV1) -> EvidenceV1 {
         let source = rocprof_source();
         let digest: [u8; 32] = Sha256::digest(ARTIFACT).into();
         let capture = import_rocprofv3_pc_sample_capture_v3(
