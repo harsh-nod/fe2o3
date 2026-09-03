@@ -37,6 +37,14 @@ The external rows below use the public documentation available on 2026-08-29:
 | Let a non-privileged agent query evidence without gaining launch, attach, pause, or recapture authority | MI can be automated but debugger control carries process authority | CLI/output can be automated; collection is a separate privileged action | CLI or VS Code workflow | A deterministic fresh-process reference client now discovers capabilities, validates exact cited simulator/Variant evidence, pages dispatches, and requests the minimum ambiguous capture plan over pipes; it has no execution/attach/collection operation, while OS sandbox deployment remains external |
 | Localize an eight-GPU communication/computation overlap regression | Possible low-level manual debugging, not a distributed semantic graph | Can collect component traces subject to clock and loss limits | Not an AMD multi-GPU path | Typed unavailable until #182 supplies admitted operation, transfer, collective, and clock-correlation identities |
 
+The [2026-09-03 protected MI300X run](evidence/mi300x-direct-kfd-rocprof-2026-09-03.md)
+adds one exact live fact to the profiling row: the canonical KFD runtime record
+observed three complete direct-KFD dispatch lifecycles while the exact
+successfully exited ROCprofiler SDK 1.1.0 collector produced no artifacts. The
+transaction retains both canonical evidence members and leaves dispatch,
+code-object, and clock correlation unavailable. This does not establish that
+all rocprofv3 releases or direct-KFD workloads behave the same way.
+
 ## Differentiator boundary
 
 fe2o3 can be better at explaining *which admitted semantic claim a piece of

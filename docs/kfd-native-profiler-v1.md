@@ -130,3 +130,59 @@ rocprof PC-sample case: exact rocprof source, Capture V3, HSACO, code-object
 relation, and Characteristic V1 bytes can be joined to sparse source/IR/ISA
 coordinates. This does not join those PC samples to a direct-KFD profile;
 direct-KFD still has no observed PC or cross-collector common identity.
+
+### Live qualification
+
+The opt-in `--direct-kfd-runtime-capture` path juxtaposes one exact rocprofv3
+run with one canonical capture emitted by any target using the production KFD
+runtime profiler. The absolute path must be new, outside collector output, use
+a canonical parent, and occur exactly once in the target argv. For example:
+
+```console
+RUNTIME=/absolute/new/direct-kfd-runtime.json
+OUTPUT=/absolute/new/rocprof-output
+TARGET=/absolute/gfx942-runtime-vecadd-benchmark
+SCOPE=1111111111111111111111111111111111111111111111111111111111111111
+
+cargo fe2o3 profile --kind dispatch-json \
+  --output-dir "$OUTPUT" \
+  --direct-kfd-runtime-capture "$RUNTIME" -- \
+  "$TARGET" unique-id 1 1 1 "$SCOPE" "$RUNTIME"
+
+cargo fe2o3 profile --kind dispatch-json \
+  --output-dir "$OUTPUT" \
+  --direct-kfd-runtime-capture "$RUNTIME" \
+  --collect --authorize-collection <plan-sha256> -- \
+  "$TARGET" unique-id 1 1 1 "$SCOPE" "$RUNTIME"
+```
+
+The first command is inert and prints the path-bound authorization. The second
+must use the same still-absent runtime path and output directory. A successful
+transaction publishes these generated members before its manifest:
+
+- `fe2o3-direct-kfd-runtime-profile-v1.json`, the exact canonical target
+  capture copied from an already retained descriptor; and
+- `fe2o3-direct-kfd-rocprof-qualification-v1.json`, which binds exact collector,
+  configuration, argv, environment, target, stdout/stderr, complete collector
+  inventory, exit, and runtime identities.
+
+Admission rejects a stale file, symlink, parent or leaf substitution,
+non-private or multiply linked file, overflow, noncanonical runtime capture,
+reserved collector output, or durability/readback mismatch. Both generated
+members count against the plan's storage limit and are published with
+no-replace transaction semantics. The runtime copy is reread and decoded from
+output custody before manifest publication.
+
+The qualification outcome distinguishes a runtime capture with no dispatch,
+a successful collector with no artifacts alongside runtime-observed
+dispatches, and collector artifacts that remain unjoined. No outcome invents a
+common dispatch, code-object, or clock identity. ATT and PC-sampling facts say
+only whether those capabilities were requested or probed in this exact record.
+The record grants no collection or dispatch authority and never proves
+universal collector inability.
+
+The checked-in [MI300X qualification evidence](evidence/mi300x-direct-kfd-rocprof-2026-09-03.md)
+records one ROCprofiler SDK 1.1.0/ROCm 7.2.4 run in which the direct-KFD target
+published, completed, and released three dispatches while the successfully
+exited collector produced no artifacts. That is an exact observed outcome,
+not a claim about every SDK version or direct-KFD workload.

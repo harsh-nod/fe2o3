@@ -279,6 +279,19 @@ cargo fe2o3 profile --kind dispatch-json \
   --collect --authorize-collection <plan-sha256> -- /absolute/target argument
 ```
 
+Targets that enable the production direct-KFD runtime profiler can request an
+exact, same-run qualification by adding
+`--direct-kfd-runtime-capture /absolute/new/runtime.json` before `--` and the
+same path exactly once in the target arguments. The path must remain new and
+outside the collector output directory between the dry run and authorized
+collection. On success, the transaction durably publishes the exact canonical
+runtime bytes as `fe2o3-direct-kfd-runtime-profile-v1.json` and a canonical
+`fe2o3-direct-kfd-rocprof-qualification-v1.json` that content-binds the exact
+collector, target, bounded streams, complete collector inventory, and runtime
+summary. It reports missing collector artifacts without inferring absent GPU
+work or universal collector inability. See the
+[direct-KFD profiler contract](../../docs/kfd-native-profiler-v1.md#live-qualification).
+
 PC sampling has two additional gates. The first ordinary dry run executes no
 external program: it measures the selected `rocprofv3-avail`, Python,
 bootstrap, environment, exact query, limits, and direct-KFD topology and prints

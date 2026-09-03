@@ -13,6 +13,13 @@ use crate::profile_dispatch_import_v1::{
     DispatchImportTargetBindingV1, ObservedTargetFamilyV1, PROFILE_DISPATCH_BUNDLE_FILE_V1,
     PROFILE_DISPATCH_RECEIPT_FILE_V1, import_dispatch_v1, readmit_dispatch_import_tuple_v1,
 };
+use crate::profile_live_qualification_v1::{
+    CollectorArtifactV1, CollectorReleaseV1, LIVE_QUALIFICATION_FILE_V1,
+    LIVE_QUALIFICATION_REDO_FILE_V1, LIVE_RUNTIME_CAPTURE_FILE_V1,
+    LIVE_RUNTIME_CAPTURE_REDO_FILE_V1, MAX_LIVE_QUALIFICATION_BYTES_V1, QualificationInputsV1,
+    RawContentIdentityV1, build_live_qualification_v1, decode_live_qualification_v1,
+    encode_live_qualification_v1,
+};
 use fe2o3_artifact_transaction::{NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1};
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
@@ -121,6 +128,16 @@ const INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1: [u8; 32] = [
     0x8f, 0xe7, 0x1f, 0xa9, 0xff, 0x69, 0x5b, 0xa2, 0x55, 0x6d, 0x65, 0xaf, 0x63, 0x6f, 0xdc, 0x48,
 ];
 const INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1: u64 = 62_506;
+const INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1: [u8; 32] = [
+    0x47, 0x8d, 0xf9, 0xaf, 0x09, 0xb7, 0x47, 0x07, 0x65, 0x2d, 0x9d, 0x55, 0x74, 0xef, 0x37, 0x15,
+    0x1f, 0xf1, 0x23, 0x4d, 0x09, 0xc6, 0x88, 0x43, 0x97, 0x2c, 0x14, 0x09, 0xa5, 0x05, 0xcd, 0xd0,
+];
+const INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1: u64 = 5_435_848;
+const INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1: [u8; 32] = [
+    0x40, 0xcf, 0x6f, 0xef, 0xff, 0xa5, 0xe9, 0xe8, 0xda, 0x24, 0x9d, 0xbc, 0x1c, 0xe6, 0xfe, 0xab,
+    0x0b, 0xb2, 0x61, 0x34, 0x38, 0xca, 0xf3, 0x7b, 0x02, 0x24, 0xd7, 0xfc, 0xe0, 0x92, 0x41, 0xe1,
+];
+const INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1: u64 = 8_314_944;
 
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "GPU_DEVICE_ORDINAL",
@@ -250,6 +267,7 @@ struct Options {
     pc_sampling: Option<PcSamplingRequestV1>,
     artifact_path: Option<PathBuf>,
     source_isa_characteristic_path: Option<PathBuf>,
+    direct_kfd_runtime_capture_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -609,6 +627,251 @@ impl FilePin {
     }
 }
 
+struct PendingRuntimeCaptureV1 {
+    canonical_path: PathBuf,
+    canonical_parent: PathBuf,
+    parent: rustix::fd::OwnedFd,
+    parent_identity: ObjectIdentity,
+    leaf: OsString,
+}
+
+struct RetainedRuntimeCaptureV1 {
+    canonical_path: PathBuf,
+    parent: rustix::fd::OwnedFd,
+    parent_identity: ObjectIdentity,
+    leaf: OsString,
+    file: File,
+    identity: ObjectIdentity,
+    bytes: Vec<u8>,
+}
+
+impl PendingRuntimeCaptureV1 {
+    fn prepare(path: &Path, target_arguments: &[String]) -> Result<Self, String> {
+        if !path.is_absolute() {
+            return Err("--direct-kfd-runtime-capture must be absolute".to_owned());
+        }
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(
+                    "--direct-kfd-runtime-capture must name a new file for each collection"
+                        .to_owned(),
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect --direct-kfd-runtime-capture: {error}"
+                ));
+            }
+        }
+        let parent = path
+            .parent()
+            .ok_or("--direct-kfd-runtime-capture has no parent directory")?;
+        let leaf = path
+            .file_name()
+            .filter(|leaf| !leaf.is_empty())
+            .ok_or("--direct-kfd-runtime-capture has no file name")?
+            .to_owned();
+        let canonical_parent = fs::canonicalize(parent).map_err(|error| {
+            format!("failed to canonicalize direct-KFD runtime capture parent: {error}")
+        })?;
+        let canonical_path = canonical_parent.join(&leaf);
+        if canonical_path != path {
+            return Err(
+                "--direct-kfd-runtime-capture must use its canonical parent path".to_owned(),
+            );
+        }
+        let path_text = canonical_path
+            .to_str()
+            .ok_or("--direct-kfd-runtime-capture must be UTF-8")?;
+        if path_text.len() > MAX_ARGUMENT_BYTES
+            || target_arguments
+                .iter()
+                .filter(|argument| argument.as_str() == path_text)
+                .count()
+                != 1
+        {
+            return Err(
+                "--direct-kfd-runtime-capture must occur exactly once in the target argv"
+                    .to_owned(),
+            );
+        }
+        let parent = rustix::fs::open(
+            &canonical_parent,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| format!("failed to retain runtime capture parent: {error}"))?;
+        let metadata = fs::metadata(&canonical_parent)
+            .map_err(|error| format!("failed to inspect runtime capture parent: {error}"))?;
+        Ok(Self {
+            canonical_path,
+            canonical_parent,
+            parent,
+            parent_identity: ObjectIdentity::from_metadata(&metadata),
+            leaf,
+        })
+    }
+
+    fn validate_parent(&self) -> Result<(), String> {
+        let descriptor = rustix::fs::fstat(&self.parent)
+            .map_err(|error| format!("failed to re-inspect runtime capture parent: {error}"))?;
+        let current = fs::metadata(&self.canonical_parent)
+            .map_err(|error| format!("runtime capture parent disappeared: {error}"))?;
+        if descriptor.st_dev != self.parent_identity.device
+            || descriptor.st_ino != self.parent_identity.inode
+            || !current.is_dir()
+            || current.dev() != self.parent_identity.device
+            || current.ino() != self.parent_identity.inode
+            || current.mode() != self.parent_identity.mode
+        {
+            return Err("direct-KFD runtime capture parent changed after planning".to_owned());
+        }
+        Ok(())
+    }
+
+    fn validate_absent(&self) -> Result<(), String> {
+        self.validate_parent()?;
+        match fs::symlink_metadata(&self.canonical_path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => {
+                Err("direct-KFD runtime capture path became occupied before collection".to_owned())
+            }
+            Err(error) => Err(format!(
+                "failed to re-inspect direct-KFD runtime capture path: {error}"
+            )),
+        }
+    }
+
+    fn admit(&self) -> Result<RetainedRuntimeCaptureV1, String> {
+        self.validate_parent()?;
+        let descriptor = rustix::fs::openat2(
+            &self.parent,
+            &self.leaf,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_MAGICLINKS
+                | rustix::fs::ResolveFlags::NO_XDEV,
+        )
+        .map(File::from)
+        .map_err(|error| format!("failed to open direct-KFD runtime capture: {error}"))?;
+        let identity =
+            ObjectIdentity::from_metadata(&descriptor.metadata().map_err(|error| {
+                format!("failed to inspect direct-KFD runtime capture: {error}")
+            })?);
+        let metadata = descriptor
+            .metadata()
+            .map_err(|error| format!("failed to inspect direct-KFD runtime capture: {error}"))?;
+        if !is_private_regular_file(&metadata)
+            || metadata.len() == 0
+            || metadata.len() > fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1
+        {
+            return Err(
+                "direct-KFD runtime capture is not a private single-link bounded regular file"
+                    .to_owned(),
+            );
+        }
+        let bytes = read_bounded_leaf(
+            descriptor
+                .try_clone()
+                .map_err(|error| format!("failed to retain direct-KFD runtime capture: {error}"))?,
+            identity,
+            fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            "direct-KFD runtime capture",
+        )?;
+        let retained = RetainedRuntimeCaptureV1 {
+            canonical_path: self.canonical_path.clone(),
+            parent: rustix::io::fcntl_dupfd_cloexec(&self.parent, 0)
+                .map_err(|error| format!("failed to retain runtime capture parent: {error}"))?,
+            parent_identity: self.parent_identity,
+            leaf: self.leaf.clone(),
+            file: descriptor,
+            identity,
+            bytes,
+        };
+        retained.revalidate()?;
+        Ok(retained)
+    }
+}
+
+impl RetainedRuntimeCaptureV1 {
+    fn revalidate(&self) -> Result<(), String> {
+        let metadata = self
+            .file
+            .metadata()
+            .map_err(|error| format!("failed to re-inspect direct-KFD runtime capture: {error}"))?;
+        if ObjectIdentity::from_metadata(&metadata) != self.identity {
+            return Err("direct-KFD runtime capture changed after admission".to_owned());
+        }
+        let (reopened, reopened_identity) = open_retained_leaf_at_v1(
+            &self.parent,
+            &self.leaf,
+            self.parent_identity,
+            self.identity,
+        )?;
+        let bytes = read_bounded_leaf(
+            reopened,
+            reopened_identity,
+            fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            "direct-KFD runtime capture",
+        )?;
+        if bytes != self.bytes
+            || fs::canonicalize(&self.canonical_path).ok().as_ref() != Some(&self.canonical_path)
+        {
+            return Err(
+                "direct-KFD runtime capture path or bytes changed after admission".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn open_retained_leaf_at_v1(
+    parent: &rustix::fd::OwnedFd,
+    leaf: &OsStr,
+    parent_identity: ObjectIdentity,
+    expected: ObjectIdentity,
+) -> Result<(File, ObjectIdentity), String> {
+    let observed_parent = rustix::fs::fstat(parent)
+        .map_err(|error| format!("failed to inspect retained runtime capture parent: {error}"))?;
+    if observed_parent.st_dev != parent_identity.device
+        || observed_parent.st_ino != parent_identity.inode
+    {
+        return Err("retained runtime capture parent changed".to_owned());
+    }
+    let file = rustix::fs::openat2(
+        parent,
+        leaf,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS
+            | rustix::fs::ResolveFlags::NO_XDEV,
+    )
+    .map(File::from)
+    .map_err(|error| format!("failed to reopen direct-KFD runtime capture: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect direct-KFD runtime capture: {error}"))?;
+    let identity = ObjectIdentity::from_metadata(&metadata);
+    if !is_private_regular_file(&metadata) || identity != expected {
+        return Err("direct-KFD runtime capture object was substituted".to_owned());
+    }
+    Ok((file, identity))
+}
+
 #[derive(Clone, Debug)]
 struct EnvironmentEntry {
     name: &'static str,
@@ -906,6 +1169,7 @@ struct Plan {
     authorization: [u8; 32],
     verified_kir_v7: Option<VerifiedKirInputV1>,
     pc_sampling: Option<PcSamplingPlanV1>,
+    pending_runtime_capture: Option<PendingRuntimeCaptureV1>,
 }
 
 struct CollectorLibraries {
@@ -1247,7 +1511,7 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
 }
 
 fn usage() -> &'static str {
-    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att|pc-sampling] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [PC: --pc-avail /absolute/path/to/rocprofv3-avail --authorize-pc-capability-probe HEX --pc-agent N --pc-method stochastic --pc-unit cycles --pc-interval N --artifact /absolute/path/to/kernel.hsaco --source-isa-characteristic /absolute/path/to/archive] [--collect --authorize-collection HEX [--acknowledge-pc-sampling-beta-risk HEX]] -- <program> [arguments...]"
+    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att|pc-sampling] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [--direct-kfd-runtime-capture /absolute/new/capture.json] [PC: --pc-avail /absolute/path/to/rocprofv3-avail --authorize-pc-capability-probe HEX --pc-agent N --pc-method stochastic --pc-unit cycles --pc-interval N --artifact /absolute/path/to/kernel.hsaco --source-isa-characteristic /absolute/path/to/archive] [--collect --authorize-collection HEX [--acknowledge-pc-sampling-beta-risk HEX]] -- <program> [arguments...]"
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
@@ -1293,6 +1557,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut pc_interval = None;
     let mut artifact_path = None;
     let mut source_isa_characteristic_path = None;
+    let mut direct_kfd_runtime_capture_path = None;
     let mut scalar_options = BTreeSet::new();
 
     let mut index = 0;
@@ -1347,6 +1612,14 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             set_once(&mut pc_avail, PathBuf::from(value), "--pc-avail")?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--output-dir")? {
             set_once(&mut output_directory, PathBuf::from(value), "--output-dir")?;
+        } else if let Some(value) =
+            option_value(args, &mut index, separator, "--direct-kfd-runtime-capture")?
+        {
+            set_once(
+                &mut direct_kfd_runtime_capture_path,
+                PathBuf::from(value),
+                "--direct-kfd-runtime-capture",
+            )?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--cwd")? {
             set_once(&mut working_directory, PathBuf::from(value), "--cwd")?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--kind")? {
@@ -1549,6 +1822,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         pc_sampling,
         artifact_path,
         source_isa_characteristic_path,
+        direct_kfd_runtime_capture_path,
     })
 }
 
@@ -1916,6 +2190,21 @@ fn prepare_plan(
     };
     let target = FilePin::open(&target_path, "profile target", MAX_TARGET_BYTES, true)?;
     require_elf(&target, "profile target")?;
+    let pending_runtime_capture = match options.direct_kfd_runtime_capture_path.as_deref() {
+        Some(path) => {
+            if path.starts_with(&output_directory) {
+                return Err(
+                    "--direct-kfd-runtime-capture must be outside the collector output directory"
+                        .to_owned(),
+                );
+            }
+            Some(PendingRuntimeCaptureV1::prepare(
+                path,
+                &options.program_arguments,
+            )?)
+        }
+        None => None,
+    };
     let verified_kir_v7 = match options.kir_v7_path.as_deref() {
         Some(path) => Some(admit_kir_v7(path, &devices)?),
         None => None,
@@ -1935,6 +2224,13 @@ fn prepare_plan(
     let collector_arguments =
         collector_arguments(options.kind, &output_directory, &target, &options)?;
     let mut configuration = canonical_configuration(options.kind, &devices);
+    if let Some(capture) = &pending_runtime_capture {
+        append_field(&mut configuration, b"direct-kfd-runtime-capture-v1");
+        append_field(
+            &mut configuration,
+            capture.canonical_path.as_os_str().as_encoded_bytes(),
+        );
+    }
     if let Some(pc) = &pc_sampling {
         append_pc_configuration_v1(&mut configuration, &options, pc);
     }
@@ -1952,6 +2248,7 @@ fn prepare_plan(
         collector_tool: &collector_tool_digest,
         verified_kir_v7: verified_kir_v7.as_ref(),
         pc_sampling: pc_sampling.as_ref(),
+        pending_runtime_capture: pending_runtime_capture.as_ref(),
     });
     if let Some(pc) = &mut pc_sampling {
         pc.risk_acknowledgement = pc_risk_acknowledgement_v1(authorization, pc);
@@ -1977,6 +2274,7 @@ fn prepare_plan(
         authorization,
         verified_kir_v7,
         pc_sampling,
+        pending_runtime_capture,
     })
 }
 
@@ -3302,6 +3600,7 @@ struct AuthorizationInputs<'a> {
     collector_tool: &'a [u8; 32],
     verified_kir_v7: Option<&'a VerifiedKirInputV1>,
     pc_sampling: Option<&'a PcSamplingPlanV1>,
+    pending_runtime_capture: Option<&'a PendingRuntimeCaptureV1>,
 }
 
 fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
@@ -3318,6 +3617,7 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         collector_tool,
         verified_kir_v7,
         pc_sampling,
+        pending_runtime_capture,
     } = input;
     let mut hasher = Sha256::new();
     hash_field(&mut hasher, b"fe2o3-profile-authorization-v1");
@@ -3358,6 +3658,14 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
     hash_field(&mut hasher, options.program.as_bytes());
     for argument in &options.program_arguments {
         hash_field(&mut hasher, argument.as_bytes());
+    }
+    if let Some(capture) = pending_runtime_capture {
+        hash_field(
+            &mut hasher,
+            capture.canonical_path.as_os_str().as_encoded_bytes(),
+        );
+        hash_field(&mut hasher, &capture.parent_identity.device.to_le_bytes());
+        hash_field(&mut hasher, &capture.parent_identity.inode.to_le_bytes());
     }
     hash_device_bindings(&mut hasher, devices);
     if let Some(kir) = &options.kir_binding {
@@ -3510,6 +3818,30 @@ fn render_plan(plan: &Plan) -> String {
         "collector-runtime-limitation",
         "rocprofv3-injects-rocprofiler-sdk-and-may-not-observe-direct-kfd-submission",
     );
+    match &plan.pending_runtime_capture {
+        Some(capture) => {
+            line(
+                &mut output,
+                "direct-kfd-rocprof-qualification",
+                "ready-after-successful-collector-exit-and-canonical-runtime-capture-admission",
+            );
+            redacted_value(
+                &mut output,
+                "direct-kfd-runtime-capture-path",
+                capture.canonical_path.as_os_str().as_encoded_bytes(),
+            );
+            line(
+                &mut output,
+                "direct-kfd-rocprof-qualification-truth",
+                "exact-run-juxtaposition-not-proof-of-universal-collector-inability",
+            );
+        }
+        None => line(
+            &mut output,
+            "direct-kfd-rocprof-qualification",
+            "not-requested",
+        ),
+    }
     identity_lines(&mut output, "tool", &plan.tool);
     identity_lines(&mut output, "python", &plan.interpreter);
     line(
@@ -4039,6 +4371,9 @@ where
     }
     device_revalidator(&plan.devices)?;
     revalidate_pc_sampling_plan_v1(&plan, true)?;
+    if let Some(capture) = &plan.pending_runtime_capture {
+        capture.validate_absent()?;
+    }
     let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
     let result = run_collector(&plan, &device_revalidator);
     let supervised = match result {
@@ -4099,7 +4434,22 @@ where
             return Err(format!("PC import custody failed and was cleaned: {error}"));
         }
     };
-    let manifest = render_manifest(&plan, &artifacts, &dispatch_import, &pc_import);
+    let live_qualification = match select_live_qualification_v1(&plan, &supervised, &artifacts) {
+        Ok(product) => product,
+        Err(error) => {
+            custody.cleanup()?;
+            return Err(format!(
+                "direct-KFD rocprof qualification failed and was cleaned: {error}"
+            ));
+        }
+    };
+    let manifest = render_manifest(
+        &plan,
+        &artifacts,
+        &dispatch_import,
+        &pc_import,
+        live_qualification.as_ref(),
+    );
     let artifact_bytes = artifacts
         .iter()
         .try_fold(0_u64, |total, artifact| total.checked_add(artifact.length));
@@ -4120,9 +4470,18 @@ where
             .and_then(|length| length.checked_add(product.source_isa_binding_bytes.len()))
             .and_then(|length| u64::try_from(length).ok()),
     };
+    let live_generated_bytes = match &live_qualification {
+        Some(product) => product
+            .bytes
+            .len()
+            .checked_add(product.runtime.bytes.len())
+            .and_then(|length| u64::try_from(length).ok()),
+        None => Some(0_u64),
+    };
     let total_publication_bytes = artifact_bytes
         .and_then(|total| total.checked_add(dispatch_generated_bytes?))
         .and_then(|total| total.checked_add(pc_generated_bytes?))
+        .and_then(|total| total.checked_add(live_generated_bytes?))
         .and_then(|total| total.checked_add(u64::try_from(manifest.len()).ok()?));
     if total_publication_bytes.is_none_or(|total| total > plan.options.storage_limit) {
         custody.cleanup()?;
@@ -4205,12 +4564,89 @@ where
             });
         }
     }
+    if let Some(product) = &live_qualification {
+        let persistence = (|| {
+            product.runtime.revalidate()?;
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+            custody.commit_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                LIVE_RUNTIME_CAPTURE_REDO_FILE_V1,
+                &product.runtime.bytes,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            let durable_runtime = custody.read_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            if durable_runtime != product.runtime.bytes {
+                return Err("durable direct-KFD runtime capture changed".to_owned());
+            }
+            fe2o3_profiler_protocol::decode_kfd_runtime_profile_v1(&durable_runtime)
+                .map_err(|error| error.to_string())?;
+            custody.commit_record(
+                LIVE_QUALIFICATION_FILE_V1,
+                LIVE_QUALIFICATION_REDO_FILE_V1,
+                &product.bytes,
+                MAX_LIVE_QUALIFICATION_BYTES_V1,
+            )?;
+            let durable =
+                custody.read_record(LIVE_QUALIFICATION_FILE_V1, MAX_LIVE_QUALIFICATION_BYTES_V1)?;
+            if durable != product.bytes
+                || RawContentIdentityV1::observed(&durable).map_err(|error| error.to_string())?
+                    != product.identity
+            {
+                return Err("durable direct-KFD rocprof qualification changed".to_owned());
+            }
+            decode_live_qualification_v1(&durable).map_err(|error| error.to_string())?;
+            let durable_runtime = custody.read_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            if durable_runtime != product.runtime.bytes {
+                return Err(
+                    "durable direct-KFD runtime capture changed after qualification publication"
+                        .to_owned(),
+                );
+            }
+            product.runtime.revalidate()?;
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)
+        })();
+        if let Err(error) = persistence {
+            let cleanup = custody.cleanup().err();
+            return Err(match cleanup {
+                Some(cleanup) => format!(
+                    "direct-KFD rocprof qualification publication failed: {error}; cleanup also failed: {cleanup}"
+                ),
+                None => format!(
+                    "direct-KFD rocprof qualification publication failed and was cleaned: {error}"
+                ),
+            });
+        }
+    }
     let final_revalidation = (|| {
         if let DispatchImportOutcomeV1::Imported { source, .. } = &dispatch_import {
             source.revalidate(&custody)?;
         }
         if let PcImportOutcomeV1::Imported { source, .. } = &pc_import {
             source.revalidate(&custody)?;
+        }
+        if let Some(product) = &live_qualification {
+            product.runtime.revalidate()?;
+            let durable_runtime = custody.read_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            if durable_runtime != product.runtime.bytes {
+                return Err("direct-KFD runtime capture changed before manifest".to_owned());
+            }
+            fe2o3_profiler_protocol::decode_kfd_runtime_profile_v1(&durable_runtime)
+                .map_err(|error| error.to_string())?;
+            let durable =
+                custody.read_record(LIVE_QUALIFICATION_FILE_V1, MAX_LIVE_QUALIFICATION_BYTES_V1)?;
+            if durable != product.bytes {
+                return Err("direct-KFD rocprof qualification changed before manifest".to_owned());
+            }
+            decode_live_qualification_v1(&durable).map_err(|error| error.to_string())?;
         }
         revalidate_collection_inputs_v1(&plan, &device_revalidator)
     })();
@@ -4240,6 +4676,7 @@ where
         &artifacts,
         &dispatch_import,
         &pc_import,
+        live_qualification.as_ref(),
     ))
 }
 
@@ -4258,7 +4695,11 @@ where
         kir.revalidate()?;
     }
     device_revalidator(&plan.devices)?;
-    revalidate_pc_sampling_plan_v1(plan, false)
+    revalidate_pc_sampling_plan_v1(plan, false)?;
+    if let Some(capture) = &plan.pending_runtime_capture {
+        capture.validate_parent()?;
+    }
+    Ok(())
 }
 
 fn revalidate_pc_sampling_plan_v1(plan: &Plan, reobserve: bool) -> Result<(), String> {
@@ -4514,6 +4955,9 @@ where
     // an external topology change after these observations; that residual is reported explicitly.
     device_revalidator(&plan.devices)?;
     revalidate_pc_sampling_plan_v1(plan, true)?;
+    if let Some(capture) = &plan.pending_runtime_capture {
+        capture.validate_absent()?;
+    }
     spawn_and_supervise_collector_v1(
         &mut command,
         plan.options.timeout,
@@ -5321,6 +5765,116 @@ enum PcImportOutcomeV1 {
     },
 }
 
+struct LiveQualificationProductV1 {
+    runtime: RetainedRuntimeCaptureV1,
+    bytes: Vec<u8>,
+    identity: RawContentIdentityV1,
+}
+
+fn select_live_qualification_v1(
+    plan: &Plan,
+    supervised: &Supervised,
+    artifacts: &[Artifact],
+) -> Result<Option<LiveQualificationProductV1>, String> {
+    let Some(pending) = &plan.pending_runtime_capture else {
+        return Ok(None);
+    };
+    let runtime = pending.admit()?;
+    let collector_artifacts = artifacts
+        .iter()
+        .map(|artifact| {
+            Ok(CollectorArtifactV1 {
+                relative_path: artifact.relative.clone(),
+                content: RawContentIdentityV1 {
+                    sha256: artifact.digest,
+                    byte_len: artifact.length,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let collector_argv = canonical_argument_vector_v1(&plan.collector_arguments)?;
+    let mut target_argv = Vec::with_capacity(plan.options.program_arguments.len() + 1);
+    target_argv.push(plan.options.program.clone());
+    target_argv.extend(plan.options.program_arguments.iter().cloned());
+    let target_argv = canonical_argument_vector_v1(&target_argv)?;
+    let recognized_installed_release = plan.collector_libraries.as_ref().is_some_and(|libraries| {
+        plan.tool.digest == INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1
+            && plan.tool.identity.size == INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1
+            && libraries.tool.digest == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1
+            && libraries.tool.identity.size == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1
+            && libraries.core.digest == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1
+            && libraries.core.identity.size == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1
+    });
+    let collector_release = if recognized_installed_release {
+        CollectorReleaseV1::RocprofilerSdk1_1_0Git97f5574
+    } else {
+        CollectorReleaseV1::UnavailableUnrecognizedExactTool
+    };
+    let record = build_live_qualification_v1(QualificationInputsV1 {
+        plan_sha256: plan.authorization,
+        collector_executable: RawContentIdentityV1 {
+            sha256: plan.tool.digest,
+            byte_len: plan.tool.identity.size,
+        },
+        collector_release,
+        collector_closure: RawContentIdentityV1 {
+            sha256: plan.collector_tool_digest,
+            byte_len: plan.collector_tool_bytes.len() as u64,
+        },
+        collector_configuration: RawContentIdentityV1 {
+            sha256: plan.configuration_digest,
+            byte_len: plan.configuration.len() as u64,
+        },
+        collector_argv: RawContentIdentityV1::observed(&collector_argv)
+            .map_err(|error| error.to_string())?,
+        collector_environment: RawContentIdentityV1 {
+            sha256: plan.environment_digest,
+            byte_len: plan.environment_bytes.len() as u64,
+        },
+        target_executable: RawContentIdentityV1 {
+            sha256: plan.target.digest,
+            byte_len: plan.target.identity.size,
+        },
+        target_argv: RawContentIdentityV1::observed(&target_argv)
+            .map_err(|error| error.to_string())?,
+        collector_stdout: RawContentIdentityV1::observed(&supervised.stdout.bytes)
+            .map_err(|error| error.to_string())?,
+        collector_stdout_overflow: supervised.stdout.overflow,
+        collector_stderr: RawContentIdentityV1::observed(&supervised.stderr.bytes)
+            .map_err(|error| error.to_string())?,
+        collector_stderr_overflow: supervised.stderr.overflow,
+        collector_artifacts,
+        runtime_capture_bytes: &runtime.bytes,
+    })
+    .map_err(|error| error.to_string())?;
+    let bytes = encode_live_qualification_v1(&record).map_err(|error| error.to_string())?;
+    let decoded = decode_live_qualification_v1(&bytes).map_err(|error| error.to_string())?;
+    if decoded != record {
+        return Err("direct-KFD rocprof qualification changed during readmission".to_owned());
+    }
+    let identity = RawContentIdentityV1::observed(&bytes).map_err(|error| error.to_string())?;
+    runtime.revalidate()?;
+    Ok(Some(LiveQualificationProductV1 {
+        runtime,
+        bytes,
+        identity,
+    }))
+}
+
+fn canonical_argument_vector_v1(arguments: &[String]) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"fe2o3-profile-argument-vector-v1\0");
+    bytes.extend_from_slice(
+        &u64::try_from(arguments.len())
+            .map_err(|_| "profile argument count overflow".to_owned())?
+            .to_le_bytes(),
+    );
+    for argument in arguments {
+        append_field(&mut bytes, argument.as_bytes());
+    }
+    Ok(bytes)
+}
+
 fn select_dispatch_import_v1(
     plan: &Plan,
     custody: &OutputCustody,
@@ -5935,6 +6489,10 @@ fn scan_artifacts_with_entry_limit(
                 PROFILE_PC_RELATION_REDO_FILE_V1,
                 PROFILE_PC_SOURCE_ISA_BINDING_FILE_V1,
                 PROFILE_PC_SOURCE_ISA_BINDING_REDO_FILE_V1,
+                LIVE_QUALIFICATION_FILE_V1,
+                LIVE_QUALIFICATION_REDO_FILE_V1,
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                LIVE_RUNTIME_CAPTURE_REDO_FILE_V1,
             ]
             .contains(&relative.as_str())
             {
@@ -6074,6 +6632,7 @@ fn render_manifest(
     artifacts: &[Artifact],
     dispatch_import: &DispatchImportOutcomeV1,
     pc_import: &PcImportOutcomeV1,
+    live_qualification: Option<&LiveQualificationProductV1>,
 ) -> String {
     let mut output = String::new();
     line(&mut output, "schema", "fe2o3-profile-artifact-manifest-v1");
@@ -6132,6 +6691,7 @@ fn render_manifest(
     render_import_plan(&mut output, plan);
     render_dispatch_import_outcome_v1(&mut output, dispatch_import);
     render_pc_import_outcome_v1(&mut output, plan, pc_import);
+    render_live_qualification_v1(&mut output, live_qualification);
     line(&mut output, "att-observation-origin", "unavailable");
     line(
         &mut output,
@@ -6141,12 +6701,48 @@ fn render_manifest(
     output
 }
 
+fn render_live_qualification_v1(
+    output: &mut String,
+    qualification: Option<&LiveQualificationProductV1>,
+) {
+    match qualification {
+        Some(product) => {
+            line(output, "direct-kfd-rocprof-qualification", "published");
+            line(
+                output,
+                "direct-kfd-rocprof-qualification-schema",
+                "fe2o3-direct-kfd-rocprof-qualification-v1",
+            );
+            line(
+                output,
+                "direct-kfd-rocprof-qualification-identity",
+                content_identity(&product.identity.sha256, product.identity.byte_len),
+            );
+            line(
+                output,
+                "direct-kfd-runtime-capture-copy",
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+            );
+            line(
+                output,
+                "direct-kfd-runtime-capture-copy-identity",
+                content_identity(
+                    &Sha256::digest(&product.runtime.bytes).into(),
+                    product.runtime.bytes.len() as u64,
+                ),
+            );
+        }
+        None => line(output, "direct-kfd-rocprof-qualification", "not-requested"),
+    }
+}
+
 fn render_successful_collection(
     plan: &Plan,
     result: Supervised,
     artifacts: &[Artifact],
     dispatch_import: &DispatchImportOutcomeV1,
     pc_import: &PcImportOutcomeV1,
+    live_qualification: Option<&LiveQualificationProductV1>,
 ) -> CommandReport {
     let mut output = String::new();
     line(&mut output, "schema", "fe2o3-profile-collection-v1");
@@ -6185,6 +6781,7 @@ fn render_successful_collection(
     }
     render_dispatch_import_outcome_v1(&mut output, dispatch_import);
     render_pc_import_outcome_v1(&mut output, plan, pc_import);
+    render_live_qualification_v1(&mut output, live_qualification);
     line(&mut output, "att-observability-origin", "unavailable");
     line(
         &mut output,
@@ -7684,6 +8281,25 @@ Flags: interval pow2\n";
     }
 
     #[test]
+    fn installed_release_allowlist_identities_are_exact() {
+        assert_eq!(
+            hex(&INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1),
+            "195ff5e6faf48a3abbc6f4db9f69dd598fe71fa9ff695ba2556d65af636fdc48"
+        );
+        assert_eq!(
+            hex(&INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1),
+            "478df9af09b74707652d9d5574ef37151ff1234d09c68843972c1409a505cdd0"
+        );
+        assert_eq!(
+            hex(&INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1),
+            "40cf6fefffa5e9e8da249dbc1ce6feab0bb2613438caf37b0224d7fce09241e1"
+        );
+        assert_eq!(INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1, 62_506);
+        assert_eq!(INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1, 5_435_848);
+        assert_eq!(INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1, 8_314_944);
+    }
+
+    #[test]
     fn att_plan_discloses_sealed_decoder_boundary_and_collection_fails_closed() {
         let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
         let root = env::temp_dir().join(format!(
@@ -7861,6 +8477,7 @@ Flags: interval pow2\n";
             collector_tool: &plan.collector_tool_digest,
             verified_kir_v7: plan.verified_kir_v7.as_ref(),
             pc_sampling: plan.pc_sampling.as_ref(),
+            pending_runtime_capture: plan.pending_runtime_capture.as_ref(),
         });
 
         let revalidations = Cell::new(0_u8);
@@ -8284,6 +8901,23 @@ Flags: interval pow2\n";
                 .contains("global entry-count bound")
         );
         custody.cleanup().unwrap();
+    }
+
+    #[test]
+    fn collector_cannot_precreate_live_qualification_transaction_members() {
+        for (label, name) in [
+            ("qualification", LIVE_QUALIFICATION_FILE_V1),
+            ("runtime", LIVE_RUNTIME_CAPTURE_FILE_V1),
+        ] {
+            let (output, custody) = test_custody(label);
+            fs::write(output.join(name), b"hostile").unwrap();
+            assert!(
+                scan_artifacts(&custody, 1024)
+                    .unwrap_err()
+                    .contains("precreated reserved transaction entry")
+            );
+            custody.cleanup().unwrap();
+        }
     }
 
     #[test]
@@ -9217,5 +9851,44 @@ Flags: interval pow2\n";
             canonical_configuration(ProfileKind::DispatchJson, &[device(GFX942_TARGET_VERSION)]),
             canonical_configuration(ProfileKind::DispatchJson, &[device(GFX950_TARGET_VERSION)])
         );
+    }
+
+    #[test]
+    fn runtime_capture_admission_requires_one_new_exact_target_argument() {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-runtime-capture-admission-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let capture = root.join("capture.json");
+        let argument = capture.to_str().unwrap().to_owned();
+        assert!(
+            PendingRuntimeCaptureV1::prepare(&capture, std::slice::from_ref(&argument)).is_ok()
+        );
+        assert!(PendingRuntimeCaptureV1::prepare(&capture, &[]).is_err());
+        assert!(PendingRuntimeCaptureV1::prepare(&capture, &[argument.clone(), argument]).is_err());
+        fs::write(&capture, b"stale").unwrap();
+        assert!(PendingRuntimeCaptureV1::prepare(&capture, &[]).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_capture_symlink_substitution_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-runtime-capture-symlink-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let capture = root.join("capture.json");
+        let pending =
+            PendingRuntimeCaptureV1::prepare(&capture, &[capture.to_str().unwrap().to_owned()])
+                .unwrap();
+        symlink("/dev/null", &capture).unwrap();
+        assert!(pending.admit().is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

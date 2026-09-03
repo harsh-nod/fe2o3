@@ -174,8 +174,10 @@ milestones are retained in the [project status archive](docs/project-status.md).
   target memory, source stepping, or breakpoints.
 - ROCgdb integration is bounded by what the installed debugger exposes and is
   not a source of fe2o3 compiler or runtime authority.
-- Profiler import has not completed a protected real GPU-dispatch rocprofv3
-  round trip. Supplied PC evidence can be joined exactly to sparse
+- One protected MI300X direct-KFD/rocprofv3 qualification completed with exact
+  runtime dispatch evidence, but that ROCprofiler SDK 1.1.0 run produced no
+  collector artifacts and therefore no cross-collector dispatch import or
+  join. Supplied PC evidence can be joined exactly to sparse
   characteristic source/IR/ISA coordinates, but that archive remains a
   self-claim without producer readmission and does not enable cross-run site
   deltas. Direct-KFD runtime observations now expose bounded local lifecycle

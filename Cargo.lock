@@ -324,6 +324,7 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron",
  "fe2o3-process-identity",
+ "fe2o3-profiler-protocol",
  "fe2o3-proof-contracts",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
