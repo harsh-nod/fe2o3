@@ -1739,6 +1739,23 @@ mod tests {
     };
     use std::os::fd::AsFd;
 
+    const MAPPING_ABSENCE_CHILD_ENV: &str = "FE2O3_TEST_CWSR_MAPPING_ABSENCE_CHILD";
+
+    fn run_mapping_absence_test_in_isolated_process(exact_test_name: &str, test: impl FnOnce()) {
+        if std::env::var_os(MAPPING_ABSENCE_CHILD_ENV).is_some() {
+            test();
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(exact_test_name)
+            .arg("--test-threads=1")
+            .env(MAPPING_ABSENCE_CHILD_ENV, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated mapping-absence test failed");
+    }
+
     type DiagnosticShadowFixture = (
         LinuxCwsrShadowPagesV1,
         Vec<Box<[u8; 4096]>>,
@@ -1905,43 +1922,58 @@ mod tests {
 
     #[test]
     fn unpublished_payload_is_unmapped_when_final_admission_fails() {
-        let (shadows, mut storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-        let payload_page = shadows.payload_page;
-        storage[0][0] ^= 1;
-        assert!(admit_installed_cwsr_shadows(shadows).is_err());
-        assert_mapping_absent(payload_page);
+        run_mapping_absence_test_in_isolated_process(
+            "queue_linux::tests::unpublished_payload_is_unmapped_when_final_admission_fails",
+            || {
+                let (shadows, mut storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+                let payload_page = shadows.payload_page;
+                storage[0][0] ^= 1;
+                assert!(admit_installed_cwsr_shadows(shadows).is_err());
+                assert_mapping_absent(payload_page);
+            },
+        );
     }
 
     #[test]
     fn payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup() {
-        let (shadows, _storage, _event, file) = mapped_diagnostic_shadow_fixture();
-        let payload_page = shadows.payload_page;
-        let binding = shadows.binding;
-        let after_event = shadows
-            .after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding })
-            .unwrap();
-        assert_mapping_absent(payload_page);
+        run_mapping_absence_test_in_isolated_process(
+            "queue_linux::tests::payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup",
+            || {
+                let (shadows, _storage, _event, file) = mapped_diagnostic_shadow_fixture();
+                let payload_page = shadows.payload_page;
+                let binding = shadows.binding;
+                let after_event = shadows
+                    .after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding })
+                    .unwrap();
+                assert_mapping_absent(payload_page);
 
-        let ready = after_event
-            .after_runtime_destroy(LinuxKfdRuntimeDisabledV1 {
-                binding: KfdRuntimeBindingV1 {
-                    opener_pid: std::process::id(),
-                    raw_fd: file.as_fd().as_raw_fd(),
-                },
-                completion_pending: true,
-            })
-            .unwrap();
-        ready.complete().unwrap();
+                let ready = after_event
+                    .after_runtime_destroy(LinuxKfdRuntimeDisabledV1 {
+                        binding: KfdRuntimeBindingV1 {
+                            opener_pid: std::process::id(),
+                            raw_fd: file.as_fd().as_raw_fd(),
+                        },
+                        completion_pending: true,
+                    })
+                    .unwrap();
+                ready.complete().unwrap();
+            },
+        );
     }
 
     #[test]
     fn unpublished_custody_unmaps_payload_on_early_return() {
-        let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-        let payload_page = shadows.payload_page;
-        drop(LinuxUnpublishedCwsrShadowPagesV1 {
-            shadows: Some(shadows),
-        });
-        assert_mapping_absent(payload_page);
+        run_mapping_absence_test_in_isolated_process(
+            "queue_linux::tests::unpublished_custody_unmaps_payload_on_early_return",
+            || {
+                let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+                let payload_page = shadows.payload_page;
+                drop(LinuxUnpublishedCwsrShadowPagesV1 {
+                    shadows: Some(shadows),
+                });
+                assert_mapping_absent(payload_page);
+            },
+        );
     }
 
     #[test]
