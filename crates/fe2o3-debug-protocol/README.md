@@ -255,3 +255,30 @@ separately carries its declared artifact binding; the checkpoint does not claim
 that artifact executed. The 185,630,720-byte and 16-segment hard bounds are
 fixed, and private bytes are never serialized. This does not make wave, lane,
 register, PC, source, or memory capabilities available.
+
+## Direct-KFD checkpoint qualification V1
+
+`fe2o3-direct-kfd-opaque-checkpoint-qualification-v1` is a separate inert,
+strict-canonical record for one complete nonempty gfx942 checkpoint. It retains
+the stopped snapshot, queue, device, context-save, checkpoint, overall content,
+and per-segment scoped correlation identities. Its exactly 16 ordered slots
+retain every public-header control-stack and wave-state relative range,
+including explicit empty ranges. It does not retain the correlation scope or
+any private checkpoint byte.
+
+The receipt self-identity covers the schema, version, and exact canonical
+redacted observation. It detects accidental or unreviewed substitution once
+the receipt is pinned, but a caller can construct and rehash another
+self-consistent record. Decoding therefore does not authenticate KFD,
+firmware, hardware, physical artifact execution, or the original live run.
+Fixed truth fields state the exact queue/device reobservation, sequential read,
+and header-reread boundary while keeping coherent-interval, runtime,
+suspension, and execution-authentication claims false. Authority accessors
+always return false.
+
+The record has no live session selector, native process/GPU/queue/event ID,
+raw address, descriptor, handle, artifact, PC, register, source, target-memory,
+or private-byte field. Its strict decoder rejects unknown fields,
+noncanonical JSON, malformed or reordered range rosters, inconsistent content
+shapes and totals, duplicate identities, unsupported targets, and any changed
+truth or unavailable claim.

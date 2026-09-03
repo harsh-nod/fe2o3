@@ -4,6 +4,7 @@
 mod codec;
 mod diagnosis_v2;
 mod hardware_v2;
+mod kfd_checkpoint_qualification_v1;
 mod live_gpu_v3;
 mod model;
 mod qualification_v1;
@@ -19,6 +20,7 @@ pub use codec::{
 };
 pub use diagnosis_v2::*;
 pub use hardware_v2::*;
+pub use kfd_checkpoint_qualification_v1::*;
 pub use live_gpu_v3::*;
 pub use model::*;
 pub use qualification_v1::*;

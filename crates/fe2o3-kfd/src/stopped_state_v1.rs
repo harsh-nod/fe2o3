@@ -274,6 +274,7 @@ impl KfdOpaqueCheckpointSegmentV1 {
 pub struct KfdOpaqueCheckpointV1 {
     logical_identity: KfdStoppedLogicalIdentityV1,
     content_identity: KfdStoppedLogicalIdentityV1,
+    capture_limit_bytes: u64,
     captured_bytes: u64,
     segments: Vec<KfdOpaqueCheckpointSegmentV1>,
 }
@@ -285,6 +286,11 @@ impl KfdOpaqueCheckpointV1 {
 
     pub const fn content_identity(&self) -> KfdStoppedLogicalIdentityV1 {
         self.content_identity
+    }
+
+    /// Exact caller-selected limit bound into this checkpoint's identity.
+    pub const fn capture_limit_bytes(&self) -> u64 {
+        self.capture_limit_bytes
     }
 
     pub const fn captured_bytes(&self) -> u64 {
@@ -1346,6 +1352,7 @@ fn capture_opaque_checkpoint<R: TargetHeaderReaderV1>(
     KfdOpaqueCheckpointObservationV1::Complete(KfdOpaqueCheckpointV1 {
         logical_identity: finish_hash(checkpoint_hash),
         content_identity,
+        capture_limit_bytes: byte_limit,
         captured_bytes,
         segments,
     })
@@ -1826,6 +1833,10 @@ mod tests {
             other => panic!("unexpected checkpoint observation: {other:?}"),
         };
         assert_eq!(checkpoint.captured_bytes(), 384);
+        assert_eq!(
+            checkpoint.capture_limit_bytes(),
+            DEFAULT_KFD_OPAQUE_CHECKPOINT_BYTES_V1
+        );
         assert_eq!(checkpoint.segments().len(), 2);
         assert!(
             checkpoint
@@ -1933,6 +1944,35 @@ mod tests {
         assert_ne!(first_checkpoint, queue_checkpoint);
         assert_ne!(first_checkpoint, exception_checkpoint);
         assert_ne!(first_checkpoint, device_checkpoint);
+    }
+
+    #[test]
+    fn checkpoint_identity_and_projection_bind_the_exact_capture_limit() {
+        let mut first_reader = reader();
+        set_checkpoint_ranges(&mut first_reader);
+        let first = snapshot(&mut first_reader, 384);
+        let mut second_reader = reader();
+        set_checkpoint_ranges(&mut second_reader);
+        let second = snapshot(&mut second_reader, 385);
+
+        let checkpoint = |snapshot: &KfdStoppedQueueSnapshotV1| {
+            let KfdOpaqueCheckpointObservationV1::Complete(checkpoint) =
+                snapshot.opaque_checkpoint()
+            else {
+                panic!("expected complete checkpoint")
+            };
+            (
+                checkpoint.logical_identity(),
+                checkpoint.content_identity(),
+                checkpoint.capture_limit_bytes(),
+            )
+        };
+        let (first_identity, first_content, first_limit) = checkpoint(&first);
+        let (second_identity, second_content, second_limit) = checkpoint(&second);
+        assert_eq!(first_content, second_content);
+        assert_eq!(first_limit, 384);
+        assert_eq!(second_limit, 385);
+        assert_ne!(first_identity, second_identity);
     }
 
     #[test]
