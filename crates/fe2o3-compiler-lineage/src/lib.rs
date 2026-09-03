@@ -70,6 +70,7 @@ pub use receipt::{
     InertSemanticToLlvmReceiptIdentityV3, InertSemanticToLlvmReceiptV3,
     InertTargetBindingReceiptIdentityV3, InertTargetBindingReceiptV3,
     MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3, MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
+    MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3,
 };
 pub use semantic_to_llvm_v3::{
     INERT_SEMANTIC_TO_LLVM_ASSOCIATION_MAGIC_V3, INERT_SEMANTIC_TO_LLVM_ASSOCIATION_VERSION_V3,

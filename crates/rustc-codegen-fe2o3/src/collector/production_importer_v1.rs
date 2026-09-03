@@ -302,10 +302,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
                 .collect(),
         );
     let identity_inventory = build_identity_inventory_v1(tcx, &target, &collection, &roots)?;
-    require_lineage_transcript_bound_v3(
-        "rustc identity inventory",
-        &identity_inventory.canonical_transcript,
-    )?;
+    require_identity_inventory_transcript_bound_v3(&identity_inventory.canonical_transcript)?;
 
     let ProductionSemanticIdentityInventoryV1 {
         functions,
@@ -324,7 +321,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         Ok(plan) => plan,
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
     };
-    require_lineage_transcript_bound_v3("rustc preflight plan", plan.canonical_transcript())?;
+    require_rustc_preflight_plan_transcript_bound_v3(plan.canonical_transcript())?;
     let semantic_types = match construct_production_semantic_types_v1(tcx, plan.type_producers()) {
         Ok(types) => types,
         Err(error) => {
@@ -401,15 +398,36 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     })
 }
 
+fn require_identity_inventory_transcript_bound_v3(
+    transcript: &[u8],
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    require_lineage_transcript_bound_v3(
+        "rustc identity inventory",
+        transcript,
+        fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
+    )
+}
+
+fn require_rustc_preflight_plan_transcript_bound_v3(
+    transcript: &[u8],
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    require_lineage_transcript_bound_v3(
+        "rustc preflight plan",
+        transcript,
+        fe2o3_compiler_lineage::MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3,
+    )
+}
+
 fn require_lineage_transcript_bound_v3(
     field: &'static str,
     transcript: &[u8],
+    maximum: usize,
 ) -> Result<(), ProductionSemanticImportErrorV1> {
-    if transcript.len() > fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 {
+    if transcript.len() > maximum {
         Err(ProductionSemanticImportErrorV1::LineageTranscriptTooLarge {
             field,
             actual: transcript.len(),
-            maximum: fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
+            maximum,
         })
     } else {
         Ok(())
@@ -4195,6 +4213,34 @@ mod tests {
                 actual: 5,
                 maximum: 4,
             })
+        ));
+    }
+
+    #[test]
+    fn lineage_transcript_bounds_are_field_specific_and_exact() {
+        let generic_max = fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3;
+        let preflight_max =
+            fe2o3_compiler_lineage::MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3;
+        assert_eq!(generic_max, 4 * 1024 * 1024);
+        assert_eq!(preflight_max, 8 * 1024 * 1024);
+
+        assert!(require_identity_inventory_transcript_bound_v3(&vec![0; generic_max]).is_ok());
+        assert!(matches!(
+            require_identity_inventory_transcript_bound_v3(&vec![0; generic_max + 1]),
+            Err(ProductionSemanticImportErrorV1::LineageTranscriptTooLarge {
+                field: "rustc identity inventory",
+                actual,
+                maximum,
+            }) if actual == generic_max + 1 && maximum == generic_max
+        ));
+        assert!(require_rustc_preflight_plan_transcript_bound_v3(&vec![0; preflight_max]).is_ok());
+        assert!(matches!(
+            require_rustc_preflight_plan_transcript_bound_v3(&vec![0; preflight_max + 1]),
+            Err(ProductionSemanticImportErrorV1::LineageTranscriptTooLarge {
+                field: "rustc preflight plan",
+                actual,
+                maximum,
+            }) if actual == preflight_max + 1 && maximum == preflight_max
         ));
     }
 
