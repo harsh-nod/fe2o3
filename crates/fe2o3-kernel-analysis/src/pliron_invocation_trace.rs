@@ -211,8 +211,6 @@ pub(crate) fn pliron_execution_layout_with_inventory_v1(
         if workgroup_extents.contains(&0)
             || workgroup_size.is_none()
             || subgroup_size == 0
-            || workgroup_size.is_some_and(|size| subgroup_size > size)
-            || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size))
             || (execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
                 && global_extents
                     .iter()

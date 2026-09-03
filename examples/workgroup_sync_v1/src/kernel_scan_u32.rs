@@ -4,21 +4,21 @@ use fe2o3_device::{
     DisjointSlice, DynamicLds, WorkgroupCollectives, WorkgroupLdsScope, kernel, thread,
 };
 
-/// Computes the inclusive prefix sum of one exact 64-element `u32` row.
+/// Computes the inclusive prefix sum of one exact 3-element `u32` row.
 #[kernel(
     typed,
     launch(
-        required = [64, 1, 1],
-        max = [64, 1, 1],
-        static_shared_memory_bytes = 256
+        required = [3, 1, 1],
+        max = [3, 1, 1],
+        static_shared_memory_bytes = 12
     )
 )]
 pub fn lds_inclusive_scan_u32_v1(values: &[u32], mut output: DisjointSlice<u32>) {
     let lane = thread::thread_idx_x();
-    if values.len() != 64
-        || output.len() != 64
-        || thread::launch_extent_1d() != 64
-        || thread::block_dim_x() != 64
+    if values.len() != 3
+        || output.len() != 3
+        || thread::launch_extent_1d() != 3
+        || thread::block_dim_x() != 3
         || thread::block_dim_y() != 1
         || thread::block_dim_z() != 1
         || thread::thread_idx_y() != 0
@@ -30,7 +30,7 @@ pub fn lds_inclusive_scan_u32_v1(values: &[u32], mut output: DisjointSlice<u32>)
         fe2o3_device::trap();
     }
     let mut scope = WorkgroupLdsScope::current();
-    let scratch = DynamicLds::<u32>::exact_current::<64>(&mut scope);
+    let scratch = DynamicLds::<u32>::exact_current::<3>(&mut scope);
     let collective = WorkgroupCollectives::current();
     let prefix = collective.inclusive_scan_sum(scratch, values[lane as usize]);
     let Some(slot) = output.get_mut(thread::index_1d()) else {

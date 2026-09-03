@@ -1,10 +1,10 @@
-//! Ordinary-Rust `f32` acceptance entry for target-neutral workgroup scan.
+//! Ordinary-Rust `u32` exclusive acceptance entry for target-neutral workgroup scan.
 
 use fe2o3_device::{
     DisjointSlice, DynamicLds, WorkgroupCollectives, WorkgroupLdsScope, kernel, thread,
 };
 
-/// Computes the inclusive prefix sum of one exact 255-element `f32` row.
+/// Computes the exclusive prefix sum of one exact 255-element `u32` row.
 #[kernel(
     typed,
     launch(
@@ -13,7 +13,7 @@ use fe2o3_device::{
         static_shared_memory_bytes = 1020
     )
 )]
-pub fn lds_inclusive_scan_f32_v1(values: &[f32], mut output: DisjointSlice<f32>) {
+pub fn lds_exclusive_scan_u32_v1(values: &[u32], mut output: DisjointSlice<u32>) {
     let lane = thread::thread_idx_x();
     if values.len() != 255
         || output.len() != 255
@@ -30,9 +30,9 @@ pub fn lds_inclusive_scan_f32_v1(values: &[f32], mut output: DisjointSlice<f32>)
         fe2o3_device::trap();
     }
     let mut scope = WorkgroupLdsScope::current();
-    let scratch = DynamicLds::<f32>::exact_current::<255>(&mut scope);
+    let scratch = DynamicLds::<u32>::exact_current::<255>(&mut scope);
     let collective = WorkgroupCollectives::current();
-    let prefix = collective.inclusive_scan_sum(scratch, values[lane as usize]);
+    let prefix = collective.exclusive_scan_sum(scratch, values[lane as usize]);
     let Some(slot) = output.get_mut(thread::index_1d()) else {
         fe2o3_device::trap();
     };

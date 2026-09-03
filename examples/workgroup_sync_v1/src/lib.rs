@@ -15,10 +15,16 @@ pub mod kernel;
 mod kernel_f32;
 #[cfg(feature = "lds-scan-f32-kernel")]
 mod kernel_scan_f32;
+#[cfg(feature = "lds-scan-f32-exclusive-kernel")]
+mod kernel_scan_f32_exclusive;
 #[cfg(feature = "lds-scan-i32-kernel")]
 mod kernel_scan_i32;
+#[cfg(feature = "lds-scan-i32-inclusive-kernel")]
+mod kernel_scan_i32_inclusive;
 #[cfg(feature = "lds-scan-u32-kernel")]
 mod kernel_scan_u32;
+#[cfg(feature = "lds-scan-u32-exclusive-kernel")]
+mod kernel_scan_u32_exclusive;
 #[cfg(feature = "lds-u32-kernel")]
 mod kernel_u32;
 #[cfg(feature = "scoped-atomic-kernel")]

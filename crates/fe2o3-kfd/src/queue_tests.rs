@@ -887,6 +887,46 @@ fn process_and_currentness_loss_never_issue_or_retry_lifecycle_calls() {
 }
 
 #[test]
+fn native_create_boundary_callback_runs_once_and_only_after_preflight() {
+    let mut rejected_fixture = fixture();
+    let authority = rejected_fixture.authority(10);
+    let key = authority.0.plan.queue;
+    let mut backend = FakeBackend::new(
+        rejected_fixture.foundation,
+        vec![success(Mutation::CreateId(5))],
+    );
+    backend.fail_currentness_at = Some(1);
+    let mut rejected = NativeQueueEngineV1::new(backend).unwrap();
+    rejected.admit(authority).unwrap();
+    let rejected_callback = Cell::new(false);
+    assert!(matches!(
+        rejected.create_at_native_boundary(key, || rejected_callback.set(true)),
+        Err(NativeQueueAdapterErrorV1::Currentness(_))
+    ));
+    assert!(!rejected_callback.get());
+
+    let mut accepted_fixture = fixture();
+    let authority = accepted_fixture.authority(11);
+    let key = authority.0.plan.queue;
+    let backend = FakeBackend::new(
+        accepted_fixture.foundation,
+        vec![success(Mutation::CreateId(6))],
+    );
+    let calls = backend.calls.clone();
+    let mut accepted = NativeQueueEngineV1::new(backend).unwrap();
+    accepted.admit(authority).unwrap();
+    let accepted_callback = Cell::new(false);
+    accepted
+        .create_at_native_boundary(key, || {
+            assert!(calls.borrow().is_empty());
+            accepted_callback.set(true);
+        })
+        .unwrap();
+    assert!(accepted_callback.get());
+    assert!(matches!(calls.borrow().as_slice(), [LoggedCall::Create(_)]));
+}
+
+#[test]
 fn ambiguous_unknown_id_globally_poisons_create_and_known_id_collision_is_retained() {
     let mut first_fixture = fixture();
     let first = first_fixture.authority(10);

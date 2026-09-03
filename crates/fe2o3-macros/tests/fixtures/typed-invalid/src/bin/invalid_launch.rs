@@ -38,7 +38,7 @@ pub fn general_wrong_dimensions(value: u32) {
 
 #[kernel(
     typed,
-    launch(required = [128, 1, 1], max = [128, 1, 1])
+    launch(required = [257, 1, 1], max = [257, 1, 1])
 )]
 pub fn general_wrong_block(value: u32) {
     let _ = value;

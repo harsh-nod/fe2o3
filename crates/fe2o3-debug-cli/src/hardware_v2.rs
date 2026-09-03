@@ -6,10 +6,10 @@ use fe2o3_debug_protocol::*;
 use fe2o3_kfd::{
     KfdDebugDeviceObservationV1, KfdDebugEventObservationV1, KfdDebugExceptionInfoV1,
     KfdDebugQueueObservationV1, KfdDebugQueueOperationObservationV1, KfdDebugQueueOperationStateV1,
-    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1, KfdStoppedAvailabilityV1,
-    KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1, KfdStoppedQueueSnapshotV1,
-    KfdStoppedSnapshotOwnershipV1, KfdStoppedStateErrorV1, KfdStoppedStateScopeV1,
-    KfdStoppedUnavailableReasonV1,
+    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1, KfdOpaqueCheckpointObservationV1,
+    KfdStoppedAvailabilityV1, KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1,
+    KfdStoppedQueueSnapshotV1, KfdStoppedSnapshotOwnershipV1, KfdStoppedStateErrorV1,
+    KfdStoppedStateScopeV1, KfdStoppedUnavailableReasonV1,
 };
 use fe2o3_kfd_uapi::{
     KfdDebugExceptionMaskV1, KfdDebugRuntimeStateV1, KfdDebugTrapExceptionCodeV1,
@@ -113,6 +113,21 @@ pub(crate) enum NativeStoppedQueueContextSaveV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NativeOpaqueCheckpointV2 {
+    Complete {
+        identity: [u8; 32],
+        content_identity: [u8; 32],
+        captured_bytes: u64,
+        segment_count: u32,
+    },
+    Truncated {
+        required_bytes: u64,
+        capture_limit_bytes: u64,
+    },
+    Unavailable(KfdStoppedUnavailableReasonV1),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NativeStoppedQueueEnvelopeV2 {
     pub(crate) identity: [u8; 32],
     pub(crate) queue_identity: [u8; 32],
@@ -124,7 +139,7 @@ pub(crate) struct NativeStoppedQueueEnvelopeV2 {
     pub(crate) xcc_count: u32,
     pub(crate) ownership: KfdStoppedSnapshotOwnershipV1,
     pub(crate) context_save: NativeStoppedQueueContextSaveV2,
-    pub(crate) hardware_checkpoint_bytes: KfdStoppedAvailabilityV1,
+    pub(crate) opaque_checkpoint: NativeOpaqueCheckpointV2,
     pub(crate) waves: KfdStoppedAvailabilityV1,
     pub(crate) lanes: KfdStoppedAvailabilityV1,
     pub(crate) registers: KfdStoppedAvailabilityV1,
@@ -350,6 +365,25 @@ fn native_stopped_queue(value: KfdStoppedQueueSnapshotV1) -> NativeStoppedQueueE
             NativeStoppedQueueContextSaveV2::Unavailable(*reason)
         }
     };
+    let opaque_checkpoint = match value.opaque_checkpoint() {
+        KfdOpaqueCheckpointObservationV1::Complete(checkpoint) => {
+            NativeOpaqueCheckpointV2::Complete {
+                identity: *checkpoint.logical_identity().as_bytes(),
+                content_identity: *checkpoint.content_identity().as_bytes(),
+                captured_bytes: checkpoint.captured_bytes(),
+                segment_count: u32::try_from(checkpoint.segments().len()).unwrap_or(u32::MAX),
+            }
+        }
+        KfdOpaqueCheckpointObservationV1::Truncated(truncation) => {
+            NativeOpaqueCheckpointV2::Truncated {
+                required_bytes: truncation.required_bytes(),
+                capture_limit_bytes: truncation.capture_limit_bytes(),
+            }
+        }
+        KfdOpaqueCheckpointObservationV1::Unavailable(reason) => {
+            NativeOpaqueCheckpointV2::Unavailable(*reason)
+        }
+    };
     NativeStoppedQueueEnvelopeV2 {
         identity: *value.logical_identity().as_bytes(),
         queue_identity: *value.queue_identity().as_bytes(),
@@ -361,7 +395,7 @@ fn native_stopped_queue(value: KfdStoppedQueueSnapshotV1) -> NativeStoppedQueueE
         xcc_count: value.xcc_count(),
         ownership: value.ownership(),
         context_save,
-        hardware_checkpoint_bytes: value.hardware_checkpoint_bytes(),
+        opaque_checkpoint,
         waves: value.waves(),
         lanes: value.lanes(),
         registers: value.registers(),
@@ -379,6 +413,7 @@ fn native_stopped_queue_error(error: KfdStoppedStateErrorV1) -> NativeStoppedQue
         }
         KfdStoppedStateErrorV1::QueueBindingSubstituted
         | KfdStoppedStateErrorV1::DeviceBindingSubstituted
+        | KfdStoppedStateErrorV1::RuntimeBindingSubstituted
         | KfdStoppedStateErrorV1::QueueMissing
         | KfdStoppedStateErrorV1::DuplicateQueueIdentity
         | KfdStoppedStateErrorV1::DeviceMissing
@@ -458,7 +493,7 @@ pub(crate) enum StoppedQueueEnvelopeCaptureV2 {
         session: HardwareSessionViewV2,
         queue: HardwareQueueIdV2,
         device: HardwareDeviceIdV2,
-        envelope: NativeStoppedQueueEnvelopeV2,
+        envelope: Box<NativeStoppedQueueEnvelopeV2>,
     },
     Rejected(HardwareDebugResponseV2),
 }
@@ -836,7 +871,7 @@ impl<T: HardwareDebugTransportV2> HardwareBackendV2<T> {
             session: self.session_view(),
             queue,
             device: record.device,
-            envelope,
+            envelope: Box::new(envelope),
         }
     }
 
@@ -1828,7 +1863,7 @@ mod tests {
             context_save: NativeStoppedQueueContextSaveV2::Unavailable(
                 KfdStoppedUnavailableReasonV1::ContextSaveAreaNotReported,
             ),
-            hardware_checkpoint_bytes: unavailable(
+            opaque_checkpoint: NativeOpaqueCheckpointV2::Unavailable(
                 KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible,
             ),
             waves: unavailable(KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi),

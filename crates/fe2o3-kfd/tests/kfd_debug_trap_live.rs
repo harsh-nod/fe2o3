@@ -15,8 +15,8 @@ use std::os::unix::process::CommandExt;
 use fe2o3_kfd::{
     DEFAULT_KFD_PATH, DeviceSelector, KfdAdapterError, KfdDebugExceptionInfoV1,
     KfdDebugQueueOperationStateV1, KfdDebugSessionErrorV1, KfdDebugSessionPlanV1,
-    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1, KfdStoppedAvailabilityV1,
-    KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1,
+    KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1, KfdOpaqueCheckpointObservationV1,
+    KfdStoppedAvailabilityV1, KfdStoppedContextSaveObservationV1, KfdStoppedQueueCapturePlanV1,
     KfdStoppedSnapshotOwnershipV1, KfdStoppedStateScopeV1, KfdStoppedUnavailableReasonV1,
     KfdTargetRuntimeDebugTokenV1, OpenedKfd,
 };
@@ -429,6 +429,12 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
     assert_eq!(layout.context_bytes_per_xcc(), 0x162_1000);
     assert_eq!(layout.total_allocation_bytes(), 0xb16_7000);
     assert_eq!(layout.headers().len(), 8);
+    let checkpoint = match stopped.opaque_checkpoint() {
+        KfdOpaqueCheckpointObservationV1::Complete(checkpoint) => checkpoint,
+        other => panic!("live gfx942 opaque checkpoint capture unavailable: {other:?}"),
+    };
+    assert_eq!(checkpoint.captured_bytes(), 0);
+    assert!(checkpoint.segments().is_empty());
     assert_eq!(
         stopped.waves(),
         KfdStoppedAvailabilityV1::Unavailable(

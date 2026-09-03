@@ -1,9 +1,9 @@
 # Workgroup synchronization V1
 
-This standalone package defines two fixed `64x1x1` kernels with CPU oracles
-and formal contracts. The LDS reduction is target-neutral through semantic MIR
-and Kernel IR, then binds independently to the production compiler profile for
-gfx942 or gfx950.
+This standalone package defines fixed-launch workgroup reduction, scan, and
+atomic kernels with CPU oracles and formal contracts. LDS collectives are
+target-neutral through semantic MIR and Kernel IR, then bind independently to
+the production compiler profile for gfx942 or gfx950.
 
 ## LDS publish/read reduction
 
@@ -16,17 +16,18 @@ is the only global output writer. Admission rejects mathematical sums outside
 
 ## Inclusive and exclusive scans
 
-The `lds-scan-u32-kernel`, `lds-scan-i32-kernel`, and
-`lds-scan-f32-kernel` features compile ordinary attributed Rust examples using
-the same affine dynamic-LDS and workgroup-authority contract. The public
+The six `lds-scan-*-kernel` features compile ordinary attributed Rust examples
+for both modes and every admitted scalar, with exact 3-, 65-, or 255-lane
+workgroups. They use the same affine dynamic-LDS and workgroup-authority
+contract. The public
 `inclusive_scan_sum` and `exclusive_scan_sum` terminals order prefixes by
 linear work-item rank and return one result per lane through a typed
 `DisjointSlice`. Their exact compiler, CPU simulation, schedule replay, and
 debug evidence contract is documented in
 [`target-neutral-workgroup-scan-v1.md`](../../docs/target-neutral-workgroup-scan-v1.md).
 
-The source now requests `DynamicLds::<i32>::exact_current::<64>` and passes
-that linear capability directly to the collective terminal. It obtains
+The reduction source requests `DynamicLds::<i32>::exact_current::<64>` and
+passes that linear capability directly to the collective terminal. It obtains
 `WorkgroupCollectives::current()` and calls
 `WorkgroupCollectives::reduce_sum_portable`; neither operation names or selects a GPU
 family. It cannot substitute a host/global raw pointer or expose the LDS
@@ -35,8 +36,9 @@ launch-resource sidecar, and its complete reachable portable-MIR closure. The
 generic semantic lowerer creates one aligned, epoch-branded workgroup
 allocation shared by all lanes; no workload profile or prebuilt Kernel IR is
 selected. V1 admits only sum over `u32`, `i32`, and `f32`, with an exact
-one-dimensional power-of-two workgroup in `1..=256`. Every lane participates
-in every acquire-release barrier phase. Unsupported scalar types, operations,
+one-dimensional workgroup in `1..=256`; scan also admits odd sizes and partial
+waves while reduction remains power-of-two-only. Every lane participates in
+every acquire-release barrier phase. Unsupported scalar types, operations,
 geometry, provider identity, and target profiles fail before target-bound
 Kernel IR is created.
 
@@ -76,7 +78,7 @@ The ignored neutral-collective rustc driver requires the pinned nightly. It
 authenticates the compiler-observed provider definition identities and
 recomputed complete source-closure pin, then checks semantic MIR, ranked
 PLIRON, generic LDS/tree/barrier KIR, target binding, and the LLVM route for
-the three reduction and three scan examples on both targets. The separate
+the three reduction and six scan examples on both targets. The separate
 protected reduction driver requires the authority launcher and measured Worker
 V3 and LLVM build identities. It starts again from the immutable reduction
 sources for all three scalar profiles

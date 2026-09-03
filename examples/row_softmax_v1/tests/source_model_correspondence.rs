@@ -11,7 +11,7 @@ use fe2o3_row_softmax_v1::{
 use sha2::{Digest as _, Sha256};
 
 const PUBLIC_BASE: &str = "e874da2083c2a1eb192048ea5f88a053c28d0ee2";
-const SAFE_SOURCE_BASE: &str = "cfb1cf6ec8785bc74f597edf97197026a2674ede";
+const SAFE_SOURCE_BASE: &str = "dfb7dfc5f57a5aef41fe70be551945decdfd7c09";
 const LINEAGE_SOURCE_PATH: &str =
     "crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/src/lib.rs";
 const SOURCE: &str = include_str!("../src/kernel.rs");
@@ -48,13 +48,13 @@ fn hostile(source: &str, from: &str, to: &str) -> String {
 fn example_owns_the_only_ordinary_kernel_and_fixture_is_only_a_facade() {
     assert!(SOURCE.contains("#[kernel("));
     assert!(SOURCE.contains("pub fn row_softmax_v1"));
-    assert_eq!(SOURCE.len(), 1_297);
+    assert_eq!(SOURCE.len(), 1_213);
     assert_eq!(
         sha256(SOURCE.as_bytes()),
         [
-            0x0b, 0x0d, 0x5e, 0x29, 0x64, 0xd4, 0x62, 0x7b, 0xc7, 0xef, 0x3d, 0xac, 0x88, 0x2f,
-            0x86, 0xa9, 0xb3, 0xc4, 0x9a, 0xb7, 0x15, 0x24, 0x5b, 0xac, 0xc3, 0xfc, 0x92, 0xf2,
-            0x8f, 0x0d, 0x08, 0xb0,
+            0xe7, 0x4f, 0x59, 0x2d, 0x99, 0xf3, 0xb6, 0x16, 0x36, 0x43, 0x4d, 0x83, 0x7e, 0xdd,
+            0x68, 0x9d, 0xd1, 0x57, 0xb5, 0xcf, 0x63, 0xae, 0xa2, 0x62, 0x60, 0x34, 0x7c, 0x39,
+            0xee, 0xbc, 0x31, 0x08,
         ]
     );
     assert_eq!(

@@ -2972,8 +2972,8 @@ fn execution_layout_is_unique_canonical_and_checked() {
         ProductionRankedKernelErrorV1::InvalidExecutionLayout
     ));
 
-    let invalid = ProductionRankedKernelV1::new(
-        "invalid_layout",
+    ProductionRankedKernelV1::new(
+        "partial_final_subgroup",
         0,
         vec![ProductionRankedBlockV1::new(
             vec![ProductionRankedOperationV1::ExecutionLayout {
@@ -2981,6 +2981,22 @@ fn execution_layout_is_unique_canonical_and_checked() {
                 global_extents: [96, 1, 1],
                 workgroup_extents: [96, 1, 1],
                 subgroup_size: 64,
+                full_physical_workgroups: true,
+            }],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("an exact workgroup may end in a partial physical subgroup");
+
+    let invalid = ProductionRankedKernelV1::new(
+        "zero_subgroup",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity: 1,
+                global_extents: [96, 1, 1],
+                workgroup_extents: [96, 1, 1],
+                subgroup_size: 0,
                 full_physical_workgroups: true,
             }],
             ProductionRankedTerminatorV1::Return,

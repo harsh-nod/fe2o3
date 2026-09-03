@@ -559,8 +559,11 @@ fn mi300x_live_kfd_v3_binds_observes_controls_and_terminates() {
                         ref headers,
                         ..
                     },
-                    hardware_checkpoint_bytes: LiveGpuStoppedQueueUnavailableV3 {
-                        reason: LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible,
+                    opaque_checkpoint: LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
+                        captured_bytes: 0,
+                        segment_count: 0,
+                        private_bytes_exposed: false,
+                        ..
                     },
                     waves: LiveGpuStoppedQueueUnavailableV3 {
                         reason: LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi,

@@ -48,10 +48,10 @@ use super::submit::{
 };
 use super::*;
 use crate::queue_linux::{
-    LinuxCwsrShadowPagesV1, LinuxCwsrShadowsReadyForReleaseV1, LinuxDestroyedQueueExceptionEventV1,
-    LinuxDoorbellErrorV1, LinuxDoorbellSliceV1, LinuxKfdRuntimeDisabledV1,
-    LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1, QueueExceptionWaitObservationV1,
-    arm_process_global_kfd_runtime_gate_for_teardown_v1,
+    LinuxCwsrShadowPagesV1, LinuxCwsrShadowsAfterEventDestroyedV1,
+    LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1, LinuxDoorbellSliceV1,
+    LinuxKfdRuntimeDisabledV1, LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1,
+    QueueExceptionWaitObservationV1, arm_process_global_kfd_runtime_gate_for_teardown_v1,
     permanently_poison_process_global_kfd_runtime_gate_v1,
 };
 use crate::sdma::{
@@ -126,7 +126,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
     "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
     "runtime=one-process-global-fe2o3-context-with-refcounted-linear-queue-leases;first-lease-exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;last-fully-destroyed-lease-exact-disable;teardown-arm-permanent-poison-lifecycle-state-and-new-lease-admission-single-mutex-linearized;ordinary-queue-fd-or-consumed-debug-token-with-separate-same-process-admitted-control-fd;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
-    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-amd-aql-v1-write-dispatch-id-at-0x38-read-dispatch-id-at-0x80-both-atomic-u64-zero-read-base-offset-u32-0x80-at-0x88;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
+    "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-amd-aql-v1-write-dispatch-id-at-0x38-read-dispatch-id-at-0x80-both-atomic-u64-zero-read-base-offset-u32-0x80-at-0x88;completion-arena-exact-8192-typed-64-byte-user-signals-pending-1-before-gpu-map;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-headers-and-24-control-stack-shadow-pages-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-separate-private-aligned-error-reason-page-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,aql-fixed-batch-v2-count-1-through-8192-and-ring-capacity-bounded,heap-owned-fixed-cardinality-state,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-per-packet-independent-0x1402-or-wait-for-prior-0x1502-ordered-u32-release-headers,exact-one-zero-setup-barrier-and-0x1403,conservative-service-default-wait-for-prior,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "completion=crate-private-non-clone-generation-bound-fixed-batches-and-one-signal-barrier-probe,fixed-batch-signal-code-kernarg-dispatch-and-queue-generations-retained,barrier-probe-queue-and-signal-generations-only,monotonic-deadline-or-legacy-bounded-atomic-acquire-poll-with-short-spin-yield-and-bounded-sleep-backoff-and-one-pre-post-currentness-envelope-and-same-scan-redacted-progress,pending-ready-fault-timeout-distinct,timeout-retains-private-linear-operation-through-sequential-pre-post-currentness-enveloped-addressless-write-read-counter-first-retained-packet-header-setup-first-retained-signal-kind-value-and-CWSR-reason-observation-before-poison,release-reset-only-after-all-retained-signals-zero\n",
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
@@ -134,19 +134,19 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
     "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
-    "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;no-drop-ioctl-store-munmap-or-free\n",
+    "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;published-owners-no-drop-ioctl-store-munmap-or-free;armed-unpublished-payload-guard-drop-zero-protect-unmap\n",
     "currentness=active-queue-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence-before-publication,after-bounded-preparation,and-before-mmio;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-retain-full-device-topology-aperture-composite;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
-    "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
-    "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
+    "event-lifecycle=linear-private-kfd-event,no-kfd-event-page-mmap,separate-private-payload-page-cleaned-on-unpublished-install-failure,armed-unpublished-payload-cleanup-through-all-pre-create-failures-until-immediately-before-native-create-queue-call,zeroized-protected-and-unmapped-immediately-after-event-destroy-before-runtime-disable-and-independent-of-later-resource-release,payload-cleanup-failure-after-event-destroy-aborts-process-before-owner-loss,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,published-owners-no-drop-ioctl-or-unmap\n",
+    "cwsr-address-semantics=bo-cpu-vma-is-create-address-except-exact-24-owned-fixed-private-anonymous-control-stack-pages,prot-none-then-dontfork-then-rw,whole-span-seal-then-exact-shadow-rw-restore;headers-and-control-stack-kfd-copy-targets,wave-state-remains-read-only-bo-mapped,event-payload-disjoint-from-all-control-stack-pages;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms-wait-and-terminal-timeout-direct-volatile-CWSR-reason,wait-and-payload-must-agree,unknown-reason-rejected,zero-reason-is-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
     "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-explicitly-classified-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=kernel-dispatch-hardware-completion-fault-or-exception-delivery-refinement,kernel-effect-correctness-beyond-inspected-metadata,full-kernel-write-coverage,kernel-numerical-correctness,device-local-update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "excluded=kernel-dispatch-hardware-completion-fault-or-exception-delivery-refinement,kernel-effect-correctness-beyond-inspected-metadata,full-kernel-write-coverage,kernel-numerical-correctness,device-local-update,multi-producer,foreign-kfd-process-coordination,private-cwsr-wave-record-decoding\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "d4c599f03c2e7bad0ea15dfd3a64cdde5ed387c7945f32d03b6b8ea59753491d";
+    "2df22ab1f0bf49e270d4dc332e490a9ce760bec04fccc0676658dd455ec4e47a";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -1807,8 +1807,7 @@ type ExternalRuntimeV1<'a> = (
 struct QueueAfterEventDestroyedV1 {
     runtime: LinuxKfdRuntimeEnabledV1,
     runtime_control: Option<KfdWithAdmittedUapi>,
-    destroyed_event: LinuxDestroyedQueueExceptionEventV1,
-    shadows: LinuxCwsrShadowPagesV1,
+    shadows: LinuxCwsrShadowsAfterEventDestroyedV1,
     return_attached: bool,
     detached_return: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
 }
@@ -1824,8 +1823,7 @@ pub struct KfdTargetRuntimeDebugQueueTeardownV1 {
     session: Option<ComputeAqlQueueSessionV1>,
     runtime: Option<LinuxKfdRuntimeEnabledV1>,
     runtime_control: Option<KfdWithAdmittedUapi>,
-    destroyed_event: Option<LinuxDestroyedQueueExceptionEventV1>,
-    shadows: Option<LinuxCwsrShadowPagesV1>,
+    shadows: Option<LinuxCwsrShadowsAfterEventDestroyedV1>,
     thread_bound: PhantomData<Rc<()>>,
 }
 
@@ -1885,7 +1883,6 @@ impl KfdTargetRuntimeDebugQueueV1 {
             session: Some(session),
             runtime: Some(after_event.runtime),
             runtime_control: Some(runtime_control),
-            destroyed_event: Some(after_event.destroyed_event),
             shadows: Some(after_event.shadows),
             thread_bound: PhantomData,
         })
@@ -1926,12 +1923,6 @@ impl KfdTargetRuntimeDebugQueueTeardownV1 {
                     "missing debug runtime control descriptor",
                 ))?;
         let disabled = runtime.disable(control.opened.fd.as_fd(), control.opened.opener_pid)?;
-        let destroyed_event =
-            self.destroyed_event
-                .take()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing destroyed queue event",
-                ))?;
         let shadows = self
             .shadows
             .take()
@@ -1944,14 +1935,8 @@ impl KfdTargetRuntimeDebugQueueTeardownV1 {
             .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                 "missing destroyed debug queue session",
             ))?;
-        let (outcome, callback_result) = session.complete_destroy(
-            destroyed_event,
-            disabled,
-            shadows,
-            false,
-            None,
-            after_queue_destroyed,
-        )?;
+        let (outcome, callback_result) =
+            session.complete_destroy(disabled, shadows, false, None, after_queue_destroyed)?;
         match outcome {
             QueueDestroyOutcomeV1::Released(destroyed) => Ok((destroyed, callback_result)),
             QueueDestroyOutcomeV1::Returned(_) => Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -2821,7 +2806,7 @@ impl ComputeAqlQueueSessionV1 {
         };
         memory.check_queue_currentness()?;
         let shadow_plan = memory.cwsr_shadow_plan(&context_save)?;
-        let shadows = match LinuxCwsrShadowPagesV1::install(shadow_plan, &event) {
+        let unpublished_shadows = match LinuxCwsrShadowPagesV1::install(shadow_plan, &event) {
             Ok(shadows) => shadows,
             Err(error) => {
                 let _ = memory.quarantine_queue_composition("CWSR shadow setup failure");
@@ -2829,7 +2814,9 @@ impl ComputeAqlQueueSessionV1 {
             }
         };
         let cwsr_initialization = match memory.with_bytes_mut(&mut context_save, |bytes| {
-            shadows.initialize_and_validate_bo_headers(bytes)
+            unpublished_shadows
+                .shadows()
+                .initialize_and_validate_bo_headers(bytes)
         }) {
             Ok(initialization) => initialization,
             Err(error) => {
@@ -2848,10 +2835,17 @@ impl ComputeAqlQueueSessionV1 {
         } else {
             runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
         }
-        event.validate_live_with_shadows(memory.kfd_fd(), memory.opener_pid(), &shadows)?;
+        event.validate_live_with_shadows(
+            memory.kfd_fd(),
+            memory.opener_pid(),
+            unpublished_shadows.shadows(),
+        )?;
         memory.check_queue_currentness()?;
         let eop = memory.seal_executable(eop)?;
         let context_save = memory.seal_executable(context_save)?;
+        unpublished_shadows
+            .shadows()
+            .restore_kernel_write_access_after_bo_seal()?;
         let ring = ring.map_and_retain(&mut memory)?;
         let control = memory.map_to_gpu(control)?;
         let completion_signals = memory.map_to_gpu(completion_signals)?;
@@ -2893,7 +2887,16 @@ impl ComputeAqlQueueSessionV1 {
         };
         let mut engine = NativeQueueEngineV1::new(backend).map_err(map_native)?;
         let key = engine.admit(authority).map_err(map_native)?;
-        engine.create(key).map_err(map_create)?;
+        let mut shadows = None;
+        engine
+            .create_at_native_boundary(key, || {
+                // The backend call is the first boundary where KFD may retain
+                // the header's payload pointer. Ambiguous native effects from
+                // this point require process teardown.
+                shadows = Some(unpublished_shadows.publish_for_native_queue_creation());
+            })
+            .map_err(map_create)?;
+        let shadows = shadows.expect("native CREATE_QUEUE boundary published CWSR shadows");
         runtime
             .mark_queue_created()
             .map_err(|error| terminal_creation("runtime queue-live transition", error.into()))?;
@@ -2945,7 +2948,13 @@ impl ComputeAqlQueueSessionV1 {
         };
         let exception = session.exception.as_ref().expect("queue exception state");
         session.observation.event_id = exception.event.event_id_observation();
-        session.observation.cwsr_shadow_pages = 8;
+        session.observation.cwsr_shadow_pages =
+            u8::try_from(crate::queue_linux::GFX942_CWSR_SHADOW_PAGES_V1).map_err(|_| {
+                terminal_creation(
+                    "CWSR shadow page count",
+                    ComputeAqlQueueSessionErrorV1::Contract("CWSR shadow page count"),
+                )
+            })?;
         session
             .check_currentness()
             .map_err(|error| terminal_creation("post-create currentness before doorbell", error))?;
@@ -5831,7 +5840,6 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.opener_pid(),
         )?;
         let (outcome, callback_result) = self.complete_destroy(
-            after_event.destroyed_event,
             disabled_runtime,
             after_event.shadows,
             after_event.return_attached,
@@ -5867,7 +5875,6 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.opener_pid(),
         )?;
         let (outcome, ()) = self.complete_destroy(
-            after_event.destroyed_event,
             disabled_runtime,
             after_event.shadows,
             after_event.return_attached,
@@ -5982,12 +5989,12 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.kfd_fd(),
             engine.backend.session.opener_pid(),
         )?;
+        let shadows = exception.shadows.after_event_destroy(destroyed_event)?;
         exception.runtime.mark_event_destroyed()?;
         Ok(QueueAfterEventDestroyedV1 {
             runtime: exception.runtime,
             runtime_control: exception.runtime_control,
-            destroyed_event,
-            shadows: exception.shadows,
+            shadows,
             return_attached,
             detached_return,
         })
@@ -5995,17 +6002,15 @@ impl ComputeAqlQueueSessionV1 {
 
     fn complete_destroy<T>(
         mut self,
-        destroyed_event: LinuxDestroyedQueueExceptionEventV1,
         disabled_runtime: LinuxKfdRuntimeDisabledV1,
-        shadows: LinuxCwsrShadowPagesV1,
+        shadows: LinuxCwsrShadowsAfterEventDestroyedV1,
         return_attached: bool,
         detached_return: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
         after_queue_destroyed: impl FnOnce(
             &mut SharedGttMemorySessionV1,
         ) -> Result<T, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<(QueueDestroyOutcomeV1, T), ComputeAqlQueueSessionErrorV1> {
-        let shadow_release =
-            shadows.after_event_and_runtime_destroy(destroyed_event, disabled_runtime)?;
+        let shadow_release = shadows.after_runtime_destroy(disabled_runtime)?;
         self.doorbell
             .take()
             .ok_or(ComputeAqlQueueSessionErrorV1::Contract("missing doorbell"))?
@@ -7455,7 +7460,15 @@ mod tests {
             .find("runtime.take().expect(\"validated debug runtime authority\")")
             .unwrap();
         let event_create = body.find("LinuxQueueExceptionEventV1::create").unwrap();
+        let native_boundary = body
+            .find("engine\n            .create_at_native_boundary")
+            .unwrap();
+        let unpublished_payload_disarm = body
+            .find("unpublished_shadows.publish_for_native_queue_creation()")
+            .unwrap();
         assert!(handoff < event_create);
+        assert!(event_create < native_boundary);
+        assert!(native_boundary < unpublished_payload_disarm);
         for post_handoff_step in [
             "LinuxCwsrShadowPagesV1::install",
             "initialize_and_validate_bo_headers",
@@ -7464,7 +7477,7 @@ mod tests {
             "memory.take_queue_model_foundation()?",
             "NativeQueueEngineV1::new(backend)",
             "NativeAqlSubmissionOwnerV1::new(ring_bytes)",
-            "engine.create(key)",
+            "create_at_native_boundary(key",
             "mark_queue_created()",
             ".create_outputs(key)",
             ".native_queue_id(key)",

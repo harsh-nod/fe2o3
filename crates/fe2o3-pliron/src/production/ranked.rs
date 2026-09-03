@@ -2160,8 +2160,6 @@ impl ProductionRankedKernelV1 {
                         || workgroup_extents.contains(&0)
                         || workgroup_size.is_none()
                         || *subgroup_size == 0
-                        || workgroup_size.is_some_and(|size| *subgroup_size > size)
-                        || workgroup_size.is_some_and(|size| !size.is_multiple_of(*subgroup_size))
                         || (*full_physical_workgroups
                             && global_extents.iter().zip(workgroup_extents).any(
                                 |(global, workgroup)| {
@@ -2844,7 +2842,7 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
                 index.get(),
             ),
             Self::InvalidExecutionLayout => formatter.write_str(
-                "ranked execution layout must be the unique first entry operation with nonzero workgroup axes and an integral subgroup width",
+                "ranked execution layout must be the unique first entry operation with nonzero workgroup axes, finite volume, and nonzero subgroup width",
             ),
             Self::InvalidUnsignedCast => formatter.write_str(
                 "ranked unsigned cast requires an index source and a width in {8, 16, 32, 64}",
