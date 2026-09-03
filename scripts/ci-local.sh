@@ -60,6 +60,7 @@ CARGO_FE2O3_DRIVER_ROOT=
 CARGO_FE2O3_DRIVER_PROFILE=
 CARGO_TARGET_DIRECTORY=
 CI_PRIVATE_TMP_ROOT=
+STANDALONE_LOCKFILES_CHECKED=0
 readonly -a ROCM_TRUSTED_DEVICE_ITEM_PACKAGES=(
   fe2o3-vecadd
   fe2o3-trusted-item-renamed-genuine
@@ -599,6 +600,7 @@ run_check() {
   local -a loader_environment_removals
   local -A rustc_example_set=()
   local package
+  run_standalone_lockfiles
   prepare_cargo_fe2o3_driver generic-check production
   validate_cargo_fe2o3_driver
   load_example_packages all all_examples "${CARGO_FE2O3_BINARY}"
@@ -782,7 +784,11 @@ run_workspace_dependency_policy() {
 }
 
 run_standalone_lockfiles() {
+  if ((STANDALONE_LOCKFILES_CHECKED)); then
+    return 0
+  fi
   run_step standalone-lockfiles bash "${STANDALONE_LOCKFILE_CHECKER}"
+  STANDALONE_LOCKFILES_CHECKED=1
 }
 
 run_runtime_pure_rust_policy() {

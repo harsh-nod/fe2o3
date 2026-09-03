@@ -8378,10 +8378,21 @@ fn project_workgroup_pipeline_effects_v1(
                     contract.destination,
                     simple_call_destination(call)?.index() as usize
                 );
+                let result =
+                    contract
+                        .pipeline
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a workgroup pipeline creation result was not assigned",
+                        ))?;
+                let view = contract
+                    .view
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a workgroup pipeline view was not assigned",
+                    ))?;
                 ProjectedPipelineEffectV1::Create {
                     owner,
-                    result: Some(contract.pipeline.expect("assigned pipeline result")),
-                    view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
+                    result: Some(result),
+                    view: ProductionRankedValueV1::Local(view),
                     buffers: contract.buffers,
                     prefetch_distance: contract.prefetch_distance,
                 }
@@ -8390,11 +8401,17 @@ fn project_workgroup_pipeline_effects_v1(
                 let owner = pipeline_call_owner_v1(call, &owners)?;
                 let contract = &pending[owner];
                 let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
+                let modulus =
+                    contract
+                        .modulus
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a workgroup pipeline modulus was not assigned",
+                        ))?;
                 ProjectedPipelineEffectV1::Event {
                     owner,
                     epoch,
                     slot_result: None,
-                    modulus: contract.modulus.expect("assigned pipeline modulus"),
+                    modulus,
                     kind: pipeline_event_kind_v1(*event),
                 }
             }
@@ -8404,12 +8421,23 @@ fn project_workgroup_pipeline_effects_v1(
                 let contract = &pending[owner];
                 let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
                 let index = scalar_projector.project_root(block_index, &call.arguments()[2])?;
+                let view = contract
+                    .view
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a workgroup pipeline view was not assigned",
+                    ))?;
+                let modulus =
+                    contract
+                        .modulus
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a workgroup pipeline modulus was not assigned",
+                        ))?;
                 ProjectedPipelineEffectV1::Access {
-                    view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
+                    view: ProductionRankedValueV1::Local(view),
                     epoch,
                     index,
                     slot_result: None,
-                    modulus: contract.modulus.expect("assigned pipeline modulus"),
+                    modulus,
                     kind: if matches!(
                         operation,
                         SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
@@ -8526,11 +8554,11 @@ impl PipelineScalarProjectorV1<'_> {
         if tuple_field_operand_local_v1(operand, 0).is_some() {
             return self.project_checked_result(operand, use_site, visiting);
         }
-        if unsigned_index_bits_v1(self.types, operand.ty()).is_none() {
+        let Some(bits) = unsigned_index_bits_v1(self.types, operand.ty()) else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a pipeline scalar is not an exact unsigned index expression",
             ));
-        }
+        };
         if let SemanticOperandV1::Constant(constant) = operand {
             let SemanticConstantValueV1::Scalar(value) = constant.value() else {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -8542,8 +8570,6 @@ impl PipelineScalarProjectorV1<'_> {
                     "a pipeline scalar constant exceeds ranked index width",
                 )
             })?;
-            let bits = unsigned_index_bits_v1(self.types, operand.ty())
-                .expect("validated unsigned pipeline scalar type");
             if bits < 64 && value >= (1_u64 << bits) {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "a pipeline scalar constant exceeds its semantic type",
@@ -9997,9 +10023,12 @@ fn project_deterministic_scalar_switches_v1(
             ));
         }
         if switch_fallback_is_empty_unreachable_v1(function, otherwise) && exhausts_valid_domain {
-            let (_, exhaustive_target) = projected_targets
-                .pop()
-                .expect("an authenticated valid-value domain is nonempty");
+            let (_, exhaustive_target) =
+                projected_targets
+                    .pop()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "an authenticated valid-value domain has no retained switch target",
+                    ))?;
             otherwise = exhaustive_target;
         }
         switches[block_index] = Some(ProjectedDeterministicSwitchV1 {
@@ -15729,7 +15758,12 @@ fn order_projected_block_effects(
             .is_some_and(|site| site.insertion_operation == index)
         {
             items.push(ProjectedBlockItemV1::Guarded(
-                sites.next().expect("peeked guarded access site").access,
+                sites
+                    .next()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a peeked guarded access site disappeared before projection",
+                    ))?
+                    .access,
             ));
         }
         if sites
@@ -15877,10 +15911,16 @@ fn projected_cfg_terminator(
                     "a comparison predicate switch with a reachable non-boolean successor",
                 ));
             }
+            let one = one.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a comparison predicate switch lost its true variant",
+            ))?;
+            let zero = zero.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a comparison predicate switch lost its false variant",
+            ))?;
             Ok(ProjectedCfgTerminatorV1::Predicate {
                 predicate,
-                true_block: target(one.expect("checked exact variant").edge().target())?,
-                false_block: target(zero.expect("checked exact variant").edge().target())?,
+                true_block: target(one.edge().target())?,
+                false_block: target(zero.edge().target())?,
             })
         }
         SemanticTerminatorKindV1::Call(call) => {
@@ -16695,7 +16735,9 @@ fn prepare_pipeline_values_v1(
             };
             match effect {
                 ProjectedPipelineEffectV1::Create { owner, result, .. } => {
-                    let value = result.expect("entry-declared pipeline result");
+                    let value = (*result).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a workgroup pipeline creation result was not prepared",
+                    ))?;
                     if pipeline_values
                         .insert(*owner, ProductionRankedValueV1::Local(value))
                         .is_some()
@@ -16754,7 +16796,9 @@ fn materialize_pipeline_effect_v1(
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match effect {
         ProjectedPipelineEffectV1::Create { owner, result, .. } => {
-            let result = result.expect("prepared pipeline result");
+            let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline creation result was not prepared",
+            ))?;
             debug_assert_eq!(
                 pipeline_values.get(&owner),
                 Some(&ProductionRankedValueV1::Local(result))
@@ -16773,7 +16817,9 @@ fn materialize_pipeline_effect_v1(
                 ),
             )?;
             let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
-            let slot_result = slot_result.expect("prepared pipeline slot result");
+            let slot_result = slot_result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline event slot result was not prepared",
+            ))?;
             operations.push(ProductionRankedOperationV1::IndexBinary {
                 result: slot_result,
                 kind: IndexBinaryKindAttr::Remainder,
@@ -16797,7 +16843,9 @@ fn materialize_pipeline_effect_v1(
         } => {
             let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
             let index = materialize_pipeline_scalar_v1(index, block, live, operations)?;
-            let slot_result = slot_result.expect("prepared pipeline slot result");
+            let slot_result = slot_result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline access slot result was not prepared",
+            ))?;
             operations.push(ProductionRankedOperationV1::IndexBinary {
                 result: slot_result,
                 kind: IndexBinaryKindAttr::Remainder,
@@ -16846,7 +16894,9 @@ fn materialize_pipeline_scalar_v1(
         } => {
             let lhs = materialize_pipeline_scalar_v1(*left, block, live, operations)?;
             let rhs = materialize_pipeline_scalar_v1(*right, block, live, operations)?;
-            let result = result.expect("prepared pipeline scalar result");
+            let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline scalar result was not prepared",
+            ))?;
             operations.push(ProductionRankedOperationV1::IndexBinary {
                 result,
                 kind,
