@@ -1,0 +1,15 @@
+profile=fe2o3.runtime.gfx942-active-checkpoint-qualification.v1
+target=gfx942:xnack-
+code-object-version=6
+kernel=active_checkpoint_liveness
+workgroup=64,1,1
+grid=64,1,1
+element=u32
+element-count=64
+iterations=1000000000
+arg0=offset:0,name:output,effect:write-only,alignment:4
+aliasing=one-whole-host-visible-allocation
+initial-output=0
+expected-output=1000000000
+completion=successful-dispatch-before-output-read-or-reuse
+purpose=finite-live-wave-for-direct-kfd-opaque-checkpoint-qualification

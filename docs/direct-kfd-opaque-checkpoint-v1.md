@@ -16,7 +16,11 @@ validates every control-stack and wave-state range within the published
 2. Returns typed truncation with no retained prefix when the configured limit
    is too small.
 3. Reads each non-empty segment twice and rejects content changes or partial
-   reads.
+   reads. `process_vm_readv` remains the primary path. Only `EFAULT` may enter
+   the `/proc/<pid>/mem` fallback, which is opened after ptrace/pidfd custody
+   and prior local suspension ownership are established. It reads only the
+   already validated header ranges through kernel-mediated procfs on the
+   qualified host.
 4. Rereads all eight headers and rejects range/binding substitution.
 5. Reobserves the queue and device through direct KFD before returning.
 
@@ -58,9 +62,24 @@ wave, lane, register, PC, source, and target-memory observations unavailable.
 Using kernel-private trap-handler assembly as an ABI would make the trust claim
 unsound and is explicitly excluded.
 
-The MI300X live-validation lane currently proves queue suspend/resume and a
-complete zero-byte idle checkpoint. A non-empty hardware-written checkpoint is
-not yet qualified. Useful decoded stopped-state inspection requires a stable,
-documented direct-KFD decoder interface or a separately versioned and reviewed
-decoder with exact driver/firmware provenance; neither exists in the current
-public interface set.
+The MI300X live-validation lane retains its earlier queue suspend/resume and
+complete zero-byte idle checkpoint. The 2026-09-03 active qualification adds a
+finite one-Wave64 dispatch. One public KFD header reported a 20-byte control
+stack and 2,304-byte wave-state range; the other seven XCCs reported empty
+ranges. `process_vm_readv` returned `EFAULT` for the AMDGPU BO range, and the
+ptrace-authorized `/proc/<pid>/mem` fallback captured all 2,324 bytes twice.
+The exact queue was resumed, the target verified all 64 outputs, disabled its
+runtime, released the queue resources, and exited before the debugger session
+finished.
+
+The target emitted adjacent sequential declarations naming the checked
+artifact digest, dispatch identity, native queue, GPU, and packet. The debugger
+joined those records to the one exact KFD queue that it queried, suspended,
+captured, and resumed. This is same-queue runtime-observation evidence. It is
+not a coherent-interval proof and does not independently authenticate which
+code-object bytes were physically loaded or executed.
+
+Useful decoded stopped-state inspection still requires a stable, documented
+direct-KFD decoder interface or a separately versioned and reviewed decoder
+with exact driver/firmware provenance; neither exists in the current public
+interface set.

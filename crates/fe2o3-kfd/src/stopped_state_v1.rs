@@ -8,6 +8,9 @@
 //! no private record is interpreted here.
 
 use core::fmt;
+use std::fs::{File, OpenOptions};
+use std::io;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 
 use fe2o3_kfd_uapi::{
     KfdDebugContextSaveAreaHeaderV1, KfdDebugExceptionMaskV1, KfdDebugRuntimeStateV1,
@@ -41,7 +44,7 @@ pub const KFD_STOPPED_STATE_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-direct-kfd-stopped-state-r2-v1\n",
     "target=linux-x86_64,gfx942,kfd-1.18,direct-kfd-no-hip-no-hsa\n",
     "admission=exact-ptrace-owner,pidfd-bound-live-debug-session,locally-retained-session-owned-prior-kfd-queue-suspension\n",
-    "capture=direct-kfd-queue-and-device-snapshot-before,8-bounded-40-byte-process-vm-header-reads,bounded-empty-range-cursors,header-bounded-control-stack-and-wave-state-adjacent-double-read,header-reread,direct-kfd-queue-and-device-snapshot-after,exact-queue-device-binding-substitution-check\n",
+    "capture=direct-kfd-queue-and-device-snapshot-before,8-bounded-40-byte-process-vm-header-reads,bounded-empty-range-cursors,header-bounded-control-stack-and-wave-state-adjacent-double-read-by-process-vm-or-efault-only-ptrace-authorized-proc-mem-fallback,header-reread,direct-kfd-queue-and-device-snapshot-after,exact-queue-device-binding-substitution-check\n",
     "gfx942=target-version:90402,xcc-count:8,save-bytes-per-xcc:0x1621000,debug-bytes:0x5f000\n",
     "observed=queue-exception-mask,ring-shape,queue-to-save-area-size,gfx-target,xcc-count,kfd-copied-header-and-control-stack,header-ranged-wave-state-opaque-bytes\n",
     "identity=caller-scoped-domain-separated-sha256,local-session-state-and-exact-queue-including-exception-status-device-header-range-content-binding,opaque-correlation-not-authentication-or-secrecy\n",
@@ -56,7 +59,7 @@ pub const KFD_STOPPED_STATE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`KFD_STOPPED_STATE_MANIFEST_V1`].
 pub const KFD_STOPPED_STATE_MANIFEST_SHA256_V1: &str =
-    "51b218b8a14f9d36b9a71c4e42a6e9499772abe6894697bc54a56d474b1aa07d";
+    "18fdfd09a075ea73d0e7f731954d0a0681172cff163082c369a3a3f509492258";
 
 /// Caller-selected correlation scope for redacted stopped-state identities.
 ///
@@ -669,6 +672,54 @@ trait TargetHeaderReaderV1 {
 
 struct LinuxProcessVmHeaderReaderV1 {
     pid: libc::pid_t,
+    proc_mem: Option<File>,
+}
+
+fn read_exact_at_v1(
+    bytes: &mut [u8],
+    offset: u64,
+    mut read: impl FnMut(&mut [u8], u64) -> io::Result<usize>,
+) -> Result<(), KfdStoppedUnavailableReasonV1> {
+    loop {
+        match read(bytes, offset) {
+            Ok(count) if count == bytes.len() => return Ok(()),
+            Ok(_) => return Err(KfdStoppedUnavailableReasonV1::TargetCheckpointReadPartial),
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(KfdStoppedUnavailableReasonV1::TargetCheckpointReadDenied),
+        }
+    }
+}
+
+impl LinuxProcessVmHeaderReaderV1 {
+    fn new(pid: libc::pid_t) -> Self {
+        Self {
+            pid,
+            proc_mem: None,
+        }
+    }
+
+    fn read_checkpoint_through_proc_mem(
+        &mut self,
+        address: u64,
+        bytes: &mut [u8],
+    ) -> Result<(), KfdStoppedUnavailableReasonV1> {
+        if self.proc_mem.is_none() {
+            let path = format!("/proc/{}/mem", self.pid);
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+                .open(path)
+                .map_err(|_| KfdStoppedUnavailableReasonV1::TargetCheckpointReadDenied)?;
+            self.proc_mem = Some(file);
+        }
+        let file = self
+            .proc_mem
+            .as_ref()
+            .ok_or(KfdStoppedUnavailableReasonV1::TargetCheckpointReadDenied)?;
+        read_exact_at_v1(bytes, address, |remaining, offset| {
+            file.read_at(remaining, offset)
+        })
+    }
 }
 
 impl TargetHeaderReaderV1 for LinuxProcessVmHeaderReaderV1 {
@@ -724,6 +775,11 @@ impl TargetHeaderReaderV1 for LinuxProcessVmHeaderReaderV1 {
         // and the ptrace/pidfd-bound session supplies process-read authority.
         let result = unsafe { libc::process_vm_readv(self.pid, &local, 1, &remote, 1, 0) };
         if result < 0 {
+            let source = io::Error::last_os_error();
+            if source.raw_os_error() == Some(libc::EFAULT) {
+                self.read_checkpoint_through_proc_mem(address, &mut bytes)?;
+                return Ok(bytes);
+            }
             return Err(KfdStoppedUnavailableReasonV1::TargetCheckpointReadDenied);
         }
         if usize::try_from(result) != Ok(byte_len) {
@@ -1404,7 +1460,7 @@ impl KfdLiveDebugSessionV1 {
 
         let pid = libc::pid_t::try_from(self.target_pid())
             .map_err(|_| KfdStoppedStateErrorV1::QueueBindingSubstituted)?;
-        let mut reader = LinuxProcessVmHeaderReaderV1 { pid };
+        let mut reader = LinuxProcessVmHeaderReaderV1::new(pid);
         let snapshot = build_snapshot(
             &mut reader,
             plan.scope,
@@ -1529,6 +1585,52 @@ mod tests {
             checkpoint_fill: None,
             checkpoint_reads: 0,
             header_reads: 0,
+        }
+    }
+
+    #[test]
+    fn proc_mem_exact_read_helper_rejects_short_and_faulted_reads() {
+        let source = [0x11_u8, 0x22, 0x33, 0x44];
+        let mut exact = [0_u8; 4];
+        read_exact_at_v1(&mut exact, 9, |bytes, offset| {
+            assert_eq!(offset, 9);
+            bytes.copy_from_slice(&source);
+            Ok(bytes.len())
+        })
+        .unwrap();
+        assert_eq!(exact, source);
+
+        let mut interrupted = true;
+        let mut recovered = [0_u8; 4];
+        read_exact_at_v1(&mut recovered, 9, |remaining, offset| {
+            if interrupted {
+                interrupted = false;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            assert_eq!(offset, 9);
+            remaining.copy_from_slice(&source);
+            Ok(remaining.len())
+        })
+        .unwrap();
+        assert_eq!(recovered, source);
+
+        assert_eq!(
+            read_exact_at_v1(&mut [0_u8; 4], 9, |_, _| Ok(2)),
+            Err(KfdStoppedUnavailableReasonV1::TargetCheckpointReadPartial)
+        );
+        assert_eq!(
+            read_exact_at_v1(&mut [0_u8; 4], 9, |remaining, _| {
+                Ok(remaining.len() + 1)
+            }),
+            Err(KfdStoppedUnavailableReasonV1::TargetCheckpointReadPartial)
+        );
+        for errno in [libc::EIO, libc::EFAULT] {
+            assert_eq!(
+                read_exact_at_v1(&mut [0_u8; 4], 9, |_, _| {
+                    Err(io::Error::from_raw_os_error(errno))
+                }),
+                Err(KfdStoppedUnavailableReasonV1::TargetCheckpointReadDenied)
+            );
         }
     }
 
