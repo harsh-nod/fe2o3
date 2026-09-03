@@ -31,6 +31,7 @@ readonly PLIRON_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/pliron_depen
 readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lockfiles.sh"
 readonly RUNTIME_PURE_RUST_AUDITOR="${REPO_ROOT}/scripts/runtime_pure_rust_audit.py"
 readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy.json"
+readonly SIM_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/sim-runtime-no-gpu-policy.json"
 readonly VIRTUAL_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/virtual-runtime-no-gpu-policy.json"
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
 readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_identity_oracle.py"
@@ -125,6 +126,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-service-host
   fe2o3-service-model
   fe2o3-sim-differential
+  fe2o3-sim-runtime
   fe2o3-source-isa-observation
   fe2o3-semantic-import
   fe2o3-semantic-query
@@ -818,7 +820,16 @@ run_runtime_pure_rust_policy() {
       --root fe2o3-amdhsa-loader \
       --root fe2o3-aql \
       --root fe2o3-runtime \
-      --root fe2o3-runtime-model
+      --root fe2o3-runtime-model \
+      --root fe2o3-sim-runtime
+  run_step sim-runtime-no-gpu-metadata \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${SIM_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
+      --root fe2o3-sim-runtime
+  run_step sim-runtime-no-gpu-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-sim-runtime \
+        --example sim-runtime-evidence
   run_step runtime-pure-rust-kfd-examples-build \
     env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
       cargo build --locked -p fe2o3-kfd \
@@ -849,6 +860,10 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/gfx942-lds-diagnostic"
+  run_step sim-runtime-no-gpu-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${SIM_RUNTIME_NO_GPU_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/sim-runtime-evidence"
   run_step runtime-pure-rust-kfd-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \

@@ -1798,6 +1798,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-sim-runtime"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
+ "fe2o3-mir-model",
+ "fe2o3-runtime",
+ "fe2o3-runtime-model",
+ "fe2o3-virtual-runtime",
+]
+
+[[package]]
 name = "fe2o3-source-isa-observation"
 version = "0.1.0"
 dependencies = [
@@ -2971,8 +2983,10 @@ dependencies = [
  "fe2o3-pliron",
  "fe2o3-process-identity",
  "fe2o3-proof-contracts",
+ "fe2o3-runtime",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
+ "fe2o3-sim-runtime",
  "fe2o3-verifier",
  "libc",
  "object 0.39.1",

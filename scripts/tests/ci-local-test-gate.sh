@@ -761,6 +761,9 @@ for core_step in \
   virtual-runtime-no-gpu-elf \
   sim-differential-no-gpu-build \
   sim-differential-no-gpu-elf \
+  sim-runtime-no-gpu-build \
+  sim-runtime-no-gpu-metadata \
+  sim-runtime-no-gpu-elf \
   kir-sim-capability-matrix \
   kir-sim-scalar-differential \
   kir-sim-semantic-differential \
@@ -865,6 +868,18 @@ assert_equals \
   "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} elf --input ${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential" \
   "$(step_command sim-differential-no-gpu-elf)" \
   'generic core did not audit the scalar differential ELF closure'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${SIM_RUNTIME_NO_GPU_POLICY} metadata --cargo --root fe2o3-sim-runtime" \
+  "$(step_command sim-runtime-no-gpu-metadata)" \
+  'generic core did not audit the normal runtime simulator package closure'
+assert_equals \
+  "env CARGO_TARGET_DIR=${RUNTIME_PURE_RUST_TARGET_DIR} cargo build --locked -p fe2o3-sim-runtime --example sim-runtime-evidence" \
+  "$(step_command sim-runtime-no-gpu-build)" \
+  'generic core did not build the normal runtime simulator adapter for ELF audit'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${SIM_RUNTIME_NO_GPU_POLICY} elf --input ${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/sim-runtime-evidence" \
+  "$(step_command sim-runtime-no-gpu-elf)" \
+  'generic core did not audit the normal runtime simulator adapter ELF'
 assert_equals \
   0 \
   "$(step_count cpu-tests-cargo-fe2o3-bootstrap)" \

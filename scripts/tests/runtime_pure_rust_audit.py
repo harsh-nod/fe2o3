@@ -30,6 +30,7 @@ REVIEWED_BUILD_SCRIPTS = (
     "libc@0.2.189",
     "proc-macro2@1.0.107",
     "quote@1.0.47",
+    "rustc_apfloat@0.2.3+llvm-462a31f5a5ab",
     "rustix@1.1.4",
     "serde@1.0.229",
     "serde_core@1.0.229",

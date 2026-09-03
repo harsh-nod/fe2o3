@@ -5,6 +5,66 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+const TYPED_LAYOUT_ABI: [u8; 32] = [
+    0xc4, 0x96, 0x7b, 0xf0, 0x41, 0xec, 0x52, 0xe3, 0x12, 0x89, 0x49, 0x0d, 0x54, 0x9a, 0x1f, 0xfd,
+    0x94, 0xfa, 0x32, 0x39, 0x15, 0x00, 0x68, 0xc7, 0xa5, 0x22, 0x1f, 0x60, 0x50, 0x60, 0xcb, 0xa3,
+];
+
+struct TypedLayoutRuntimeArguments {
+    value: f32,
+    allocation: fe2o3_runtime::RuntimeAllocationIdV1,
+    elements: u64,
+}
+
+impl fe2o3_runtime::RuntimeArgumentsV1 for TypedLayoutRuntimeArguments {
+    const SIGNATURE_V1: [u8; 32] = TYPED_LAYOUT_ABI;
+
+    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+        let mut bytes = vec![0; 40];
+        bytes[0..4].copy_from_slice(&self.value.to_bits().to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.elements.to_le_bytes());
+        bytes[32..40].copy_from_slice(&self.elements.to_le_bytes());
+        bytes
+    }
+
+    fn bindings_v1(&self) -> Vec<fe2o3_runtime::RuntimeBindingV1> {
+        vec![
+            fe2o3_runtime::RuntimeBindingV1 {
+                region: fe2o3_runtime::RuntimeMemoryRegionV1 {
+                    allocation: self.allocation,
+                    access: fe2o3_runtime::RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 64 * 4,
+                },
+                kernarg_byte_offset: 8,
+            },
+            fe2o3_runtime::RuntimeBindingV1 {
+                region: fe2o3_runtime::RuntimeMemoryRegionV1 {
+                    allocation: self.allocation,
+                    access: fe2o3_runtime::RuntimeAccessV1::ReadWrite,
+                    byte_offset: 64 * 4,
+                    byte_len: 64 * 4,
+                },
+                kernarg_byte_offset: 24,
+            },
+        ]
+    }
+}
+
+struct WrongTypedLayoutRuntimeArguments;
+
+impl fe2o3_runtime::RuntimeArgumentsV1 for WrongTypedLayoutRuntimeArguments {
+    const SIGNATURE_V1: [u8; 32] = [0x44; 32];
+
+    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn bindings_v1(&self) -> Vec<fe2o3_runtime::RuntimeBindingV1> {
+        Vec::new()
+    }
+}
+
 struct ScratchTarget {
     path: PathBuf,
 }
@@ -957,6 +1017,14 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
     let storage =
         fe2o3_kernel_ir::SemanticStorageMapV1::from_canonical_json_bytes(bundle.storage_map())
             .expect("decode exact compiler storage map");
+    assert_eq!(
+        semantic.functions()[storage.kernels()[0].semantic_root() as usize]
+            .abi()
+            .identity()
+            .as_bytes(),
+        &TYPED_LAYOUT_ABI,
+        "ordinary Rust semantic ABI identity changed without regenerating its typed runtime arguments",
+    );
     assert_eq!(storage.kernels().len(), 1);
     assert_eq!(storage.kernels()[0].arguments().len(), 3);
     assert_eq!(
@@ -1111,6 +1179,143 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
     assert_eq!(simulated_response["session"]["simulated"], true);
     assert_eq!(simulated_response["session"]["hardware_observed"], false);
 
+    let backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0x91; 32]).unwrap();
+    assert_eq!(
+        backend.evidence(),
+        fe2o3_sim_runtime::SimRuntimeEvidenceV1 {
+            mode: "cpu-kir-semantic-simulation",
+            simulated: true,
+            hardware: false,
+            performance_prediction: false,
+        }
+    );
+    let mut runtime = fe2o3_runtime::RuntimeContextV1::open(backend).unwrap();
+    let device = runtime.devices()[0].id();
+    let allocation = runtime
+        .allocate(
+            device,
+            fe2o3_runtime::RuntimeMemoryKindV1::HostVisible,
+            128 * 4,
+            4,
+        )
+        .unwrap();
+    runtime
+        .write_allocation(allocation, 0, &vec![0; 128 * 4])
+        .unwrap();
+    let stream = runtime.create_stream(device).unwrap();
+    assert!(
+        runtime
+            .load_module(device, b"not-a-fe2sim-v3-bundle")
+            .is_err()
+    );
+    let module = runtime
+        .load_module(device, bundle.canonical_bytes())
+        .unwrap();
+    assert!(
+        runtime
+            .resolve_kernel::<WrongTypedLayoutRuntimeArguments>(module, "typed_layout_corpus")
+            .is_err()
+    );
+    let kernel = runtime
+        .resolve_kernel::<TypedLayoutRuntimeArguments>(module, "typed_layout_corpus")
+        .unwrap();
+    let bad_arguments = TypedLayoutRuntimeArguments {
+        value: 1.0,
+        allocation,
+        elements: 63,
+    };
+    assert!(
+        runtime
+            .launch(
+                stream,
+                &kernel,
+                &bad_arguments,
+                fe2o3_runtime::RuntimeLaunchGeometryV1 {
+                    grid: [64, 1, 1],
+                    workgroup: [64, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+                &[],
+            )
+            .is_err()
+    );
+    let first_arguments = TypedLayoutRuntimeArguments {
+        value: 1.25,
+        allocation,
+        elements: 64,
+    };
+    let mut first = runtime
+        .launch(
+            stream,
+            &kernel,
+            &first_arguments,
+            fe2o3_runtime::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+            &[],
+        )
+        .unwrap();
+    let event = runtime.record_event(&first).unwrap();
+    assert_eq!(
+        runtime
+            .wait(&mut first, std::time::Duration::from_secs(10))
+            .unwrap(),
+        fe2o3_runtime::RuntimePollV1::Succeeded
+    );
+    let second_arguments = TypedLayoutRuntimeArguments {
+        value: 2.5,
+        allocation,
+        elements: 64,
+    };
+    let mut second = runtime
+        .launch(
+            stream,
+            &kernel,
+            &second_arguments,
+            fe2o3_runtime::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+            &[event],
+        )
+        .unwrap();
+    assert_eq!(
+        runtime
+            .wait(&mut second, std::time::Duration::from_secs(10))
+            .unwrap(),
+        fe2o3_runtime::RuntimePollV1::Succeeded
+    );
+    let mut copied_back = vec![0; 64 * 4];
+    runtime
+        .read_allocation(allocation, 64 * 4, &mut copied_back)
+        .unwrap();
+    assert!(
+        copied_back
+            .chunks_exact(4)
+            .all(|bytes| { f32::from_bits(u32::from_le_bytes(bytes.try_into().unwrap())) == 2.5 })
+    );
+    runtime.release_event(event).unwrap();
+    runtime.release_submission(first).unwrap();
+    runtime.release_submission(second).unwrap();
+    runtime.destroy_stream(stream).unwrap();
+    runtime.unload_module(module).unwrap();
+    runtime.release_allocation(allocation).unwrap();
+    let backend = runtime.shutdown().unwrap();
+    assert!(!backend.uses_gpu());
+
+    let mut wrong_target_backend =
+        fe2o3_sim_runtime::SimRuntimeBackendV1::gfx950([0x93; 32]).unwrap();
+    assert!(
+        fe2o3_runtime::RuntimeBackendV1::load_module_v1(
+            &mut wrong_target_backend,
+            1,
+            bundle.canonical_bytes()
+        )
+        .is_err()
+    );
     let semantic_bytes = bundle.semantic_mir().to_vec();
     let inner = bundle.into_inner_v2();
     let hostile_map = fe2o3_kernel_ir::SemanticStorageMapV1::new(
@@ -1129,6 +1334,15 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
     let hostile =
         fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner, semantic_bytes, hostile_map)
             .expect("envelope alone does not claim semantic layout interpretation");
+    let mut hostile_backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0x92; 32]).unwrap();
+    assert!(
+        fe2o3_runtime::RuntimeBackendV1::load_module_v1(
+            &mut hostile_backend,
+            1,
+            hostile.canonical_bytes()
+        )
+        .is_err()
+    );
     let hostile_path = target.path().join("typed-layout-hostile.fe2sim");
     std::fs::write(&hostile_path, hostile.canonical_bytes()).unwrap();
     let rejected = Command::new(debug_target.join("debug/fe2o3-debug"))

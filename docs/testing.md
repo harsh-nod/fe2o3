@@ -28,22 +28,27 @@ The issue #216 virtual-runtime slice has focused no-GPU coverage:
 
 ```text
 cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
+cargo test --locked -p fe2o3-sim-runtime
 cargo test --locked -p fe2o3-sim-differential
 cargo test --locked -p fe2o3-kernel-ir simulation_bundle_v3
 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0
-cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --all-targets -- -D warnings
-cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --no-deps
+cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-runtime -p fe2o3-sim-differential --all-targets -- -D warnings
+cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-runtime -p fe2o3-sim-differential --no-deps
 scripts/ci-local.sh workspace-policy
 scripts/ci-local.sh runtime-policy
 ```
 
-The runtime-policy lane checks both virtual-runtime package closures and the
-scalar differential command's closure and ELF. They must remain independent of
-HIP, HSA, DRM, KFD device nodes, and GPU libraries. These tests establish model
-and semantic CPU behavior only; they do not increase a hardware or parity pass
-count.
+The runtime-policy lane checks the virtual-runtime package closures, scalar
+differential command, and normal runtime simulator adapter. The syscall-free
+roots remain independent of HIP, HSA, DRM, KFD, device nodes, and GPU libraries.
+The adapter is separately checked through the pure-Rust runtime policy and ELF;
+it uses the public SPI owned by `fe2o3-runtime` but invokes no KFD path and links
+no GPU library. Its dedicated ELF policy permits libc `dlsym`, which
+`std::thread` imports for pthread compatibility, while rejecting `dlopen`, GPU
+library names, and device paths. These tests establish model and semantic CPU behavior only;
+they do not increase a hardware or parity pass count.
 
 The ignored V3 production test requires the pinned AMD target. It exports an
 ordinary Rust kernel through the production rustc transaction, decodes the

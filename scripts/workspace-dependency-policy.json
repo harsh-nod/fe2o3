@@ -112,6 +112,7 @@
         "fe2o3-protected-static-executable",
         "fe2o3-runtime",
         "fe2o3-runtime-protocol",
+        "fe2o3-sim-runtime",
         "fe2o3-service-host",
         "fe2o3-virtual-runtime"
       ]
