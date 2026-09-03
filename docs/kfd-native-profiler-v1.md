@@ -238,4 +238,11 @@ The checked-in [MI300X qualification evidence](evidence/mi300x-direct-kfd-rocpro
 records one ROCprofiler SDK 1.1.0/ROCm 7.2.4 run in which the direct-KFD target
 published, completed, and released three dispatches while the successfully
 exited collector produced no artifacts. That is an exact observed outcome,
-not a claim about every SDK version or direct-KFD workload.
+not a claim about every SDK version or direct-KFD workload. A follow-up raw
+collector probe confirmed that kernel tracing was enabled, the collector client
+and contexts started, the requested output directory was writable, and the
+minimum output threshold was zero, while the collector still reported zero
+services generating output. The installed CLI exposes no direct-KFD dispatch
+registration mode. Consequently, adding an output flag or weakening artifact
+admission would not repair this boundary; a future collector path needs an
+actual common direct-KFD queue/dispatch observation contract.

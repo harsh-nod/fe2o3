@@ -43,7 +43,13 @@ observed three complete direct-KFD dispatch lifecycles while the exact
 successfully exited ROCprofiler SDK 1.1.0 collector produced no artifacts. The
 transaction retains both canonical evidence members and leaves dispatch,
 code-object, and clock correlation unavailable. This does not establish that
-all rocprofv3 releases or direct-KFD workloads behave the same way.
+all rocprofv3 releases or direct-KFD workloads behave the same way. A bounded
+raw-entrypoint follow-up ruled out the sealed adapter, output path, output
+format, and minimum-output threshold as causes for that exact empty inventory:
+the installed SDK 1.1.0 client and contexts started, but reported zero services
+generating output. Its rocprofv3 CLI has no mode for registering a queue created
+directly through KFD ioctls, so direct-KFD dispatch correlation remains typed
+unavailable rather than synthesized from the runtime record.
 
 ## Differentiator boundary
 

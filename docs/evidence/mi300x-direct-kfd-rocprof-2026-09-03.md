@@ -69,6 +69,43 @@ argument catalog exposes HSA queue interception. That makes an HSA-runtime
 registration boundary a plausible explanation for the direct-KFD observation
 gap, but it is an inference, not a universal SDK incapability claim.
 
+### Empty-inventory investigation
+
+A follow-up bounded probe used the same target and installed collector without
+the fe2o3 sealed adapter. This rules out an adapter-only failure: the raw
+installed entrypoint also exited successfully and produced no files with
+`--kernel-trace --agent-index absolute --output-format json`. With
+`--log-level trace`, the collector reported that it found and configured the
+rocprofv3 client, registered and started five contexts, started the primary
+context before invoking the target, flushed its buffer after the successful
+target exit, and had zero services generating output. The bounded trace was
+558,887 bytes with raw SHA-256
+`222f2a1f14e10385d34df59927c0bf4619abda1c764e92aab468c8d50741b00d`.
+It is not retained because it contains process-local addresses and identifiers.
+
+Three negative controls distinguish an empty observation from an output-path
+or threshold mistake:
+
+- adding `--output-config true` wrote a 5,420-byte `capture_config.json` to the
+  requested directory; its metadata recorded `kernel_trace: true`, JSON output,
+  the requested output path and stem, and a zero-byte minimum-output threshold;
+- explicitly adding `--minimum-output-data 0` still produced no trace artifact;
+- replacing kernel trace with `--sys-trace` still produced no artifact.
+
+The output-config file is configuration metadata, not dispatch evidence, and
+must not be admitted as if it were a kernel trace. The installed 1.1.0 CLI also
+rejects `--kfd-trace` as an unrecognized argument. Its installed SDK headers
+describe dispatch-counting selection before enqueue into an HSA queue and
+catalog `hsa_queue_create` plus `hsa_amd_queue_intercept_create`; they do not
+expose a documented rocprofv3 path for registering a queue created directly by
+KFD ioctls. The evidence therefore identifies no fe2o3 argument, output,
+custody, or sealed-launch bug to fix. The narrow explanation is that this exact
+rocprofv3 kernel-dispatch service had no registered/interposed runtime queue
+from which to produce a dispatch record while the fe2o3 runtime independently
+observed its direct-KFD dispatches. That explanation remains an inference about
+this installed release. It is not proof that no custom SDK tool, future SDK, or
+driver facility can observe a direct-KFD queue.
+
 ## Separate probes
 
 A separate bounded ATT launch exited before the target with
