@@ -33,3 +33,11 @@ hardware, equivalence, performance, or universal-correctness authority.
 
 The companion `fe2o3-virtual-runtime-cli` reuses the hardened
 `fe2o3-kir-sim-cli` KIR/bundle admission boundary and emits stable JSON.
+
+`capture_host_lifetime_evidence_v1` is a read-only query for a live buffer that
+is still retained by prepared or ambiguous dispatches. Its strict canonical
+record binds the runtime generation, buffer, attempted host operation, blocking
+completions, exact KIR, and a bounded snapshot identity for each dispatch
+input. Blocker and snapshot-byte limits produce explicit partial states rather
+than inferred completeness. The record is advisory semantic evidence only; its
+content identities do not authenticate a producer or authorize execution.

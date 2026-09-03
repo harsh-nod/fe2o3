@@ -11,9 +11,12 @@ use fe2o3_kir_sim::{
 use fe2o3_runtime_model::{IdentityDigestV1, TransitionErrorV1};
 use fe2o3_virtual_runtime::{
     VirtualArgumentV1, VirtualBufferAccessV1, VirtualCompletionAmbiguityV1,
-    VirtualCompletionStateV1, VirtualDispatchRequestV1, VirtualRunProgressV1,
-    VirtualRuntimeConfigV1, VirtualRuntimeErrorV1, VirtualRuntimeLimitsV1, VirtualRuntimeV1,
-    VirtualTargetProfileV1,
+    VirtualCompletionStateV1, VirtualDispatchInputBindingV1,
+    VirtualDispatchInputUnavailableReasonV1, VirtualDispatchRequestV1,
+    VirtualHostLifetimeCompletenessV1, VirtualHostLifetimeEvidenceLimitsV1,
+    VirtualHostLifetimeEvidenceV1, VirtualHostLifetimeFindingV1, VirtualHostLifetimeOperationV1,
+    VirtualRunProgressV1, VirtualRuntimeConfigV1, VirtualRuntimeErrorV1, VirtualRuntimeLimitsV1,
+    VirtualRuntimeV1, VirtualTargetProfileV1,
 };
 
 fn operation(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -666,6 +669,105 @@ fn ambiguity_blocks_host_access_and_invalidates_writable_alias_union() {
     assert!(matches!(
         runtime.copy_to_host(buffer, 0, &mut output),
         Err(VirtualRuntimeErrorV1::UninitializedHostRead { offset: 0 })
+    ));
+}
+
+#[test]
+fn host_lifetime_evidence_is_canonical_and_binds_the_blocking_dispatch() {
+    let mut runtime = runtime(41);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[7; 4]).unwrap();
+    let completion = runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+    assert!(matches!(
+        runtime.release_buffer(buffer),
+        Err(VirtualRuntimeErrorV1::Model(
+            TransitionErrorV1::ResourceInUse(_)
+        ))
+    ));
+
+    let evidence = runtime
+        .capture_host_lifetime_evidence_v1(
+            buffer,
+            VirtualHostLifetimeOperationV1::ReleaseBuffer,
+            VirtualHostLifetimeEvidenceLimitsV1::new(8, 1 << 20).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        evidence.finding,
+        VirtualHostLifetimeFindingV1::ReleaseWhileRetained
+    );
+    assert_eq!(evidence.retained_dispatches, 1);
+    assert_eq!(
+        evidence.blockers[0].completion_ordinal,
+        completion.ordinal()
+    );
+    assert!(matches!(
+        evidence.blockers[0].dispatch_input,
+        VirtualDispatchInputBindingV1::Exact { .. }
+    ));
+    assert_eq!(
+        evidence.completeness,
+        VirtualHostLifetimeCompletenessV1::Complete
+    );
+    assert!(!evidence.grants_execution_authority());
+
+    let canonical = evidence.to_canonical_bytes().unwrap();
+    assert_eq!(
+        VirtualHostLifetimeEvidenceV1::from_canonical_bytes(&canonical).unwrap(),
+        evidence
+    );
+    let mut corrupt: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+    corrupt["buffer_ordinal"] = serde_json::json!(99);
+    assert!(
+        VirtualHostLifetimeEvidenceV1::from_canonical_bytes(&serde_json::to_vec(&corrupt).unwrap())
+            .is_err()
+    );
+}
+
+#[test]
+fn host_lifetime_evidence_reports_bounded_partial_inventory_and_input_identity() {
+    let mut runtime = runtime(42);
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[3; 4]).unwrap();
+    runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+    runtime
+        .submit(queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+
+    let evidence = runtime
+        .capture_host_lifetime_evidence_v1(
+            buffer,
+            VirtualHostLifetimeOperationV1::SnapshotBuffer,
+            VirtualHostLifetimeEvidenceLimitsV1::new(1, 0).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(evidence.retained_dispatches, 2);
+    assert_eq!(evidence.blockers.len(), 1);
+    assert!(matches!(
+        evidence.completeness,
+        VirtualHostLifetimeCompletenessV1::PartialBlockerAndInputIdentity {
+            total_blockers: 2,
+            retained_blockers: 1
+        }
+    ));
+    assert!(matches!(
+        evidence.blockers[0].dispatch_input,
+        VirtualDispatchInputBindingV1::Unavailable {
+            reason: VirtualDispatchInputUnavailableReasonV1::SnapshotByteLimit,
+            ..
+        }
     ));
 }
 

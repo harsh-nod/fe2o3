@@ -1953,6 +1953,9 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-kir-sim",
  "fe2o3-runtime-model",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

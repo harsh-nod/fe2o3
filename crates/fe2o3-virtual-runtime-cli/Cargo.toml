@@ -22,3 +22,8 @@ sha2.workspace = true
 name = "fe2o3-virtual-runtime"
 path = "src/main.rs"
 doc = false
+
+[[bin]]
+name = "fe2o3-sim-agent"
+path = "src/bin/fe2o3-sim-agent.rs"
+doc = false

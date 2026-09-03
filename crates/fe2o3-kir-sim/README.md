@@ -190,6 +190,10 @@ to match. The CLI exposes `--reduce-failure` and
 same no-symlink snapshot input and durable no-replace output boundaries as
 other simulator artifacts. Reduction and replay remain CPU observations and
 grant no GPU scheduling, timing, performance, or execution authority.
+`matches_data_race` additionally lets a read-only consumer verify that a
+detailed race has the exact fingerprint retained by a canonical report. It
+does not authenticate the report producer or replay the report; consumers that
+need execution-backed custody must still use the replay API.
 
 `PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
 form for that same record. It adds exact raw-KIR versus simulation-bundle route,
