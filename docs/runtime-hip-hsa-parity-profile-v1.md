@@ -30,53 +30,89 @@ virtual-memory remapping, IPC, and multi-host transport are outside V1. A
 backend must report these as unsupported; it must not emulate them silently or
 advertise their capability.
 
-## Current R11 Status
+## Current R12 Status
 
-R11 implements backend-neutral typed completion state for submissions and
-events, exact-once completion callbacks, and aggregate stream query and bounded
-synchronization. It also provides typed atomic and collective wrappers that
-match operation, scope, success ordering, optional failure ordering, weak mode,
-geometry, and collective membership before submitting an ordinary admitted
-typed kernel. Compare-exchange requires a failure order without release
-semantics that is no stronger than success; non-CAS operations require no
-failure order and `weak = false`. Collective grids must contain
-only complete workgroups: every grid dimension is at least and exactly
-divisible by its workgroup dimension. Atomic launch admission retains base
-geometry validation and permits a partial final workgroup. These are facade
-semantics, not a native-operation or authority claim: current KFD backends
-advertise both stable
-and execution-detail atomic/collective capabilities as false, so the wrappers
+R12 retains the backend-neutral typed completion state, exact-once callbacks,
+aggregate stream query, and bounded synchronization introduced in R11. It also
+retains typed atomic and collective wrappers that match operation, scope,
+success ordering, optional failure ordering, weak mode, geometry, and
+collective membership before submitting an ordinary admitted typed kernel.
+Compare-exchange requires a failure order without release semantics that is no
+stronger than success; non-CAS operations require no failure order and
+`weak = false`. Collective grids must contain only complete workgroups: every
+grid dimension is at least and exactly divisible by its workgroup dimension.
+Atomic launch admission retains base geometry validation and permits a partial
+final workgroup. These are facade semantics, not a native-operation or
+authority claim: current KFD backends advertise both stable and
+execution-detail atomic/collective capabilities as false, so the wrappers
 reject before KFD submission.
 
-The exact two-device XGMI copy-only backend now retains successful peer mappings
+The direct single-device KFD backend now assigns the first two live logical
+streams to two persistent native compute queue lanes. Each lane has distinct
+ring, doorbell, completion, exception-event, CWSR, dispatch, and recyclable
+queue-local custody under one shared VM session. Public lane handles bind the
+exact session occurrence, ordinal, and generation; destroyed slots advance
+generation before reuse, and stale or cross-session handles reject. Auxiliary
+destruction preflights quiescence before taking custody and follows the same
+event, payload, runtime, and resource teardown order as the primary queue. The
+lane callback surface exposes only admitted fixed-dispatch and observation
+operations, not session-global SDMA or lifecycle control.
+
+At most one dispatch per lane may be in flight, and the two lanes may publish
+concurrently only when their allocation sets are disjoint. A third live stream
+is rejected with capacity before native queue creation; after an owning stream
+is quiescent and destroyed, its logical lane can be reassigned. A pending
+compute event dependency rejects as busy before publication, so the caller must
+poll or wait for the dependency and retry the launch. R12 does not provide
+native queue-side dependency scheduling, arbitrary stream counts, multiple
+queued dispatches per stream, or overlapping-memory compute concurrency. The
+`concurrent_compute` capability therefore means this exact two-lane profile,
+not general HIP/HSA stream parity. When the exact native profile is available,
+the direct backend also reports only its implemented native async-copy,
+compute-copy-overlap, memory-pool, and cancellation surfaces; native peer copy
+remains a separate backend, and atomic and collective execution remain false.
+
+The exact two-device XGMI copy-only backend retains successful peer mappings
 until host access or allocation release and publishes directional copies from a
 deterministic FIFO readiness queue in batches of at most 63 with caller-driven
 fairness. Ready selection is O(batch), bounded by 63, and focused in-flight
 selection is O(log batch), independent of the total active set. It remains
-separate from the single-device compute owner. Direct KFD still serializes
-logical compute streams through one compute queue, and there is no unified
-native multi-device compute backend.
+separate from the single-device compute owner; there is no unified native
+multi-device compute backend.
 
 The additive in-process `flush_stream` extension publishes one complete ready
 XGMI directional batch before returning, so later host work can overlap that DMA
 without waiting for the first poll. A ready set larger than the 63-ticket ring
 admission rejects before publication. Poll and wait remain the fallback and the
 only completion-progress operations; there is no background progress thread and
-Worker V3 carries no flush request.
+Worker V3 carries no flush request. The XGMI benchmark labels queued work as
+`outstanding_depth`; the native route uses one ordered SDMA engine per direction
+and does not claim that depth as engine concurrency.
 
-The XGMI benchmark labels queued work as `outstanding_depth`; the native route
-uses one ordered SDMA engine per direction and does not claim that depth as
-engine concurrency.
+Worker V3 now has a public, move-only application execution binding on the
+generated KFD invocation path. The production transition retains the exact
+authenticated executable and current-publication token and binds compiler and
+proof evidence, target and code object, generated argument packing, kernel and
+dispatch identities, launch geometry, and one checked device. Its fields and
+constructor remain private, currentness is revalidated, and the synthetic test
+verifier path retains qualification custody that cannot execute as production.
+This is the application-side binding and release transition, not the missing
+semantic or machine-refinement verifier. A reviewed production producer for the
+required semantic-to-machine proof and protected verifier decision remains
+absent, so ordinary compiler-produced applications still cannot use this path
+to manufacture production execution authority.
 
 The low-level KFD clock-correlation observation is one currentness-bracketed
 GPU/CPU/system counter sample for calibration. It does not mark dispatch
 publication, start, or completion and is not a per-dispatch device timestamp.
-The production Worker V3 application verifier remains absent, and the current
-Rust device-language addition is a bounded volatile-load/store bridge rather
-than broad Rust support. The R11 executable model and Verus obligations cover
-abstract safety properties only; they make no Rust-to-Verus, compiler-to-ISA,
-firmware, or hardware refinement claim. The runtime therefore remains below
-this parity profile.
+The current Rust device-language addition remains a bounded
+volatile-load/store bridge rather than broad Rust support. The R12 executable
+model and Verus development cover bounded abstract multi-queue custody,
+generation, dependency, cancellation, drain, and currentness properties only;
+the model's larger configurable queue bound is not a runtime capability. These
+proofs are not a refinement proof of the Rust KFD implementation and make no
+Rust-to-Verus, compiler-to-ISA, firmware, or hardware refinement claim. The
+runtime therefore remains below this parity profile.
 
 ## Required Gates
 
