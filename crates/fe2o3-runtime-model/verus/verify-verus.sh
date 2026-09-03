@@ -16,6 +16,7 @@ r8_execution_contracts_proof="$script_dir/r8_execution_contracts_v1.rs"
 r9_native_evidence_proof="$script_dir/r9_native_evidence_v1.rs"
 r10_closed_execution_proof="$script_dir/r10_closed_execution_v1.rs"
 r11_runtime_semantics_proof="$script_dir/r11_runtime_semantics_v1.rs"
+r12_native_concurrency_proof="$script_dir/r12_native_concurrency_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -95,6 +96,19 @@ negative_r11_collective_partial_tail="$script_dir/negative/r11_runtime_semantics
 negative_r11_event_substitution="$script_dir/negative/r11_runtime_semantics_v1_event_substitution.rs"
 negative_r11_mapping_early_release="$script_dir/negative/r11_runtime_semantics_v1_mapping_early_release.rs"
 negative_r11_mapping_uncertain="$script_dir/negative/r11_runtime_semantics_v1_mapping_uncertain.rs"
+negative_r12_capability_count="$script_dir/negative/r12_native_concurrency_v1_capability_count.rs"
+negative_r12_cross_queue_terminal="$script_dir/negative/r12_native_concurrency_v1_cross_queue_terminal.rs"
+negative_r12_currentness_quarantine="$script_dir/negative/r12_native_concurrency_v1_currentness_quarantine.rs"
+negative_r12_dependent_release="$script_dir/negative/r12_native_concurrency_v1_dependent_release.rs"
+negative_r12_dependency_bypass="$script_dir/negative/r12_native_concurrency_v1_dependency_bypass.rs"
+negative_r12_indeterminate_drain="$script_dir/negative/r12_native_concurrency_v1_indeterminate_drain.rs"
+negative_r12_published_cancel="$script_dir/negative/r12_native_concurrency_v1_published_cancel.rs"
+negative_r12_published_release="$script_dir/negative/r12_native_concurrency_v1_published_release.rs"
+negative_r12_queue_recreation="$script_dir/negative/r12_native_concurrency_v1_queue_recreation.rs"
+negative_r12_queue_occurrence="$script_dir/negative/r12_native_concurrency_v1_queue_occurrence.rs"
+negative_r12_slot_recycle="$script_dir/negative/r12_native_concurrency_v1_slot_recycle.rs"
+negative_r12_slot_generation="$script_dir/negative/r12_native_concurrency_v1_slot_generation.rs"
+negative_r12_stale_drain="$script_dir/negative/r12_native_concurrency_v1_stale_drain.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -132,6 +146,7 @@ expected_r8_execution_contracts=$(read_pin "$pin_dir/R8_EXECUTION_CONTRACTS_SHA2
 expected_r9_native_evidence=$(read_pin "$pin_dir/R9_NATIVE_EVIDENCE_SHA256")
 expected_r10_closed_execution=$(read_pin "$pin_dir/R10_CLOSED_EXECUTION_SHA256")
 expected_r11_runtime_semantics=$(read_pin "$pin_dir/R11_RUNTIME_SEMANTICS_SHA256")
+expected_r12_native_concurrency=$(read_pin "$pin_dir/R12_NATIVE_CONCURRENCY_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -211,6 +226,19 @@ expected_negative_r11_collective_partial_tail=$(read_pin "$pin_dir/NEGATIVE_R11_
 expected_negative_r11_event_substitution=$(read_pin "$pin_dir/NEGATIVE_R11_EVENT_SUBSTITUTION_SHA256")
 expected_negative_r11_mapping_early_release=$(read_pin "$pin_dir/NEGATIVE_R11_MAPPING_EARLY_RELEASE_SHA256")
 expected_negative_r11_mapping_uncertain=$(read_pin "$pin_dir/NEGATIVE_R11_MAPPING_UNCERTAIN_SHA256")
+expected_negative_r12_capability_count=$(read_pin "$pin_dir/NEGATIVE_R12_CAPABILITY_COUNT_SHA256")
+expected_negative_r12_cross_queue_terminal=$(read_pin "$pin_dir/NEGATIVE_R12_CROSS_QUEUE_TERMINAL_SHA256")
+expected_negative_r12_currentness_quarantine=$(read_pin "$pin_dir/NEGATIVE_R12_CURRENTNESS_QUARANTINE_SHA256")
+expected_negative_r12_dependent_release=$(read_pin "$pin_dir/NEGATIVE_R12_DEPENDENT_RELEASE_SHA256")
+expected_negative_r12_dependency_bypass=$(read_pin "$pin_dir/NEGATIVE_R12_DEPENDENCY_BYPASS_SHA256")
+expected_negative_r12_indeterminate_drain=$(read_pin "$pin_dir/NEGATIVE_R12_INDETERMINATE_DRAIN_SHA256")
+expected_negative_r12_published_cancel=$(read_pin "$pin_dir/NEGATIVE_R12_PUBLISHED_CANCEL_SHA256")
+expected_negative_r12_published_release=$(read_pin "$pin_dir/NEGATIVE_R12_PUBLISHED_RELEASE_SHA256")
+expected_negative_r12_queue_recreation=$(read_pin "$pin_dir/NEGATIVE_R12_QUEUE_RECREATION_SHA256")
+expected_negative_r12_queue_occurrence=$(read_pin "$pin_dir/NEGATIVE_R12_QUEUE_OCCURRENCE_SHA256")
+expected_negative_r12_slot_recycle=$(read_pin "$pin_dir/NEGATIVE_R12_SLOT_RECYCLE_SHA256")
+expected_negative_r12_slot_generation=$(read_pin "$pin_dir/NEGATIVE_R12_SLOT_GENERATION_SHA256")
+expected_negative_r12_stale_drain=$(read_pin "$pin_dir/NEGATIVE_R12_STALE_DRAIN_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -251,6 +279,7 @@ check_sources() {
     check_digest "$expected_r9_native_evidence" "$r9_native_evidence_proof"
     check_digest "$expected_r10_closed_execution" "$r10_closed_execution_proof"
     check_digest "$expected_r11_runtime_semantics" "$r11_runtime_semantics_proof"
+    check_digest "$expected_r12_native_concurrency" "$r12_native_concurrency_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -330,6 +359,19 @@ check_sources() {
     check_digest "$expected_negative_r11_event_substitution" "$negative_r11_event_substitution"
     check_digest "$expected_negative_r11_mapping_early_release" "$negative_r11_mapping_early_release"
     check_digest "$expected_negative_r11_mapping_uncertain" "$negative_r11_mapping_uncertain"
+    check_digest "$expected_negative_r12_capability_count" "$negative_r12_capability_count"
+    check_digest "$expected_negative_r12_cross_queue_terminal" "$negative_r12_cross_queue_terminal"
+    check_digest "$expected_negative_r12_currentness_quarantine" "$negative_r12_currentness_quarantine"
+    check_digest "$expected_negative_r12_dependent_release" "$negative_r12_dependent_release"
+    check_digest "$expected_negative_r12_dependency_bypass" "$negative_r12_dependency_bypass"
+    check_digest "$expected_negative_r12_indeterminate_drain" "$negative_r12_indeterminate_drain"
+    check_digest "$expected_negative_r12_published_cancel" "$negative_r12_published_cancel"
+    check_digest "$expected_negative_r12_published_release" "$negative_r12_published_release"
+    check_digest "$expected_negative_r12_queue_recreation" "$negative_r12_queue_recreation"
+    check_digest "$expected_negative_r12_queue_occurrence" "$negative_r12_queue_occurrence"
+    check_digest "$expected_negative_r12_slot_recycle" "$negative_r12_slot_recycle"
+    check_digest "$expected_negative_r12_slot_generation" "$negative_r12_slot_generation"
+    check_digest "$expected_negative_r12_stale_drain" "$negative_r12_stale_drain"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -351,6 +393,7 @@ check_sources
     "$r9_native_evidence_proof" \
     "$r10_closed_execution_proof" \
     "$r11_runtime_semantics_proof" \
+    "$r12_native_concurrency_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -426,7 +469,20 @@ check_sources
     "$negative_r11_collective_partial_tail" \
     "$negative_r11_event_substitution" \
     "$negative_r11_mapping_early_release" \
-    "$negative_r11_mapping_uncertain"
+    "$negative_r11_mapping_uncertain" \
+    "$negative_r12_capability_count" \
+    "$negative_r12_cross_queue_terminal" \
+    "$negative_r12_currentness_quarantine" \
+    "$negative_r12_dependent_release" \
+    "$negative_r12_dependency_bypass" \
+    "$negative_r12_indeterminate_drain" \
+    "$negative_r12_published_cancel" \
+    "$negative_r12_published_release" \
+    "$negative_r12_queue_recreation" \
+    "$negative_r12_queue_occurrence" \
+    "$negative_r12_slot_recycle" \
+    "$negative_r12_slot_generation" \
+    "$negative_r12_stale_drain"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -538,6 +594,7 @@ check_positive "$r8_execution_contracts_proof" 'verification results:: 10 verifi
 check_positive "$r9_native_evidence_proof" 'verification results:: 14 verified, 0 errors' r9-native-evidence
 check_positive "$r10_closed_execution_proof" 'verification results:: 20 verified, 0 errors' r10-closed-execution
 check_positive "$r11_runtime_semantics_proof" 'verification results:: 18 verified, 0 errors' r11-runtime-semantics
+check_positive "$r12_native_concurrency_proof" 'verification results:: 23 verified, 0 errors' r12-native-concurrency
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -617,13 +674,26 @@ check_negative "$negative_r11_collective_partial_tail" mutated_partial_tail_coll
 check_negative "$negative_r11_event_substitution" mutated_event_query_retains_source_status_v1 r11-event-substitution
 check_negative "$negative_r11_mapping_early_release" mutated_batch_retention_blocks_mapping_release_v1 r11-mapping-early-release
 check_negative "$negative_r11_mapping_uncertain" mutated_indeterminate_batch_blocks_mapping_release_v1 r11-mapping-uncertain
+check_negative "$negative_r12_capability_count" mutated_single_queue_capability_is_rejected_v1 r12-capability-count
+check_negative "$negative_r12_cross_queue_terminal" mutated_cross_queue_terminal_is_rejected_v1 r12-cross-queue-terminal
+check_negative "$negative_r12_currentness_quarantine" mutated_currentness_loss_quarantines_published_v1 r12-currentness-quarantine
+check_negative "$negative_r12_dependent_release" mutated_reserved_dependent_blocks_terminal_release_v1 r12-dependent-release
+check_negative "$negative_r12_dependency_bypass" mutated_unready_dependency_blocks_publication_v1 r12-dependency-bypass
+check_negative "$negative_r12_indeterminate_drain" mutated_indeterminate_state_blocks_drain_v1 r12-indeterminate-drain
+check_negative "$negative_r12_published_cancel" mutated_published_cancellation_retains_custody_v1 r12-published-cancel
+check_negative "$negative_r12_published_release" mutated_published_release_retains_custody_v1 r12-published-release
+check_negative "$negative_r12_queue_recreation" mutated_drained_queue_recreation_advances_occurrence_v1 r12-queue-recreation
+check_negative "$negative_r12_queue_occurrence" mutated_queue_occurrence_substitution_is_rejected_v1 r12-queue-occurrence
+check_negative "$negative_r12_slot_recycle" mutated_cancel_advances_live_slot_generation_v1 r12-slot-recycle
+check_negative "$negative_r12_slot_generation" mutated_slot_generation_substitution_is_rejected_v1 r12-slot-generation
+check_negative "$negative_r12_stale_drain" mutated_stale_queue_occurrence_cannot_be_drained_v1 r12-stale-drain
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 mutations=79'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 mutations=92'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

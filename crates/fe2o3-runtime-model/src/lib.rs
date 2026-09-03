@@ -30,6 +30,7 @@ mod model;
 mod multi_device;
 mod queue_lifecycle;
 mod r11_runtime_semantics;
+mod r12_native_concurrency;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -47,6 +48,7 @@ pub use multi_device::*;
 pub use queue_lifecycle::*;
 pub use r9_native_evidence::*;
 pub use r11_runtime_semantics::*;
+pub use r12_native_concurrency::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -71,6 +73,8 @@ mod multi_device_tests;
 mod queue_lifecycle_tests;
 #[cfg(test)]
 mod r11_runtime_semantics_tests;
+#[cfg(test)]
+mod r12_native_concurrency_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

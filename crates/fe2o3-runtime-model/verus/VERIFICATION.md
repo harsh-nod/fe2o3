@@ -1,10 +1,11 @@
 # Runtime model verification
 
 This directory contains the issue #137 Verus specifications and the additive R7
-asynchronous-resource, R8 execution-contract, R9 native-evidence, and R10 closed
-execution-composition and R11 runtime-semantics models. The authenticated runner
-proves 119 obligations and rejects 79 expected-negative mutations over finite
-abstract values and traces. The materialization input and image sequences are
+asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
+execution-composition, R11 runtime-semantics, and R12 native-concurrency models.
+The authenticated runner proves 142 obligations and rejects 92
+expected-negative mutations over finite abstract values and traces. The
+materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
 lifecycle-history sequence lengths are not bounded by these proofs.
 
@@ -391,6 +392,53 @@ device execution.
 | Native atomic, collective, callback, event, and persistent mapping behavior | **Not established** | Concrete adapters must authenticate capability and completion observations and retain native custody. |
 | Compiler, ISA, hardware progress, and performance | **Not established** | No R11 model value is execution authority or hardware evidence. |
 
+`r12_native_concurrency_v1.rs` proves twenty-three abstract multi-queue custody
+obligations:
+
+1. only an exact, stable device capability supporting at least two requested
+   compute queues admits the requested queue and slot counts;
+2. single-queue, unstable, and over-capacity requests are rejected;
+3. queue occurrences and slot generations must match exactly;
+4. an unready dependency prevents publication, while every dependency identity
+   must resolve in the modeled submission sequence to a successful terminal
+   producer before publication;
+5. a ready consumer publishes without releasing slot or resource custody, and
+   a failed or otherwise non-successful producer leaves it reserved;
+6. an exact terminal observation retains custody until explicit release;
+7. an event for another slot or queue cannot complete a submission, while
+   terminal events for distinct slots may be observed out of order;
+8. cancellation before publication relinquishes custody, advances the live
+   slot generation exactly once, and permits drain;
+9. cancellation or release after publication does not relinquish custody;
+10. a reserved dependent found by scanning the modeled submission sequence
+    blocks producer release; otherwise terminal release relinquishes custody,
+    advances the live slot generation, and permits drain;
+11. currentness loss cancels reserved work with the same generation advance but
+    converts published work to resource-retaining quarantine;
+12. indeterminate custody cannot be released or drained;
+13. drain is bound to the exact queue occurrence; and
+14. recreating a drained current queue preserves its numeric queue ID while
+    advancing its occurrence exactly once.
+
+The numbering groups related theorems; the verifier reports twenty-three proof
+obligations. The executable `r12_native_concurrency.rs` model is bounded to 16
+queue occurrences, 64 slots per queue, 4,096 submissions, 256 dependencies per
+submission, 64 resources per submission, and 8,192 registered resources. Its
+Rust tests cover exact capability binding, out-of-order completion, cross-queue
+and stale-generation rejection, dependency gating, failed dependencies,
+prepublication cancellation, post-publication retention, currentness-loss
+quarantine, occurrence-bound drain, and drained-queue occurrence advance.
+
+## R12 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract multi-queue admission, dependency, terminal-event, cancellation, release, currentness, drain, and queue-recreation relations | **Proved** | Twenty-three theorems in `r12_native_concurrency_v1.rs`; finite mathematical state only. Dependency readiness and reserved-dependent retention are derived by scanning abstract submission sequences and matching submission identities. |
+| Executable bounded R12 model | **Checked** | Rust unit tests exercise an independently implemented finite state machine with exact occurrence and generation identities. |
+| Executable Rust to Verus correspondence | **Not established** | No theorem connects `src/r12_native_concurrency.rs` to the Verus structures or transitions. |
+| Native KFD multi-queue creation, scheduling, completion, reset, and quiescence | **Not established** | A native adapter must authenticate capabilities, queue occurrences, resources, terminal observations, and currentness. Model values grant no native authority. |
+| HSA/HIP parity, progress, fairness, overlap, and performance | **Not established** | These are implementation and matched-hardware measurement obligations, not consequences of the R12 model. |
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -446,7 +494,13 @@ inclusive-scan prefix off by one lane; R11 callback redischarge, event-status
 substitution, omitted atomic execution capability, admission of a release
 failure order for compare-exchange, collective membership mismatch, admission
 of a partial tail workgroup, mapping release during a live batch, and mapping
-release after indeterminate completion. The launcher
+release after indeterminate completion; R12 admission of a single compute
+queue, queue-occurrence substitution, slot-generation substitution, dependency
+bypass, cross-queue terminal observation, published cancellation or release
+dropping custody, currentness loss dropping rather than quarantining published
+custody, drain of indeterminate work, terminal release despite a reserved
+dependent, slot recycle without generation advance, stale-occurrence drain, and
+queue recreation without occurrence advance. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -457,7 +511,8 @@ pure canonical-record mapping; it is not a proof that the executable Rust
 implements that relation, nor that the adapter observed truthful kernel data.
 The lifecycle, memory, and queue files prove abstract transition relations, not
 refinement of `src/model.rs`, `src/device_identity.rs`,
-`src/memory_lifecycle.rs`, or `src/queue_lifecycle.rs`. All
+`src/memory_lifecycle.rs`, `src/queue_lifecycle.rs`, or
+`src/r12_native_concurrency.rs`. All
 receipts remain model-only and are not production device authority. A later
 sealed adapter refinement must
 authenticate the KFD topology, DRM render, partition, schema, and process XNACK
