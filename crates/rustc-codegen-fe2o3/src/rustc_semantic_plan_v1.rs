@@ -52,6 +52,36 @@ const PREFLIGHT_PLAN_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-pla
 #[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V3: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v3";
 const PREFLIGHT_PLAN_DOMAIN_V4: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v4";
+const PREFLIGHT_PLAN_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5";
+const PREFLIGHT_TYPES_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/types";
+const PREFLIGHT_SOURCE_FILES_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/source-files";
+const PREFLIGHT_FUNCTIONS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/functions";
+const PREFLIGHT_FUNCTION_ABIS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/function-abis";
+const PREFLIGHT_TERMINALS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/terminals";
+const PREFLIGHT_BODY_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/body";
+const PREFLIGHT_ROOTS_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/roots";
+const PREFLIGHT_EDGES_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/edges";
+const PREFLIGHT_DIRECT_CALLS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/direct-calls";
+const PREFLIGHT_TERMINAL_EXPANSIONS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/terminal-expansions";
+const PREFLIGHT_NORMALIZED_INTRINSICS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/normalized-intrinsics";
+const PREFLIGHT_SECTION_TYPES_V5: u8 = 0;
+const PREFLIGHT_SECTION_SOURCE_FILES_V5: u8 = 1;
+const PREFLIGHT_SECTION_FUNCTIONS_V5: u8 = 2;
+const PREFLIGHT_SECTION_FUNCTION_ABIS_V5: u8 = 3;
+const PREFLIGHT_SECTION_TERMINALS_V5: u8 = 4;
+const PREFLIGHT_SECTION_BODIES_V5: u8 = 5;
+const PREFLIGHT_SECTION_ROOTS_V5: u8 = 6;
+const PREFLIGHT_SECTION_EDGES_V5: u8 = 7;
+const PREFLIGHT_SECTION_DIRECT_CALLS_V5: u8 = 8;
+const PREFLIGHT_SECTION_TERMINAL_EXPANSIONS_V5: u8 = 9;
+const PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5: u8 = 10;
 const COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/compiler-intrinsic-definition/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
@@ -466,6 +496,11 @@ pub(crate) enum ProductionSemanticPreflightErrorV1 {
     AccountingDomain {
         resource: SemanticMirResourceV1,
     },
+    CommitmentBoundExceeded {
+        scope: &'static str,
+        actual: u64,
+        maximum: u64,
+    },
     TypeIdentityCollision,
     IdentityTableMismatch,
     TypeLayout {
@@ -499,6 +534,14 @@ impl fmt::Display for ProductionSemanticPreflightErrorV1 {
             Self::AccountingDomain { resource } => write!(
                 formatter,
                 "raw rustc MIR preflight attempted to charge non-raw resource {resource:?}",
+            ),
+            Self::CommitmentBoundExceeded {
+                scope,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "raw rustc MIR preflight {scope} commitment uses {actual} canonical bytes; maximum is {maximum}",
             ),
             Self::TypeIdentityCollision => formatter.write_str(
                 "raw rustc MIR preflight derived one type identity for distinct normalized rustc types",
@@ -1001,7 +1044,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         &normalized_intrinsics,
         counts,
         tcx,
-    );
+    )?;
     Ok(ProductionSemanticPreflightPlanV1 {
         types,
         functions,
@@ -2853,6 +2896,233 @@ fn bounded_diagnostic_component_v1(value: &str) -> String {
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreflightChildCommitmentV5 {
+    field_count: u64,
+    payload_framed_bytes: u64,
+    sha256: [u8; 32],
+}
+
+struct PreflightChildCommitmentBuilderV5 {
+    digest: SemanticIdentityDigestV1,
+    scope: &'static str,
+    field_count: u64,
+    payload_framed_bytes: u64,
+}
+
+impl PreflightChildCommitmentBuilderV5 {
+    fn section(domain: &'static [u8], section: u8, scope: &'static str) -> Self {
+        let mut digest = SemanticIdentityDigestV1::new(domain);
+        digest.field(&[section]);
+        Self {
+            digest,
+            scope,
+            field_count: 0,
+            payload_framed_bytes: 0,
+        }
+    }
+
+    fn body(ordinal: u64, function: SemanticFunctionIdV1) -> Self {
+        let mut digest = SemanticIdentityDigestV1::new(PREFLIGHT_BODY_DOMAIN_V5);
+        digest.field(&[PREFLIGHT_SECTION_BODIES_V5]);
+        digest.field(&ordinal.to_le_bytes());
+        digest.field(&function.index().to_le_bytes());
+        Self {
+            digest,
+            scope: "body child",
+            field_count: 0,
+            payload_framed_bytes: 0,
+        }
+    }
+
+    fn field(&mut self, field: &[u8]) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        let field_len = u64::try_from(field.len()).map_err(|_| {
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+            }
+        })?;
+        let framed = 8_u64.checked_add(field_len).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+            },
+        )?;
+        let next_bytes = self.payload_framed_bytes.checked_add(framed).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+            },
+        )?;
+        if next_bytes > fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1 {
+            return Err(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: self.scope,
+                    actual: next_bytes,
+                    maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+                },
+            );
+        }
+        self.field_count = self.field_count.checked_add(1).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+            },
+        )?;
+        self.payload_framed_bytes = next_bytes;
+        self.digest.field(field);
+        Ok(())
+    }
+
+    fn finish(self) -> PreflightChildCommitmentV5 {
+        PreflightChildCommitmentV5 {
+            field_count: self.field_count,
+            payload_framed_bytes: self.payload_framed_bytes,
+            sha256: self.digest.finish(),
+        }
+    }
+}
+
+struct BoundedPreflightTranscriptV5 {
+    digest: SemanticIdentityDigestV1,
+    framed_bytes: u64,
+}
+
+impl BoundedPreflightTranscriptV5 {
+    fn new() -> Self {
+        Self {
+            digest: SemanticIdentityDigestV1::new_with_canonical_transcript(
+                PREFLIGHT_PLAN_DOMAIN_V5,
+            ),
+            framed_bytes: 8 + PREFLIGHT_PLAN_DOMAIN_V5.len() as u64,
+        }
+    }
+
+    fn field(&mut self, field: &[u8]) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        let maximum = fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 as u64;
+        let field_len = u64::try_from(field.len()).map_err(|_| {
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: "V5 parent transcript",
+                actual: u64::MAX,
+                maximum,
+            }
+        })?;
+        let actual = self
+            .framed_bytes
+            .checked_add(8)
+            .and_then(|bytes| bytes.checked_add(field_len))
+            .ok_or(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "V5 parent transcript",
+                    actual: u64::MAX,
+                    maximum,
+                },
+            )?;
+        if actual > maximum {
+            return Err(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "V5 parent transcript",
+                    actual,
+                    maximum,
+                },
+            );
+        }
+        self.framed_bytes = actual;
+        self.digest.field(field);
+        Ok(())
+    }
+
+    fn section(
+        &mut self,
+        section: u8,
+        item_count: usize,
+        commitment: PreflightChildCommitmentV5,
+    ) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        self.field(&[section])?;
+        self.field(&usize_to_u64_v5(item_count).to_le_bytes())?;
+        self.field(&commitment.field_count.to_le_bytes())?;
+        self.field(&commitment.payload_framed_bytes.to_le_bytes())?;
+        self.field(&commitment.sha256)
+    }
+
+    fn body(
+        &mut self,
+        ordinal: u64,
+        body: &RetainedSemanticBodyProducerV1,
+        commitment: PreflightChildCommitmentV5,
+    ) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        let statements = body
+            .blocks
+            .iter()
+            .try_fold(0_usize, |count, block| {
+                count.checked_add(block.statements.len())
+            })
+            .ok_or(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "body child counts",
+                    actual: u64::MAX,
+                    maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+                },
+            )?;
+        let block_source_producers = body.blocks.len().checked_mul(2).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: "body child counts",
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+            },
+        )?;
+        let source_producers = 1_usize
+            .checked_add(body.locals.len())
+            .and_then(|count| count.checked_add(block_source_producers))
+            .and_then(|count| count.checked_add(statements))
+            .ok_or(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "body child counts",
+                    actual: u64::MAX,
+                    maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+                },
+            )?;
+        self.field(&[PREFLIGHT_SECTION_BODIES_V5])?;
+        self.field(&ordinal.to_le_bytes())?;
+        self.field(&body.function.index().to_le_bytes())?;
+        for count in [
+            body.locals.len(),
+            body.raw_to_semantic_locals.len(),
+            body.blocks.len(),
+            body.raw_to_semantic_blocks.len(),
+            statements,
+            source_producers,
+        ] {
+            self.field(&usize_to_u64_v5(count).to_le_bytes())?;
+        }
+        self.field(&commitment.field_count.to_le_bytes())?;
+        self.field(&commitment.payload_framed_bytes.to_le_bytes())?;
+        self.field(&commitment.sha256)
+    }
+
+    fn finish(self) -> Result<([u8; 32], Box<[u8]>), ProductionSemanticPreflightErrorV1> {
+        let (sha256, transcript) = self.digest.finish_with_canonical_transcript();
+        if transcript.len() as u64 != self.framed_bytes {
+            return Err(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "V5 parent transcript accounting",
+                    actual: transcript.len() as u64,
+                    maximum: self.framed_bytes,
+                },
+            );
+        }
+        Ok((sha256, transcript))
+    }
+}
+
+fn usize_to_u64_v5(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn preflight_plan_identity_and_transcript_v1<'tcx>(
     target: SemanticTargetDataLayoutV1,
@@ -2870,11 +3140,13 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     normalized_intrinsics: &[NormalizedRustcIntrinsicRecipeV1<'tcx>],
     counts: RawMirPreflightCountsV1,
     tcx: TyCtxt<'tcx>,
-) -> ([u8; 32], Box<[u8]>) {
-    let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V4);
-    digest.field(target.identity().as_bytes());
-    digest.field(&identity_inventory_sha256);
+) -> Result<([u8; 32], Box<[u8]>), ProductionSemanticPreflightErrorV1> {
+    let mut digest = BoundedPreflightTranscriptV5::new();
+    // V5 is the parent domain. This separate field binds the exact flat-stream
+    // lineage whose payload fields are committed by the V5 children below.
+    digest.field(PREFLIGHT_PLAN_DOMAIN_V4)?;
+    digest.field(target.identity().as_bytes())?;
+    digest.field(&identity_inventory_sha256)?;
     for cardinality in [
         types.len(),
         source_files.len(),
@@ -2889,130 +3161,229 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         terminal_expansions.len(),
         normalized_intrinsics.len(),
     ] {
-        digest.field(&u64::try_from(cardinality).unwrap_or(u64::MAX).to_le_bytes());
+        digest.field(&usize_to_u64_v5(cardinality).to_le_bytes())?;
     }
     for count in counts.digest_fields() {
-        digest.field(&count.to_le_bytes());
+        digest.field(&count.to_le_bytes())?;
     }
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_TYPES_DOMAIN_V5,
+        PREFLIGHT_SECTION_TYPES_V5,
+        "types child",
+    );
     for ty in types {
-        digest.field(ty.identity.as_bytes());
-        digest.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes());
-        digest.field(&ty.rustc_layout_sha256);
-        digest.field(&rustc_type_layout_sha256_v1(tcx, ty.layout));
-        digest.field(ty.semantic_layout_identity.as_bytes());
+        section.field(ty.identity.as_bytes())?;
+        section.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes())?;
+        section.field(&ty.rustc_layout_sha256)?;
+        section.field(&rustc_type_layout_sha256_v1(tcx, ty.layout))?;
+        section.field(ty.semantic_layout_identity.as_bytes())?;
     }
+    digest.section(PREFLIGHT_SECTION_TYPES_V5, types.len(), section.finish())?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_SOURCE_FILES_DOMAIN_V5,
+        PREFLIGHT_SECTION_SOURCE_FILES_V5,
+        "source-files child",
+    );
     for source_file in source_files {
-        digest.field(source_file.as_bytes());
+        section.field(source_file.as_bytes())?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_SOURCE_FILES_V5,
+        source_files.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_FUNCTIONS_DOMAIN_V5,
+        PREFLIGHT_SECTION_FUNCTIONS_V5,
+        "functions child",
+    );
     for function in functions {
-        digest.field(function.identities.function().as_bytes());
-        digest.field(&rustc_mir_body_sha256_v1(tcx, function.instance));
-        digest.field(&[function_role_tag_v1(function.role)]);
+        section.field(function.identities.function().as_bytes())?;
+        section.field(&rustc_mir_body_sha256_v1(tcx, function.instance))?;
+        section.field(&[function_role_tag_v1(function.role)])?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_FUNCTIONS_V5,
+        functions.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_FUNCTION_ABIS_DOMAIN_V5,
+        PREFLIGHT_SECTION_FUNCTION_ABIS_V5,
+        "function-ABIs child",
+    );
     for abi in function_abis {
-        digest.field(&abi.function.index().to_le_bytes());
-        digest.field(abi.identity.as_bytes());
-        digest.field(abi.layout_identity.as_bytes());
-        digest.field(&abi.rustc_source_signature_sha256);
-        digest.field(&abi.rustc_fn_abi_sha256);
-        digest.field(
-            &u64::try_from(abi.source_inputs.len())
-                .unwrap_or(u64::MAX)
-                .to_le_bytes(),
-        );
+        section.field(&abi.function.index().to_le_bytes())?;
+        section.field(abi.identity.as_bytes())?;
+        section.field(abi.layout_identity.as_bytes())?;
+        section.field(&abi.rustc_source_signature_sha256)?;
+        section.field(&abi.rustc_fn_abi_sha256)?;
+        section.field(&usize_to_u64_v5(abi.source_inputs.len()).to_le_bytes())?;
         for input in &abi.source_inputs {
-            digest.field(rustc_type_identity_v1(tcx, *input).as_bytes());
+            section.field(rustc_type_identity_v1(tcx, *input).as_bytes())?;
         }
-        digest.field(rustc_type_identity_v1(tcx, abi.source_output).as_bytes());
+        section.field(rustc_type_identity_v1(tcx, abi.source_output).as_bytes())?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_FUNCTION_ABIS_V5,
+        function_abis.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_TERMINALS_DOMAIN_V5,
+        PREFLIGHT_SECTION_TERMINALS_V5,
+        "terminals child",
+    );
     for terminal in terminals {
-        digest.field(terminal.identities.function().as_bytes());
-        digest.field(terminal.identities.item_definition().as_bytes());
-        digest.field(terminal.identities.monomorphization().as_bytes());
-        digest.field(terminal.identities.generic_type_arguments().as_bytes());
-        digest.field(terminal.identities.const_generic_arguments().as_bytes());
-        digest.field(&[terminal_expansion_tag_for_schema_v1(
+        section.field(terminal.identities.function().as_bytes())?;
+        section.field(terminal.identities.item_definition().as_bytes())?;
+        section.field(terminal.identities.monomorphization().as_bytes())?;
+        section.field(terminal.identities.generic_type_arguments().as_bytes())?;
+        section.field(terminal.identities.const_generic_arguments().as_bytes())?;
+        section.field(&[terminal_expansion_tag_for_schema_v1(
             terminal.expansion,
             TerminalIdentitySchemaV1::CombinedV4,
-        )]);
-        digest.field(&terminal.abi.rustc_source_signature_sha256);
-        digest.field(&terminal.abi.rustc_fn_abi_sha256);
-        digest_source_producer_v1(&mut digest, terminal.source);
+        )])?;
+        section.field(&terminal.abi.rustc_source_signature_sha256)?;
+        section.field(&terminal.abi.rustc_fn_abi_sha256)?;
+        digest_source_producer_v1(&mut section, terminal.source)?;
     }
-    for body in bodies {
-        digest.field(&body.function.index().to_le_bytes());
-        digest_source_producer_v1(&mut digest, body.source);
+    digest.section(
+        PREFLIGHT_SECTION_TERMINALS_V5,
+        terminals.len(),
+        section.finish(),
+    )?;
+
+    digest.field(&[PREFLIGHT_SECTION_BODIES_V5])?;
+    digest.field(&usize_to_u64_v5(bodies.len()).to_le_bytes())?;
+    for (body_ordinal, body) in bodies.iter().enumerate() {
+        let body_ordinal = usize_to_u64_v5(body_ordinal);
+        let mut child = PreflightChildCommitmentBuilderV5::body(body_ordinal, body.function);
+        child.field(&body.function.index().to_le_bytes())?;
+        digest_source_producer_v1(&mut child, body.source)?;
         for local in &body.locals {
-            digest.field(local.identity.as_bytes());
-            digest.field(&local.rustc_local.to_le_bytes());
-            digest.field(&local.ty.index().to_le_bytes());
-            digest_source_producer_v1(&mut digest, local.source);
+            child.field(local.identity.as_bytes())?;
+            child.field(&local.rustc_local.to_le_bytes())?;
+            child.field(&local.ty.index().to_le_bytes())?;
+            digest_source_producer_v1(&mut child, local.source)?;
         }
         for local in &body.raw_to_semantic_locals {
-            digest.field(&local.index().to_le_bytes());
+            child.field(&local.index().to_le_bytes())?;
         }
-        digest.field(&body.entry.index().to_le_bytes());
+        child.field(&body.entry.index().to_le_bytes())?;
         for block in &body.blocks {
-            digest.field(block.identity.as_bytes());
-            digest.field(&block.rustc_block.to_le_bytes());
-            digest_source_producer_v1(&mut digest, block.source);
+            child.field(block.identity.as_bytes())?;
+            child.field(&block.rustc_block.to_le_bytes())?;
+            digest_source_producer_v1(&mut child, block.source)?;
             for statement in &block.statements {
-                digest_source_producer_v1(&mut digest, *statement);
+                digest_source_producer_v1(&mut child, *statement)?;
             }
-            digest_source_producer_v1(&mut digest, block.terminator);
+            digest_source_producer_v1(&mut child, block.terminator)?;
         }
         for block in &body.raw_to_semantic_blocks {
-            digest.field(&block.index().to_le_bytes());
+            child.field(&block.index().to_le_bytes())?;
         }
+        digest.body(body_ordinal, body, child.finish())?;
     }
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_ROOTS_DOMAIN_V5,
+        PREFLIGHT_SECTION_ROOTS_V5,
+        "roots child",
+    );
     for root in roots {
-        digest.field(&root.index().to_le_bytes());
+        section.field(&root.index().to_le_bytes())?;
     }
+    digest.section(PREFLIGHT_SECTION_ROOTS_V5, roots.len(), section.finish())?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_EDGES_DOMAIN_V5,
+        PREFLIGHT_SECTION_EDGES_V5,
+        "edges child",
+    );
     for edge in edges {
-        digest.field(&edge.caller.index().to_le_bytes());
-        digest.field(&edge.callee.index().to_le_bytes());
+        section.field(&edge.caller.index().to_le_bytes())?;
+        section.field(&edge.callee.index().to_le_bytes())?;
     }
+    digest.section(PREFLIGHT_SECTION_EDGES_V5, edges.len(), section.finish())?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_DIRECT_CALLS_DOMAIN_V5,
+        PREFLIGHT_SECTION_DIRECT_CALLS_V5,
+        "direct-calls child",
+    );
     for call in direct_calls {
-        digest.field(&call.caller.index().to_le_bytes());
-        digest.field(&call.block.to_le_bytes());
-        digest.field(&call.callee.index().to_le_bytes());
+        section.field(&call.caller.index().to_le_bytes())?;
+        section.field(&call.block.to_le_bytes())?;
+        section.field(&call.callee.index().to_le_bytes())?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_DIRECT_CALLS_V5,
+        direct_calls.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_TERMINAL_EXPANSIONS_DOMAIN_V5,
+        PREFLIGHT_SECTION_TERMINAL_EXPANSIONS_V5,
+        "terminal-expansions child",
+    );
     for recipe in terminal_expansions {
-        digest.field(&recipe.caller.index().to_le_bytes());
-        digest.field(&recipe.block.to_le_bytes());
-        digest.field(&[terminal_expansion_tag_for_schema_v1(
+        section.field(&recipe.caller.index().to_le_bytes())?;
+        section.field(&recipe.block.to_le_bytes())?;
+        section.field(&[terminal_expansion_tag_for_schema_v1(
             recipe.expansion,
             TerminalIdentitySchemaV1::CombinedV4,
-        )]);
-        digest.field(&recipe.arguments.to_le_bytes());
-        digest.field(recipe.identities.function().as_bytes());
-        digest.field(recipe.identities.item_definition().as_bytes());
-        digest.field(recipe.identities.monomorphization().as_bytes());
-        digest.field(recipe.identities.generic_type_arguments().as_bytes());
-        digest.field(recipe.identities.const_generic_arguments().as_bytes());
-        digest.field(&recipe.terminal.to_le_bytes());
-        digest.field(&terminal_definition_sha256_v1(tcx, recipe));
+        )])?;
+        section.field(&recipe.arguments.to_le_bytes())?;
+        section.field(recipe.identities.function().as_bytes())?;
+        section.field(recipe.identities.item_definition().as_bytes())?;
+        section.field(recipe.identities.monomorphization().as_bytes())?;
+        section.field(recipe.identities.generic_type_arguments().as_bytes())?;
+        section.field(recipe.identities.const_generic_arguments().as_bytes())?;
+        section.field(&recipe.terminal.to_le_bytes())?;
+        section.field(&terminal_definition_sha256_v1(tcx, recipe))?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_TERMINAL_EXPANSIONS_V5,
+        terminal_expansions.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_NORMALIZED_INTRINSICS_DOMAIN_V5,
+        PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5,
+        "normalized-intrinsics child",
+    );
     for recipe in normalized_intrinsics {
-        digest.field(&recipe.caller.index().to_le_bytes());
-        digest.field(&recipe.block.to_le_bytes());
-        digest.field(&[recipe.operation.operation_tag()]);
+        section.field(&recipe.caller.index().to_le_bytes())?;
+        section.field(&recipe.block.to_le_bytes())?;
+        section.field(&[recipe.operation.operation_tag()])?;
         let (operation, access) = recipe
             .operation
             .atomic_rmw()
             .expect("preflight retains only normalized atomic intrinsics");
-        digest.field(&[atomic_rmw_operation_tag_v1(operation)]);
-        digest.field(&[atomic_ordering_tag_v1(access.ordering())]);
-        digest.field(&[atomic_scope_tag_v1(access.scope())]);
-        digest.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes());
-        digest.field(recipe.identities.function().as_bytes());
-        digest.field(recipe.identities.item_definition().as_bytes());
-        digest.field(recipe.identities.monomorphization().as_bytes());
-        digest.field(recipe.identities.generic_type_arguments().as_bytes());
-        digest.field(recipe.identities.const_generic_arguments().as_bytes());
-        digest.field(&normalized_intrinsic_definition_sha256_v1(tcx, recipe));
+        section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
+        section.field(&[atomic_ordering_tag_v1(access.ordering())])?;
+        section.field(&[atomic_scope_tag_v1(access.scope())])?;
+        section.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes())?;
+        section.field(recipe.identities.function().as_bytes())?;
+        section.field(recipe.identities.item_definition().as_bytes())?;
+        section.field(recipe.identities.monomorphization().as_bytes())?;
+        section.field(recipe.identities.generic_type_arguments().as_bytes())?;
+        section.field(recipe.identities.const_generic_arguments().as_bytes())?;
+        section.field(&normalized_intrinsic_definition_sha256_v1(tcx, recipe))?;
     }
-    digest.finish_with_canonical_transcript()
+    digest.section(
+        PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5,
+        normalized_intrinsics.len(),
+        section.finish(),
+    )?;
+    digest.finish()
 }
 
 const fn atomic_rmw_operation_tag_v1(
@@ -3083,33 +3454,32 @@ fn source_provenance_producer_count_v1(bodies: &[RetainedSemanticBodyProducerV1]
 }
 
 fn digest_source_producer_v1(
-    digest: &mut SemanticIdentityDigestV1,
+    digest: &mut PreflightChildCommitmentBuilderV5,
     source: RetainedSemanticSourceProducerV1,
-) {
-    digest.field(&source.expansion_chain_sha256);
-    digest_source_origin_v1(digest, source.provenance.expansion());
-    digest_source_origin_v1(digest, source.provenance.call_site());
+) -> Result<(), ProductionSemanticPreflightErrorV1> {
+    digest.field(&source.expansion_chain_sha256)?;
+    digest_source_origin_v1(digest, source.provenance.expansion())?;
+    digest_source_origin_v1(digest, source.provenance.call_site())
 }
 
 fn digest_source_origin_v1(
-    digest: &mut SemanticIdentityDigestV1,
+    digest: &mut PreflightChildCommitmentBuilderV5,
     origin: Option<SemanticSourceOriginV1>,
-) {
+) -> Result<(), ProductionSemanticPreflightErrorV1> {
     let Some(origin) = origin else {
-        digest.field(&[0]);
-        return;
+        return digest.field(&[0]);
     };
-    digest.field(&[1]);
-    digest.field(origin.file().as_bytes());
+    digest.field(&[1])?;
+    digest.field(origin.file().as_bytes())?;
     let (byte_start, byte_end) = origin.byte_range();
-    digest.field(&byte_start.to_le_bytes());
-    digest.field(&byte_end.to_le_bytes());
+    digest.field(&byte_start.to_le_bytes())?;
+    digest.field(&byte_end.to_le_bytes())?;
     let (line_start, column_start) = origin.start_coordinate();
-    digest.field(&line_start.to_le_bytes());
-    digest.field(&column_start.to_le_bytes());
+    digest.field(&line_start.to_le_bytes())?;
+    digest.field(&column_start.to_le_bytes())?;
     let (line_end, column_end) = origin.end_coordinate();
-    digest.field(&line_end.to_le_bytes());
-    digest.field(&column_end.to_le_bytes());
+    digest.field(&line_end.to_le_bytes())?;
+    digest.field(&column_end.to_le_bytes())
 }
 
 const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {
@@ -3287,7 +3657,212 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     use std::cell::Cell;
+
+    #[derive(Clone, Copy)]
+    struct BodyCommitmentFixtureV5 {
+        source_span: [u8; 8],
+        local: [u8; 8],
+        local_mapping: [u8; 8],
+        block: [u8; 8],
+        statement: [u8; 8],
+        terminator: [u8; 8],
+    }
+
+    fn body_commitment_fixture_v5(
+        ordinal: u64,
+        function: u32,
+        fixture: BodyCommitmentFixtureV5,
+    ) -> PreflightChildCommitmentV5 {
+        let function = SemanticFunctionIdV1::from_index(function);
+        let mut child = PreflightChildCommitmentBuilderV5::body(ordinal, function);
+        child.field(&function.index().to_le_bytes()).unwrap();
+        for field in [
+            &fixture.source_span,
+            &fixture.local,
+            &fixture.local_mapping,
+            &fixture.block,
+            &fixture.statement,
+            &fixture.terminator,
+        ] {
+            child.field(field).unwrap();
+        }
+        child.finish()
+    }
+
+    fn committed_body_roster_v5(
+        bodies: &[(u64, u32, PreflightChildCommitmentV5)],
+    ) -> ([u8; 32], Box<[u8]>) {
+        let mut parent = BoundedPreflightTranscriptV5::new();
+        parent.field(PREFLIGHT_PLAN_DOMAIN_V4).unwrap();
+        parent.field(&[PREFLIGHT_SECTION_BODIES_V5]).unwrap();
+        parent
+            .field(&usize_to_u64_v5(bodies.len()).to_le_bytes())
+            .unwrap();
+        for (ordinal, function, child) in bodies {
+            parent.field(&[PREFLIGHT_SECTION_BODIES_V5]).unwrap();
+            parent.field(&ordinal.to_le_bytes()).unwrap();
+            parent.field(&function.to_le_bytes()).unwrap();
+            for count in [0_u64; 6] {
+                parent.field(&count.to_le_bytes()).unwrap();
+            }
+            parent.field(&child.field_count.to_le_bytes()).unwrap();
+            parent
+                .field(&child.payload_framed_bytes.to_le_bytes())
+                .unwrap();
+            parent.field(&child.sha256).unwrap();
+        }
+        parent.finish().unwrap()
+    }
+
+    fn transcript_fields_v5(mut bytes: &[u8]) -> Vec<&[u8]> {
+        let mut fields = Vec::new();
+        while !bytes.is_empty() {
+            let length = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+            let end = 8 + length;
+            fields.push(&bytes[8..end]);
+            bytes = &bytes[end..];
+        }
+        fields
+    }
+
+    #[test]
+    fn v5_hierarchical_commitments_are_domain_order_and_content_sensitive() {
+        let baseline = BodyCommitmentFixtureV5 {
+            source_span: [1; 8],
+            local: [2; 8],
+            local_mapping: [3; 8],
+            block: [4; 8],
+            statement: [5; 8],
+            terminator: [6; 8],
+        };
+        let first = body_commitment_fixture_v5(0, 7, baseline);
+        assert_eq!(first.field_count, 7);
+        assert_eq!(first.payload_framed_bytes, 7 * 16 - 4);
+
+        for mutated in [
+            BodyCommitmentFixtureV5 {
+                source_span: [9; 8],
+                ..baseline
+            },
+            BodyCommitmentFixtureV5 {
+                local: [9; 8],
+                ..baseline
+            },
+            BodyCommitmentFixtureV5 {
+                local_mapping: [9; 8],
+                ..baseline
+            },
+            BodyCommitmentFixtureV5 {
+                block: [9; 8],
+                ..baseline
+            },
+            BodyCommitmentFixtureV5 {
+                statement: [9; 8],
+                ..baseline
+            },
+            BodyCommitmentFixtureV5 {
+                terminator: [9; 8],
+                ..baseline
+            },
+        ] {
+            assert_ne!(body_commitment_fixture_v5(0, 7, mutated), first);
+        }
+        assert_ne!(body_commitment_fixture_v5(1, 7, baseline), first);
+        assert_ne!(body_commitment_fixture_v5(0, 8, baseline), first);
+
+        let second = body_commitment_fixture_v5(1, 8, baseline);
+        let ordered = committed_body_roster_v5(&[(0, 7, first), (1, 8, second)]);
+        let reordered = committed_body_roster_v5(&[
+            (0, 8, body_commitment_fixture_v5(0, 8, baseline)),
+            (1, 7, body_commitment_fixture_v5(1, 7, baseline)),
+        ]);
+        assert_ne!(ordered.0, reordered.0);
+        assert_eq!(ordered.0, <[u8; 32]>::from(Sha256::digest(&ordered.1)));
+
+        let fields = transcript_fields_v5(&ordered.1);
+        assert_eq!(fields[0], PREFLIGHT_PLAN_DOMAIN_V5);
+        assert_eq!(fields[1], PREFLIGHT_PLAN_DOMAIN_V4);
+        assert_ne!(PREFLIGHT_PLAN_DOMAIN_V4, PREFLIGHT_PLAN_DOMAIN_V5);
+    }
+
+    #[test]
+    fn v5_child_commitments_cannot_cross_domain_section_or_ordinal() {
+        let fields = [b"same-field-one".as_slice(), b"same-field-two".as_slice()];
+        let mut types = PreflightChildCommitmentBuilderV5::section(
+            PREFLIGHT_TYPES_DOMAIN_V5,
+            PREFLIGHT_SECTION_TYPES_V5,
+            "test types",
+        );
+        let mut sources = PreflightChildCommitmentBuilderV5::section(
+            PREFLIGHT_SOURCE_FILES_DOMAIN_V5,
+            PREFLIGHT_SECTION_SOURCE_FILES_V5,
+            "test sources",
+        );
+        for field in fields {
+            types.field(field).unwrap();
+            sources.field(field).unwrap();
+        }
+        let types = types.finish();
+        let sources = sources.finish();
+        assert_ne!(types.sha256, sources.sha256);
+
+        let fixture = BodyCommitmentFixtureV5 {
+            source_span: [1; 8],
+            local: [2; 8],
+            local_mapping: [3; 8],
+            block: [4; 8],
+            statement: [5; 8],
+            terminator: [6; 8],
+        };
+        assert_ne!(
+            body_commitment_fixture_v5(0, 7, fixture).sha256,
+            body_commitment_fixture_v5(1, 7, fixture).sha256,
+        );
+
+        let mut types_parent = BoundedPreflightTranscriptV5::new();
+        types_parent
+            .section(PREFLIGHT_SECTION_TYPES_V5, 2, types)
+            .unwrap();
+        let mut transplanted_parent = BoundedPreflightTranscriptV5::new();
+        transplanted_parent
+            .section(PREFLIGHT_SECTION_SOURCE_FILES_V5, 2, types)
+            .unwrap();
+        assert_ne!(
+            types_parent.finish().unwrap().0,
+            transplanted_parent.finish().unwrap().0,
+        );
+    }
+
+    #[test]
+    fn v5_parent_is_bounded_below_the_unchanged_v3_receipt_maximum() {
+        const SECTION_COMMITMENT_BYTES: u64 = 9 + 16 + 16 + 16 + 40;
+        const BODY_COMMITMENT_BYTES: u64 = 9 + 16 + 12 + 6 * 16 + 16 + 16 + 40;
+        const FIXED_PARENT_BYTES: u64 = 50 + 50 + 40 + 40 + 23 * 16 + 9 + 16;
+        const NON_BODY_SECTIONS: u64 = 10;
+        let predicted_maximum = FIXED_PARENT_BYTES
+            + NON_BODY_SECTIONS * SECTION_COMMITMENT_BYTES
+            + fe2o3_mir_model::semantic_mir_v1::HARD_MAX_FUNCTIONS_V1 * BODY_COMMITMENT_BYTES;
+        assert!(
+            predicted_maximum
+                < fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 as u64
+        );
+
+        let mut exact = BoundedPreflightTranscriptV5::new();
+        let maximum = fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3;
+        let remaining = maximum - exact.framed_bytes as usize - 8;
+        exact.field(&vec![0; remaining]).unwrap();
+        assert_eq!(exact.framed_bytes as usize, maximum);
+        assert!(matches!(
+            exact.field(&[]),
+            Err(ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: "V5 parent transcript",
+                actual,
+                maximum: observed_maximum,
+            }) if actual == maximum as u64 + 8 && observed_maximum == maximum as u64
+        ));
+    }
 
     #[test]
     fn disabled_debug_capture_never_inspects_v2_metadata() {
