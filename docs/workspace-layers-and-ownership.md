@@ -89,9 +89,13 @@ the user's files, network, and device nodes.
 
 This projection is deliberately package-wide and feature-independent. Every
 regular `*.rs` file outside the exact generated Cargo target-directory boundary
-participates. Every exact Cargo target
-root reported by metadata MUST also be a package-owned UTF-8 `.rs` path, matching
-the rustc invocation parser's input contract. Conventional `mod`,
+participates. Every exact Cargo target root reported by metadata MUST also be a
+package-owned, structurally parseable UTF-8 `.rs` path, matching the rustc
+invocation parser's input contract. A retained non-target `.rs` file may contain
+proof-system or generated-language syntax; if ordinary Rust parsing cannot
+classify it, the scanner records an unresolved source edge and conservatively
+selects the wrapper unless the package has an observed explicit fallback.
+Conventional `mod`,
 literal `#[path]`, and literal `include!` edges are considered resolved only
 when they name a source already scanned beneath the same package root. A
 dynamic, missing, or package-external edge conservatively selects a package
@@ -105,8 +109,9 @@ boundaries; an edge from the parent into one is an external selection boundary.
 A package MUST NOT mix a directly observed compiler-derived binding with an
 explicit fallback namespace anywhere in the complete projection, even when
 Cargo features or targets make the sources mutually exclusive. Unparseable
-scanned sources are rejected. This strict package ownership rule avoids feature-dependent binding selection
-and is checked with mixed-target and external-edge adversaries.
+Cargo targets are rejected. This strict package ownership rule avoids
+feature-dependent binding selection and is checked with mixed-target,
+non-target proof-syntax, and external-edge adversaries.
 
 Each Cargo target source MUST be owned beneath its package root. Cross-package
 source reuse uses a package-owned target root with an explicit external

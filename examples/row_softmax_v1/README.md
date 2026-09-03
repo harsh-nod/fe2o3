@@ -11,10 +11,12 @@ compiler/runtime or machine-code refinement result.
 It is ordinary attributed Rust: it contains no `macro_rules!`, `include!`,
 `include_str!`, generated body, or explanatory substitute. The compiler fixture
 is now only a path-dependent re-export facade, while the direct codegen harness
-reads and compiles this exact example-owned file. The move preserved the exact
-1,289 source bytes and SHA-256
-`0b0d5e2964d4627bc7ef3dac882f86a9b3c49ab715245bacc3fc92f28f0d08b0`,
-so the reviewed portable-MIR, Kernel IR, and LLVM commitments were not changed.
+reads and compiles this exact example-owned file. Authors write only
+`#[kernel(typed, ...)]`; `cargo fe2o3` derives its binding identity. The reviewed
+namespace-free source is exactly 1,213 bytes with SHA-256
+`e74f592d99f3b61636434d837edd689dd157b5cf63aea26260347c39eebc3108`.
+Removing the former identity-only attribute did not change the reviewed kernel
+body or its portable-MIR, Kernel IR, and LLVM-body commitments.
 The manifest records the exact predecessor location at public commit `e874da208`
 as a lineage source; it does not claim the new example path existed there.
 
@@ -135,7 +137,7 @@ positive proof source, canonical Kernel IR and LLVM body commitments, exact
 `gfx942:xnack-` width-64 specialization, exact 64-element input/output
 preconditions, and pinned Verus/Z3 closure. Its
 canonical digest is
-`8114b1d9fde2928742dd736970e3dc6eb4aa9dfca8fb3f1113e60a11269cae20`.
+`9a568d96a968b2a63ca503a1a538ffd631d8898d796ef7ddb65fca251e031a95`.
 
 The certificate is formal evidence only. It grants no compiler origin,
 source-to-machine refinement, descriptor or artifact admission, load, launch,

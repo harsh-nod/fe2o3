@@ -1392,6 +1392,12 @@ struct PackageSourceScanState {
 }
 
 #[derive(Clone, Copy)]
+enum RustSourceRole {
+    CargoTarget,
+    PackageTree,
+}
+
+#[derive(Clone, Copy)]
 struct PackageSourceScanUsage {
     entries: usize,
     files: usize,
@@ -1564,6 +1570,7 @@ fn package_source_tree_projection_with_targets(
             &mut target.file,
             target.initial,
             &target.path,
+            RustSourceRole::CargoTarget,
             &mut state,
             package_name,
         )?;
@@ -1757,6 +1764,7 @@ fn scan_package_source_directory(
                         &mut source,
                         entry_initial,
                         &child_relative,
+                        RustSourceRole::PackageTree,
                         state,
                         package_name,
                     )?;
@@ -1845,6 +1853,7 @@ fn inspect_package_rust_source(
     source: &mut File,
     initial: SourceObjectSnapshot,
     relative: &Path,
+    role: RustSourceRole,
     state: &mut PackageSourceScanState,
     package_name: &str,
 ) -> Result<(), String> {
@@ -1895,26 +1904,30 @@ fn inspect_package_rust_source(
     })?;
     state.source_snapshots.insert(source_path.clone(), initial);
     state.rust_sources.insert(source_path.clone());
-    state.has_wrapper_binding |= source_requires_wrapper_binding(contents).map_err(|error| {
+    let syntax = match syn::parse_file(contents) {
+        Ok(syntax) => syntax,
+        Err(error) => match role {
+            RustSourceRole::CargoTarget => {
+                return Err(format!(
+                    "failed to structurally classify Cargo target source in package `{package_name}` {}: {error}",
+                    relative.display()
+                ));
+            }
+            RustSourceRole::PackageTree => {
+                state.admit_module_edges(&source_path, vec![SourceModuleEdge::Unresolved])?;
+                return Ok(());
+            }
+        },
+    };
+    let classification = classify_package_rust_file(&syntax).map_err(|error| {
         format!(
             "failed to structurally classify package `{package_name}` Rust source {}: {error}",
             relative.display()
         )
     })?;
-    state.has_explicit_namespace |=
-        source_has_explicit_kernel_namespace(contents).map_err(|error| {
-            format!(
-                "failed to classify explicit namespace in package `{package_name}` Rust source {}: {error}",
-                relative.display()
-            )
-        })?;
-    let edges = source_module_edges(contents).map_err(|error| {
-        format!(
-            "failed to classify module edges in package `{package_name}` Rust source {}: {error}",
-            relative.display()
-        )
-    })?;
-    state.admit_module_edges(&source_path, edges)?;
+    state.has_wrapper_binding |= classification.requires_wrapper_binding;
+    state.has_explicit_namespace |= classification.has_explicit_namespace;
+    state.admit_module_edges(&source_path, classification.module_edges)?;
     Ok(())
 }
 
@@ -2018,6 +2031,12 @@ struct WrapperBindingVisitor {
 struct ExternalModuleEdgeVisitor {
     edges: Vec<SourceModuleEdge>,
     error: Option<syn::Error>,
+}
+
+struct PackageRustSourceClassification {
+    requires_wrapper_binding: bool,
+    has_explicit_namespace: bool,
+    module_edges: Vec<SourceModuleEdge>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2216,8 +2235,12 @@ fn walk_macro_token_body(
 
 fn source_has_explicit_kernel_namespace(source: &str) -> Result<bool, syn::Error> {
     let file = syn::parse_file(source)?;
+    file_has_explicit_kernel_namespace(&file)
+}
+
+fn file_has_explicit_kernel_namespace(file: &syn::File) -> Result<bool, syn::Error> {
     let mut visitor = ExplicitKernelNamespaceVisitor::default();
-    visitor.visit_file(&file);
+    visitor.visit_file(file);
     if let Some(error) = visitor.error {
         return Err(error);
     }
@@ -2256,10 +2279,15 @@ impl<'ast> Visit<'ast> for WrapperBindingVisitor {
     }
 }
 
+#[cfg(test)]
 fn source_requires_wrapper_binding(source: &str) -> Result<bool, syn::Error> {
     let file = syn::parse_file(source)?;
+    file_requires_wrapper_binding(&file)
+}
+
+fn file_requires_wrapper_binding(file: &syn::File) -> Result<bool, syn::Error> {
     let mut visitor = WrapperBindingVisitor::default();
-    visitor.visit_file(&file);
+    visitor.visit_file(file);
     if let Some(error) = visitor.error {
         return Err(error);
     }
@@ -2362,14 +2390,29 @@ fn source_has_external_module_edge(source: &str) -> Result<bool, syn::Error> {
     Ok(!source_module_edges(source)?.is_empty())
 }
 
+#[cfg(test)]
 fn source_module_edges(source: &str) -> Result<Vec<SourceModuleEdge>, syn::Error> {
     let file = syn::parse_file(source)?;
+    file_module_edges(&file)
+}
+
+fn file_module_edges(file: &syn::File) -> Result<Vec<SourceModuleEdge>, syn::Error> {
     let mut visitor = ExternalModuleEdgeVisitor::default();
-    visitor.visit_file(&file);
+    visitor.visit_file(file);
     if let Some(error) = visitor.error {
         return Err(error);
     }
     Ok(visitor.edges)
+}
+
+fn classify_package_rust_file(
+    file: &syn::File,
+) -> Result<PackageRustSourceClassification, syn::Error> {
+    Ok(PackageRustSourceClassification {
+        requires_wrapper_binding: file_requires_wrapper_binding(file)?,
+        has_explicit_namespace: file_has_explicit_kernel_namespace(file)?,
+        module_edges: file_module_edges(file)?,
+    })
 }
 
 impl<'ast> Visit<'ast> for SourceArtifactVisitor {
@@ -2749,6 +2792,80 @@ pub fn alpha() {}"#,
         );
 
         assert!(scan_test_package(root).expect("scan complete package source tree"));
+    }
+
+    #[test]
+    fn non_target_proof_syntax_conservatively_selects_the_wrapper() {
+        let cleanup = test_directory();
+        let root = &cleanup.0;
+        write(
+            root,
+            "Cargo.toml",
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        );
+        write(root, "src/lib.rs", "pub fn ordinary() {}\n");
+        write(
+            root,
+            "tests/fixtures/verus.rs",
+            "broadcast use prelude::*;\n",
+        );
+
+        assert!(
+            scan_test_package(root).expect("scan non-target proof syntax"),
+            "unclassified evidence must conservatively select the wrapper"
+        );
+    }
+
+    #[test]
+    fn non_target_rust_still_obeys_structural_bounds() {
+        let cleanup = test_directory();
+        let root = &cleanup.0;
+        write(
+            root,
+            "Cargo.toml",
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        );
+        write(root, "src/lib.rs", "pub fn ordinary() {}\n");
+        let too_many_edges = (0..=MAX_PACKAGE_SOURCE_MODULE_EDGES)
+            .map(|index| format!("mod module_{index};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write(root, "tests/fixtures/bounded.rs", &too_many_edges);
+
+        let error = scan_test_package(root).expect_err("structural bound must fail closed");
+        assert!(error.contains("module-edge"), "{error}");
+    }
+
+    #[test]
+    fn cargo_target_roots_remain_strictly_parseable_rust() {
+        let cleanup = test_directory();
+        let root = cleanup.0.canonicalize().expect("canonical fixture root");
+        write(
+            &root,
+            "Cargo.toml",
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        );
+        write(&root, "src/lib.rs", "broadcast use prelude::*;\n");
+        let workspace =
+            PinnedDirectory::open_existing(root.clone(), "test workspace").expect("pin workspace");
+        let package_directory =
+            PinnedDirectory::open_existing(root.clone(), "test package").expect("pin package");
+        let package = json!({
+            "targets": [{ "src_path": root.join("src/lib.rs").to_str().unwrap() }]
+        });
+        let mut targets =
+            validate_package_targets(&package, &package_directory, &root, &root, "fixture", None)
+                .expect("retain declared target root");
+
+        let error = package_source_tree_requires_binding_with_targets(
+            &workspace,
+            &package_directory,
+            "fixture",
+            &mut targets,
+            &mut |_| {},
+        )
+        .expect_err("invalid Cargo target syntax must fail closed");
+        assert!(error.contains("Cargo target source"), "{error}");
     }
 
     #[test]

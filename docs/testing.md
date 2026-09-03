@@ -135,6 +135,12 @@ projection are rescanned after the managed tests. This routing applies to any
 kernel package; it does not encode package-name exceptions or require literal
 namespaces.
 
+Cargo-declared target roots must parse as ordinary Rust during projection.
+Retained non-target `.rs` evidence, such as Verus closure fixtures, is still
+bounded and revalidated; syntax outside ordinary Rust is treated as an
+unresolved source edge and conservatively routes the package through the
+binding wrapper.
+
 Workspace source and configuration outside those protected selections, build
 scripts, procedural macros, linkers, and test bodies are trusted and execute as
 the current user. The fixed runner closes its child environment and descriptor
