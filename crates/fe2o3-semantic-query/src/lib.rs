@@ -41,6 +41,8 @@ mod agent_variant_service_v1;
 pub use agent_variant_service_v1::*;
 mod agent_variant_service_v2;
 pub use agent_variant_service_v2::*;
+mod agent_variant_service_v3;
+pub use agent_variant_service_v3::*;
 mod agent_service_v1;
 pub use agent_service_v1::*;
 

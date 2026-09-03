@@ -765,6 +765,34 @@ where
     .derivation)
 }
 
+pub(crate) fn revalidate_protected_worker_v3_finalizer_for_structural_archive_v1<'payload, I>(
+    attempt: BuildAttempt,
+    outer_handoff: &[u8],
+    external_provider_payloads: I,
+    transcript: &[u8],
+    exact_finalized_hsaco: &[u8],
+) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoPublicationErrorV1>
+where
+    I: IntoIterator<Item = &'payload [u8]>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let transcript = ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(transcript)?;
+    let outer = InertSemanticCompilerModuleHandoffV3::decode(outer_handoff)?;
+    let payloads = external_provider_payloads.into_iter();
+    let mut borrowed = try_vec(payloads.len(), "structural archive provider inputs")?;
+    for payload in payloads {
+        borrowed.push(BorrowedProviderPayloadV1(payload));
+    }
+    Ok(validate_finalizer_replay_components(
+        attempt,
+        outer,
+        borrowed,
+        transcript,
+        exact_finalized_hsaco,
+    )?
+    .finalized)
+}
+
 /// Completes the production V3 publication path from one independently replayed restart owner.
 ///
 /// This is the production entry point. The lower-level artifact-transaction V3 API independently

@@ -238,6 +238,24 @@ profiler, publication, load, launch, or runtime authority.
 The frozen bridge wire, admission, query, and nonauthority contract is documented in
 `../../docs/production-kir-v7-structural-bridge-v1.md`.
 
+`ProductionProfilerKirArchiveV1` is the bounded restart boundary for that
+producer evidence. Preparation consumes an already-finalized protected Worker
+V3 owner and records the exact build attempt, outer semantic handoff, ordered
+external-provider payloads, compact finalizer transcript, and finalized HSACO.
+The canonical archive binds every byte with a domain-separated checksum and
+identity. Its strict decoder rejects truncation, trailing data, reserved-field
+changes, duplicate or reordered tagged sections, provider-ordinal changes, and
+component or aggregate bound violations.
+
+Decoding creates only an inert owner. Admission reruns the complete Worker V3
+finalizer replay before deriving a fresh Source/ISA catalog, V7-to-V8 bridge,
+and Characteristic projection. Compiler instrumentation, catalog, bridge, and
+projection gaps remain distinct typed-unavailable results. The archive does
+not authenticate the external origin of its bytes and retains no compiler,
+publication, load, launch, profiler-collection, or runtime authority. See
+`../../docs/production-profiler-kir-archive-v1.md` for the wire and trust
+boundary.
+
 `ProductionSourceIsaCharacteristicCollectionV1` is an additive, bounded producer-side projection
 over an admitted catalog and bridge. It independently verifies the exact target-bound KIR V8 bytes
 and classifies operations only by structure: global plain/guarded stores, workgroup

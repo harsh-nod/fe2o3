@@ -1782,6 +1782,23 @@ fn run_variant_v2_service(requests: &[JsonValue]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn run_variant_v3_service(requests: &[JsonValue]) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-profiler-service"))
+        .arg("variant-v3-jsonl")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for request in requests {
+        serde_json::to_writer(&mut input, request).unwrap();
+        input.write_all(b"\n").unwrap();
+    }
+    drop(input);
+    child.wait_with_output().unwrap()
+}
+
 #[test]
 fn variant_v2_preserves_v1_and_refuses_causal_or_absence_upgrades() {
     let workload = b"variant-v2-workload";
@@ -1962,6 +1979,88 @@ fn additive_variant_v2_jsonl_is_deterministic_strict_and_v1_independent() {
     assert_eq!(
         comparison["causal_attribution"],
         "positive_co_observations_do_not_prove_causation"
+    );
+}
+
+#[test]
+fn additive_variant_v3_jsonl_replays_v2_without_inventing_structural_owners() {
+    let workload = b"variant-v3-service-workload";
+    let source = dispatch_source(140, 260);
+    let baseline = treatment(
+        workload,
+        &source,
+        hsaco(7, 0),
+        1,
+        b"schedule-a",
+        b"isa-a",
+        None,
+    );
+    let candidate = treatment(
+        workload,
+        &source,
+        hsaco(8, 1),
+        2,
+        b"schedule-b",
+        b"isa-b",
+        None,
+    );
+    let treatment_v3 = |treatment: &Treatment| {
+        serde_json::json!({
+            "treatment_v2": treatment_json(treatment),
+            "structural_archive": null,
+        })
+    };
+    let requests = [
+        serde_json::json!({
+            "operation": "discover_capabilities",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 1,
+            "expected_revision": 0,
+        }),
+        serde_json::json!({
+            "operation": "compare_variants",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 2,
+            "expected_revision": 1,
+            "baseline": treatment_v3(&baseline),
+            "candidate": treatment_v3(&candidate),
+        }),
+    ];
+    let first = run_variant_v3_service(&requests);
+    let second = run_variant_v3_service(&requests);
+    assert!(first.status.success(), "{:?}", first.stderr);
+    assert_eq!(first.stdout, second.stdout);
+    let responses = output_json_lines(&first.stdout);
+    assert_eq!(responses.len(), 2);
+    for line in first
+        .stdout
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        validate_agent_profiler_variant_response_line_v3(line).unwrap();
+    }
+    let comparison = &responses[1]["value"]["comparison"];
+    assert_eq!(comparison["schema_version"], 3);
+    assert_eq!(comparison["comparison_v2"]["schema_version"], 2);
+    assert!(
+        comparison["structural_bindings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        comparison["unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["kind"] == "baseline_production_structural_evidence_missing" })
+    );
+    assert!(
+        comparison["unavailable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|fact| { fact["kind"] == "candidate_production_structural_evidence_missing" })
     );
 }
 use std::io::Write;

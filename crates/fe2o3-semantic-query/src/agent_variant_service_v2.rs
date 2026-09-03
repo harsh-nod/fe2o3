@@ -502,7 +502,7 @@ struct OwnedDecodedAttSourceIsaV2 {
     record_identities: Vec<CaptureIdentityV1>,
 }
 
-struct OwnedTreatmentV2 {
+pub(crate) struct OwnedTreatmentV2 {
     manifest: Vec<u8>,
     semantic_workload: Vec<u8>,
     raw_profiler_source: Vec<u8>,
@@ -517,7 +517,7 @@ struct OwnedTreatmentV2 {
 }
 
 impl OwnedTreatmentV2 {
-    fn decode(
+    pub(crate) fn decode(
         value: AgentProfilerVariantTreatmentHexV2,
     ) -> Result<Self, AgentProfilerVariantErrorCodeV2> {
         let pc_source_isa = value
@@ -606,7 +606,7 @@ impl OwnedTreatmentV2 {
         .flatten()
     }
 
-    fn input(&self) -> ProfilerVariantTreatmentInputV2<'_> {
+    pub(crate) fn input(&self) -> ProfilerVariantTreatmentInputV2<'_> {
         ProfilerVariantTreatmentInputV2 {
             treatment: ProfilerVariantTreatmentInputV1 {
                 manifest: &self.manifest,

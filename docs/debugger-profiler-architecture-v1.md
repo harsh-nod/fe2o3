@@ -213,16 +213,16 @@ schedule identity is content-bound but caller-declared; the profiler-KIR to
 Characteristic-KIR structural bridge and producer authentication remain
 unavailable.
 
-The additive [Profiler Variant V3](profiler-variant-v3.md) library path resolves
-that profiler-KIR/Characteristic-KIR version boundary only when the caller
-already owns the production-admitted V7-to-V8 bridge, exact catalog, and
-Characteristic producer projection. It replays Variant V2, binds Bundle V4's
-V7 claim to the bridge, and requires a unique catalog match for every upgraded
-positive occurrence. The result remains structural co-observation: partial
-absence, schedule execution, and causality are typed unavailable. A JSONL
-service cannot safely accept inert bridge/catalog bytes as equivalent evidence,
-so agent transport remains open until an authenticated self-contained archive
-can re-establish those admitted owners.
+The additive [Profiler Variant V3](profiler-variant-v3.md) path resolves that
+profiler-KIR/Characteristic-KIR version boundary only through a
+production-admitted V7-to-V8 bridge, exact catalog, and Characteristic producer
+projection. Its self-contained archive records all finalizer replay inputs; the
+fresh-process JSONL service verifies its exact identity, reruns the complete
+Worker V3 finalizer derivation, and retains only the reconstructed read-only
+owners. It replays Variant V2, binds Bundle V4's V7 claim to the bridge, and
+requires a unique catalog match for every upgraded positive occurrence. The
+result remains structural co-observation: external provenance, partial
+absence, schedule execution, and causality are typed unavailable.
 
 The additive KFD/Source-ISA V1 query service now admits exact canonical
 direct-KFD runtime profiles and Source/ISA Observation V1 collections, follows
@@ -304,7 +304,10 @@ profiler Variant extensions instead carry all exact bytes as canonical
 lowercase hex, so a mutable path is never evidence. The V2 query uses a
 separate fresh child with independent capability discovery, request/revision
 association, response-identity validation, and complete local replay against
-the retained artifact and schedule bytes.
+the retained artifact and schedule bytes. Variant V3 separately opens at most
+two caller-pinned finalizer archives, reruns the complete finalizer replay, and
+retains only exact Source/ISA catalog, KIR bridge, and Characteristic query
+owners. It exposes no archive path, compiler, or runtime operation.
 
 Debugger and profiler executables are admitted once as bounded singly-linked
 regular files with executable permission, no-follow and close-on-exec flags,

@@ -24,6 +24,7 @@ mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
 mod production_kir_v7_structural_bridge_v1;
+mod production_profiler_kir_archive_v1;
 mod production_semantic_anchor_v1;
 mod production_source_isa_catalog_v1;
 mod production_source_isa_characteristic_observer_v1;
@@ -100,6 +101,14 @@ pub use production_kir_v7_structural_bridge_v1::{
     ProductionKirV7BridgeQueryUnavailableV1, ProductionKirV7BridgeRecordV1,
     ProductionKirV7BridgeSiteV1, ProductionKirV7BridgeTargetV1, ProductionKirV7BridgeUnavailableV1,
     ProductionKirV7StructuralBridgeV1, admit_production_kir_v7_structural_bridge_v1,
+};
+pub use production_profiler_kir_archive_v1::{
+    AdmittedProductionProfilerKirArchiveV1, InertProductionProfilerKirArchiveV1,
+    MAX_PRODUCTION_PROFILER_KIR_ARCHIVE_BYTES_V1, PRODUCTION_PROFILER_KIR_ARCHIVE_MAGIC_V1,
+    PRODUCTION_PROFILER_KIR_ARCHIVE_VERSION_V1, PreparedProductionProfilerKirArchiveV1,
+    ProductionProfilerKirArchiveAdmissionV1, ProductionProfilerKirArchiveErrorV1,
+    ProductionProfilerKirArchiveIdentityV1, ProductionProfilerKirArchiveUnavailableClassV1,
+    ProductionProfilerKirArchiveUnavailableV1, prepare_production_profiler_kir_archive_v1,
 };
 pub use production_semantic_anchor_v1::{
     AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,
