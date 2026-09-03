@@ -224,6 +224,16 @@ requires a unique catalog match for every upgraded positive occurrence. The
 result remains structural co-observation: external provenance, partial
 absence, schedule execution, and causality are typed unavailable.
 
+The V3 fresh-process service now also exposes the bounded
+`ProfilerCompleteStructuralComparisonV1` contract. Only two fully admitted
+archive owners with complete catalog projections, complete supported-
+Characteristic scans, and the same exact workload plus archive-derived stable
+source/MIR site universe can produce an added/removed structural multiplicity.
+It preserves all archive-local identities for duplicate occurrences and never
+uses missing PC or ATT observations as absence. Cross-domain identity,
+incomplete coverage, unkeyed occurrences, schedule execution, causality, and
+result overflow remain stable typed unavailable states.
+
 The additive KFD/Source-ISA V1 query service now admits exact canonical
 direct-KFD runtime profiles and Source/ISA Observation V1 collections, follows
 each observed dispatch through its resolved kernel and loaded module, and joins

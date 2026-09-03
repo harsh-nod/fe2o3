@@ -39,6 +39,9 @@ The service accepts newline-delimited requests under
    owners.
 3. `compare_variants` embeds the unchanged V2 treatment wire and optionally
    cites one previously opened archive identity for each side.
+4. `compare_complete_structural_catalogs` accepts the same inputs, recomputes
+   Variant V3, and considers an add/remove claim only from two complete
+   admitted producer catalogs in one exact comparison domain.
 
 An exact replay that encounters absent compiler instrumentation or another
 supported production projection gap returns `structural_archive_unavailable`
@@ -103,13 +106,47 @@ structurally resolved occurrences, V3 separately identifies
 `profiler_kir_to_characteristic_kir_bridge_unavailable` as the V2 fact its new
 evidence supersedes; it does not rewrite the older result.
 
+## Complete structural catalog comparison
+
+`ProfilerCompleteStructuralComparisonV1` is a bounded additive contract. It
+does not reinterpret a missing PC sample or ATT record. Instead, it requires
+both self-contained archives to replay to internally consistent complete
+catalog projections and complete supported-Characteristic scans. Its exact
+comparison domain is the existing content-bound semantic workload plus the
+archive-derived complete set of exact source-node, source-span, MIR-node, and
+MIR-coordinate sites. The per-side Source Map V2 identities remain visible but
+are not required to match because each also binds its side's canonical KIR.
+Different stable source/MIR universes are
+`cross_domain_source_mir_universe_identity`; V1 has no source-lineage authority
+and returns no delta.
+
+Within that domain the contract keys each classified target-KIR witness by its
+structural kind and complete deduplicated source-plus-MIR site set. It compares
+key multiplicities over all functions, blocks, and operations, without names
+or fixed kernel shapes. Added and removed records include every exact
+archive-local occurrence identity on both sides. This preserves duplicated
+lowering occurrences and reports the exact count difference without claiming
+which indistinguishable duplicate continued across treatments.
+
+The contract returns no partial add/remove set when either owner or complete
+projection is missing, any classified occurrence lacks a stable source/MIR
+identity, or the bounded result would overflow. These conditions use stable
+reason codes. `schedule_execution_unavailable` and
+`causal_attribution_unavailable` are always retained. Catalog completeness is
+the finalizer-admitted structural projection scope; it is not complete ISA,
+live execution, external provenance, or performance coverage.
+
 ## Bounds and hostile behavior
 
 V3 retains the Variant V2 occurrence ceiling of 512 records per treatment,
 permits at most two treatment bindings, and caps encoded results at 8 MiB. The
-service retains at most two archive owners and 64 requests. Archive and request
-bounds are derived from the existing bounded semantic handoff, external
-provider, compact transcript, and HSACO maxima; capability discovery reports
+complete structural comparison retains at most 4,096 changed keys and 4,096
+exact side occurrences across those keys, and caps its encoded result at 16
+MiB. It never truncates to those bounds: overflow is typed unavailable before
+any add/remove set is returned. The service retains at most two archive owners
+and 64 requests. Archive and request bounds are derived from the existing
+bounded semantic handoff, external provider, compact transcript, and HSACO
+maxima; capability discovery reports
 their exact numeric values.
 
 Request identities bind both admitted structural evidence identities. Tests
