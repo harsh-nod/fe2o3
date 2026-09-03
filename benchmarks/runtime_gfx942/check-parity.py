@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import math
 import pathlib
+import re
 import sys
 from collections.abc import Iterable
 
@@ -36,6 +37,19 @@ SCHEMA_METRICS = {
         ("reverse_p50_GBps", "bandwidth"),
     ),
 }
+
+SCHEMA_MATCH_FIELDS = {
+    "fe2o3.async-copy-benchmark.v1": ("unique_id", "warmups", "samples"),
+    "fe2o3.async-copy-multi-device-benchmark.v1": (
+        "devices",
+        "unique_ids",
+        "warmups",
+        "samples",
+    ),
+    "fe2o3.xgmi-peer-benchmark.v1": ("unique_ids", "warmups", "samples"),
+}
+
+CANONICAL_UNIQUE_ID = re.compile(r"[0-9a-f]{16}")
 
 
 class CheckError(Exception):
@@ -70,6 +84,43 @@ def positive_number(row: dict[str, str], field: str) -> float:
     return value
 
 
+def matched_methodology(row: dict[str, str], schema: str) -> tuple[str, ...]:
+    backend = row.get("backend", "?")
+    try:
+        values = tuple(row[field] for field in SCHEMA_MATCH_FIELDS[schema])
+    except KeyError as error:
+        raise CheckError(
+            f"backend {backend} is missing required match field {error.args[0]}"
+        ) from error
+
+    integer_fields = ("warmups", "samples")
+    if "devices" in SCHEMA_MATCH_FIELDS[schema]:
+        integer_fields += ("devices",)
+    for field in integer_fields:
+        value = row[field]
+        if not value.isdigit() or value == "0":
+            raise CheckError(f"field {field} must be a positive integer")
+
+    if (
+        "unique_id" in row
+        and CANONICAL_UNIQUE_ID.fullmatch(row["unique_id"]) is None
+    ):
+        raise CheckError("field unique_id must be exactly 16 lowercase hexadecimal digits")
+    if "unique_ids" in row:
+        unique_ids = row["unique_ids"].split(",")
+        if (
+            len(unique_ids) != 2
+            or len(set(unique_ids)) != 2
+            or any(CANONICAL_UNIQUE_ID.fullmatch(value) is None for value in unique_ids)
+        ):
+            raise CheckError(
+                "field unique_ids must contain two distinct canonical unique IDs"
+            )
+        if "devices" in row and int(row["devices"]) != len(unique_ids):
+            raise CheckError("field devices must equal the number of unique_ids")
+    return values
+
+
 def comparison_key(row: dict[str, str], schema: str) -> tuple[str, str]:
     try:
         byte_count = row["bytes"]
@@ -91,14 +142,10 @@ def check_rows(
 ) -> list[str]:
     if schema not in SCHEMA_METRICS:
         raise CheckError(f"unsupported schema: {schema}")
-    if not math.isfinite(max_latency_ratio) or max_latency_ratio < 1:
-        raise CheckError("maximum latency ratio must be finite and at least 1")
-    if (
-        not math.isfinite(min_bandwidth_ratio)
-        or min_bandwidth_ratio <= 0
-        or min_bandwidth_ratio > 1
-    ):
-        raise CheckError("minimum bandwidth ratio must be in (0, 1]")
+    if not math.isfinite(max_latency_ratio) or max_latency_ratio <= 0:
+        raise CheckError("maximum latency ratio must be finite and positive")
+    if not math.isfinite(min_bandwidth_ratio) or min_bandwidth_ratio <= 0:
+        raise CheckError("minimum bandwidth ratio must be finite and positive")
 
     groups: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
     for line_number, line in enumerate(lines, 1):
@@ -129,6 +176,15 @@ def check_rows(
                 f"bytes={key[0]} depth={key[1]} missing backends: {','.join(sorted(missing))}"
             )
         kfd = group["kfd"]
+        kfd_methodology = matched_methodology(kfd, schema)
+        for reference_name in ("hsa", "hip"):
+            reference_methodology = matched_methodology(group[reference_name], schema)
+            if reference_methodology != kfd_methodology:
+                fields = ",".join(SCHEMA_MATCH_FIELDS[schema])
+                raise CheckError(
+                    f"bytes={key[0]} depth={key[1]} has mismatched {fields} "
+                    f"between kfd and {reference_name}"
+                )
         for metric, kind in SCHEMA_METRICS[schema]:
             kfd_value = positive_number(kfd, metric)
             for reference_name in ("hsa", "hip"):

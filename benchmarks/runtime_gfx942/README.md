@@ -75,10 +75,19 @@ python3 benchmarks/runtime_gfx942/check-parity.py result.txt \
   --min-bandwidth-ratio 0.90
 ```
 
-The example values are illustrative, not an adopted release policy. The
-checker rejects missing or duplicate backend rows, nonpositive metrics, and
-any KFD p50/p95 latency or p50 bandwidth ratio outside the supplied bounds.
-Multi-device copy and XGMI logs use their corresponding schema names.
+The example values are illustrative, not an adopted release policy. Ratios are
+always KFD divided by the named reference: lower latency is better, while
+higher bandwidth is better. Thus a 10x speedup policy uses
+`--max-latency-ratio 0.10` and/or `--min-bandwidth-ratio 10.0`; it is not
+silently weakened to a parity-only bound. The checker rejects missing or
+duplicate backend rows, nonpositive metrics or thresholds, mismatched device
+IDs, warmup/sample counts, and any KFD p50/p95 latency or p50 bandwidth ratio
+outside the supplied bounds. Multi-device copy and XGMI logs use their
+corresponding schema names and require the same ordered pair of device IDs.
+
+A passing threshold is evidence only for the rows, devices, timing boundary,
+software stack, and workload encoded in that input. It does not establish a
+runtime-wide speedup or permit extrapolation to unmeasured HIP/HSA APIs.
 
 ## Asynchronous Copy Qualification
 

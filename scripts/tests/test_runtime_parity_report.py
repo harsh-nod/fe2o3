@@ -19,8 +19,11 @@ def row(backend: str, scale: float = 1.0) -> str:
     fields = {
         "backend": backend,
         "schema": "fe2o3.async-copy-benchmark.v1",
+        "unique_id": "6ced1647a296545c",
         "bytes": "1048576",
         "depth": "16",
+        "warmups": "10",
+        "samples": "30",
         "h2d_p50_ns": 100 * scale,
         "h2d_p95_ns": 120 * scale,
         "h2d_p50_GBps": 20 / scale,
@@ -38,6 +41,15 @@ class CheckParityTests(unittest.TestCase):
             "fe2o3.async-copy-benchmark.v1",
             1.1,
             0.9,
+        )
+        self.assertEqual(output[-1], "parity_status=pass")
+
+    def test_accepts_explicit_tenfold_speedup_thresholds(self) -> None:
+        output = CHECK_PARITY.check_rows(
+            [row("kfd", 0.1), row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+            0.1,
+            10.0,
         )
         self.assertEqual(output[-1], "parity_status=pass")
 
@@ -78,6 +90,35 @@ class CheckParityTests(unittest.TestCase):
                 0.9,
             )
 
+    def test_rejects_mismatched_sample_count(self) -> None:
+        mismatched = row("hsa").replace("samples=30", "samples=31")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "mismatched"):
+            CHECK_PARITY.check_rows(
+                [row("kfd"), mismatched, row("hip")],
+                "fe2o3.async-copy-benchmark.v1",
+                1.1,
+                0.9,
+            )
+
+    def test_rejects_noncanonical_unique_id(self) -> None:
+        broken = row("kfd").replace("6ced1647a296545c", "0x6CED1647A296545C")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "16 lowercase"):
+            CHECK_PARITY.check_rows(
+                [broken, row("hsa"), row("hip")],
+                "fe2o3.async-copy-benchmark.v1",
+                1.1,
+                0.9,
+            )
+
+    def test_rejects_zero_threshold(self) -> None:
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "finite and positive"):
+            CHECK_PARITY.check_rows(
+                [row("kfd"), row("hsa"), row("hip")],
+                "fe2o3.async-copy-benchmark.v1",
+                0.0,
+                1.0,
+            )
+
     def test_accepts_multi_device_schema(self) -> None:
         rows = []
         for backend in ("kfd", "hsa", "hip"):
@@ -86,8 +127,12 @@ class CheckParityTests(unittest.TestCase):
                     (
                         f"backend={backend}",
                         "schema=fe2o3.async-copy-multi-device-benchmark.v1",
+                        "devices=2",
+                        "unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf",
                         "bytes=1048576",
                         "depth_per_device=8",
+                        "warmups=10",
+                        "samples=30",
                         "h2d_p50_ns=100",
                         "h2d_p95_ns=120",
                         "h2d_aggregate_p50_GBps=40",
@@ -113,8 +158,11 @@ class CheckParityTests(unittest.TestCase):
                     (
                         f"backend={backend}",
                         "schema=fe2o3.xgmi-peer-benchmark.v1",
+                        "unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf",
                         "bytes=1048576",
                         "depth=8",
+                        "warmups=10",
+                        "samples=30",
                         "forward_p50_ns=100",
                         "forward_p95_ns=120",
                         "forward_p50_GBps=20",
