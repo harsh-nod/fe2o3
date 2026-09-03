@@ -88,6 +88,7 @@ pub use dispatch::{
 };
 
 const CONTROL_BYTES: usize = 4_096;
+pub(crate) const GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1: u8 = 5;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
@@ -900,6 +901,19 @@ impl ComputeAqlQueueDestroyedV1 {
             queue_id,
             released_resources,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_producer_for_semantic_observation_tests(queue_id: u32) -> Self {
+        destroyed_queue_observation(queue_id)
+    }
+}
+
+const fn destroyed_queue_observation(queue_id: u32) -> ComputeAqlQueueDestroyedV1 {
+    ComputeAqlQueueDestroyedV1 {
+        queue_id,
+        // Ring, control, EOP, context-save, and completion-signal arena.
+        released_resources: GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1,
     }
 }
 
@@ -3965,10 +3979,7 @@ impl ComputeAqlQueueSessionV1 {
         let completion_signals = memory.unmap_from_gpu(completion_signals.into_token())?;
         memory.release(completion_signals)?;
         let callback_result = after_queue_destroyed(memory)?;
-        let destroyed = ComputeAqlQueueDestroyedV1 {
-            queue_id: self.observation.queue_id,
-            released_resources: 5,
-        };
+        let destroyed = destroyed_queue_observation(self.observation.queue_id);
         let Some((dispatch_generation, data)) = returned_dispatch else {
             return Ok((QueueDestroyOutcomeV1::Released(destroyed), callback_result));
         };

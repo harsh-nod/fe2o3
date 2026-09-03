@@ -64,6 +64,7 @@ pub use device_content::{
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1,
 };
 
+pub(crate) use live::GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1;
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
