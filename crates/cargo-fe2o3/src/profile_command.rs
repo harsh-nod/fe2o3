@@ -2639,7 +2639,7 @@ where
             readmit_dispatch_import_tuple_v1(
                 *source_kind,
                 &source.bytes,
-                binding.clone(),
+                binding.as_ref().clone(),
                 &product.bundle_bytes,
                 &product.capture_bytes,
                 &product.receipt_bytes,
@@ -2668,7 +2668,7 @@ where
             readmit_dispatch_import_tuple_v1(
                 *source_kind,
                 &source.bytes,
-                binding.clone(),
+                binding.as_ref().clone(),
                 &durable_bundle,
                 &product.capture_bytes,
                 &durable_receipt,
@@ -3740,8 +3740,8 @@ enum DispatchImportOutcomeV1 {
     Imported {
         source: RetainedDispatchSourceV1,
         source_kind: DispatchImportSourceKindV1,
-        binding: DispatchImportBindingV1,
-        product: DispatchImportProductV1,
+        binding: Box<DispatchImportBindingV1>,
+        product: Box<DispatchImportProductV1>,
     },
 }
 
@@ -3872,8 +3872,8 @@ fn select_dispatch_import_v1(
     Ok(DispatchImportOutcomeV1::Imported {
         source,
         source_kind,
-        binding,
-        product,
+        binding: Box::new(binding),
+        product: Box::new(product),
     })
 }
 
@@ -4882,11 +4882,10 @@ mod tests {
 
     #[test]
     fn dispatch_source_admission_propagates_internal_failures() {
-        assert_eq!(classify_dispatch_source_admission_v1(Ok(())).unwrap(), true);
-        assert_eq!(
-            classify_dispatch_source_admission_v1(Err(ProfilerBundleErrorV4::InvalidRocprofJson))
-                .unwrap(),
-            false
+        assert!(classify_dispatch_source_admission_v1(Ok(())).unwrap());
+        assert!(
+            !classify_dispatch_source_admission_v1(Err(ProfilerBundleErrorV4::InvalidRocprofJson))
+                .unwrap()
         );
         for error in [
             ProfilerBundleErrorV4::SizeOverflow,

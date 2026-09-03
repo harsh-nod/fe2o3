@@ -823,16 +823,15 @@ impl ProfileDispatchImportReceiptV1 {
             {
                 return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
             }
-            if let Some(pid) = mapping.source_process_id {
-                if process_pids
+            if let Some(pid) = mapping.source_process_id
+                && (process_pids
                     .insert(mapping.process_index, pid)
                     .is_some_and(|prior| prior != pid)
                     || pid_processes
                         .insert(pid, mapping.process_index)
-                        .is_some_and(|prior| prior != mapping.process_index)
-                {
-                    return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
-                }
+                        .is_some_and(|prior| prior != mapping.process_index))
+            {
+                return Err(ProfileDispatchImportErrorV1::InvalidReceipt);
             }
             mapped_nodes.insert(mapping.kfd_node);
         }
