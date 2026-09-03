@@ -88,11 +88,12 @@ pub use dispatch::{
 };
 
 const CONTROL_BYTES: usize = 4_096;
+pub(crate) const GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1: u8 = 5;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r35-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r36-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
@@ -136,7 +137,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "61db3e72cbb07d40bd721bb33e5d9a1235c5f227da08bb2b7808b9530c42fb24";
+    "09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -900,6 +901,19 @@ impl ComputeAqlQueueDestroyedV1 {
             queue_id,
             released_resources,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_producer_for_semantic_observation_tests(queue_id: u32) -> Self {
+        destroyed_queue_observation(queue_id)
+    }
+}
+
+const fn destroyed_queue_observation(queue_id: u32) -> ComputeAqlQueueDestroyedV1 {
+    ComputeAqlQueueDestroyedV1 {
+        queue_id,
+        // Ring, control, EOP, context-save, and completion-signal arena.
+        released_resources: GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1,
     }
 }
 
@@ -3965,10 +3979,7 @@ impl ComputeAqlQueueSessionV1 {
         let completion_signals = memory.unmap_from_gpu(completion_signals.into_token())?;
         memory.release(completion_signals)?;
         let callback_result = after_queue_destroyed(memory)?;
-        let destroyed = ComputeAqlQueueDestroyedV1 {
-            queue_id: self.observation.queue_id,
-            released_resources: 5,
-        };
+        let destroyed = destroyed_queue_observation(self.observation.queue_id);
         let Some((dispatch_generation, data)) = returned_dispatch else {
             return Ok((QueueDestroyOutcomeV1::Released(destroyed), callback_result));
         };

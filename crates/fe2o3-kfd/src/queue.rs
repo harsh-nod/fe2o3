@@ -64,6 +64,7 @@ pub use device_content::{
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1,
 };
 
+pub(crate) use live::GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1;
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
@@ -83,8 +84,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r23-v1\n",
-    "compute_session_sha256=61db3e72cbb07d40bd721bb33e5d9a1235c5f227da08bb2b7808b9530c42fb24\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r24-v1\n",
+    "compute_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -106,7 +107,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "95ea62ada32e40e8dcb81baa218c5e23be08b719dcc0b13bfcd5d9b94b98e190";
+    "a8673e9cb2943f320401032bb7bb4b48c611051c267a62ea20e0219631ac75b5";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
