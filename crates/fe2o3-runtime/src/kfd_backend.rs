@@ -4393,12 +4393,41 @@ fn enqueue_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) {
     ids.push_back(id);
 }
 
+fn prepend_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) {
+    if ids.len() == ids.capacity() {
+        std::process::abort();
+    }
+    ids.push_front(id);
+}
+
 fn remove_xgmi_ready_id_v1(ids: &mut VecDeque<u64>, id: u64) -> bool {
     let Some(index) = ids.iter().position(|candidate| *candidate == id) else {
         return false;
     };
     ids.remove(index);
     true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XgmiProgressIndexPhaseV1 {
+    InFlight,
+    Ready,
+    Waiting,
+}
+
+fn remove_xgmi_progress_index_v1(
+    ready: &mut VecDeque<u64>,
+    in_flight: &mut Vec<u64>,
+    id: u64,
+) -> XgmiProgressIndexPhaseV1 {
+    if remove_ordered_xgmi_id_v1(in_flight, id) {
+        return XgmiProgressIndexPhaseV1::InFlight;
+    }
+    if remove_xgmi_ready_id_v1(ready, id) {
+        XgmiProgressIndexPhaseV1::Ready
+    } else {
+        XgmiProgressIndexPhaseV1::Waiting
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6177,13 +6206,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     }
 
     fn remove_directional_indexes(&mut self, active: &XgmiRuntimeSubmissionV1) {
-        let ready =
-            remove_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
-        let in_flight = remove_ordered_xgmi_id_v1(
+        let _ = remove_xgmi_progress_index_v1(
+            &mut self.ready_by_direction[active.direction],
             &mut self.in_flight_by_direction[active.direction],
             active.id,
         );
-        if ready && in_flight || self.active_by_direction[active.direction] == 0 {
+        if self.active_by_direction[active.direction] == 0 {
             std::process::abort();
         }
         self.active_by_direction[active.direction] -= 1;
@@ -6263,7 +6291,18 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         if active_batch.len() != requests.len() {
             std::process::abort();
         }
-        for (active, request) in active_batch.into_iter().zip(requests) {
+        if active_batch.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+            std::process::abort();
+        }
+        let direction = active_batch.first().map(|active| active.direction);
+        if direction.is_some_and(|direction| {
+            active_batch
+                .iter()
+                .any(|active| active.direction != direction)
+        }) {
+            std::process::abort();
+        }
+        for (active, request) in active_batch.into_iter().zip(requests).rev() {
             let (source, destination) = request.into_mappings();
             self.restore_mapped_copy_pair(
                 active.source,
@@ -6272,7 +6311,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 source,
                 destination,
             )?;
-            enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
+            prepend_xgmi_ready_id_v1(&mut self.ready_by_direction[active.direction], active.id);
             self.active.insert(active.id, active);
         }
         Ok(())
@@ -8788,6 +8827,58 @@ mod tests {
             }
         }
         assert_eq!(observed, READY);
+    }
+
+    #[test]
+    fn native_xgmi_completed_ticket_bypasses_a_large_ready_backlog() {
+        const READY: u64 = 131_072;
+        const COMPLETED: u64 = READY / 2;
+
+        let mut ready = VecDeque::new();
+        ready.try_reserve_exact(READY as usize).unwrap();
+        ready.extend(1..=READY);
+        let expected_ready = ready.clone();
+        let mut in_flight = Vec::with_capacity(GFX942_SDMA_MAX_IN_FLIGHT_V1);
+        in_flight.push(COMPLETED);
+
+        // Mirroring the marker in the hostile test backlog makes index-order
+        // observable: an implementation that searches ready first removes it.
+        assert_eq!(
+            remove_xgmi_progress_index_v1(&mut ready, &mut in_flight, COMPLETED),
+            XgmiProgressIndexPhaseV1::InFlight
+        );
+        assert!(in_flight.is_empty());
+        assert_eq!(ready, expected_ready);
+    }
+
+    #[test]
+    fn native_xgmi_recoverable_prefix_restoration_preserves_fifo_order() {
+        let mut ready = VecDeque::new();
+        ready.try_reserve_exact(8).unwrap();
+        ready.extend([40, 50, 60]);
+
+        for id in [10, 20, 30].into_iter().rev() {
+            prepend_xgmi_ready_id_v1(&mut ready, id);
+        }
+
+        assert_eq!(
+            ready.into_iter().collect::<Vec<_>>(),
+            [10, 20, 30, 40, 50, 60]
+        );
+    }
+
+    #[test]
+    fn native_xgmi_partial_reverse_restoration_keeps_each_restored_owner_indexed() {
+        let mut ready = VecDeque::new();
+        ready.try_reserve_exact(8).unwrap();
+        ready.extend([40, 50, 60]);
+
+        // Reverse restoration has completed owners 30 and 20 when restoring
+        // owner 10 fails. Both completed owners remain a FIFO prefix.
+        prepend_xgmi_ready_id_v1(&mut ready, 30);
+        prepend_xgmi_ready_id_v1(&mut ready, 20);
+
+        assert_eq!(ready.into_iter().collect::<Vec<_>>(), [20, 30, 40, 50, 60]);
     }
 
     #[test]

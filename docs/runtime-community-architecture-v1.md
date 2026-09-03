@@ -236,7 +236,9 @@ ambiguity.
 - Native XGMI facade batches are direction-local and FIFO readiness ordered,
   reuse exact-roster mappings after successful completion, and use the same
   63-ticket ring bound. Ready dequeue and publication selection are O(batch),
-  with `batch <= 63`; focused in-flight selection is O(log batch). Dependency
+  with `batch <= 63`; focused in-flight selection is O(log batch), while
+  completed-ticket removal is O(batch) within that fixed bound and does not
+  inspect the ready backlog. Dependency
   wakeup is O(waiters for the completed dependency times the bounded 256-entry
   dependency roster). Prepublication cancellation may remove an arbitrary
   ready entry in O(ready), and allocation-overlap admission remains O(active).
