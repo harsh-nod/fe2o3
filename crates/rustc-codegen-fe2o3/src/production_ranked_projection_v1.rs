@@ -255,6 +255,7 @@ struct IntrinsicProjectionV1 {
     capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
     transpose_workgroup_effects: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
+    direct_read_effects: Vec<Option<GuardedRankedAccessV1>>,
     direct_write_effects: Vec<Option<GuardedRankedAccessV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
@@ -2844,6 +2845,22 @@ fn project_and_verify_ranked_root_v1(
             guarded_sites.try_reserve(1).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "strided read access-site storage cannot be reserved",
+                )
+            })?;
+            guarded_sites.push(GuardedAccessSiteV1 {
+                insertion_operation: operations.len(),
+                access,
+            });
+        }
+        if let Some(access) = intrinsic
+            .direct_read_effects
+            .get(block_index)
+            .cloned()
+            .flatten()
+        {
+            guarded_sites.try_reserve(1).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "volatile read access-site storage cannot be reserved",
                 )
             })?;
             guarded_sites.push(GuardedAccessSiteV1 {
@@ -6426,6 +6443,7 @@ fn project_intrinsic_contracts(
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
     let mut runtime_index_arguments = vec![None; local_count];
+    let mut runtime_slice_extent_arguments = vec![None; local_count];
     let mut next_runtime_argument = 1_usize;
     let read_view_effects = project_strided_read_effects_v1(
         types,
@@ -7150,6 +7168,7 @@ fn project_intrinsic_contracts(
 
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
+    let mut direct_read_effects = vec![None; function.blocks().len()];
     let mut direct_write_effects = vec![None; function.blocks().len()];
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -7164,6 +7183,135 @@ fn project_intrinsic_contracts(
             operation,
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
         );
+        if let SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } = operation {
+            if call.arguments().len() != 2 || call.destination().is_none() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "volatile load argument or result arity changed",
+                ));
+            }
+            let receiver = call
+                .arguments()
+                .first()
+                .and_then(simple_operand_local)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a volatile load receiver without one exact slice local",
+                ))?
+                .index() as usize;
+            let allocation_contract = local_allocations.get(receiver).copied().flatten().ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a volatile load receiver without one authenticated kernel-argument origin",
+                ),
+            )?;
+            if !volatile_load_frozen_shared_scalar_source_v1(
+                types,
+                function,
+                &stable_argument_origins,
+                receiver,
+                *element,
+            ) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a volatile load is not rooted in a frozen shared Rust allocation",
+                ));
+            }
+            let extent = project_runtime_slice_extent_argument_v1(
+                receiver,
+                &stable_argument_origins,
+                &mut runtime_slice_extent_arguments,
+                &mut next_runtime_argument,
+            )?;
+            let index = project_runtime_index_operand_v1(
+                call.arguments().get(1),
+                constants,
+                &stable_argument_origins,
+                &mut runtime_index_arguments,
+                &mut next_runtime_argument,
+                operations,
+                next_value,
+            )?;
+            let origin_index = allocation_contract.allocation_origin as usize;
+            let element_width = type_width(types, *element)?;
+            let view = match views_by_origin
+                .get(origin_index)
+                .and_then(|view| view.as_ref())
+            {
+                Some(view)
+                    if view.element_width == element_width
+                        && !view.writable
+                        && view.shape == [DYNAMIC_EXTENT]
+                        && view.dynamic_extents == [extent]
+                        && view.memory_space == MemorySpaceAttr::Global
+                        && view.allocation_origin == allocation_contract.allocation_origin
+                        && view.noalias_class == allocation_contract.noalias_class =>
+                {
+                    view.result
+                }
+                Some(_) => {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "one volatile allocation origin was projected with conflicting type or extent",
+                    ));
+                }
+                None => {
+                    reserve_operation(operations)?;
+                    let view = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::ViewInSpace {
+                        result: view,
+                        element_width,
+                        writable: false,
+                        shape: vec![DYNAMIC_EXTENT],
+                        dynamic_extents: vec![extent],
+                        memory_space: MemorySpaceAttr::Global,
+                        allocation_origin: allocation_contract.allocation_origin,
+                        noalias_class: allocation_contract.noalias_class,
+                    });
+                    push_ranked_ir(
+                        ranked_ir,
+                        &format!(
+                            "  %{} = kernel.ranked_view <{}, false, [dynamic], Global>({})\n",
+                            view.get(),
+                            element_width,
+                            ranked_value_text_v1(extent),
+                        ),
+                    )?;
+                    let slot = views_by_origin.get_mut(origin_index).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "a volatile allocation origin outside the semantic local table",
+                        ),
+                    )?;
+                    *slot = Some(ProjectedViewV1 {
+                        result: view,
+                        element_width,
+                        writable: false,
+                        shape: vec![DYNAMIC_EXTENT],
+                        dynamic_extents: vec![extent],
+                        memory_space: MemorySpaceAttr::Global,
+                        allocation_origin: allocation_contract.allocation_origin,
+                        noalias_class: allocation_contract.noalias_class,
+                    });
+                    view
+                }
+            };
+            let access = GuardedRankedAccessV1 {
+                view,
+                indices: vec![index],
+                checked_success: None,
+                comparisons: vec![(index, extent)],
+                access: AccessKindAttr::Read,
+                memory_space: MemorySpaceAttr::Global,
+                source: block.terminator().source(),
+                semantic_site: None,
+            };
+            let slot = direct_read_effects.get_mut(block_index).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a volatile read block outside the semantic CFG",
+                ),
+            )?;
+            if slot.replace(access).is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "multiple volatile reads occupy one semantic block",
+                ));
+            }
+            continue;
+        }
         let (element, index, precondition, checked_success, direct_write) = match operation {
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. } => {
                 let projected = projected_disjoint_operand_v1(
@@ -7995,6 +8143,7 @@ fn project_intrinsic_contracts(
         index_values,
         local_contracts,
         extent_argument_count: if guarded_accesses.is_empty()
+            && direct_read_effects.iter().all(Option::is_none)
             && direct_write_effects.iter().all(Option::is_none)
             && next_runtime_argument == 1
         {
@@ -8011,6 +8160,7 @@ fn project_intrinsic_contracts(
         capability_read_effects,
         transpose_workgroup_effects,
         read_view_effects,
+        direct_read_effects,
         direct_write_effects,
         pipeline_effects,
         generated_terminator_effects,
@@ -14643,6 +14793,44 @@ fn project_uniform_switch_operand_v1(
     Ok(Some(ProductionRankedValueV1::Argument(argument)))
 }
 
+fn project_runtime_slice_extent_argument_v1(
+    receiver: usize,
+    stable_argument_origins: &[Option<u32>],
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    let origin = stable_argument_origins
+        .get(receiver)
+        .copied()
+        .flatten()
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a volatile load slice length without one stable kernel-argument origin",
+        ))? as usize;
+    let slot = arguments
+        .get_mut(origin)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a volatile load slice extent origin outside the semantic local table",
+        ))?;
+    let argument = match *slot {
+        Some(argument) => argument,
+        None => {
+            let argument = u32::try_from(*next_argument).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "too many volatile load slice extent arguments",
+                )
+            })?;
+            *next_argument = next_argument.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "volatile load slice extent argument count overflow",
+                ),
+            )?;
+            *slot = Some(argument);
+            argument
+        }
+    };
+    Ok(ProductionRankedValueV1::Argument(argument))
+}
+
 fn project_runtime_index_operand_v1(
     operand: Option<&SemanticOperandV1>,
     constants: &[Option<u64>],
@@ -15286,6 +15474,102 @@ fn local_allocation_contracts(
         .iter()
         .map(|origin| origin.and_then(|origin| arguments.get(origin as usize).copied().flatten()))
         .collect())
+}
+
+fn volatile_load_frozen_shared_scalar_source_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    stable_argument_origins: &[Option<u32>],
+    receiver: usize,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(argument) = stable_argument_origins
+        .get(receiver)
+        .copied()
+        .flatten()
+        .and_then(|argument| usize::try_from(argument).ok())
+    else {
+        return false;
+    };
+    let Some(&ownership) = function.abi().source_argument_ownership().get(argument) else {
+        return false;
+    };
+    let Some(&source_type) = function.abi().source_input_types().get(argument) else {
+        return false;
+    };
+    let Some(source_declaration) = types.get(source_type.index() as usize) else {
+        return false;
+    };
+    let Some(abi_argument) = function.abi().adjusted_arguments().get(argument) else {
+        return false;
+    };
+    let Some(pointee) = abi_argument
+        .value()
+        .pointee_override()
+        .or(source_declaration.abi_properties().first_pointee())
+    else {
+        return false;
+    };
+    volatile_load_frozen_shared_scalar_type_v1(
+        types,
+        source_type,
+        ownership,
+        pointee.kind(),
+        element,
+    )
+}
+
+fn volatile_load_frozen_shared_scalar_type_v1(
+    types: &[SemanticTypeDeclV1],
+    source_type: SemanticTypeIdV1,
+    ownership: SemanticSourceArgumentOwnershipV1,
+    pointee_kind: SemanticAbiPointeeKindV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    if ownership != SemanticSourceArgumentOwnershipV1::SharedBorrow
+        || !matches!(
+            pointee_kind,
+            SemanticAbiPointeeKindV1::SharedReference { .. }
+        )
+    {
+        return false;
+    }
+    let Some(source_declaration) = types.get(source_type.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Pointer(pointer) = source_declaration.shape() else {
+        return false;
+    };
+    if pointer.kind() != SemanticPointerKindV1::Reference
+        || pointer.mutability() != SemanticMutabilityV1::Immutable
+        || pointer.address_space() != 0
+        || pointer.pointer_width_bits() != 64
+        || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+    {
+        return false;
+    }
+    let Some(SemanticTypeShapeV1::Slice {
+        element: slice_element,
+    }) = types
+        .get(pointer.pointee().index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return false;
+    };
+    *slice_element == element
+        && matches!(
+            types
+                .get(element.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool))
+                | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    bits: 8 | 16 | 32 | 64,
+                    ..
+                }))
+                | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float {
+                    bits: 32 | 64
+                }))
+        )
 }
 
 fn authenticated_source_allocation_contract_v1(
@@ -23186,6 +23470,127 @@ mod tests {
         assert!(unqualified.writable);
     }
 
+    fn volatile_load_source_types_v1(
+        element_shape: SemanticTypeShapeV1,
+        pointer_kind: SemanticPointerKindV1,
+        mutability: SemanticMutabilityV1,
+    ) -> Vec<SemanticTypeDeclV1> {
+        let element = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(116)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(116)),
+            SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+            element_shape,
+        );
+        let slice = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(117)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(117)),
+            SemanticTypeLayoutV1::new(None, 4).unwrap(),
+            SemanticTypeShapeV1::Slice {
+                element: SemanticTypeIdV1::from_index(0),
+            },
+        );
+        let source = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(118)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(118)),
+            SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    SemanticTypeIdV1::from_index(1),
+                    pointer_kind,
+                    mutability,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::SliceLength,
+                )
+                .unwrap(),
+            ),
+        );
+        vec![element, slice, source]
+    }
+
+    #[test]
+    fn volatile_load_read_only_eligibility_is_local_and_exact() {
+        let scalar = SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 });
+        let shared = volatile_load_source_types_v1(
+            scalar,
+            SemanticPointerKindV1::Reference,
+            SemanticMutabilityV1::Immutable,
+        );
+        let source = SemanticTypeIdV1::from_index(2);
+        let element = SemanticTypeIdV1::from_index(0);
+        let generic_contract = allocation_contract_from_pointee(
+            SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            false,
+            1,
+        );
+        assert!(generic_contract.writable);
+        assert!(volatile_load_frozen_shared_scalar_type_v1(
+            &shared,
+            source,
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            element,
+        ));
+
+        for (ownership, pointer_kind, mutability, pointee_kind) in [
+            (
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Mutable,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                SemanticPointerKindV1::Raw,
+                SemanticMutabilityV1::Immutable,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+            ),
+            (
+                SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                SemanticAbiPointeeKindV1::Raw,
+            ),
+        ] {
+            let types = volatile_load_source_types_v1(
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 }),
+                pointer_kind,
+                mutability,
+            );
+            assert!(!volatile_load_frozen_shared_scalar_type_v1(
+                &types,
+                source,
+                ownership,
+                pointee_kind,
+                element,
+            ));
+        }
+
+        for element_shape in [
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Char),
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+        ] {
+            let types = volatile_load_source_types_v1(
+                element_shape,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+            );
+            assert!(!volatile_load_frozen_shared_scalar_type_v1(
+                &types,
+                source,
+                SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                SemanticAbiPointeeKindV1::SharedReference { frozen: false },
+                element,
+            ));
+        }
+    }
+
     #[test]
     fn authenticated_source_ownership_distinguishes_borrows_owners_and_raw_pointers() {
         let raw = allocation_contract_from_pointee(SemanticAbiPointeeKindV1::Raw, false, 3);
@@ -30869,6 +31274,15 @@ mod tests {
                 }
             ));
         }
+    }
+
+    #[test]
+    fn volatile_load_is_never_an_effect_free_scalar_dependency() {
+        assert!(!compiler_intrinsic_is_pure_total_scalar_dependency_v1(
+            &SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad {
+                element: SCALAR_TYPE,
+            },
+        ));
     }
 
     #[test]

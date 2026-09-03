@@ -5094,11 +5094,13 @@ fn repeated_nonempty_helper_calls_reuse_frame_and_value_scratch() {
     ));
 }
 
-fn conditional_load_module(guarded: bool) -> Module {
+fn conditional_load_module(guarded: bool, volatile: bool) -> Module {
     let element = Type::Scalar(ScalarType::U8);
     let slice = Type::slice(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
     let pointer = Type::pointer(element.clone(), AddressSpace::Global, AccessMode::ReadWrite);
     let mut block = BasicBlock::new(BlockId(0));
+    let mut guarded_access = MemoryAccess::new(AddressSpace::Global, 1);
+    guarded_access.volatile = volatile;
     block.operations = vec![
         op(
             4,
@@ -5114,7 +5116,7 @@ fn conditional_load_module(guarded: bool) -> Module {
                     pointer: ValueId(4),
                     predicate: ValueId(2),
                     fallback: ValueId(3),
-                    access: MemoryAccess::new(AddressSpace::Global, 1),
+                    access: guarded_access,
                 }
             } else {
                 OperationKind::Load {
@@ -5180,7 +5182,7 @@ fn conditional_load_request(predicate: bool, input: BufferArgumentV1) -> Simulat
 
 #[test]
 fn guarded_load_false_uses_fallback_without_reading_or_emitting_a_read() {
-    let admitted = admitted(conditional_load_module(true));
+    let admitted = admitted(conditional_load_module(true, false));
     let mut request = conditional_load_request(false, empty_u8_buffer());
     request.events = EventPolicyV1::Enabled;
     let mut events = Collector::default();
@@ -5205,8 +5207,32 @@ fn guarded_load_false_uses_fallback_without_reading_or_emitting_a_read() {
 }
 
 #[test]
+fn volatile_guarded_load_false_does_not_read_an_empty_slice() {
+    let admitted = admitted(conditional_load_module(true, true));
+    let mut request = conditional_load_request(false, empty_u8_buffer());
+    request.events = EventPolicyV1::Enabled;
+    let mut events = Collector::default();
+    let execution = admitted
+        .simulate_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut events,
+        )
+        .expect("false volatile guarded load is non-speculative");
+
+    assert_eq!(execution.buffer(1).unwrap().bytes(), &[99]);
+    assert!(
+        !events
+            .0
+            .iter()
+            .any(|event| matches!(event.kind, SimulationEventKindV1::MemoryRead { .. }))
+    );
+}
+
+#[test]
 fn guarded_load_true_reads_through_the_shared_load_path() {
-    let admitted = admitted(conditional_load_module(true));
+    let admitted = admitted(conditional_load_module(true, false));
     let mut request = conditional_load_request(true, byte_buffer(&[7]));
     request.events = EventPolicyV1::Enabled;
     let mut events = Collector::default();
@@ -5231,8 +5257,34 @@ fn guarded_load_true_reads_through_the_shared_load_path() {
 }
 
 #[test]
+fn volatile_guarded_load_true_reads_once() {
+    let admitted = admitted(conditional_load_module(true, true));
+    let mut request = conditional_load_request(true, byte_buffer(&[7]));
+    request.events = EventPolicyV1::Enabled;
+    let mut events = Collector::default();
+    let execution = admitted
+        .simulate_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut events,
+        )
+        .expect("true volatile guarded load reads memory");
+
+    assert_eq!(execution.buffer(1).unwrap().bytes(), &[7]);
+    assert_eq!(
+        events
+            .0
+            .iter()
+            .filter(|event| matches!(event.kind, SimulationEventKindV1::MemoryRead { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn guarded_load_true_reports_the_guarded_operation_site_for_an_invalid_read() {
-    let error = admitted(conditional_load_module(true))
+    let error = admitted(conditional_load_module(true, false))
         .simulate(
             &conditional_load_request(true, empty_u8_buffer()),
             SimulationTargetV1::amdgpu_64(),
@@ -5255,7 +5307,7 @@ fn false_guarded_load_does_not_consume_a_memory_access_record() {
         max_memory_access_records: 1,
         ..SimulationLimitsV1::default()
     };
-    let admitted = admitted(conditional_load_module(true));
+    let admitted = admitted(conditional_load_module(true, false));
     let false_execution = admitted
         .simulate(
             &conditional_load_request(false, empty_u8_buffer()),
@@ -5286,8 +5338,8 @@ fn false_guarded_load_does_not_consume_a_memory_access_record() {
 
 #[test]
 fn guarded_load_has_the_same_inline_resident_cost_as_load() {
-    let guarded = admitted(conditional_load_module(true));
-    let ordinary = admitted(conditional_load_module(false));
+    let guarded = admitted(conditional_load_module(true, false));
+    let ordinary = admitted(conditional_load_module(false, false));
     assert_eq!(
         guarded.admitted_resident_bytes(),
         ordinary.admitted_resident_bytes()

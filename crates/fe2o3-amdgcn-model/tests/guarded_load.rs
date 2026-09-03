@@ -5,13 +5,15 @@ use fe2o3_kernel_ir::{
     ValueDef, ValueId,
 };
 
-fn guarded_load_module() -> Module {
+fn guarded_load_module(volatile: bool) -> Module {
     let slice = Type::slice(
         Type::Scalar(ScalarType::U32),
         AddressSpace::Global,
         AccessMode::ReadOnly,
     );
     let mut block = BasicBlock::new(BlockId(0));
+    let mut access = MemoryAccess::new(AddressSpace::Global, 4);
+    access.volatile = volatile;
     block.operations.push(Operation::effect_free(
         ValueDef::new(
             ValueId(3),
@@ -29,7 +31,7 @@ fn guarded_load_module() -> Module {
             pointer: ValueId(3),
             predicate: ValueId(1),
             fallback: ValueId(2),
-            access: MemoryAccess::new(AddressSpace::Global, 4),
+            access,
         },
     ));
     block.terminator = Some(Terminator::Return { values: vec![] });
@@ -55,7 +57,7 @@ fn guarded_load_module() -> Module {
     module
 }
 
-fn assert_non_speculative_cfg_diamond(llvm: &str) {
+fn assert_non_speculative_cfg_diamond(llvm: &str, volatile: bool) {
     let branch = llvm
         .find("br i1 %arg1, label %guarded_load_bb0_op1_true, label %guarded_load_bb0_op1_false")
         .unwrap();
@@ -63,8 +65,13 @@ fn assert_non_speculative_cfg_diamond(llvm: &str) {
         .find("guarded_load_bb0_op1_true:")
         .map(|offset| branch + offset)
         .unwrap();
+    let expected_load = if volatile {
+        "%v4.loaded = load volatile i32, ptr addrspace(1) %v3, align 4"
+    } else {
+        "%v4.loaded = load i32, ptr addrspace(1) %v3, align 4"
+    };
     let load = llvm[true_label..]
-        .find("%v4.loaded = load i32, ptr addrspace(1) %v3, align 4")
+        .find(expected_load)
         .map(|offset| true_label + offset)
         .unwrap();
     let false_label = llvm[load..]
@@ -84,9 +91,20 @@ fn assert_non_speculative_cfg_diamond(llvm: &str) {
 
 #[test]
 fn guarded_load_lowers_to_a_non_speculative_cfg_diamond() {
-    let module = guarded_load_module();
-    assert_non_speculative_cfg_diamond(&lower_compiler_module_to_llvm_ir(&module).unwrap());
+    let module = guarded_load_module(false);
+    assert_non_speculative_cfg_diamond(&lower_compiler_module_to_llvm_ir(&module).unwrap(), false);
     assert_non_speculative_cfg_diamond(
         &lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id).unwrap(),
+        false,
+    );
+}
+
+#[test]
+fn volatile_guarded_load_lowers_to_a_non_speculative_cfg_diamond() {
+    let module = guarded_load_module(true);
+    assert_non_speculative_cfg_diamond(&lower_compiler_module_to_llvm_ir(&module).unwrap(), true);
+    assert_non_speculative_cfg_diamond(
+        &lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id).unwrap(),
+        true,
     );
 }

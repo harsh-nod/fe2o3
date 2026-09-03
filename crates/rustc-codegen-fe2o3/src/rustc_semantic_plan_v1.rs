@@ -49,7 +49,9 @@ use crate::rustc_semantic_adapter_v1::{
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
 #[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v2";
+#[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V3: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v3";
+const PREFLIGHT_PLAN_DOMAIN_V4: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v4";
 const COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/compiler-intrinsic-definition/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
@@ -61,7 +63,9 @@ enum TerminalIdentitySchemaV1 {
     IndependentV1,
     #[cfg(test)]
     CombinedV2,
+    #[cfg_attr(not(test), allow(dead_code))]
     CombinedV3,
+    CombinedV4,
 }
 
 #[derive(Clone, Debug)]
@@ -2868,7 +2872,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> ([u8; 32], Box<[u8]>) {
     let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V3);
+        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V4);
     digest.field(target.identity().as_bytes());
     digest.field(&identity_inventory_sha256);
     for cardinality in [
@@ -2929,7 +2933,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(terminal.identities.const_generic_arguments().as_bytes());
         digest.field(&[terminal_expansion_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV3,
+            TerminalIdentitySchemaV1::CombinedV4,
         )]);
         digest.field(&terminal.abi.rustc_source_signature_sha256);
         digest.field(&terminal.abi.rustc_fn_abi_sha256);
@@ -2978,7 +2982,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(&recipe.block.to_le_bytes());
         digest.field(&[terminal_expansion_tag_for_schema_v1(
             recipe.expansion,
-            TerminalIdentitySchemaV1::CombinedV3,
+            TerminalIdentitySchemaV1::CombinedV4,
         )]);
         digest.field(&recipe.arguments.to_le_bytes());
         digest.field(recipe.identities.function().as_bytes());
@@ -3216,21 +3220,22 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
-            TerminalIdentitySchemaV1::CombinedV3 => 111,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 111,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
-            TerminalIdentitySchemaV1::CombinedV3 => 112,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
-                TerminalIdentitySchemaV1::CombinedV3 => 100,
+                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -3564,11 +3569,24 @@ mod tests {
         assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV3);
         assert_ne!(PREFLIGHT_PLAN_DOMAIN_V1, PREFLIGHT_PLAN_DOMAIN_V2);
         assert_ne!(PREFLIGHT_PLAN_DOMAIN_V2, PREFLIGHT_PLAN_DOMAIN_V3);
+        assert_ne!(PREFLIGHT_PLAN_DOMAIN_V3, PREFLIGHT_PLAN_DOMAIN_V4);
         assert_eq!(
             pipeline.map(|expansion| {
                 terminal_expansion_tag_for_schema_v1(expansion, combined_schema)
             }),
             [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::RustcFabsF32,
+                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs),
+                ProductionTerminalExpansionV1::MemoryVolatileLoad,
+            ]
+            .map(|expansion| terminal_expansion_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV4,
+            )),
+            [113, 114, 115],
         );
         assert_eq!(
             [

@@ -8187,6 +8187,7 @@ fn semantic_reachable_blocks_avoiding_node_v1(
 
 fn semantic_requires_runtime_assert_failure(
     function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
     infallible_asserts: &BTreeSet<u32>,
 ) -> bool {
     function
@@ -8198,6 +8199,13 @@ fn semantic_requires_runtime_assert_failure(
                 !infallible_asserts.contains(&(block_index as u32))
             }
             SemanticTerminatorKindV1::Abort | SemanticTerminatorKindV1::UnwindTerminate => true,
+            SemanticTerminatorKindV1::Call(call) => matches!(
+                callables.get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { .. },
+                    ..
+                })
+            ),
             _ => false,
         })
 }
@@ -8599,8 +8607,11 @@ fn lower_one_semantic_function_v1(
                 "lowered semantic function is missing",
             )
         })?;
-    let has_runtime_assert =
-        semantic_requires_runtime_assert_failure(function, &infallible_asserts);
+    let has_runtime_assert = semantic_requires_runtime_assert_failure(
+        function,
+        semantic.callables(),
+        &infallible_asserts,
+    );
     let statement_count = function
         .blocks()
         .iter()
@@ -9363,7 +9374,9 @@ fn lower_single_root_module(
             .checked_add(function.blocks().len())
             .and_then(|count| {
                 count.checked_add(usize::from(semantic_requires_runtime_assert_failure(
-                    function, infallible,
+                    function,
+                    semantic.callables(),
+                    infallible,
                 )))
             })
             .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
@@ -14203,6 +14216,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "compiler intrinsic call has no destination",
             )
         })?;
+        let mut runtime_guard = None;
         let binding = match operation {
             SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
                 dynamic_lds,
@@ -16141,6 +16155,125 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     },
                 )?
             }
+            SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
+                self.require_call_argument_count(block, call, 2)?;
+                if !semantic_volatile_load_contract_v1(
+                    self.types,
+                    semantic_operand_type(&call.arguments()[0]),
+                    semantic_operand_type(&call.arguments()[1]),
+                    *element,
+                ) || destination.place().ty() != *element
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load semantic slice, index, or result contract changed",
+                    ));
+                }
+                let (slice, slice_ty) = self
+                    .lower_operand(block, None, &call.arguments()[0], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let Type::Slice(slice_contract) = slice_ty else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load source is not a lowered slice",
+                    ));
+                };
+                if slice_contract.address_space != AddressSpace::Global
+                    || slice_contract.access != AccessMode::ReadOnly
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load source does not retain immutable global-slice access",
+                    ));
+                }
+                let element_ty = lower_scalar_type(self.types, *element)?;
+                if *slice_contract.element != element_ty || destination.place().ty() != *element {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load source or destination element type changed",
+                    ));
+                }
+                let index = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let index = self
+                    .coerce_index(block, operations, index)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                    .0;
+                let length = self.emit_id(
+                    operations,
+                    Type::INDEX,
+                    OperationKind::SliceLength { slice },
+                )?;
+                let present =
+                    self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+                let zero_index = self.emit_index_constant(operations, 0)?;
+                let safe_index = self.emit_select_index(operations, present, index, zero_index)?;
+                let pointer_ty = Type::pointer(
+                    element_ty.clone(),
+                    slice_contract.address_space,
+                    slice_contract.access,
+                );
+                let base = self.emit_id(
+                    operations,
+                    pointer_ty.clone(),
+                    OperationKind::SliceData { slice },
+                )?;
+                let pointer = self.emit_id(
+                    operations,
+                    pointer_ty,
+                    OperationKind::GetElementPointer {
+                        base,
+                        offset: safe_index,
+                    },
+                )?;
+                let fallback = volatile_load_zero_constant_v1(&element_ty).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load element has no supported scalar fallback",
+                    )
+                })?;
+                let fallback = self.emit_id(
+                    operations,
+                    element_ty.clone(),
+                    OperationKind::Constant(fallback),
+                )?;
+                let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load element has no supported scalar alignment",
+                    )
+                })?;
+                let mut access = MemoryAccess::new(slice_contract.address_space, alignment);
+                access.volatile = true;
+                let value = self.emit_id(
+                    operations,
+                    element_ty.clone(),
+                    OperationKind::GuardedLoad {
+                        pointer,
+                        predicate: present,
+                        fallback,
+                        access,
+                    },
+                )?;
+                runtime_guard = Some(present);
+                SemanticValueBindingV1::Value {
+                    id: value,
+                    ty: element_ty,
+                }
+            }
             SemanticCompilerIntrinsicOperationV1::WaveBarrier => {
                 return Err(unsupported(
                     0,
@@ -16161,10 +16294,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             operations,
         )?;
         self.bind_destination(block, None, destination.place(), binding)?;
-        Ok(Terminator::Branch {
-            target: BlockId(destination.edge().target().index()),
-            arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
-        })
+        let target = BlockId(destination.edge().target().index());
+        let arguments = self.edge_arguments(block, destination.edge().target(), operations)?;
+        if let Some(condition) = runtime_guard {
+            let failure = self.assert_failure_block.ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "volatile load has no retained bounds-failure trap block",
+                )
+            })?;
+            Ok(Terminator::ConditionalBranch {
+                condition,
+                then_target: target,
+                then_arguments: arguments,
+                else_target: failure,
+                else_arguments: Vec::new(),
+            })
+        } else {
+            Ok(Terminator::Branch { target, arguments })
+        }
     }
 
     fn lower_defined_call(
@@ -20614,6 +20764,78 @@ fn strided_read_scalar_alignment_v1(element: &Type) -> Option<u32> {
     }
 }
 
+fn semantic_volatile_load_contract_v1(
+    types: &[SemanticTypeDeclV1],
+    source: SemanticTypeIdV1,
+    index: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(source) = types.get(source.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Pointer(pointer) = source.shape() else {
+        return false;
+    };
+    if pointer.kind() != SemanticPointerKindV1::Reference
+        || pointer.mutability() != SemanticMutabilityV1::Immutable
+        || pointer.address_space() != 0
+        || pointer.pointer_width_bits() != 64
+        || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+        || source.layout().size_bytes() != Some(16)
+        || source.layout().alignment_bytes() != 8
+    {
+        return false;
+    }
+    if !matches!(
+        types.get(pointer.pointee().index() as usize).map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Slice { element: actual }) if *actual == element
+    ) || !matches!(
+        types
+            .get(index.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        }))
+    ) {
+        return false;
+    }
+    matches!(
+        types
+            .get(element.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(
+            SemanticScalarTypeV1::Bool | SemanticScalarTypeV1::Char
+        )) | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            bits: 8 | 16 | 32 | 64,
+            ..
+        })) | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float {
+            bits: 32 | 64,
+        }))
+    )
+}
+
+fn volatile_load_zero_constant_v1(element: &Type) -> Option<Constant> {
+    Some(match element.as_scalar()? {
+        ScalarType::Bool => Constant::Bool(false),
+        ScalarType::I8 => Constant::I8(0),
+        ScalarType::I16 => Constant::I16(0),
+        ScalarType::I32 => Constant::I32(0),
+        ScalarType::I64 => Constant::I64(0),
+        ScalarType::U8 => Constant::U8(0),
+        ScalarType::U16 => Constant::U16(0),
+        ScalarType::U32 => Constant::U32(0),
+        ScalarType::U64 => Constant::U64(0),
+        ScalarType::F32 => Constant::F32Bits(0),
+        ScalarType::F64 => Constant::F64Bits(0),
+        ScalarType::I128
+        | ScalarType::U128
+        | ScalarType::Index
+        | ScalarType::F16
+        | ScalarType::Bf16 => return None,
+    })
+}
+
 fn unsupported_terminator_detail(terminator: &SemanticTerminatorKindV1) -> &'static str {
     match terminator {
         SemanticTerminatorKindV1::SwitchInt { .. } => {
@@ -23495,6 +23717,297 @@ mod resource_tests {
             );
         }
         assert_eq!(strided_read_scalar_alignment_v1(&Type::INDEX), None);
+    }
+
+    #[test]
+    fn volatile_load_supported_scalar_set_is_exact_and_closed() {
+        for scalar in [
+            ScalarType::Bool,
+            ScalarType::I8,
+            ScalarType::I16,
+            ScalarType::I32,
+            ScalarType::I64,
+            ScalarType::U8,
+            ScalarType::U16,
+            ScalarType::U32,
+            ScalarType::U64,
+            ScalarType::F32,
+            ScalarType::F64,
+        ] {
+            assert!(volatile_load_zero_constant_v1(&Type::Scalar(scalar)).is_some());
+            assert!(strided_read_scalar_alignment_v1(&Type::Scalar(scalar)).is_some());
+        }
+        for scalar in [
+            ScalarType::I128,
+            ScalarType::U128,
+            ScalarType::Index,
+            ScalarType::F16,
+            ScalarType::Bf16,
+        ] {
+            assert!(volatile_load_zero_constant_v1(&Type::Scalar(scalar)).is_none());
+        }
+        assert!(volatile_load_zero_constant_v1(&Type::INDEX).is_none());
+    }
+
+    fn lower_volatile_load_for_test(
+        semantic_address_space: u32,
+        semantic_reference_size: u64,
+        index_type: SemanticTypeIdV1,
+        lowered_address_space: AddressSpace,
+        lowered_access: AccessMode,
+    ) -> Result<(Vec<Operation>, Terminator), ProductionSemanticKirErrorV1> {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let element = SemanticTypeIdV1::from_index(1);
+        let slice = SemanticTypeIdV1::from_index(3);
+        let slice_reference = SemanticTypeIdV1::from_index(4);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let types = vec![
+            unit_type(),
+            unsigned_scalar_type(151, 32),
+            u64_type(),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([153; 32]),
+                SemanticLayoutIdentityV1::from_sha256([154; 32]),
+                SemanticTypeLayoutV1::new(None, 4).unwrap(),
+                SemanticTypeShapeV1::Slice { element },
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([155; 32]),
+                SemanticLayoutIdentityV1::from_sha256([156; 32]),
+                SemanticTypeLayoutV1::new(Some(semantic_reference_size), 8).unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1::new_with_kind(
+                        slice,
+                        SemanticPointerKindV1::Reference,
+                        SemanticMutabilityV1::Immutable,
+                        semantic_address_space,
+                        64,
+                        SemanticPointerMetadataV1::SliceLength,
+                    )
+                    .unwrap(),
+                ),
+            ),
+        ];
+        let unit_abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([157; 32]),
+            SemanticLayoutIdentityV1::from_sha256([158; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let callable = SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256([159; 32]),
+                SemanticItemDefinitionIdentityV1::from_sha256([160; 32]),
+                SemanticMonomorphizationIdentityV1::from_sha256([161; 32]),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256([162; 32]),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256([163; 32]),
+                source,
+                unit_abi.clone(),
+            ),
+            operation: SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element },
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([164; 32]),
+        };
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([165; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([166; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([167; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([168; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([169; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([170; 32]),
+            source,
+            unit_abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([171; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([172; 32]),
+                    slice_reference,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([173; 32]),
+                    index_type,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([174; 32]),
+                    element,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap();
+        let callables = [callable];
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &callables,
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+            },
+            Some(BlockId(2)),
+            None,
+            BTreeSet::new(),
+            1,
+            false,
+            32,
+        )?;
+        lowering.locals[1] = Some(SemanticValueBindingV1::Value {
+            id: ValueId(0),
+            ty: Type::slice(
+                Type::Scalar(ScalarType::U32),
+                lowered_address_space,
+                lowered_access,
+            ),
+        });
+        lowering.locals[2] = Some(SemanticValueBindingV1::Value {
+            id: ValueId(1),
+            ty: Type::INDEX,
+        });
+        lowering.next_value = 2;
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![
+                SemanticOperandV1::Copy(place(1, slice_reference)),
+                SemanticOperandV1::Copy(place(2, index_type)),
+            ],
+            Some(SemanticCallDestinationV1::new(
+                place(3, element),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let mut operations = Vec::new();
+        let terminator =
+            lowering.lower_call(SemanticBlockIdV1::from_index(0), &call, &mut operations)?;
+        Ok((operations, terminator))
+    }
+
+    #[test]
+    fn volatile_load_lowers_to_checked_non_speculative_global_read_and_oob_trap() {
+        let usize_ty = SemanticTypeIdV1::from_index(2);
+        let (operations, terminator) = lower_volatile_load_for_test(
+            0,
+            16,
+            usize_ty,
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        )
+        .unwrap();
+        assert!(matches!(
+            operations[0].kind,
+            OperationKind::SliceLength { slice: ValueId(0) }
+        ));
+        assert!(matches!(
+            operations[1].kind,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            }
+        ));
+        assert!(matches!(
+            operations[3].kind,
+            OperationKind::Select {
+                condition: ValueId(3),
+                true_value: ValueId(1),
+                false_value: ValueId(4),
+            }
+        ));
+        assert!(matches!(
+            operations[7].kind,
+            OperationKind::GuardedLoad {
+                predicate: ValueId(3),
+                access: MemoryAccess {
+                    address_space: AddressSpace::Global,
+                    alignment: 4,
+                    volatile: true,
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            terminator,
+            Terminator::ConditionalBranch {
+                condition: ValueId(3),
+                then_target: BlockId(1),
+                else_target: BlockId(2),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn volatile_load_lowering_rejects_substituted_semantic_or_memory_contracts() {
+        let usize_ty = SemanticTypeIdV1::from_index(2);
+        let u32_ty = SemanticTypeIdV1::from_index(1);
+        for result in [
+            lower_volatile_load_for_test(
+                1,
+                16,
+                usize_ty,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            lower_volatile_load_for_test(
+                0,
+                8,
+                usize_ty,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            lower_volatile_load_for_test(0, 16, u32_ty, AddressSpace::Global, AccessMode::ReadOnly),
+            lower_volatile_load_for_test(
+                0,
+                16,
+                usize_ty,
+                AddressSpace::Workgroup,
+                AccessMode::ReadOnly,
+            ),
+            lower_volatile_load_for_test(
+                0,
+                16,
+                usize_ty,
+                AddressSpace::Global,
+                AccessMode::ReadWrite,
+            ),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported { .. })
+            ));
+        }
     }
 
     #[test]
