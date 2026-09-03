@@ -19,9 +19,9 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationV4, InertProofBindingReceiptV3,
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmAssociationV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
-    LineageErrorV3, MultiRootCanonicalKirVersionV2, MultiRootNeutralKirIdentityV2,
-    MultiRootProofRosterErrorV2, MultiRootProofRosterInputsV2, MultiRootProofRosterKindV2,
-    MultiRootProofRosterRootInputV2, MultiRootProofRosterTranscriptV2,
+    LineageErrorV3, MultiRootCanonicalKirVersionV2, MultiRootCorrespondencePayloadV2,
+    MultiRootNeutralKirIdentityV2, MultiRootProofRosterErrorV2, MultiRootProofRosterInputsV2,
+    MultiRootProofRosterKindV2, MultiRootProofRosterRootInputV2, MultiRootProofRosterTranscriptV2,
     MultiRootTargetBindingInputsV2, MultiRootTargetBindingTranscriptV2,
     MultiRootTargetWorkgroupInputV2, OrderedInertSemanticLineageReceiptsV3,
     ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
@@ -511,6 +511,16 @@ fn encode_correspondence_root_payload_v1(
             "a lineage root has no exact correspondence records",
         ));
     }
+    let decoded = MultiRootCorrespondencePayloadV2::decode(&bytes).map_err(|_| {
+        ProductionSemanticLineageErrorV3::AxisMismatch(
+            "producer emitted a non-canonical multi-root correspondence payload",
+        )
+    })?;
+    if decoded.root_ordinal() != ordinal || decoded.correspondence_owner() != owner.index() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "producer cross-wired its multi-root correspondence payload header",
+        ));
+    }
     Ok(bytes)
 }
 
@@ -933,9 +943,17 @@ impl PreparedProductionSemanticLineageV3 {
                     }
                 }
                 PreparedLineageRosterCustodyV1::MultiRoot { .. } => {
-                    crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
-                        ProductionSemanticDebugProducerGapV1::MultipleKirFunctionBodies,
-                    )
+                    match crate::production_semantic_debug_v1::prepare_production_semantic_debug_multi_root_v1(
+                        admitted.semantic_kir(),
+                        mir_to_kir_correspondence.canonical_preimage(),
+                        *source_map,
+                        &canonical_kir_v7,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(error) => crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
+                            semantic_debug_prepare_gap(&error),
+                        ),
+                    }
                 }
             },
         };

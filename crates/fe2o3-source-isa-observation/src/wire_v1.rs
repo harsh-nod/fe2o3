@@ -956,6 +956,7 @@ pub enum SourceIsaObservationErrorCodeV1 {
     FinalizedMapArtifactInspection = 0x100e,
     FinalizedMapAllocationFailure = 0x100f,
     FinalizedMapInvalidBoundCorrespondenceV5 = 0x1010,
+    FinalizedMapInvalidBoundMultiRootCorrespondenceV2 = 0x1011,
     SemanticMapInvalidLength = 0x1101,
     SemanticMapInvalidJson = 0x1102,
     SemanticMapNonCanonicalEncoding = 0x1103,
@@ -1061,6 +1062,9 @@ impl SourceIsaObservationErrorCodeV1 {
             Self::FinalizedMapAllocationFailure => "finalized-map-allocation-failure",
             Self::FinalizedMapInvalidBoundCorrespondenceV5 => {
                 "finalized-map-invalid-bound-correspondence-v5"
+            }
+            Self::FinalizedMapInvalidBoundMultiRootCorrespondenceV2 => {
+                "finalized-map-invalid-bound-multi-root-correspondence-v2"
             }
             Self::SemanticMapInvalidLength => "semantic-map-invalid-length",
             Self::SemanticMapInvalidJson => "semantic-map-invalid-json",
@@ -1168,6 +1172,7 @@ impl SourceIsaObservationErrorCodeV1 {
             0x100e => Ok(Self::FinalizedMapArtifactInspection),
             0x100f => Ok(Self::FinalizedMapAllocationFailure),
             0x1010 => Ok(Self::FinalizedMapInvalidBoundCorrespondenceV5),
+            0x1011 => Ok(Self::FinalizedMapInvalidBoundMultiRootCorrespondenceV2),
             0x1101 => Ok(Self::SemanticMapInvalidLength),
             0x1102 => Ok(Self::SemanticMapInvalidJson),
             0x1103 => Ok(Self::SemanticMapNonCanonicalEncoding),
@@ -1995,7 +2000,7 @@ mod tests {
             1,
             2,
             0x1000,
-            0x1011,
+            0x1012,
             0x1100,
             0x111d,
             0x1200,
@@ -2031,6 +2036,19 @@ mod tests {
         assert_eq!(
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5.label(),
             "finalized-map-invalid-bound-correspondence-v5"
+        );
+
+        let multi_root = frame(SourceIsaObservationOutcomeV1::Error(
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2,
+        ));
+        let encoded = multi_root.encode();
+        assert_eq!(
+            u16::from_le_bytes(encoded[169..171].try_into().unwrap()),
+            0x1011
+        );
+        assert_eq!(
+            SourceIsaObservationFrameV1::decode(&encoded),
+            Ok(multi_root)
         );
     }
 

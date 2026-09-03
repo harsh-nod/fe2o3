@@ -3,6 +3,10 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
+use fe2o3_kernel_ir::{
+    ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugReceiptExtensionV1,
+    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapDocumentV1,
+};
 use fe2o3_verifier::{
     validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
 };
@@ -450,6 +454,77 @@ fn proof_carrying_two_kernel_collection_reaches_exact_multi_root_target_lineage(
             .expect("validate exact multi-root target lineage");
     assert!(target_lineage.has_exact_receipt_association());
     assert!(target_lineage.has_exact_kir_to_llvm_replay());
+
+    let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
+        handoff
+            .capsule()
+            .receipts()
+            .semantic_to_llvm()
+            .canonical_preimage(),
+    )
+    .expect("decode exact multi-root semantic debug extension");
+    let ProductionSemanticDebugAvailabilityV1::Available(fragment) =
+        extension.carrier_v1().availability()
+    else {
+        panic!("multi-root semantic debug unexpectedly unavailable");
+    };
+    let debug_map =
+        SemanticDebugMapDocumentV1::from_canonical_json_bytes(fragment.pre_finalization_map())
+            .expect("decode multi-root semantic debug map");
+    let kir_functions = debug_map
+        .nodes()
+        .iter()
+        .filter_map(|node| match node.location() {
+            SemanticDebugLocationV1::Kir {
+                function_ordinal, ..
+            } => Some(function_ordinal),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(kir_functions, [0, 1].into_iter().collect());
+
+    let mut queried_functions = std::collections::BTreeSet::new();
+    for node in debug_map.nodes() {
+        let SemanticDebugLocationV1::Kir {
+            function_ordinal, ..
+        } = node.location()
+        else {
+            continue;
+        };
+        let Some(mir_to_kir) = debug_map.mapping_to(node.identity()) else {
+            continue;
+        };
+        if mir_to_kir.input_layer() != SemanticDebugLayerV1::Mir {
+            continue;
+        }
+        assert_eq!(mir_to_kir.output_layer(), SemanticDebugLayerV1::Kir);
+        assert!(mir_to_kir.output().nodes().contains(&node.identity()));
+        let mir_identity = mir_to_kir.inputs()[0];
+        assert_eq!(
+            debug_map
+                .mapping_from(mir_identity)
+                .expect("query MIR to KIR mapping")
+                .identity(),
+            mir_to_kir.identity(),
+        );
+        let source_to_mir = debug_map
+            .mapping_to(mir_identity)
+            .expect("query source to MIR mapping");
+        assert_eq!(source_to_mir.input_layer(), SemanticDebugLayerV1::Source);
+        assert_eq!(source_to_mir.output_layer(), SemanticDebugLayerV1::Mir);
+        assert!(source_to_mir.output().nodes().contains(&mir_identity));
+        for source_identity in source_to_mir.inputs() {
+            assert_eq!(
+                debug_map
+                    .mapping_from(*source_identity)
+                    .expect("query source node forward")
+                    .identity(),
+                source_to_mir.identity(),
+            );
+        }
+        queried_functions.insert(function_ordinal);
+    }
+    assert_eq!(queried_functions, [0, 1].into_iter().collect());
 
     let llvm = std::str::from_utf8(handoff.module_handoff().module_bytes())
         .expect("proof-carrying module is LLVM text");

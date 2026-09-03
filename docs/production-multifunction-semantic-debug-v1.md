@@ -3,10 +3,10 @@
 Status: implemented additive slice for GitHub issue #215 T1.
 
 Production semantic debugging no longer treats a semantic function index as a
-canonical KIR function ordinal. For a singleton kernel whose retained closure
-contains ordinary Rust helpers, the compiler now carries an exact function
-roster through Source Map V2, the pre-finalization semantic map, protected
-lineage, independent finalizer replay, and debugger queries.
+canonical KIR function ordinal. For singleton and disjoint multi-root kernel
+closures, the compiler carries an exact function roster through Source Map V2,
+the pre-finalization semantic map, protected lineage, independent finalizer
+replay, and debugger queries.
 
 ## Exact contract
 
@@ -36,6 +36,19 @@ payload; the finalizer additionally consumes and replays the V5 function
 roster. Transformation Map V2 identifies the exact V5 evidence bytes with the
 additive `mir_kir_correspondence_v5` kind.
 
+For multiple roots, the existing `MultiRootProofRosterTranscriptV2`
+correspondence envelope carries one existing `F2MRCOP2` payload per root. The
+shared `MultiRootCorrespondencePayloadV2` decoder gives that payload a bounded
+typed contract. It retains function-qualified blocks, statements, terminators,
+synthetic spans, and parameter bindings. Compiler preparation replays all of
+those records against the live correspondence owner. Finalizer admission
+independently resolves every function symbol to one absolute KIR ordinal,
+verifies semantic root identities, checks complete contiguous operation
+coverage, and rejects reordered roots, substituted identities, duplicate
+ordinals, overlapping spans, and shared semantic helpers. Transformation Map
+V2 uses `multi_root_mir_kir_correspondence_roster_v2`; V1-V5 bytes are
+unchanged.
+
 ## Debugger behavior
 
 Source Map V1/V2 emission uses the live `(correspondence owner, semantic
@@ -57,15 +70,20 @@ The ordinary `debug_helper` fixture demonstrates the public workflow:
 This remains deterministic CPU execution evidence. It is not GPU execution or
 performance prediction.
 
+The ignored ordinary two-kernel production extraction test compiles in normal
+CI. Running it requires the pinned protected Verus runtime and AMD rust-src
+installation; an environment without those inputs cannot establish the
+ordinary-source production exit criterion.
+
 ## Remaining boundary
 
-- Multi-root protected capsules still return
-  `MultipleKirFunctionBodies`; their V2 roster payload does not yet use this
-  V5 singleton-helper envelope.
-- Frozen V4 synthetic spans have no function owner and reject synthetics when
-  multiple functions are present. A helper closure containing enum-payload or
-  runtime-assert synthetic operations therefore remains unavailable until a
-  fully function-qualified correspondence version is admitted.
+- Multi-root admission is exact only for disjoint root closures. Reusing one
+  semantic helper in more than one root is deliberately unavailable because
+  Source Map V2 and Semantic Debug Map V1 cannot distinguish repeated
+  instances of the same semantic function ordinal without a new wire version.
+- Multi-root `F2MRCOP2` synthetic spans are function-qualified and admitted.
+  Legacy singleton V4 synthetic spans remain unqualified; this change does not
+  reinterpret or upgrade those frozen bytes.
 - Semantic Debug Map V1 has statement locations but no MIR terminator
   location. Source Map V2 maps call terminator operations, but the
   Source-to-MIR-to-KIR transformation graph does not claim a call-terminator

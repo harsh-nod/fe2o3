@@ -1,11 +1,18 @@
 //! Finalizer admission for exact-artifact-bound semantic debug maps.
 
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1;
 use fe2o3_compiler_lineage::{
     InertSemanticToLlvmAssociationInputsV3, InertSemanticToLlvmAssociationV3,
-    InertSemanticToLlvmContentIdentityV3,
+    InertSemanticToLlvmContentIdentityV3, MultiRootCanonicalKirVersionV2,
+    MultiRootCorrespondenceFunctionRoleV2, MultiRootCorrespondencePayloadV2,
+    MultiRootCorrespondenceSyntheticRuleV2, MultiRootProofRosterKindV2,
+    MultiRootProofRosterTranscriptV2,
 };
 use fe2o3_kernel_ir::{
     DebugSourceMapDocumentV2, DebugSourceMapKirSiteV1, DebugSourceMapSpanV1,
@@ -29,7 +36,10 @@ use fe2o3_lower_mir_kernel::{
     InertCanonicalMirToKirCorrespondenceEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV5,
     MirToKirFunctionRoleEvidenceV5, ProductionCanonicalKernelIrVersionV1,
 };
-use fe2o3_mir_model::semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticMirLimitsV1};
+use fe2o3_mir_model::{
+    InertCanonicalSemanticU32InductionEvidenceV1,
+    semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticFunctionIdV1, SemanticMirLimitsV1},
+};
 
 use crate::{
     ContentIdentityV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
@@ -509,6 +519,356 @@ fn bounded_copy(bytes: &[u8]) -> Result<Vec<u8>, FinalizedSemanticDebugMapErrorV
     Ok(copy)
 }
 
+#[derive(Clone, Copy)]
+struct ExactFinalizerStatementV1 {
+    semantic_function: u32,
+    semantic_block: u32,
+    statement: u32,
+    kernel_ir_block: u32,
+    first_operation: u32,
+    operation_count: u32,
+}
+
+struct ExactFinalizerFunctionV1<'a> {
+    semantic_function: u32,
+    function_ordinal: u64,
+    body: &'a fe2o3_kernel_ir::FunctionBody,
+    block_ordinals: Vec<(u32, usize)>,
+}
+
+fn multi_root_finalizer_view_v1<'a>(
+    roster: &MultiRootProofRosterTranscriptV2,
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    module: &'a fe2o3_kernel_ir::Module,
+) -> Result<
+    (
+        Vec<ExactFinalizerFunctionV1<'a>>,
+        Vec<ExactFinalizerStatementV1>,
+    ),
+    FinalizedSemanticDebugMapErrorV1,
+> {
+    let mut layouts = Vec::new();
+    let mut statements = Vec::new();
+    let mut semantic_functions = BTreeSet::new();
+    let mut kir_ordinals = BTreeSet::new();
+    let mut previous_root = None;
+    for root_ordinal in 0..roster.root_count() {
+        let root = roster
+            .root(root_ordinal)
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2)?;
+        if previous_root.is_some_and(|previous| previous >= root.semantic_root()) {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        previous_root = Some(root.semantic_root());
+        let root_function = semantic_mir
+            .functions()
+            .get(root.semantic_root() as usize)
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        if root_function.identity().as_bytes() != &root.semantic_root_identity() {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        let selected = semantic_mir
+            .select_kernel_body_for_root_v1(SemanticFunctionIdV1::from_index(root.semantic_root()))
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        let payload = MultiRootCorrespondencePayloadV2::decode(root.payload())
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2)?;
+        let expected_ordinal = u32::try_from(root_ordinal)
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        if payload.root_ordinal() != expected_ordinal
+            || payload.correspondence_owner() != root.semantic_root()
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        let induction = InertCanonicalSemanticU32InductionEvidenceV1::decode(payload.induction())
+            .map_err(|_| {
+            FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2
+        })?;
+        if induction.semantic_mir_sha256() != semantic_mir.semantic_sha256().as_bytes()
+            || induction.grants_authority()
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::CorrespondenceIdentityMismatch);
+        }
+
+        let mut local_functions = BTreeMap::new();
+        let mut entry_count = 0_usize;
+        for record in payload.functions() {
+            let semantic = semantic_mir
+                .functions()
+                .get(record.semantic_function() as usize)
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            let mut matches = module
+                .functions
+                .iter()
+                .enumerate()
+                .filter(|(_, function)| function.id.as_str() == record.kernel_ir_function());
+            let (ordinal, function) = matches
+                .next()
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            if matches.next().is_some()
+                || !kir_ordinals.insert(ordinal)
+                || !semantic_functions.insert(record.semantic_function())
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+            let body = function
+                .body
+                .as_ref()
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            let expected_role = match record.role() {
+                MultiRootCorrespondenceFunctionRoleV2::KernelEntry => {
+                    fe2o3_kernel_ir::FunctionRole::KernelEntry
+                }
+                MultiRootCorrespondenceFunctionRoleV2::InternalHelper => {
+                    fe2o3_kernel_ir::FunctionRole::InternalHelper
+                }
+            };
+            if function.role != expected_role
+                || local_functions
+                    .insert(record.semantic_function(), (semantic, ordinal, body))
+                    .is_some()
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+            if record.role() == MultiRootCorrespondenceFunctionRoleV2::KernelEntry {
+                entry_count += 1;
+                if record.semantic_function() != selected.body().index()
+                    || record.kernel_ir_function() != root.kernel_id()
+                {
+                    return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+                }
+            }
+            layouts.push(ExactFinalizerFunctionV1 {
+                semantic_function: record.semantic_function(),
+                function_ordinal: u64::try_from(ordinal)
+                    .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?,
+                body,
+                block_ordinals: exact_block_ordinals_v1(body)?,
+            });
+        }
+        if entry_count != 1 || local_functions.is_empty() {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+
+        let expected_blocks = local_functions
+            .values()
+            .try_fold(0_usize, |total, (semantic, _, _)| {
+                total.checked_add(semantic.blocks().len())
+            })
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        if payload.blocks().len() != expected_blocks
+            || payload.terminators().len() != expected_blocks
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        let mut semantic_to_kir = BTreeMap::new();
+        let mut mapped_kir_blocks = BTreeSet::new();
+        for record in payload.blocks() {
+            let (semantic, _, body) = local_functions
+                .get(&record.semantic_function())
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            let source = semantic
+                .blocks()
+                .get(record.semantic_block() as usize)
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            if source.statements().len() != record.source_statement_count() as usize
+                || !body
+                    .blocks
+                    .iter()
+                    .any(|block| block.id.0 == record.kernel_ir_block())
+                || !mapped_kir_blocks.insert((record.semantic_function(), record.kernel_ir_block()))
+                || semantic_to_kir
+                    .insert(
+                        (record.semantic_function(), record.semantic_block()),
+                        record.kernel_ir_block(),
+                    )
+                    .is_some()
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+        }
+        let expected_statements = local_functions
+            .values()
+            .try_fold(0_usize, |total, (semantic, _, _)| {
+                semantic.blocks().iter().try_fold(total, |total, block| {
+                    total.checked_add(block.statements().len())
+                })
+            })
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        if payload.statements().len() != expected_statements {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        let statement_by_site = payload
+            .statements()
+            .iter()
+            .map(|record| {
+                (
+                    (
+                        record.semantic_function(),
+                        record.semantic_block(),
+                        record.statement(),
+                    ),
+                    *record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let terminator_by_site = payload
+            .terminators()
+            .iter()
+            .map(|record| {
+                (
+                    (record.semantic_function(), record.semantic_block()),
+                    *record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut synthetic_by_block = payload
+            .synthetics()
+            .iter()
+            .map(|record| {
+                (
+                    (record.semantic_function(), record.kernel_ir_block()),
+                    *record,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        if statement_by_site.len() != payload.statements().len()
+            || terminator_by_site.len() != payload.terminators().len()
+            || synthetic_by_block.len() != payload.synthetics().len()
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        for (&semantic_function, (semantic, _, body)) in &local_functions {
+            let mut mapped = BTreeSet::new();
+            for (semantic_block, source) in semantic.blocks().iter().enumerate() {
+                let semantic_block = u32::try_from(semantic_block)
+                    .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                let kir_block_id = *semantic_to_kir
+                    .get(&(semantic_function, semantic_block))
+                    .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                mapped.insert(kir_block_id);
+                let block = body
+                    .blocks
+                    .iter()
+                    .find(|block| block.id.0 == kir_block_id)
+                    .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                let mut next = 0_u32;
+                if let Some(synthetic) =
+                    synthetic_by_block.remove(&(semantic_function, kir_block_id))
+                {
+                    if synthetic.rule()
+                        != MultiRootCorrespondenceSyntheticRuleV2::EnumPayloadStorage
+                        || synthetic.first_operation() != 0
+                        || synthetic.operation_count() == 0
+                    {
+                        return Err(
+                            FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence,
+                        );
+                    }
+                    next = synthetic.operation_count();
+                }
+                for statement in 0..source.statements().len() {
+                    let statement = u32::try_from(statement).map_err(|_| {
+                        FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence
+                    })?;
+                    let span = statement_by_site
+                        .get(&(semantic_function, semantic_block, statement))
+                        .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                    if span.kernel_ir_block() != kir_block_id || span.first_operation() != next {
+                        return Err(
+                            FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence,
+                        );
+                    }
+                    next = next
+                        .checked_add(span.operation_count())
+                        .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                    statements.push(ExactFinalizerStatementV1 {
+                        semantic_function,
+                        semantic_block,
+                        statement,
+                        kernel_ir_block: kir_block_id,
+                        first_operation: span.first_operation(),
+                        operation_count: span.operation_count(),
+                    });
+                }
+                let terminator = terminator_by_site
+                    .get(&(semantic_function, semantic_block))
+                    .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                if terminator.kernel_ir_block() != kir_block_id
+                    || terminator.first_operation() != next
+                {
+                    return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+                }
+                next = next
+                    .checked_add(terminator.operation_count())
+                    .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                if next as usize != block.operations.len() || block.terminator.is_none() {
+                    return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+                }
+            }
+            for block in &body.blocks {
+                if mapped.contains(&block.id.0) {
+                    continue;
+                }
+                let synthetic = synthetic_by_block
+                    .remove(&(semantic_function, block.id.0))
+                    .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+                if synthetic.rule()
+                    != MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap
+                    || synthetic.first_operation() != 0
+                    || synthetic.operation_count() as usize != block.operations.len()
+                    || block.operations.is_empty()
+                    || block.terminator.is_none()
+                {
+                    return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+                }
+            }
+        }
+        if !synthetic_by_block.is_empty() {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        let mut parameters = BTreeSet::new();
+        for parameter in payload.parameters() {
+            let (semantic, _, body) = local_functions
+                .get(&parameter.semantic_function())
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            if semantic
+                .locals()
+                .get(parameter.semantic_local() as usize)
+                .is_none()
+                || !body
+                    .parameters
+                    .iter()
+                    .any(|value| value.0 == parameter.kernel_ir_value())
+                || !parameters.insert((
+                    parameter.semantic_function(),
+                    parameter.semantic_local(),
+                    parameter.kernel_ir_value(),
+                ))
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+        }
+    }
+    let defined_count = module
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some())
+        .count();
+    if kir_ordinals.len() != defined_count {
+        return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+    }
+    layouts.sort_unstable_by_key(|layout| layout.semantic_function);
+    statements
+        .sort_unstable_by_key(|span| (span.semantic_function, span.semantic_block, span.statement));
+    if layouts
+        .windows(2)
+        .any(|pair| pair[0].semantic_function >= pair[1].semantic_function)
+    {
+        return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+    }
+    Ok((layouts, statements))
+}
+
 #[allow(clippy::too_many_lines)]
 fn validate_exact_production_correspondence(
     map: &SemanticDebugMapDocumentV1,
@@ -526,7 +886,18 @@ fn validate_exact_production_correspondence(
         SemanticMirLimitsV1::default(),
     )
     .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundSemanticMir)?;
-    let correspondence_v5 = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
+    let multi_root = if correspondence_bytes.get(..8) == Some(b"F2MRCOR2") {
+        Some(
+            MultiRootProofRosterTranscriptV2::decode(correspondence_bytes).map_err(|_| {
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2
+            })?,
+        )
+    } else {
+        None
+    };
+    let correspondence_v5 = if multi_root.is_none()
+        && correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0")
+    {
         let evidence = InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5)?;
         evidence
@@ -536,17 +907,20 @@ fn validate_exact_production_correspondence(
     } else {
         None
     };
-    let legacy_v4;
-    let correspondence = if let Some(evidence) = correspondence_v5.as_ref() {
-        evidence.nested_v4()
-    } else {
-        legacy_v4 = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
+    let legacy_v4 = if multi_root.is_none() && correspondence_v5.is_none() {
+        let evidence = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV4)?;
-        legacy_v4
+        evidence
             .revalidate()
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV4)?;
-        &legacy_v4
+        Some(evidence)
+    } else {
+        None
     };
+    let correspondence = correspondence_v5
+        .as_ref()
+        .map(InertCanonicalMirToKirCorrespondenceEvidenceV5::nested_v4)
+        .or(legacy_v4.as_ref());
     let (canonical_kir_v8, module_v8) =
         VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(bounded_copy(
             canonical_kir_v8_bytes,
@@ -562,13 +936,29 @@ fn validate_exact_production_correspondence(
             .validate_against_module(&module_v7)
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5)?;
     }
-    let correspondence_kir = correspondence.canonical_kernel_ir_identity();
-    if correspondence_kir.version() != ProductionCanonicalKernelIrVersionV1::V8
-        || correspondence_kir.digest() != canonical_kir_v8.identity().digest()
-        || correspondence_kir.canonical_length() != canonical_kir_v8.identity().canonical_length()
-        || correspondence.semantic_sha256() != semantic_mir.semantic_sha256().as_bytes()
-    {
-        return Err(FinalizedSemanticDebugMapErrorV1::CorrespondenceIdentityMismatch);
+    if let Some(roster) = multi_root.as_ref() {
+        if roster.kind() != MultiRootProofRosterKindV2::Correspondence
+            || roster.root_count() < 2
+            || roster.semantic_mir_sha256() != *semantic_mir.semantic_sha256().as_bytes()
+            || roster.neutral_kir().version() != MultiRootCanonicalKirVersionV2::V8
+            || roster.neutral_kir().digest() != *canonical_kir_v8.identity().digest()
+            || roster.neutral_kir().canonical_length()
+                != canonical_kir_v8.identity().canonical_length()
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::CorrespondenceIdentityMismatch);
+        }
+    } else {
+        let correspondence = correspondence
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        let correspondence_kir = correspondence.canonical_kernel_ir_identity();
+        if correspondence_kir.version() != ProductionCanonicalKernelIrVersionV1::V8
+            || correspondence_kir.digest() != canonical_kir_v8.identity().digest()
+            || correspondence_kir.canonical_length()
+                != canonical_kir_v8.identity().canonical_length()
+            || correspondence.semantic_sha256() != semantic_mir.semantic_sha256().as_bytes()
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::CorrespondenceIdentityMismatch);
+        }
     }
 
     let defined_function_count = module_v7
@@ -577,7 +967,11 @@ fn validate_exact_production_correspondence(
         .filter(|function| function.body.is_some())
         .count();
     let mut function_layouts = Vec::new();
-    if let Some(evidence) = correspondence_v5.as_ref() {
+    let mut statement_spans = Vec::new();
+    if let Some(roster) = multi_root.as_ref() {
+        (function_layouts, statement_spans) =
+            multi_root_finalizer_view_v1(roster, &semantic_mir, &module_v7)?;
+    } else if let Some(evidence) = correspondence_v5.as_ref() {
         if defined_function_count != evidence.functions().len()
             || evidence.functions().is_empty()
             || evidence
@@ -625,12 +1019,12 @@ fn validate_exact_production_correspondence(
             {
                 return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
             }
-            function_layouts.push((
-                record.semantic_function(),
-                u64::from(record.kernel_ir_function_ordinal()),
+            function_layouts.push(ExactFinalizerFunctionV1 {
+                semantic_function: record.semantic_function(),
+                function_ordinal: u64::from(record.kernel_ir_function_ordinal()),
                 body,
-                exact_block_ordinals_v1(body)?,
-            ));
+                block_ordinals: exact_block_ordinals_v1(body)?,
+            });
         }
         if ordinals.len() != defined_function_count {
             return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
@@ -644,6 +1038,8 @@ fn validate_exact_production_correspondence(
         let Some((ordinal, body)) = bodies.next() else {
             return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
         };
+        let correspondence = correspondence
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         if bodies.next().is_some() || correspondence.function_count() != 1 {
             return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
         }
@@ -652,29 +1048,43 @@ fn validate_exact_production_correspondence(
             .first()
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?
             .semantic_function();
-        function_layouts.push((
+        function_layouts.push(ExactFinalizerFunctionV1 {
             semantic_function,
-            u64::try_from(ordinal)
+            function_ordinal: u64::try_from(ordinal)
                 .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?,
             body,
-            exact_block_ordinals_v1(body)?,
-        ));
+            block_ordinals: exact_block_ordinals_v1(body)?,
+        });
     }
-    function_layouts.sort_unstable_by_key(|layout| layout.0);
+    if let Some(correspondence) = correspondence {
+        statement_spans
+            .try_reserve_exact(correspondence.statement_spans().len())
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+        statement_spans.extend(correspondence.statement_spans().iter().map(|span| {
+            ExactFinalizerStatementV1 {
+                semantic_function: span.semantic_function(),
+                semantic_block: span.semantic_block(),
+                statement: span.statement(),
+                kernel_ir_block: span.kernel_ir_block(),
+                first_operation: span.first_operation(),
+                operation_count: span.operation_count(),
+            }
+        }));
+    }
+    function_layouts.sort_unstable_by_key(|layout| layout.semantic_function);
     if function_layouts
         .windows(2)
-        .any(|pair| pair[0].0 >= pair[1].0)
+        .any(|pair| pair[0].semantic_function >= pair[1].semantic_function)
     {
         return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
     }
 
-    let counts = correspondence
-        .statement_spans()
+    let counts = statement_spans
         .iter()
         .try_fold((0_usize, 0_usize), |(statements, operations), span| {
             Some((
                 statements.checked_add(1)?,
-                operations.checked_add(span.operation_count() as usize)?,
+                operations.checked_add(span.operation_count as usize)?,
             ))
         })
         .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
@@ -712,23 +1122,23 @@ fn validate_exact_production_correspondence(
             .map(|index| nodes_by_location[index].1)
     };
 
-    for span in correspondence.statement_spans() {
-        let (_, function_ordinal, body, block_ordinals) = function_layouts
-            .binary_search_by_key(&span.semantic_function(), |layout| layout.0)
+    for span in &statement_spans {
+        let layout = function_layouts
+            .binary_search_by_key(&span.semantic_function, |layout| layout.semantic_function)
             .ok()
             .and_then(|index| function_layouts.get(index))
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let function = semantic_mir
             .functions()
-            .get(span.semantic_function() as usize)
+            .get(span.semantic_function as usize)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let block = function
             .blocks()
-            .get(span.semantic_block() as usize)
+            .get(span.semantic_block as usize)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let statement = block
             .statements()
-            .get(span.statement() as usize)
+            .get(span.statement as usize)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let origin = statement
             .source()
@@ -736,7 +1146,7 @@ fn validate_exact_production_correspondence(
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let (byte_start, byte_end) = origin.byte_range();
         let (line, column) = origin.start_coordinate();
-        let source_span = if span.operation_count() == 0 {
+        let source_span = if span.operation_count == 0 {
             DebugSourceMapSpanV1::new_eliminated(
                 *origin.file().as_bytes(),
                 byte_start,
@@ -756,9 +1166,9 @@ fn validate_exact_production_correspondence(
         .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let source_location = SemanticDebugLocationV1::Source { span: source_span };
         let mir_location = SemanticDebugLocationV1::Mir {
-            body_ordinal: u64::from(span.semantic_function()),
-            block_ordinal: u64::from(span.semantic_block()),
-            statement_ordinal: u64::from(span.statement()),
+            body_ordinal: u64::from(span.semantic_function),
+            block_ordinal: u64::from(span.semantic_block),
+            statement_ordinal: u64::from(span.statement),
         };
         let mir_id = node_id(mir_location)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
@@ -780,7 +1190,7 @@ fn validate_exact_production_correspondence(
             SemanticDebugTransformationV1::Preserved,
         )?;
 
-        if span.operation_count() == 0 {
+        if span.operation_count == 0 {
             if source_map.eliminated().binary_search(&source_span).is_err() {
                 return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
             }
@@ -796,18 +1206,20 @@ fn validate_exact_production_correspondence(
             continue;
         }
 
-        let block_index = block_ordinals
-            .binary_search_by_key(&span.kernel_ir_block(), |entry| entry.0)
+        let block_index = layout
+            .block_ordinals
+            .binary_search_by_key(&span.kernel_ir_block, |entry| entry.0)
             .ok()
-            .map(|index| block_ordinals[index].1)
+            .map(|index| layout.block_ordinals[index].1)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
-        let kir_block = body
+        let kir_block = layout
+            .body
             .blocks
             .get(block_index)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let end = span
-            .first_operation()
-            .checked_add(span.operation_count())
+            .first_operation
+            .checked_add(span.operation_count)
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         if end as usize > kir_block.operations.len() {
             return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
@@ -816,11 +1228,11 @@ fn validate_exact_production_correspondence(
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
         let mut kir_ids = Vec::new();
         kir_ids
-            .try_reserve_exact(span.operation_count() as usize)
+            .try_reserve_exact(span.operation_count as usize)
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
-        for operation in span.first_operation()..end {
+        for operation in span.first_operation..end {
             let site = DebugSourceMapKirSiteV1::operation(
-                *function_ordinal,
+                layout.function_ordinal,
                 block_ordinal,
                 u64::from(operation),
             );
@@ -834,7 +1246,7 @@ fn validate_exact_production_correspondence(
                 return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
             }
             let kir_location = SemanticDebugLocationV1::Kir {
-                function_ordinal: *function_ordinal,
+                function_ordinal: layout.function_ordinal,
                 block_ordinal,
                 operation_ordinal: u64::from(operation),
             };
@@ -1021,7 +1433,9 @@ fn build_production_transformation_map_v2(
     admitted: &AdmittedFinalizedSemanticDebugMapV1,
     correspondence_bytes: &[u8],
 ) -> Result<SemanticDebugTransformationMapDocumentV2, FinalizedSemanticDebugMapErrorV1> {
-    let correspondence_kind = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
+    let correspondence_kind = if correspondence_bytes.get(..8) == Some(b"F2MRCOR2") {
+        SemanticDebugTransformationEvidenceKindV2::MultiRootMirKirCorrespondenceRosterV2
+    } else if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
         SemanticDebugTransformationEvidenceKindV2::MirKirCorrespondenceV5
     } else {
         SemanticDebugTransformationEvidenceKindV2::MirKirCorrespondenceV4
@@ -1115,6 +1529,7 @@ pub enum FinalizedSemanticDebugMapErrorV1 {
     InvalidBoundSemanticMir,
     InvalidBoundCorrespondenceV4,
     InvalidBoundCorrespondenceV5,
+    InvalidBoundMultiRootCorrespondenceV2,
     InvalidBoundCanonicalKirV8,
     InvalidBoundCanonicalKirV7,
     CanonicalKirProjectionMismatch,
@@ -1149,6 +1564,7 @@ impl Error for FinalizedSemanticDebugMapErrorV1 {
             | Self::InvalidBoundSemanticMir
             | Self::InvalidBoundCorrespondenceV4
             | Self::InvalidBoundCorrespondenceV5
+            | Self::InvalidBoundMultiRootCorrespondenceV2
             | Self::InvalidBoundCanonicalKirV8
             | Self::InvalidBoundCanonicalKirV7
             | Self::CanonicalKirProjectionMismatch
