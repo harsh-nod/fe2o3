@@ -4,11 +4,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use fe2o3_kernel_ir::{
-    SemanticArgumentStorageV1, SemanticKernelStorageV1, SemanticKirStorageRepresentationV1,
-    SemanticStorageBindingV1, SemanticStorageMapV1, Type,
+    SemanticArgumentStorageV1, SemanticArgumentStorageV2, SemanticKernelStorageV1,
+    SemanticKernelStorageV2, SemanticKirComponentRepresentationV2, SemanticKirComponentStorageV2,
+    SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
+    SemanticStorageMapV2, Type, VerifiedSimulationBundleV3,
 };
 use fe2o3_kir_sim::{IndexWidthV1, SimulationArgumentV1};
-use fe2o3_kir_sim_cli::{AdmittedSimulationBundleInputV3, load_debug_simulation_bundle_v3};
+use fe2o3_kir_sim_cli::{
+    AdmittedSimulationInputV1, load_debug_simulation_bundle_v3, load_debug_simulation_bundle_v4,
+};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticEnumEncodingV1, SemanticFieldsShapeV1, SemanticLocalRoleV1,
     SemanticMirLimitsV1, SemanticRustcVariantsV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
@@ -16,12 +20,19 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-const SCHEMA: &str = "fe2o3-debug-typed-layout-v1";
+const SCHEMA_V1: &str = "fe2o3-debug-typed-layout-v1";
+const SCHEMA_V2: &str = "fe2o3-debug-typed-layout-v2";
 
 #[derive(Debug)]
 struct OptionsV1 {
-    bundle: PathBuf,
+    bundle: BundleInputV1,
     request: PathBuf,
+}
+
+#[derive(Debug)]
+enum BundleInputV1 {
+    V3(PathBuf),
+    V4(PathBuf),
 }
 
 #[derive(Serialize)]
@@ -30,9 +41,13 @@ struct ResponseV1 {
     schema: &'static str,
     status: &'static str,
     bundle_identity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bundle_v3_identity: Option<String>,
     bundle_subject_identity: String,
     semantic_mir_identity: String,
     storage_map_identity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    semantic_storage_map_v1_identity: Option<String>,
     target_layout_identity: String,
     types: Vec<TypeViewV1>,
     kernels: Vec<KernelViewV1>,
@@ -70,6 +85,12 @@ struct KernelViewV1 {
     semantic_body: u32,
     kir_function_ordinal: u32,
     arguments: Vec<SemanticArgumentStorageV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    explicit_kernarg_bytes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    explicit_kernarg_alignment: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component_arguments: Option<Vec<SemanticArgumentStorageV2>>,
 }
 
 #[derive(Serialize)]
@@ -78,7 +99,17 @@ struct ArgumentViewV1 {
     ordinal: u32,
     semantic_type: Option<u32>,
     storage: Option<SemanticStorageBindingV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component_storage: Option<ComponentStorageViewV2>,
     observation: Value,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct ComponentStorageViewV2 {
+    source_ordinal: u32,
+    semantic_type: u32,
+    component: SemanticKirComponentStorageV2,
 }
 
 #[derive(Serialize)]
@@ -107,13 +138,51 @@ pub(super) fn run(arguments: Vec<OsString>) -> ExitCode {
         Ok(options) => options,
         Err(message) => return fail("arguments", "invalid_command_line", &message),
     };
-    let admitted = match load_debug_simulation_bundle_v3(&options.bundle, &options.request) {
-        Ok(admitted) => admitted,
-        Err(error) => return fail("input", "bundle_or_request_rejected", &error.message),
+    let response = match options.bundle {
+        BundleInputV1::V3(bundle) => {
+            let admitted = match load_debug_simulation_bundle_v3(&bundle, &options.request) {
+                Ok(admitted) => admitted,
+                Err(error) => {
+                    return fail("input", "bundle_or_request_rejected", &error.message);
+                }
+            };
+            inspect_parts(admitted.input(), admitted.bundle(), None)
+        }
+        BundleInputV1::V4(bundle) => {
+            let admitted = match load_debug_simulation_bundle_v4(&bundle, &options.request) {
+                Ok(admitted) => admitted,
+                Err(error) => {
+                    return fail("input", "bundle_or_request_rejected", &error.message);
+                }
+            };
+            let storage = match SemanticStorageMapV2::from_canonical_json_bytes(
+                admitted.bundle().storage_map(),
+            ) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    return fail(
+                        "input",
+                        "bundle_or_request_rejected",
+                        &format!("V4 component storage map is invalid: {error}"),
+                    );
+                }
+            };
+            inspect_parts(
+                admitted.input(),
+                admitted.bundle().inner_v3(),
+                Some(ComponentContextV2 {
+                    bundle_identity: *admitted.bundle().identity().as_bytes(),
+                    storage_identity: *admitted.bundle().storage_map_identity(),
+                    storage: &storage,
+                }),
+            )
+        }
     };
-    let response = match inspect(&admitted) {
+    let response = match response {
         Ok(response) => response,
-        Err(message) => return fail("typed_layout", "semantic_correspondence_rejected", &message),
+        Err(message) => {
+            return fail("typed_layout", "semantic_correspondence_rejected", &message);
+        }
     };
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
     match serde_json::to_writer(&mut output, &response)
@@ -137,22 +206,36 @@ fn parse(arguments: Vec<OsString>) -> Result<OptionsV1, String> {
             .next()
             .ok_or_else(|| format!("option {option:?} requires a value"))?;
         match option.to_str() {
-            Some("--bundle-v3") if bundle.is_none() => bundle = Some(PathBuf::from(value)),
+            Some("--bundle-v3") if bundle.is_none() => {
+                bundle = Some(BundleInputV1::V3(PathBuf::from(value)));
+            }
+            Some("--bundle-v4") if bundle.is_none() => {
+                bundle = Some(BundleInputV1::V4(PathBuf::from(value)));
+            }
             Some("--request") if request.is_none() => request = Some(PathBuf::from(value)),
-            Some("--bundle-v3" | "--request") => {
+            Some("--bundle-v3" | "--bundle-v4" | "--request") => {
                 return Err(format!("option {option:?} may appear only once"));
             }
             _ => return Err(format!("unknown option {option:?}")),
         }
     }
     Ok(OptionsV1 {
-        bundle: bundle.ok_or_else(|| "--bundle-v3 is required".to_owned())?,
+        bundle: bundle.ok_or_else(|| "--bundle-v3 or --bundle-v4 is required".to_owned())?,
         request: request.ok_or_else(|| "--request is required".to_owned())?,
     })
 }
 
-fn inspect(admitted: &AdmittedSimulationBundleInputV3) -> Result<ResponseV1, String> {
-    let bundle = admitted.bundle();
+struct ComponentContextV2<'a> {
+    bundle_identity: [u8; 32],
+    storage_identity: [u8; 32],
+    storage: &'a SemanticStorageMapV2,
+}
+
+fn inspect_parts(
+    admitted: &AdmittedSimulationInputV1,
+    bundle: &VerifiedSimulationBundleV3,
+    components: Option<ComponentContextV2<'_>>,
+) -> Result<ResponseV1, String> {
     let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
         bundle.semantic_mir(),
         SemanticMirLimitsV1::default(),
@@ -161,6 +244,9 @@ fn inspect(admitted: &AdmittedSimulationBundleInputV3) -> Result<ResponseV1, Str
     let storage = SemanticStorageMapV1::from_canonical_json_bytes(bundle.storage_map())
         .map_err(|error| format!("storage map is not canonical: {error}"))?;
     validate_correspondence(admitted, &semantic, &storage)?;
+    if let Some(context) = &components {
+        validate_component_correspondence(admitted, &storage, context.storage)?;
+    }
 
     let types = semantic
         .types()
@@ -197,16 +283,38 @@ fn inspect(admitted: &AdmittedSimulationBundleInputV3) -> Result<ResponseV1, Str
     let kernels = storage
         .kernels()
         .iter()
-        .map(|kernel| KernelViewV1 {
-            semantic_root: kernel.semantic_root(),
-            semantic_body: kernel.semantic_body(),
-            kir_function_ordinal: kernel.kir_function_ordinal(),
-            arguments: kernel.arguments().to_vec(),
+        .map(|kernel| {
+            let component_kernel = components.as_ref().map(|context| {
+                context
+                    .storage
+                    .kernels()
+                    .iter()
+                    .find(|candidate| {
+                        candidate.semantic_root() == kernel.semantic_root()
+                            && candidate.semantic_body() == kernel.semantic_body()
+                            && candidate.kir_function_ordinal() == kernel.kir_function_ordinal()
+                    })
+                    .expect("validated V2 kernel correspondence")
+            });
+            KernelViewV1 {
+                semantic_root: kernel.semantic_root(),
+                semantic_body: kernel.semantic_body(),
+                kir_function_ordinal: kernel.kir_function_ordinal(),
+                arguments: kernel.arguments().to_vec(),
+                explicit_kernarg_bytes: component_kernel
+                    .map(SemanticKernelStorageV2::explicit_kernarg_bytes),
+                explicit_kernarg_alignment: component_kernel
+                    .map(SemanticKernelStorageV2::explicit_kernarg_alignment),
+                component_arguments: component_kernel.map(|kernel| kernel.arguments().to_vec()),
+            }
         })
         .collect();
     let selected = selected_storage_kernel(admitted, &storage)?;
+    let selected_components = components
+        .as_ref()
+        .map(|context| selected_component_storage_kernel(admitted, context.storage))
+        .transpose()?;
     let arguments = admitted
-        .input()
         .request
         .arguments
         .iter()
@@ -230,21 +338,53 @@ fn inspect(admitted: &AdmittedSimulationBundleInputV3) -> Result<ResponseV1, Str
                 [binding] => Some(*binding),
                 _ => return Err("multiple source arguments name one KIR parameter".to_owned()),
             };
+            let component_storage = selected_components
+                .and_then(|kernel| component_for_kir_ordinal(kernel.arguments(), ordinal))
+                .map(|(argument, component)| ComponentStorageViewV2 {
+                    source_ordinal: argument.source_ordinal(),
+                    semantic_type: argument.semantic_type(),
+                    component: component.clone(),
+                });
             Ok(ArgumentViewV1 {
                 ordinal: ordinal as u32,
-                semantic_type: binding.map(SemanticArgumentStorageV1::semantic_type),
+                semantic_type: binding
+                    .map(SemanticArgumentStorageV1::semantic_type)
+                    .or_else(|| {
+                        component_storage
+                            .as_ref()
+                            .map(|component| component.semantic_type)
+                    }),
                 storage: binding.map(|binding| binding.storage().clone()),
+                component_storage,
                 observation: observe_argument(admitted, ordinal, argument)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(ResponseV1 {
-        schema: SCHEMA,
+        schema: if components.is_some() {
+            SCHEMA_V2
+        } else {
+            SCHEMA_V1
+        },
         status: "ok",
-        bundle_identity: hex(bundle.identity().as_bytes()),
+        bundle_identity: hex(components
+            .as_ref()
+            .map_or(bundle.identity().as_bytes(), |context| {
+                &context.bundle_identity
+            })),
+        bundle_v3_identity: components
+            .as_ref()
+            .map(|_| hex(bundle.identity().as_bytes())),
         bundle_subject_identity: hex(bundle.subject_identity()),
         semantic_mir_identity: hex(bundle.semantic_mir_identity()),
-        storage_map_identity: hex(bundle.storage_map_identity()),
+        storage_map_identity: hex(components
+            .as_ref()
+            .map_or(bundle.storage_map_identity(), |context| {
+                &context.storage_identity
+            })),
+        semantic_storage_map_v1_identity: components
+            .as_ref()
+            .map(|_| hex(bundle.storage_map_identity())),
         target_layout_identity: hex(semantic.target_layout_identity().as_bytes()),
         types,
         kernels,
@@ -261,7 +401,7 @@ fn inspect(admitted: &AdmittedSimulationBundleInputV3) -> Result<ResponseV1, Str
 }
 
 fn validate_correspondence(
-    admitted: &AdmittedSimulationBundleInputV3,
+    admitted: &AdmittedSimulationInputV1,
     semantic: &AdmittedInertSemanticMirV1,
     storage: &SemanticStorageMapV1,
 ) -> Result<(), String> {
@@ -270,7 +410,7 @@ fn validate_correspondence(
     {
         return Err("semantic MIR version or target layout does not match the storage map".into());
     }
-    let module = admitted.input().module.module();
+    let module = admitted.module.module();
     for kernel in storage.kernels() {
         let root = semantic
             .functions()
@@ -349,14 +489,14 @@ fn validate_correspondence(
 }
 
 fn selected_storage_kernel<'a>(
-    admitted: &AdmittedSimulationBundleInputV3,
+    admitted: &AdmittedSimulationInputV1,
     storage: &'a SemanticStorageMapV1,
 ) -> Result<&'a SemanticKernelStorageV1, String> {
-    let module = admitted.input().module.module();
+    let module = admitted.module.module();
     let request_kernel = module
         .kernels
         .iter()
-        .find(|kernel| kernel.id == admitted.input().request.kernel)
+        .find(|kernel| kernel.id == admitted.request.kernel)
         .ok_or_else(|| "simulation request kernel is absent after admission".to_owned())?;
     let function_ordinal = module
         .functions
@@ -373,6 +513,140 @@ fn selected_storage_kernel<'a>(
         [] => Err("storage map has no correspondence for the requested kernel".into()),
         _ => Err("storage map has ambiguous correspondence for the requested kernel".into()),
     }
+}
+
+fn validate_component_correspondence(
+    admitted: &AdmittedSimulationInputV1,
+    legacy: &SemanticStorageMapV1,
+    storage: &SemanticStorageMapV2,
+) -> Result<(), String> {
+    let module = admitted.module.module();
+    if storage.kernels().len() != legacy.kernels().len() {
+        return Err("V2 component kernel roster differs from V1".to_owned());
+    }
+    for kernel in storage.kernels() {
+        let mut matching = legacy.kernels().iter().filter(|candidate| {
+            candidate.semantic_root() == kernel.semantic_root()
+                && candidate.semantic_body() == kernel.semantic_body()
+                && candidate.kir_function_ordinal() == kernel.kir_function_ordinal()
+        });
+        let legacy_kernel = match (matching.next(), matching.next()) {
+            (Some(kernel), None) => kernel,
+            _ => return Err("V2 component kernel identity differs from V1".to_owned()),
+        };
+        if kernel.arguments().len() != legacy_kernel.arguments().len() {
+            return Err("V2 component source argument roster differs from V1".to_owned());
+        }
+        let function = module
+            .functions
+            .get(kernel.kir_function_ordinal() as usize)
+            .ok_or_else(|| "V2 component KIR function is out of range".to_owned())?;
+        let body = function
+            .body
+            .as_ref()
+            .ok_or_else(|| "V2 component KIR function has no body".to_owned())?;
+        for (argument, legacy_argument) in kernel.arguments().iter().zip(legacy_kernel.arguments())
+        {
+            if argument.source_ordinal() != legacy_argument.source_ordinal()
+                || argument.semantic_local() != legacy_argument.semantic_local()
+                || argument.semantic_type() != legacy_argument.semantic_type()
+                || argument.ownership() != legacy_argument.ownership()
+            {
+                return Err("V2 component source identity differs from V1".to_owned());
+            }
+            let Some(components) = argument.storage().components() else {
+                continue;
+            };
+            for component in components {
+                let ordinal = component.kir_parameter_ordinal() as usize;
+                if body.parameters.get(ordinal).map(|value| value.0)
+                    != Some(component.kir_value_ordinal())
+                {
+                    return Err("V2 component KIR value identity was substituted".to_owned());
+                }
+                let ty = function
+                    .signature
+                    .parameters
+                    .get(ordinal)
+                    .ok_or_else(|| "V2 component KIR parameter is out of range".to_owned())?;
+                let compatible = matches!(
+                    (component.representation(), ty),
+                    (
+                        SemanticKirComponentRepresentationV2::ScalarValue,
+                        Type::Scalar(_)
+                    ) | (
+                        SemanticKirComponentRepresentationV2::RegionPointer,
+                        Type::Pointer(_)
+                    ) | (
+                        SemanticKirComponentRepresentationV2::RegionSlice,
+                        Type::Slice(_)
+                    )
+                );
+                if !compatible {
+                    return Err(
+                        "V2 component representation differs from its KIR parameter type"
+                            .to_owned(),
+                    );
+                }
+                let target_ordinal = component.kir_parameter_ordinal();
+                let references = kernel
+                    .arguments()
+                    .iter()
+                    .filter_map(|candidate| candidate.storage().components())
+                    .flatten()
+                    .filter(|candidate| candidate.kir_parameter_ordinal() == target_ordinal)
+                    .count();
+                if references != 1 {
+                    return Err(
+                        "V2 component KIR parameter is absent or multiply represented".to_owned(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn selected_component_storage_kernel<'a>(
+    admitted: &AdmittedSimulationInputV1,
+    storage: &'a SemanticStorageMapV2,
+) -> Result<&'a SemanticKernelStorageV2, String> {
+    let module = admitted.module.module();
+    let request_kernel = module
+        .kernels
+        .iter()
+        .find(|kernel| kernel.id == admitted.request.kernel)
+        .ok_or_else(|| "simulation request kernel is absent after admission".to_owned())?;
+    let function_ordinal = module
+        .functions
+        .iter()
+        .position(|function| function.id == request_kernel.entry)
+        .ok_or_else(|| "simulation request entry is absent after admission".to_owned())?;
+    let mut matching = storage
+        .kernels()
+        .iter()
+        .filter(|kernel| kernel.kir_function_ordinal() as usize == function_ordinal);
+    match (matching.next(), matching.next()) {
+        (Some(kernel), None) => Ok(kernel),
+        (None, _) => Err("component storage map has no requested kernel".to_owned()),
+        (Some(_), Some(_)) => {
+            Err("component storage map has ambiguous requested kernel".to_owned())
+        }
+    }
+}
+
+fn component_for_kir_ordinal(
+    arguments: &[SemanticArgumentStorageV2],
+    ordinal: usize,
+) -> Option<(&SemanticArgumentStorageV2, &SemanticKirComponentStorageV2)> {
+    arguments.iter().find_map(|argument| {
+        argument.storage().components().and_then(|components| {
+            components
+                .iter()
+                .find(|component| component.kir_parameter_ordinal() as usize == ordinal)
+                .map(|component| (argument, component))
+        })
+    })
 }
 
 fn validate_binding(
@@ -417,7 +691,7 @@ fn validate_binding(
 }
 
 fn observe_argument(
-    admitted: &AdmittedSimulationBundleInputV3,
+    admitted: &AdmittedSimulationInputV1,
     ordinal: usize,
     argument: &SimulationArgumentV1,
 ) -> Result<Value, String> {
@@ -449,7 +723,6 @@ fn observe_argument(
                 .checked_add(length)
                 .ok_or_else(|| "admitted buffer-view byte range overflowed".to_owned())?;
             let backing = admitted
-                .input()
                 .request
                 .shared_buffers
                 .iter()
@@ -459,7 +732,6 @@ fn observe_argument(
                 .map(initialized_ranges)
                 .unwrap_or_default();
             let same_backing = admitted
-                .input()
                 .request
                 .arguments
                 .iter()
@@ -511,12 +783,12 @@ fn observe_argument(
 }
 
 fn element_bytes(
-    admitted: &AdmittedSimulationBundleInputV3,
+    admitted: &AdmittedSimulationInputV1,
     scalar: fe2o3_kernel_ir::ScalarType,
 ) -> Result<usize, String> {
     match scalar {
         fe2o3_kernel_ir::ScalarType::Index => {
-            Ok(match admitted.input().simulation_target().index_width() {
+            Ok(match admitted.simulation_target().index_width() {
                 IndexWidthV1::Bits32 => 4,
                 IndexWidthV1::Bits64 => 8,
             })
@@ -682,7 +954,7 @@ fn hex(bytes: &[u8; 32]) -> String {
 
 fn fail(stage: &str, code: &str, message: &str) -> ExitCode {
     let error = ErrorV1 {
-        schema: SCHEMA,
+        schema: SCHEMA_V1,
         status: "error",
         stage,
         code,
@@ -693,4 +965,34 @@ fn fail(stage: &str, code: &str, message: &str) -> ExitCode {
     let _ = output.write_all(b"\n");
     let _ = output.flush();
     ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_layout_selects_exactly_one_versioned_bundle() {
+        let v4 = parse(vec![
+            "typed-layout".into(),
+            "--bundle-v4".into(),
+            "kernel.fe2sim".into(),
+            "--request".into(),
+            "request.json".into(),
+        ])
+        .unwrap();
+        assert!(matches!(v4.bundle, BundleInputV1::V4(_)));
+        assert!(
+            parse(vec![
+                "typed-layout".into(),
+                "--bundle-v3".into(),
+                "old.fe2sim".into(),
+                "--bundle-v4".into(),
+                "new.fe2sim".into(),
+                "--request".into(),
+                "request.json".into(),
+            ])
+            .is_err()
+        );
+    }
 }

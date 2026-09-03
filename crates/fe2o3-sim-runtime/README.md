@@ -20,9 +20,17 @@ cannot strand Drop, and every admitted dispatch is independently bounded by
 the simulator limits. Worker loss makes the backend terminal and retains
 outstanding resources.
 
-Only exact scalar, thin global pointer, and global slice storage
-correspondences are materialized. Cast, adjusted, indirect, aggregate,
-ambiguous, reordered, and expanded ABI forms fail typed admission. Dynamic
-shared memory, peer copy, multiple devices, and host runtime collectives are
-not advertised. KIR wave operations remain simulated kernel semantics; they do
-not constitute a host collective primitive.
+V3 materializes exact scalar, thin global pointer, and global slice storage
+correspondences. V4 content-binds an independently versioned one-to-many
+semantic component map, including explicit physical kernarg size, alignment,
+and slots. Those facts are available to typed debugger inspection, but V4 does
+not grant compiler authority. Ordinary by-value aggregate execution therefore
+fails with a typed unsupported error until the production compiler exports an
+authenticated component and host packing plan. The consumer already validates
+nested Rust projections, scalar validity, direct and niche discriminants,
+inactive-payload poison, region metadata, and physical slot bounds without
+reading padding or host pointer bytes. Embedded pointers, cast or adjusted
+ABIs, indirect arguments, ambiguous storage, and layouts without exact slots
+also fail typed admission. Dynamic shared memory, peer copy, multiple devices,
+and host runtime collectives are not advertised. KIR wave operations remain
+simulated kernel semantics; they do not constitute a host collective primitive.

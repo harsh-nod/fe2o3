@@ -29,6 +29,9 @@
 //! source-variable/debugger formats. They do not reinterpret the frozen V1 map
 //! or bundle and confer no compiler-execution, proof, load, launch, or hardware
 //! authority.
+//! [`VerifiedSimulationBundleV4`] is an additive aggregate-materialization
+//! envelope. It retains the complete V3 bytes and binds a separately versioned
+//! one-to-many semantic-component storage map without changing any earlier wire.
 //!
 //! [`SemanticDebugMapDocumentV1`] is a separate, finalized-artifact-bound sidecar for exact
 //! bidirectional source/MIR/KIR/schedule/LLVM/ISA correlation. It represents optimization shape
@@ -64,6 +67,7 @@ mod semantic_operations;
 mod simulation_bundle_v1;
 mod simulation_bundle_v2;
 mod simulation_bundle_v3;
+mod simulation_bundle_v4;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -110,6 +114,7 @@ pub use semantic_operations::*;
 pub use simulation_bundle_v1::*;
 pub use simulation_bundle_v2::*;
 pub use simulation_bundle_v3::*;
+pub use simulation_bundle_v4::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;

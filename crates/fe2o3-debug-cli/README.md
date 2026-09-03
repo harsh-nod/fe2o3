@@ -66,12 +66,21 @@ shared-backing arguments.
 Substituted layout, local, KIR, or source-map bindings fail closed. The query is
 observational and grants no compiler or execution authority.
 
-KIR V7 still has no by-value aggregate value type. Struct, tuple, array, and
-enum layouts can therefore be inspected when retained by an otherwise admitted
-ordinary Rust kernel, but aggregate values are not reconstructed from scalar
-names or silently flattened. Aggregate construction/execution outside the
-current production lowering remains a typed compiler rejection; exact
-parameter storage that cannot be interpreted is `opaque_flattened`.
+Bundle V4 retains the complete V3 payload byte-for-byte and adds a separately
+content-bound one-to-many component map with explicit physical kernarg size,
+alignment, and slots. This proves internal content association, not that the
+production compiler generated the physical plan. Use
+`fe2o3-debug typed-layout --bundle-v4 KERNEL.fe2sim --request REQUEST.json` to
+associate each observed KIR argument with its source argument, semantic type,
+and nested struct, tuple, array, or enum projection path. This emits
+`fe2o3-debug-typed-layout-v2`; V3 continues to emit the unchanged V1 response.
+
+KIR V7 still has no by-value aggregate value type. V4 reconstructs components
+only when the compiler supplies the exact semantic projection for every
+retained scalar KIR parameter; it never infers flattening from scalar names.
+Aggregate construction/execution outside the current production lowering
+remains a typed compiler rejection, and storage without exact correspondence
+remains typed unavailable.
 
 Source-variable inspection uses the separate
 `fe2o3-debug-source-variable-request-v2` schema. Callers select all variables,

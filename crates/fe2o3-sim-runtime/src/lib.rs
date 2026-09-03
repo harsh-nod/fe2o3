@@ -2,14 +2,21 @@
 #![doc = include_str!("../README.md")]
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V3, ScalarType,
-    SemanticArgumentOwnershipV1, SemanticKirStorageRepresentationV1, SemanticStorageBindingV1,
-    SemanticStorageMapV1, Type, VerifiedCanonicalKernelIrV7, VerifiedSimulationBundleV3,
+    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V4, ScalarType,
+    SemanticArgumentOwnershipV1, SemanticArgumentStorageV2, SemanticComponentStorageBindingV2,
+    SemanticKernargSlotV2, SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
+    SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
+    SemanticStorageMapV2, SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7,
+    VerifiedSimulationBundleV3, VerifiedSimulationBundleV4,
 };
 use fe2o3_kir_sim::{AdmittedSimulationModuleV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticLocalRoleV1, SemanticMirLimitsV1,
-    SemanticSourceArgumentOwnershipV1,
+    AdmittedInertSemanticMirV1, SemanticAbiArgumentV1, SemanticAbiPassModeV1,
+    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticEnumEncodingV1, SemanticLocalRoleV1,
+    SemanticMirLimitsV1, SemanticMutabilityV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
+    SemanticRustcVariantsV1, SemanticScalarTypeV1, SemanticScalarValidityRangeV1,
+    SemanticSourceArgumentOwnershipV1, SemanticTypeDeclV1, SemanticTypeIdV1,
+    SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
 };
 use fe2o3_runtime::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
@@ -209,6 +216,70 @@ struct ArgumentRecordV1 {
     offset: usize,
     size: usize,
     ty: Type,
+    materialization: ArgumentMaterializationV1,
+}
+
+#[derive(Clone)]
+enum ArgumentMaterializationV1 {
+    ExactBytes {
+        validity: Vec<SemanticScalarValidityRangeV1>,
+        guards: Vec<EnumVariantGuardV1>,
+    },
+    EnumDiscriminant {
+        decoder: EnumDecoderV1,
+        guards: Vec<EnumVariantGuardV1>,
+    },
+    Region {
+        metadata: Option<PhysicalSlotV1>,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct PhysicalSlotV1 {
+    offset: usize,
+    size: usize,
+}
+
+#[derive(Clone)]
+struct EnumVariantGuardV1 {
+    decoder: EnumDecoderV1,
+    required_variant: u32,
+}
+
+#[derive(Clone)]
+struct EnumDecoderV1 {
+    byte_offset: usize,
+    byte_width: usize,
+    variants: Vec<EnumVariantValueV1>,
+    encoding: EnumDecoderEncodingV1,
+}
+
+#[derive(Clone, Copy)]
+struct EnumVariantValueV1 {
+    index: u32,
+    discriminant: u128,
+    uninhabited: bool,
+}
+
+#[derive(Clone)]
+enum EnumDecoderEncodingV1 {
+    Single {
+        variant: u32,
+    },
+    Direct {
+        physical_bits: u16,
+        logical_signed: bool,
+        logical_bits: u16,
+        validity: Option<SemanticScalarValidityRangeV1>,
+    },
+    Niche {
+        physical_bits: u16,
+        source_validity: SemanticScalarValidityRangeV1,
+        untagged_variant: u32,
+        niche_variants_start: u32,
+        niche_variants_end: u32,
+        niche_start: u128,
+    },
 }
 
 struct SubmissionRecordV1 {
@@ -601,10 +672,10 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         if device != DEVICE_HANDLE {
             return Err(rejected_handle("device"));
         }
-        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V3 {
+        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V4 {
             return Err(RuntimeBackendFailureV1::Rejected(
                 SimRuntimeBackendErrorV1::InvalidBundle(
-                    "bundle exceeds the V3 byte limit".to_owned(),
+                    "bundle exceeds the V4 byte limit".to_owned(),
                 ),
             ));
         }
@@ -912,8 +983,22 @@ fn parse_bundle(
     image: &[u8],
     target: VirtualTargetProfileV1,
 ) -> Result<ParsedBundleV1, SimRuntimeBackendErrorV1> {
-    let bundle = VerifiedSimulationBundleV3::from_canonical_bytes(image.to_vec())
-        .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+    let (bundle, component_storage) = if VerifiedSimulationBundleV4::has_magic_prefix(image) {
+        let bundle = VerifiedSimulationBundleV4::from_canonical_bytes(copy_bundle_image_v2(image)?)
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+        bundle
+            .revalidate()
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+        let storage = SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+        (bundle.into_inner_v3(), Some(storage))
+    } else {
+        (
+            VerifiedSimulationBundleV3::from_canonical_bytes(copy_bundle_image_v2(image)?)
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?,
+            None,
+        )
+    };
     bundle
         .revalidate()
         .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
@@ -939,11 +1024,31 @@ fn parse_bundle(
         ));
     }
     let (canonical, module) = VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(
-        bundle.inner_v2().inner_v1().canonical_kir_v7().to_vec(),
+        copy_bundle_image_v2(bundle.inner_v2().inner_v1().canonical_kir_v7())?,
     )
     .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
     let mut kernels = HashMap::new();
     for storage_kernel in storage.kernels() {
+        let component_kernel = component_storage.as_ref().map(|storage| {
+            storage
+                .kernels()
+                .iter()
+                .find(|kernel| kernel.semantic_root() == storage_kernel.semantic_root())
+                .ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::InvalidBundle(
+                        "component storage map does not cover a semantic root".to_owned(),
+                    )
+                })
+        });
+        let component_kernel = component_kernel.transpose()?;
+        if let Some(component_kernel) = component_kernel
+            && (component_kernel.semantic_body() != storage_kernel.semantic_body()
+                || component_kernel.kir_function_ordinal() != storage_kernel.kir_function_ordinal())
+        {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                "V1 and V2 semantic storage kernel identities differ".to_owned(),
+            ));
+        }
         let root = semantic
             .functions()
             .get(storage_kernel.semantic_root() as usize)
@@ -1009,6 +1114,11 @@ fn parse_bundle(
                     )
                 })?;
             if local.ty().index() != item.semantic_type()
+                || root
+                    .abi()
+                    .source_input_types()
+                    .get(source)
+                    .is_none_or(|ty| ty.index() != item.semantic_type())
                 || local.role() != SemanticLocalRoleV1::Argument(item.source_ordinal())
                 || !ownership_matches(
                     item.ownership(),
@@ -1038,12 +1148,24 @@ fn parse_bundle(
                 }
             }
         }
-        let (arguments, explicit_byte_len, unsupported) = argument_layout(
-            storage_kernel.arguments(),
-            root.abi(),
-            semantic.types(),
-            &function.signature.parameters,
-        )?;
+        let (arguments, explicit_byte_len, unsupported) =
+            if let Some(component_kernel) = component_kernel {
+                argument_layout_v2(
+                    storage_kernel.arguments(),
+                    component_kernel,
+                    root.abi(),
+                    semantic.types(),
+                    &body.parameters,
+                    &function.signature.parameters,
+                )?
+            } else {
+                argument_layout(
+                    storage_kernel.arguments(),
+                    root.abi(),
+                    semantic.types(),
+                    &function.signature.parameters,
+                )?
+            };
         if kernels
             .insert(
                 kernel.id.as_str().to_owned(),
@@ -1068,10 +1190,29 @@ fn parse_bundle(
             "storage map does not cover every KIR kernel".to_owned(),
         ));
     }
+    if component_storage
+        .as_ref()
+        .is_some_and(|storage| storage.kernels().len() != kernels.len())
+    {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "component storage map has an extra semantic kernel".to_owned(),
+        ));
+    }
     let admitted =
         AdmittedSimulationModuleV1::admit(canonical, fe2o3_kir_sim::SimulationLimitsV1::default())
             .map_err(|error| SimRuntimeBackendErrorV1::UnsupportedBundle(error.to_string()))?;
     Ok(ParsedBundleV1 { admitted, kernels })
+}
+
+fn copy_bundle_image_v2(image: &[u8]) -> Result<Vec<u8>, SimRuntimeBackendErrorV1> {
+    let mut copy = Vec::new();
+    copy.try_reserve_exact(image.len()).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle(
+            "simulation bundle image allocation failed".to_owned(),
+        )
+    })?;
+    copy.extend_from_slice(image);
+    Ok(copy)
 }
 
 fn argument_layout(
@@ -1080,12 +1221,25 @@ fn argument_layout(
     semantic_types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     kir_types: &[Type],
 ) -> Result<(Vec<ArgumentRecordV1>, usize, Option<String>), SimRuntimeBackendErrorV1> {
-    let mut arguments = Vec::with_capacity(storage.len());
-    let source_abi_arguments = abi
-        .arguments()
-        .iter()
-        .filter(|argument| argument.is_source())
-        .collect::<Vec<_>>();
+    let mut arguments = Vec::new();
+    arguments.try_reserve_exact(storage.len()).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle(
+            "source argument roster allocation failed".to_owned(),
+        )
+    })?;
+    let mut source_abi_arguments = Vec::new();
+    source_abi_arguments
+        .try_reserve_exact(storage.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "source ABI roster allocation failed".to_owned(),
+            )
+        })?;
+    source_abi_arguments.extend(
+        abi.arguments()
+            .iter()
+            .filter(|argument| argument.is_source()),
+    );
     if source_abi_arguments.len() != storage.len() {
         return Err(SimRuntimeBackendErrorV1::InvalidBundle(
             "physical semantic ABI source-argument roster differs".to_owned(),
@@ -1190,8 +1344,40 @@ fn argument_layout(
         }
         arguments.push(ArgumentRecordV1 {
             offset,
-            size,
+            size: if matches!(
+                representation,
+                SemanticKirStorageRepresentationV1::RegionSlice
+            ) {
+                8
+            } else {
+                size
+            },
             ty: kir_ty,
+            materialization: match representation {
+                SemanticKirStorageRepresentationV1::Scalar => {
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    }
+                }
+                SemanticKirStorageRepresentationV1::RegionPointer => {
+                    ArgumentMaterializationV1::Region { metadata: None }
+                }
+                SemanticKirStorageRepresentationV1::RegionSlice => {
+                    ArgumentMaterializationV1::Region {
+                        metadata: Some(PhysicalSlotV1 {
+                            offset: offset + 8,
+                            size: 8,
+                        }),
+                    }
+                }
+                SemanticKirStorageRepresentationV1::OpaqueFlattened => {
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    }
+                }
+            },
         });
     }
     if arguments.len() != kir_types.len() {
@@ -1199,6 +1385,1066 @@ fn argument_layout(
             .get_or_insert_with(|| "source-to-KIR argument count is not one-to-one".to_owned());
     }
     Ok((arguments, align_up(next, maximum_alignment)?, unsupported))
+}
+
+fn argument_layout_v2(
+    legacy: &[fe2o3_kernel_ir::SemanticArgumentStorageV1],
+    kernel_storage: &SemanticKernelStorageV2,
+    abi: &fe2o3_mir_model::semantic_mir_v1::SemanticFunctionAbiV1,
+    semantic_types: &[SemanticTypeDeclV1],
+    kir_values: &[fe2o3_kernel_ir::ValueId],
+    kir_types: &[Type],
+) -> Result<(Vec<ArgumentRecordV1>, usize, Option<String>), SimRuntimeBackendErrorV1> {
+    let storage = kernel_storage.arguments();
+    if storage.len() != legacy.len() || storage.len() != abi.source_input_types().len() {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "V2 source argument roster differs from V1 or semantic ABI".to_owned(),
+        ));
+    }
+    let mut source_abi_arguments = Vec::new();
+    source_abi_arguments
+        .try_reserve_exact(storage.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "V2 source ABI roster allocation failed".to_owned(),
+            )
+        })?;
+    source_abi_arguments.extend(
+        abi.arguments()
+            .iter()
+            .filter(|argument| argument.is_source()),
+    );
+    if source_abi_arguments.len() != storage.len() {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "V2 physical semantic ABI source-argument roster differs".to_owned(),
+        ));
+    }
+
+    let explicit_byte_len =
+        usize::try_from(kernel_storage.explicit_kernarg_bytes()).map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "V2 physical kernarg size does not fit this host".to_owned(),
+            )
+        })?;
+    let _explicit_alignment = usize::try_from(kernel_storage.explicit_kernarg_alignment())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "V2 physical kernarg alignment does not fit this host".to_owned(),
+            )
+        })?;
+    if explicit_byte_len > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
+        return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+            "V2 physical kernarg exceeds the runtime byte limit".to_owned(),
+        ));
+    }
+
+    for (source, item) in storage.iter().enumerate() {
+        let legacy = legacy.get(source).ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle("V1 source argument is absent".to_owned())
+        })?;
+        if item.source_ordinal() as usize != source
+            || item.source_ordinal() != legacy.source_ordinal()
+            || item.semantic_local() != legacy.semantic_local()
+            || item.semantic_type() != legacy.semantic_type()
+            || item.ownership() != legacy.ownership()
+        {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                "V2 source argument identity differs from V1".to_owned(),
+            ));
+        }
+        let declaration = semantic_types
+            .get(item.semantic_type() as usize)
+            .ok_or_else(|| {
+                SimRuntimeBackendErrorV1::InvalidBundle(
+                    "V2 semantic argument type is out of range".to_owned(),
+                )
+            })?;
+        if declaration.layout().is_uninhabited() {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} has an uninhabited Rust layout"
+            )));
+        }
+        usize::try_from(declaration.layout().size_bytes().ok_or_else(|| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} has an unsized Rust layout"
+            ))
+        })?)
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} size does not fit this host"
+            ))
+        })?;
+        usize::try_from(declaration.layout().alignment_bytes()).map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} alignment does not fit this host"
+            ))
+        })?;
+    }
+    let mut arguments = Vec::new();
+    arguments.try_reserve_exact(kir_types.len()).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle(
+            "V2 KIR argument roster allocation failed".to_owned(),
+        )
+    })?;
+    arguments.resize_with(kir_types.len(), || None);
+    let mut unsupported = requires_producer_authenticated_packing_v2(storage).then(|| {
+        "V4 aggregate execution requires a compiler-authenticated physical host packing plan"
+            .to_owned()
+    });
+    for (source, item) in storage.iter().enumerate() {
+        let source_type = SemanticTypeIdV1::from_index(item.semantic_type());
+        let source_declaration = semantic_types
+            .get(item.semantic_type() as usize)
+            .ok_or_else(|| {
+                SimRuntimeBackendErrorV1::InvalidBundle(
+                    "V2 semantic argument type is out of range".to_owned(),
+                )
+            })?;
+        let source_size =
+            usize::try_from(source_declaration.layout().size_bytes().ok_or_else(|| {
+                SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "source argument {source} has an unsized Rust layout"
+                ))
+            })?)
+            .map_err(|_| {
+                SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "source argument {source} size does not fit this host"
+                ))
+            })?;
+        let physical = source_abi_arguments[source];
+        if physical.value().source_ty() != source_type {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} physical ABI type was substituted"
+            )));
+        }
+        let components = match item.storage() {
+            SemanticComponentStorageBindingV2::ExactKirComponents { components } => components,
+            SemanticComponentStorageBindingV2::Unavailable { reason } => {
+                unsupported.get_or_insert_with(|| {
+                    format!("source argument {source} has unavailable V2 storage: {reason:?}")
+                });
+                continue;
+            }
+            SemanticComponentStorageBindingV2::Ambiguous => {
+                unsupported.get_or_insert_with(|| {
+                    format!("source argument {source} has ambiguous V2 storage")
+                });
+                continue;
+            }
+        };
+        if physical.value().adjusted().is_some() {
+            unsupported.get_or_insert_with(|| {
+                format!("source argument {source} has an adjusted ABI value")
+            });
+        }
+        let has_slice = components.iter().any(|component| {
+            component.representation() == SemanticKirComponentRepresentationV2::RegionSlice
+        });
+        let has_pointer = components.iter().any(|component| {
+            component.representation() == SemanticKirComponentRepresentationV2::RegionPointer
+        });
+        match physical.mode() {
+            SemanticAbiPassModeV1::Ignore if source_size == 0 && components.is_empty() => {}
+            SemanticAbiPassModeV1::Direct(_)
+                if !has_slice && (!has_pointer || components.len() == 1) => {}
+            SemanticAbiPassModeV1::Pair { .. }
+                if has_slice && !has_pointer && components.len() == 1 => {}
+            SemanticAbiPassModeV1::Ignore => {
+                unsupported.get_or_insert_with(|| {
+                    format!("source argument {source} is ABI-ignored but has retained storage")
+                });
+            }
+            SemanticAbiPassModeV1::Cast { .. } => {
+                unsupported.get_or_insert_with(|| {
+                    format!("source argument {source} uses an unsupported cast ABI")
+                });
+            }
+            SemanticAbiPassModeV1::Indirect { .. } => {
+                unsupported.get_or_insert_with(|| {
+                    format!("source argument {source} uses an unsupported indirect ABI")
+                });
+            }
+            SemanticAbiPassModeV1::Direct(_) | SemanticAbiPassModeV1::Pair { .. } => {
+                unsupported.get_or_insert_with(|| {
+                    format!(
+                        "source argument {source} physical ABI mode disagrees with its component representation"
+                    )
+                });
+            }
+        };
+        for component in components {
+            let ordinal = component.kir_parameter_ordinal() as usize;
+            let Some(kir_ty) = kir_types.get(ordinal).cloned() else {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                    "source argument {source} component references an absent KIR parameter"
+                )));
+            };
+            if kir_values.get(ordinal).map(|value| value.0) != Some(component.kir_value_ordinal())
+                || arguments[ordinal].is_some()
+            {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                    "source argument {source} component has substituted or duplicate KIR storage"
+                )));
+            }
+            let record = match component.representation() {
+                SemanticKirComponentRepresentationV2::ScalarValue => {
+                    let projected = project_semantic_component_v2(
+                        semantic_types,
+                        source_type,
+                        component.path(),
+                        0,
+                        components,
+                        component,
+                        source,
+                    )?;
+                    let expected = scalar_type_for_semantic_component_v2(
+                        semantic_types,
+                        projected.semantic_type,
+                        projected.is_enum_discriminant,
+                    )?;
+                    if kir_ty.as_scalar() != Some(expected) {
+                        return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} component semantic and KIR scalar types differ"
+                        )));
+                    }
+                    let scalar_size = scalar_bytes(Some(expected)).ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "semantic scalar has no concrete KIR byte width".to_owned(),
+                        )
+                    })?;
+                    let expected_size = projected
+                        .discriminant_decoder
+                        .as_ref()
+                        .map_or(scalar_size, |decoder| decoder.byte_width);
+                    let semantic_alignment = expected_size.next_power_of_two();
+                    let value_slot = validate_component_physical_slot_v2(
+                        component.value_slot(),
+                        expected_size,
+                        semantic_alignment,
+                        source,
+                    )?;
+                    let source_width = if projected.discriminant_decoder.is_some() {
+                        expected_size
+                    } else {
+                        scalar_size
+                    };
+                    let materialization = if let Some(decoder) = projected.discriminant_decoder {
+                        ArgumentMaterializationV1::EnumDiscriminant {
+                            decoder,
+                            guards: projected.guards,
+                        }
+                    } else {
+                        ArgumentMaterializationV1::ExactBytes {
+                            validity: semantic_component_validity_v2(
+                                semantic_types,
+                                projected.semantic_type,
+                            )?,
+                            guards: projected.guards,
+                        }
+                    };
+                    if projected
+                        .byte_offset
+                        .checked_add(source_width)
+                        .is_none_or(|end| end > source_size)
+                    {
+                        return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} component exceeds its Rust layout"
+                        )));
+                    }
+                    ArgumentRecordV1 {
+                        offset: value_slot.offset,
+                        size: value_slot.size,
+                        ty: kir_ty,
+                        materialization,
+                    }
+                }
+                SemanticKirComponentRepresentationV2::RegionPointer
+                | SemanticKirComponentRepresentationV2::RegionSlice => {
+                    if let Err(detail) = validate_region_component_v2(
+                        semantic_types,
+                        source_type,
+                        item.ownership(),
+                        component,
+                        &kir_ty,
+                        physical,
+                        source_size,
+                    ) {
+                        unsupported.get_or_insert_with(|| {
+                            format!(
+                                "source argument {source} has no exact region materialization: {detail}"
+                            )
+                        });
+                    }
+                    ArgumentRecordV1 {
+                        offset: physical_slot_v2(component.value_slot())?.offset,
+                        size: physical_slot_v2(component.value_slot())?.size,
+                        ty: kir_ty,
+                        materialization: ArgumentMaterializationV1::Region {
+                            metadata: component
+                                .metadata_slot()
+                                .map(physical_slot_v2)
+                                .transpose()?,
+                        },
+                    }
+                }
+            };
+            arguments[ordinal] = Some(record);
+        }
+    }
+    if arguments.iter().any(Option::is_none) && unsupported.is_none() {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "V2 component storage does not cover every KIR parameter exactly once".to_owned(),
+        ));
+    }
+    let mut materialized = Vec::new();
+    materialized
+        .try_reserve_exact(kir_types.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "V2 materialized argument allocation failed".to_owned(),
+            )
+        })?;
+    materialized.extend(arguments.into_iter().flatten());
+    Ok((materialized, explicit_byte_len, unsupported))
+}
+
+fn requires_producer_authenticated_packing_v2(storage: &[SemanticArgumentStorageV2]) -> bool {
+    storage
+        .iter()
+        .filter_map(|argument| argument.storage().components())
+        .flatten()
+        .any(|component| !component.path().is_empty())
+}
+
+fn validate_region_component_v2(
+    semantic_types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+    ownership: SemanticArgumentOwnershipV1,
+    component: &fe2o3_kernel_ir::SemanticKirComponentStorageV2,
+    kir_type: &Type,
+    physical: &SemanticAbiArgumentV1,
+    source_size: usize,
+) -> Result<(), String> {
+    if !component.path().is_empty() {
+        return Err("embedded pointer components have no owned runtime region binding".to_owned());
+    }
+    if physical.value().pointee_override().is_some() {
+        return Err("semantic ABI pointee override has no exact region rule".to_owned());
+    }
+    let declaration = semantic_types
+        .get(semantic_type.index() as usize)
+        .ok_or_else(|| "semantic pointer type is absent".to_owned())?;
+    let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape() else {
+        return Err("semantic source type is not an exact pointer or reference".to_owned());
+    };
+    if pointer.pointer_width_bits() != 64 {
+        return Err("semantic pointer width is not the runtime target width of 64 bits".to_owned());
+    }
+    if !matches!(pointer.address_space(), 0 | 1) {
+        return Err("semantic pointer address space is not device-global".to_owned());
+    }
+    let expected_access = match pointer.mutability() {
+        SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
+        SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
+    };
+    let ownership_matches_pointer = matches!(
+        (ownership, pointer.kind(), pointer.mutability()),
+        (
+            SemanticArgumentOwnershipV1::SharedBorrow,
+            SemanticPointerKindV1::Reference,
+            SemanticMutabilityV1::Immutable
+        ) | (
+            SemanticArgumentOwnershipV1::UniqueBorrow,
+            SemanticPointerKindV1::Reference,
+            SemanticMutabilityV1::Mutable
+        ) | (
+            SemanticArgumentOwnershipV1::RawPointer,
+            SemanticPointerKindV1::Raw,
+            _
+        ) | (
+            SemanticArgumentOwnershipV1::ExclusiveOwner,
+            SemanticPointerKindV1::Raw,
+            SemanticMutabilityV1::Mutable
+        )
+    );
+    if !ownership_matches_pointer {
+        return Err("semantic pointer kind, mutability, and source ownership disagree".to_owned());
+    }
+
+    let (semantic_element, kir_element, kir_address_space, kir_access, expected_size, mode_ok) =
+        match (component.representation(), pointer.metadata(), kir_type) {
+            (
+                SemanticKirComponentRepresentationV2::RegionPointer,
+                SemanticPointerMetadataV1::None,
+                Type::Pointer(kir),
+            ) => (
+                pointer.pointee(),
+                kir.pointee.as_ref(),
+                kir.address_space,
+                kir.access,
+                8,
+                matches!(physical.mode(), SemanticAbiPassModeV1::Direct(_)),
+            ),
+            (
+                SemanticKirComponentRepresentationV2::RegionSlice,
+                SemanticPointerMetadataV1::SliceLength,
+                Type::Slice(kir),
+            ) => {
+                let pointee = semantic_types
+                    .get(pointer.pointee().index() as usize)
+                    .ok_or_else(|| "semantic slice pointee type is absent".to_owned())?;
+                let SemanticTypeShapeV1::Slice { element } = pointee.shape() else {
+                    return Err(
+                        "slice-length pointer metadata does not reference a semantic slice"
+                            .to_owned(),
+                    );
+                };
+                (
+                    *element,
+                    kir.element.as_ref(),
+                    kir.address_space,
+                    kir.access,
+                    16,
+                    matches!(physical.mode(), SemanticAbiPassModeV1::Pair { .. }),
+                )
+            }
+            (SemanticKirComponentRepresentationV2::RegionPointer, _, _) => {
+                return Err(
+                    "region-pointer representation disagrees with semantic metadata or KIR type"
+                        .to_owned(),
+                );
+            }
+            (SemanticKirComponentRepresentationV2::RegionSlice, _, _) => {
+                return Err(
+                    "region-slice representation disagrees with semantic metadata or KIR type"
+                        .to_owned(),
+                );
+            }
+            (SemanticKirComponentRepresentationV2::ScalarValue, _, _) => {
+                return Err("scalar component was dispatched as a region".to_owned());
+            }
+        };
+    if kir_address_space != AddressSpace::Global || kir_access != expected_access {
+        return Err(
+            "semantic address space or mutability disagrees with the KIR region".to_owned(),
+        );
+    }
+    let expected_element =
+        scalar_type_for_semantic_component_v2(semantic_types, semantic_element, false).map_err(
+            |_| "semantic region element has no exact scalar KIR representation".to_owned(),
+        )?;
+    if kir_element != &Type::Scalar(expected_element) {
+        return Err("semantic pointee element disagrees with the KIR region element".to_owned());
+    }
+    if source_size != expected_size || !mode_ok {
+        return Err(
+            "semantic source layout and physical ABI mode are not exact for the region".to_owned(),
+        );
+    }
+    let value = physical_slot_v2(component.value_slot()).map_err(|error| error.to_string())?;
+    if value.size != 8 || component.value_slot().byte_alignment() != 8 {
+        return Err("region pointer slot differs from the target pointer ABI".to_owned());
+    }
+    let metadata = component.metadata_slot();
+    match component.representation() {
+        SemanticKirComponentRepresentationV2::RegionPointer if metadata.is_none() => {}
+        SemanticKirComponentRepresentationV2::RegionSlice => {
+            let metadata =
+                metadata.ok_or_else(|| "region slice metadata slot is absent".to_owned())?;
+            let metadata = physical_slot_v2(metadata).map_err(|error| error.to_string())?;
+            if metadata.size != 8
+                || component
+                    .metadata_slot()
+                    .is_none_or(|slot| slot.byte_alignment() != 8)
+            {
+                return Err(
+                    "region slice metadata slot differs from the target usize ABI".to_owned(),
+                );
+            }
+        }
+        _ => return Err("region metadata slot disagrees with its representation".to_owned()),
+    }
+    Ok(())
+}
+
+fn physical_slot_v2(
+    slot: SemanticKernargSlotV2,
+) -> Result<PhysicalSlotV1, SimRuntimeBackendErrorV1> {
+    Ok(PhysicalSlotV1 {
+        offset: usize::try_from(slot.byte_offset()).map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "physical kernarg offset does not fit this host".to_owned(),
+            )
+        })?,
+        size: usize::try_from(slot.byte_width()).map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "physical kernarg width does not fit this host".to_owned(),
+            )
+        })?,
+    })
+}
+
+fn validate_component_physical_slot_v2(
+    slot: SemanticKernargSlotV2,
+    expected_size: usize,
+    expected_alignment: usize,
+    source: usize,
+) -> Result<PhysicalSlotV1, SimRuntimeBackendErrorV1> {
+    let physical = physical_slot_v2(slot)?;
+    if physical.size != expected_size
+        || usize::try_from(slot.byte_alignment()).ok() != Some(expected_alignment)
+    {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+            "source argument {source} component physical slot has the wrong ABI width or alignment"
+        )));
+    }
+    Ok(physical)
+}
+
+struct ProjectedSemanticComponentV2 {
+    semantic_type: SemanticTypeIdV1,
+    byte_offset: usize,
+    guards: Vec<EnumVariantGuardV1>,
+    discriminant_decoder: Option<EnumDecoderV1>,
+    is_enum_discriminant: bool,
+}
+
+fn project_semantic_component_v2(
+    types: &[SemanticTypeDeclV1],
+    root: SemanticTypeIdV1,
+    path: &[SemanticStorageProjectionV2],
+    root_offset: usize,
+    components: &[fe2o3_kernel_ir::SemanticKirComponentStorageV2],
+    current_component: &fe2o3_kernel_ir::SemanticKirComponentStorageV2,
+    source: usize,
+) -> Result<ProjectedSemanticComponentV2, SimRuntimeBackendErrorV1> {
+    let mut semantic_type = root;
+    let mut byte_offset = root_offset;
+    let mut guards = Vec::new();
+    guards.try_reserve_exact(path.len()).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle("component enum-guard allocation failed".to_owned())
+    })?;
+    let mut selected_variant = None;
+    for (position, projection) in path.iter().enumerate() {
+        let declaration = types.get(semantic_type.index() as usize).ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "component path references an absent semantic type".to_owned(),
+            )
+        })?;
+        match *projection {
+            SemanticStorageProjectionV2::Field { index } => {
+                let (field_type, relative) = match declaration.shape() {
+                    SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
+                        let layout = match declaration.layout().details() {
+                            SemanticTypeLayoutDetailsV1::Aggregate(layout) => layout,
+                            SemanticTypeLayoutDetailsV1::None => {
+                                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                                    "aggregate component has no exact field layout".to_owned(),
+                                ));
+                            }
+                        };
+                        let field_type = *fields.fields().get(index as usize).ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(
+                                "aggregate component field is out of range".to_owned(),
+                            )
+                        })?;
+                        let offset =
+                            *layout.field_offsets().get(index as usize).ok_or_else(|| {
+                                SimRuntimeBackendErrorV1::InvalidBundle(
+                                    "aggregate component field offset is absent".to_owned(),
+                                )
+                            })?;
+                        (field_type, offset)
+                    }
+                    SemanticTypeShapeV1::Enum { variants, .. } => {
+                        let variant = selected_variant.take().ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(
+                                "enum payload field has no preceding variant projection".to_owned(),
+                            )
+                        })?;
+                        let fields = variants.get(variant as usize).ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(
+                                "enum payload variant is out of range".to_owned(),
+                            )
+                        })?;
+                        let field_type =
+                            *fields
+                                .fields()
+                                .fields()
+                                .get(index as usize)
+                                .ok_or_else(|| {
+                                    SimRuntimeBackendErrorV1::InvalidBundle(
+                                        "enum payload field is out of range".to_owned(),
+                                    )
+                                })?;
+                        let aggregate = match declaration.layout().variants() {
+                            SemanticRustcVariantsV1::Multiple(layout) => layout
+                                .variants()
+                                .get(variant as usize)
+                                .ok_or_else(|| {
+                                    SimRuntimeBackendErrorV1::InvalidBundle(
+                                        "enum payload layout variant is out of range".to_owned(),
+                                    )
+                                })?
+                                .aggregate(),
+                            SemanticRustcVariantsV1::Single { index: retained }
+                                if *retained == variant =>
+                            {
+                                match declaration.layout().details() {
+                                    SemanticTypeLayoutDetailsV1::Aggregate(aggregate) => aggregate,
+                                    SemanticTypeLayoutDetailsV1::None => {
+                                        return Err(
+                                            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                                                "single-variant enum payload has no retained field layout"
+                                                    .to_owned(),
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                            SemanticRustcVariantsV1::Single { .. } => {
+                                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                                    "enum payload projection selects a non-retained single variant"
+                                        .to_owned(),
+                                ));
+                            }
+                            SemanticRustcVariantsV1::Empty => {
+                                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                                    "uninhabited enum has no payload layout".to_owned(),
+                                ));
+                            }
+                        };
+                        let offset =
+                            *aggregate
+                                .field_offsets()
+                                .get(index as usize)
+                                .ok_or_else(|| {
+                                    SimRuntimeBackendErrorV1::InvalidBundle(
+                                        "enum payload field offset is absent".to_owned(),
+                                    )
+                                })?;
+                        (field_type, offset)
+                    }
+                    _ => {
+                        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                            "field projection does not name an aggregate".to_owned(),
+                        ));
+                    }
+                };
+                let relative = usize::try_from(relative).map_err(|_| {
+                    SimRuntimeBackendErrorV1::UnsupportedBundle(
+                        "component field byte offset does not fit this host".to_owned(),
+                    )
+                })?;
+                byte_offset = byte_offset.checked_add(relative).ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::InvalidBundle(
+                        "component field byte offset overflow".to_owned(),
+                    )
+                })?;
+                semantic_type = field_type;
+            }
+            SemanticStorageProjectionV2::ArrayElement { index } => {
+                let SemanticTypeShapeV1::Array { element, length } = declaration.shape() else {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "array projection does not name an array".to_owned(),
+                    ));
+                };
+                if index >= *length {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "array component index is out of range".to_owned(),
+                    ));
+                }
+                let fe2o3_mir_model::semantic_mir_v1::SemanticFieldsShapeV1::Array {
+                    stride_bytes,
+                    count,
+                } = declaration.layout().fields()
+                else {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "array component has no exact stride layout".to_owned(),
+                    ));
+                };
+                if count != length {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "array semantic and layout lengths differ".to_owned(),
+                    ));
+                }
+                let relative = index.checked_mul(*stride_bytes).ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::InvalidBundle(
+                        "array component byte offset overflow".to_owned(),
+                    )
+                })?;
+                let relative = usize::try_from(relative).map_err(|_| {
+                    SimRuntimeBackendErrorV1::UnsupportedBundle(
+                        "array component byte offset does not fit this host".to_owned(),
+                    )
+                })?;
+                byte_offset = byte_offset.checked_add(relative).ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::InvalidBundle(
+                        "array component byte offset does not fit this host".to_owned(),
+                    )
+                })?;
+                semantic_type = *element;
+            }
+            SemanticStorageProjectionV2::EnumVariant { index } => {
+                let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "enum-variant projection does not name an enum".to_owned(),
+                    ));
+                };
+                if selected_variant.is_some() || variants.get(index as usize).is_none() {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "enum-variant projection is duplicate or out of range".to_owned(),
+                    ));
+                }
+                let mut discriminants = components.iter().filter(|candidate| {
+                    candidate.representation() == SemanticKirComponentRepresentationV2::ScalarValue
+                        && candidate.path().len() == position + 1
+                        && candidate.path()[..position] == path[..position]
+                        && candidate.path()[position]
+                            == SemanticStorageProjectionV2::EnumDiscriminant
+                });
+                let discriminant = match (discriminants.next(), discriminants.next()) {
+                    (Some(component), None) => component,
+                    _ => {
+                        return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "enum payload requires one exact physical discriminant component"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                let decoder = physical_enum_decoder_v2(
+                    enum_decoder_v2(types, semantic_type, byte_offset)?,
+                    discriminant.value_slot(),
+                    source,
+                )?;
+                guards.push(EnumVariantGuardV1 {
+                    decoder,
+                    required_variant: index,
+                });
+                selected_variant = Some(index);
+            }
+            SemanticStorageProjectionV2::EnumDiscriminant => {
+                if position + 1 != path.len() || selected_variant.is_some() {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "enum-discriminant projection must be a terminal enum projection"
+                            .to_owned(),
+                    ));
+                }
+                let SemanticTypeShapeV1::Enum { discriminant, .. } = declaration.shape() else {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "enum-discriminant projection does not name an enum".to_owned(),
+                    ));
+                };
+                let semantic_decoder = enum_decoder_v2(types, semantic_type, byte_offset)?;
+                let semantic_byte_offset = semantic_decoder.byte_offset;
+                let discriminant_decoder = physical_enum_decoder_v2(
+                    semantic_decoder,
+                    current_component.value_slot(),
+                    source,
+                )?;
+                return Ok(ProjectedSemanticComponentV2 {
+                    semantic_type: *discriminant,
+                    byte_offset: semantic_byte_offset,
+                    guards,
+                    discriminant_decoder: Some(discriminant_decoder),
+                    is_enum_discriminant: true,
+                });
+            }
+        }
+    }
+    if selected_variant.is_some() {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "enum-variant projection has no payload field".to_owned(),
+        ));
+    }
+    Ok(ProjectedSemanticComponentV2 {
+        semantic_type,
+        byte_offset,
+        guards,
+        discriminant_decoder: None,
+        is_enum_discriminant: false,
+    })
+}
+
+fn scalar_type_for_semantic_component_v2(
+    types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+    _is_enum_discriminant: bool,
+) -> Result<ScalarType, SimRuntimeBackendErrorV1> {
+    let declaration = types.get(semantic_type.index() as usize).ok_or_else(|| {
+        SimRuntimeBackendErrorV1::InvalidBundle(
+            "component scalar semantic type is absent".to_owned(),
+        )
+    })?;
+    let scalar = match declaration.shape() {
+        SemanticTypeShapeV1::Scalar(scalar) => *scalar,
+        SemanticTypeShapeV1::ValidityScalar(validity) => validity.scalar(),
+        SemanticTypeShapeV1::Pointer(_) => {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "by-value aggregate pointer components are not deserialized".to_owned(),
+            ));
+        }
+        _ if declaration.layout().size_bytes() == Some(0) => {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                "zero-sized semantic leaves must not name KIR parameters".to_owned(),
+            ));
+        }
+        _ => {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "component path does not terminate at a scalar Rust value".to_owned(),
+            ));
+        }
+    };
+    match scalar {
+        SemanticScalarTypeV1::Bool => Ok(ScalarType::Bool),
+        SemanticScalarTypeV1::Char => Ok(ScalarType::U32),
+        SemanticScalarTypeV1::Integer { signed, bits } => match (signed, bits) {
+            (true, 8) => Ok(ScalarType::I8),
+            (true, 16) => Ok(ScalarType::I16),
+            (true, 32) => Ok(ScalarType::I32),
+            (true, 64) => Ok(ScalarType::I64),
+            (true, 128) => Ok(ScalarType::I128),
+            (false, 8) => Ok(ScalarType::U8),
+            (false, 16) => Ok(ScalarType::U16),
+            (false, 32) => Ok(ScalarType::U32),
+            (false, 64) => Ok(ScalarType::U64),
+            (false, 128) => Ok(ScalarType::U128),
+            _ => Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "semantic integer component width is unsupported".to_owned(),
+            )),
+        },
+        SemanticScalarTypeV1::Float { bits: 16 } => Ok(ScalarType::F16),
+        SemanticScalarTypeV1::Float { bits: 32 } => Ok(ScalarType::F32),
+        SemanticScalarTypeV1::Float { bits: 64 } => Ok(ScalarType::F64),
+        SemanticScalarTypeV1::Float { .. } => Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+            "semantic floating component width is unsupported".to_owned(),
+        )),
+    }
+}
+
+fn semantic_component_validity_v2(
+    types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+) -> Result<Vec<SemanticScalarValidityRangeV1>, SimRuntimeBackendErrorV1> {
+    let Some(declaration) = types.get(semantic_type.index() as usize) else {
+        return Ok(Vec::new());
+    };
+    let ranges = match declaration.shape() {
+        SemanticTypeShapeV1::ValidityScalar(validity) => validity.valid_ranges(),
+        _ => &[],
+    };
+    let backend = match declaration.layout().backend_repr() {
+        SemanticBackendReprV1::Scalar(scalar) if ranges.is_empty() => scalar.valid_range(),
+        _ => None,
+    };
+    let count = if ranges.is_empty() {
+        usize::from(backend.is_some())
+    } else {
+        ranges.len()
+    };
+    let mut output = Vec::new();
+    output.try_reserve_exact(count).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle("semantic validity allocation failed".to_owned())
+    })?;
+    if ranges.is_empty() {
+        output.extend(backend);
+    } else {
+        output.extend_from_slice(ranges);
+    }
+    Ok(output)
+}
+
+fn enum_decoder_v2(
+    types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+    base_offset: usize,
+) -> Result<EnumDecoderV1, SimRuntimeBackendErrorV1> {
+    let declaration = types.get(semantic_type.index() as usize).ok_or_else(|| {
+        SimRuntimeBackendErrorV1::InvalidBundle("enum semantic type is absent".to_owned())
+    })?;
+    let SemanticTypeShapeV1::Enum {
+        discriminant,
+        variants,
+    } = declaration.shape()
+    else {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "enum decoder does not name an enum type".to_owned(),
+        ));
+    };
+    let logical = types
+        .get(discriminant.index() as usize)
+        .and_then(|declaration| match declaration.shape() {
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits }) => {
+                Some((*signed, *bits))
+            }
+            SemanticTypeShapeV1::ValidityScalar(validity) => match validity.scalar() {
+                SemanticScalarTypeV1::Integer { signed, bits } => Some((signed, bits)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "enum logical discriminant is not a fixed-width integer".to_owned(),
+            )
+        })?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(variants.len()).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle("enum variant roster allocation failed".to_owned())
+    })?;
+    values.extend(
+        variants
+            .iter()
+            .enumerate()
+            .map(|(index, variant)| EnumVariantValueV1 {
+                index: index as u32,
+                discriminant: variant.discriminant(),
+                uninhabited: variant.is_uninhabited(),
+            }),
+    );
+    match declaration.layout().variants() {
+        SemanticRustcVariantsV1::Single { index } => {
+            let variant = values.get(*index as usize).ok_or_else(|| {
+                SimRuntimeBackendErrorV1::InvalidBundle(
+                    "single enum variant index is out of range".to_owned(),
+                )
+            })?;
+            if variant.uninhabited {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "single enum variant is uninhabited".to_owned(),
+                ));
+            }
+            Ok(EnumDecoderV1 {
+                byte_offset: base_offset,
+                byte_width: 0,
+                variants: values,
+                encoding: EnumDecoderEncodingV1::Single { variant: *index },
+            })
+        }
+        SemanticRustcVariantsV1::Multiple(layout) => match layout.encoding() {
+            SemanticEnumEncodingV1::Direct(direct) => {
+                let (_, physical_bits) = integer_primitive_v2(direct.tag().primitive())?;
+                let width =
+                    usize::try_from(direct.tag().primitive().size_bytes().ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "direct enum tag has unsupported width".to_owned(),
+                        )
+                    })?)
+                    .map_err(|_| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "direct enum tag width does not fit this host".to_owned(),
+                        )
+                    })?;
+                Ok(EnumDecoderV1 {
+                    byte_offset: base_offset
+                        .checked_add(usize::try_from(direct.tag_offset_bytes()).map_err(|_| {
+                            SimRuntimeBackendErrorV1::UnsupportedBundle(
+                                "direct enum tag offset does not fit this host".to_owned(),
+                            )
+                        })?)
+                        .ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(
+                                "direct enum tag offset overflow".to_owned(),
+                            )
+                        })?,
+                    byte_width: width,
+                    variants: values,
+                    encoding: EnumDecoderEncodingV1::Direct {
+                        physical_bits,
+                        logical_signed: logical.0,
+                        logical_bits: logical.1,
+                        validity: direct.tag().valid_range(),
+                    },
+                })
+            }
+            SemanticEnumEncodingV1::Niche(niche) => {
+                let (_, physical_bits) = integer_primitive_v2(niche.tag().primitive())?;
+                let width =
+                    usize::try_from(niche.tag().primitive().size_bytes().ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "niche enum tag has unsupported width".to_owned(),
+                        )
+                    })?)
+                    .map_err(|_| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "niche enum tag width does not fit this host".to_owned(),
+                        )
+                    })?;
+                Ok(EnumDecoderV1 {
+                    byte_offset: base_offset
+                        .checked_add(
+                            usize::try_from(niche.source().expected_offset_bytes()).map_err(
+                                |_| {
+                                    SimRuntimeBackendErrorV1::UnsupportedBundle(
+                                        "niche enum tag offset does not fit this host".to_owned(),
+                                    )
+                                },
+                            )?,
+                        )
+                        .ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(
+                                "niche enum tag offset overflow".to_owned(),
+                            )
+                        })?,
+                    byte_width: width,
+                    variants: values,
+                    encoding: EnumDecoderEncodingV1::Niche {
+                        physical_bits,
+                        source_validity: niche.source_niche().valid_range(),
+                        untagged_variant: niche.untagged_variant(),
+                        niche_variants_start: niche.niche_variant_range().0,
+                        niche_variants_end: niche.niche_variant_range().1,
+                        niche_start: niche.niche_start(),
+                    },
+                })
+            }
+        },
+        SemanticRustcVariantsV1::Empty => Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+            "uninhabited enum has no runtime discriminant".to_owned(),
+        )),
+    }
+}
+
+fn physical_enum_decoder_v2(
+    mut decoder: EnumDecoderV1,
+    slot: SemanticKernargSlotV2,
+    source: usize,
+) -> Result<EnumDecoderV1, SimRuntimeBackendErrorV1> {
+    if decoder.byte_width == 0 {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "single-variant enum must not retain a physical discriminant parameter".to_owned(),
+        ));
+    }
+    let physical = validate_component_physical_slot_v2(
+        slot,
+        decoder.byte_width,
+        decoder.byte_width.next_power_of_two(),
+        source,
+    )?;
+    decoder.byte_offset = physical.offset;
+    Ok(decoder)
+}
+
+fn integer_primitive_v2(
+    primitive: SemanticBackendPrimitiveV1,
+) -> Result<(bool, u16), SimRuntimeBackendErrorV1> {
+    match primitive {
+        SemanticBackendPrimitiveV1::Integer { signed, bits, .. }
+            if matches!(bits, 8 | 16 | 32 | 64 | 128) =>
+        {
+            Ok((signed, bits))
+        }
+        SemanticBackendPrimitiveV1::Pointer { .. } => {
+            Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "pointer-niche enum tags are not deserialized as host addresses".to_owned(),
+            ))
+        }
+        SemanticBackendPrimitiveV1::Integer { .. } | SemanticBackendPrimitiveV1::Float { .. } => {
+            Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                "enum tag primitive is not a supported fixed-width integer".to_owned(),
+            ))
+        }
+    }
 }
 
 fn prepare_arguments(
@@ -1226,7 +2472,14 @@ fn prepare_arguments(
         }
     }
     let mut consumed = HashSet::new();
-    let mut output = Vec::with_capacity(kernel.arguments.len());
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(kernel.arguments.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidArguments(
+                "materialized launch argument allocation failed".to_owned(),
+            )
+        })?;
     for argument in &kernel.arguments {
         let bytes = kernarg
             .get(argument.offset..argument.offset + argument.size)
@@ -1235,11 +2488,20 @@ fn prepare_arguments(
                     "argument range exceeds kernarg".to_owned(),
                 )
             })?;
-        match &argument.ty {
-            Type::Scalar(ty) => {
-                let mut little = [0_u8; 16];
-                little[..bytes.len()].copy_from_slice(bytes);
-                let bits = u128::from_le_bytes(little);
+        match (&argument.materialization, &argument.ty) {
+            (ArgumentMaterializationV1::ExactBytes { validity, guards }, Type::Scalar(ty)) => {
+                require_enum_guards_active_v2(guards, kernarg)?;
+                let bits = read_little_scalar_v2(bytes)?;
+                if !validity.is_empty()
+                    && !validity
+                        .iter()
+                        .copied()
+                        .any(|range| validity_range_contains_v2(range, bits))
+                {
+                    return Err(SimRuntimeBackendErrorV1::InvalidArguments(
+                        "by-value aggregate scalar component violates Rust validity".to_owned(),
+                    ));
+                }
                 let value =
                     ScalarBitsV1::new(*ty, bits, fe2o3_kir_sim::SimulationTargetV1::amdgpu_64())
                         .map_err(|error| {
@@ -1247,7 +2509,17 @@ fn prepare_arguments(
                         })?;
                 output.push(VirtualArgumentV1::Scalar(value));
             }
-            Type::Pointer(pointer) => {
+            (ArgumentMaterializationV1::EnumDiscriminant { decoder, guards }, Type::Scalar(ty)) => {
+                require_enum_guards_active_v2(guards, kernarg)?;
+                let bits = decode_enum_v2(decoder, kernarg)?.discriminant;
+                let value =
+                    ScalarBitsV1::new(*ty, bits, fe2o3_kir_sim::SimulationTargetV1::amdgpu_64())
+                        .map_err(|error| {
+                            SimRuntimeBackendErrorV1::InvalidArguments(error.to_string())
+                        })?;
+                output.push(VirtualArgumentV1::Scalar(value));
+            }
+            (ArgumentMaterializationV1::Region { metadata: None }, Type::Pointer(pointer)) => {
                 require_zero_pointer_placeholder(bytes)?;
                 let binding = binding_at(argument.offset, &mut consumed, &by_offset)?;
                 output.push(buffer_argument(
@@ -1259,14 +2531,26 @@ fn prepare_arguments(
                     None,
                 )?);
             }
-            Type::Slice(slice) => {
-                require_zero_pointer_placeholder(&bytes[..8])?;
+            (
+                ArgumentMaterializationV1::Region {
+                    metadata: Some(metadata),
+                },
+                Type::Slice(slice),
+            ) => {
+                require_zero_pointer_placeholder(bytes)?;
                 let binding = binding_at(argument.offset, &mut consumed, &by_offset)?;
-                let length_bytes = bytes.get(8..16).ok_or_else(|| {
-                    SimRuntimeBackendErrorV1::InvalidArguments(
-                        "slice metadata is truncated".to_owned(),
-                    )
-                })?;
+                let length_bytes = kernarg
+                    .get(metadata.offset..metadata.offset.saturating_add(metadata.size))
+                    .ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::InvalidArguments(
+                            "slice metadata is truncated".to_owned(),
+                        )
+                    })?;
+                if length_bytes.len() != 8 {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                        "slice metadata slot differs from the target index width".to_owned(),
+                    ));
+                }
                 let elements = usize::try_from(u64::from_le_bytes(
                     length_bytes.try_into().expect("fixed slice metadata"),
                 ))
@@ -1284,9 +2568,14 @@ fn prepare_arguments(
                     Some(elements),
                 )?);
             }
-            Type::Unit => {
+            (_, Type::Unit) => {
                 return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
                     "unit KIR parameters are not materialized".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                    "argument materialization disagrees with its KIR type".to_owned(),
                 ));
             }
         }
@@ -1297,6 +2586,177 @@ fn prepare_arguments(
         ));
     }
     Ok(output)
+}
+
+fn read_little_scalar_v2(bytes: &[u8]) -> Result<u128, SimRuntimeBackendErrorV1> {
+    if bytes.len() > 16 {
+        return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+            "scalar component exceeds 128 bits".to_owned(),
+        ));
+    }
+    let mut little = [0_u8; 16];
+    little[..bytes.len()].copy_from_slice(bytes);
+    Ok(u128::from_le_bytes(little))
+}
+
+fn enum_guards_active_v2(
+    guards: &[EnumVariantGuardV1],
+    kernarg: &[u8],
+) -> Result<bool, SimRuntimeBackendErrorV1> {
+    for guard in guards {
+        if decode_enum_v2(&guard.decoder, kernarg)?.index != guard.required_variant {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn require_enum_guards_active_v2(
+    guards: &[EnumVariantGuardV1],
+    kernarg: &[u8],
+) -> Result<(), SimRuntimeBackendErrorV1> {
+    if enum_guards_active_v2(guards, kernarg)? {
+        Ok(())
+    } else {
+        Err(SimRuntimeBackendErrorV1::InvalidArguments(
+            "inactive enum payload is poison and cannot be materialized as a KIR argument"
+                .to_owned(),
+        ))
+    }
+}
+
+fn decode_enum_v2(
+    decoder: &EnumDecoderV1,
+    kernarg: &[u8],
+) -> Result<EnumVariantValueV1, SimRuntimeBackendErrorV1> {
+    if let EnumDecoderEncodingV1::Single { variant } = decoder.encoding {
+        return decoder
+            .variants
+            .get(variant as usize)
+            .copied()
+            .filter(|value| !value.uninhabited)
+            .ok_or_else(|| {
+                SimRuntimeBackendErrorV1::InvalidArguments(
+                    "single-variant enum has no inhabited variant".to_owned(),
+                )
+            });
+    }
+    let end = decoder
+        .byte_offset
+        .checked_add(decoder.byte_width)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle("enum tag byte range overflow".to_owned())
+        })?;
+    let bits = read_little_scalar_v2(kernarg.get(decoder.byte_offset..end).ok_or_else(|| {
+        SimRuntimeBackendErrorV1::InvalidArguments(
+            "enum tag byte range exceeds the source kernarg".to_owned(),
+        )
+    })?)?;
+    let index = match decoder.encoding {
+        EnumDecoderEncodingV1::Single { .. } => unreachable!("handled above"),
+        EnumDecoderEncodingV1::Direct {
+            physical_bits,
+            logical_signed,
+            logical_bits,
+            validity,
+        } => {
+            if validity.is_some_and(|range| !validity_range_contains_v2(range, bits)) {
+                return Err(SimRuntimeBackendErrorV1::InvalidArguments(
+                    "direct enum tag violates its rustc validity range".to_owned(),
+                ));
+            }
+            decoder
+                .variants
+                .iter()
+                .find(|variant| {
+                    !variant.uninhabited
+                        && encoded_discriminant_v2(
+                            variant.discriminant,
+                            logical_signed,
+                            logical_bits,
+                            physical_bits,
+                        ) == bits
+                })
+                .map(|variant| variant.index)
+                .ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::InvalidArguments(
+                        "direct enum tag does not select an inhabited variant".to_owned(),
+                    )
+                })?
+        }
+        EnumDecoderEncodingV1::Niche {
+            physical_bits,
+            source_validity,
+            untagged_variant,
+            niche_variants_start,
+            niche_variants_end,
+            niche_start,
+        } => {
+            let relative = bits.wrapping_sub(niche_start) & unsigned_mask_v2(physical_bits);
+            let niche_count = u128::from(
+                niche_variants_end
+                    .checked_sub(niche_variants_start)
+                    .ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::InvalidBundle(
+                            "niche enum variant range is reversed".to_owned(),
+                        )
+                    })?,
+            );
+            if relative <= niche_count {
+                u32::try_from(u128::from(niche_variants_start) + relative).map_err(|_| {
+                    SimRuntimeBackendErrorV1::InvalidArguments(
+                        "niche enum variant does not fit the semantic roster".to_owned(),
+                    )
+                })?
+            } else if validity_range_contains_v2(source_validity, bits) {
+                untagged_variant
+            } else {
+                return Err(SimRuntimeBackendErrorV1::InvalidArguments(
+                    "niche enum tag is neither a niche nor a valid untagged value".to_owned(),
+                ));
+            }
+        }
+    };
+    decoder
+        .variants
+        .get(index as usize)
+        .copied()
+        .filter(|value| value.index == index && !value.uninhabited)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidArguments(
+                "enum tag selects an absent or uninhabited variant".to_owned(),
+            )
+        })
+}
+
+fn encoded_discriminant_v2(
+    discriminant: u128,
+    logical_signed: bool,
+    logical_bits: u16,
+    physical_bits: u16,
+) -> u128 {
+    if logical_signed && logical_bits > 0 && discriminant & (1_u128 << (logical_bits - 1)) != 0 {
+        let logical = discriminant | !unsigned_mask_v2(logical_bits);
+        logical & unsigned_mask_v2(physical_bits)
+    } else {
+        discriminant & unsigned_mask_v2(physical_bits)
+    }
+}
+
+fn unsigned_mask_v2(bits: u16) -> u128 {
+    if bits == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << bits) - 1
+    }
+}
+
+fn validity_range_contains_v2(range: SemanticScalarValidityRangeV1, bits: u128) -> bool {
+    if range.start() <= range.end() {
+        (range.start()..=range.end()).contains(&bits)
+    } else {
+        bits >= range.start() || bits <= range.end()
+    }
 }
 
 fn require_zero_pointer_placeholder(bytes: &[u8]) -> Result<(), SimRuntimeBackendErrorV1> {
@@ -1672,8 +3132,58 @@ fn require_capacity(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fe2o3_runtime::{RuntimeContextV1, RuntimeErrorV1, RuntimeValidationErrorV1};
+
+    #[test]
+    fn short_and_foreign_v4_prefixes_keep_the_v3_decode_error() {
+        for image in [b"F2SIMB0".as_slice(), b"F2SIMB03payload".as_slice()] {
+            let expected = VerifiedSimulationBundleV3::from_canonical_bytes(image.to_vec())
+                .unwrap_err()
+                .to_string();
+            let actual = match parse_bundle(image, VirtualTargetProfileV1::Gfx942XnackMinus) {
+                Ok(_) => panic!("non-V4 input unexpectedly parsed"),
+                Err(error) => error,
+            };
+            assert_eq!(actual, SimRuntimeBackendErrorV1::InvalidBundle(expected));
+        }
+    }
+    use fe2o3_runtime::{
+        RuntimeArgumentsV1, RuntimeBindingV1, RuntimeContextV1, RuntimeErrorV1,
+        RuntimeMemoryRegionV1, RuntimeValidationErrorV1,
+    };
     use std::time::Duration;
+
+    struct AggregateSliceScalarArgumentsFixtureV1 {
+        head: u16,
+        tail: u64,
+        allocation: fe2o3_runtime::RuntimeAllocationIdV1,
+        elements: u64,
+        scalar: u32,
+    }
+
+    impl RuntimeArgumentsV1 for AggregateSliceScalarArgumentsFixtureV1 {
+        const SIGNATURE_V1: [u8; 32] = [0xa4; 32];
+
+        fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+            let mut bytes = vec![0; 40];
+            bytes[0..2].copy_from_slice(&self.head.to_le_bytes());
+            bytes[8..16].copy_from_slice(&self.tail.to_le_bytes());
+            bytes[24..32].copy_from_slice(&self.elements.to_le_bytes());
+            bytes[32..36].copy_from_slice(&self.scalar.to_le_bytes());
+            bytes
+        }
+
+        fn bindings_v1(&self) -> Vec<RuntimeBindingV1> {
+            vec![RuntimeBindingV1 {
+                region: RuntimeMemoryRegionV1 {
+                    allocation: self.allocation,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: self.elements * 4,
+                },
+                kernarg_byte_offset: 16,
+            }]
+        }
+    }
 
     #[test]
     fn evidence_and_normal_memory_lifecycle_require_no_gpu() {
@@ -1894,5 +3404,407 @@ mod tests {
         ));
         context.release_allocation(allocation).unwrap();
         context.shutdown().unwrap();
+    }
+
+    fn scalar_argument(
+        offset: usize,
+        size: usize,
+        ty: ScalarType,
+        materialization: ArgumentMaterializationV1,
+    ) -> ArgumentRecordV1 {
+        ArgumentRecordV1 {
+            offset,
+            size,
+            ty: Type::Scalar(ty),
+            materialization,
+        }
+    }
+
+    fn materialization_kernel(arguments: Vec<ArgumentRecordV1>, bytes: usize) -> KernelRecordV1 {
+        KernelRecordV1 {
+            module: None,
+            kernel: KernelId::new("aggregate_materialization_test"),
+            signature: [1; 32],
+            explicit_byte_len: bytes,
+            arguments,
+            unsupported: None,
+        }
+    }
+
+    fn scalar_bits(arguments: Vec<VirtualArgumentV1>) -> Vec<u128> {
+        arguments
+            .into_iter()
+            .map(|argument| match argument {
+                VirtualArgumentV1::Scalar(value) => value.bits(),
+                VirtualArgumentV1::Buffer { .. } => panic!("expected scalar component"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn runtime_argument_fixture_physical_padding_and_slice_slots_drive_materialization() {
+        let backend = SimRuntimeBackendV1::gfx942([0xa4; 32]).unwrap();
+        let mut context = RuntimeContextV1::open(backend).unwrap();
+        let device = context.devices()[0].id();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::HostVisible, 16, 4)
+            .unwrap();
+        let fixture = AggregateSliceScalarArgumentsFixtureV1 {
+            head: 0x1234,
+            tail: 0x0102_0304_0506_0708,
+            allocation,
+            elements: 4,
+            scalar: 0xaabb_ccdd,
+        };
+        let encoded = fixture.encode_explicit_kernarg_v1();
+        assert_eq!(encoded.len(), 40);
+        assert_eq!(&encoded[0..2], &0x1234_u16.to_le_bytes());
+        assert!(encoded[2..8].iter().all(|byte| *byte == 0));
+        assert_eq!(&encoded[8..16], &0x0102_0304_0506_0708_u64.to_le_bytes());
+        assert!(encoded[16..24].iter().all(|byte| *byte == 0));
+        assert_eq!(&encoded[24..32], &4_u64.to_le_bytes());
+        assert_eq!(&encoded[32..36], &0xaabb_ccdd_u32.to_le_bytes());
+        assert!(encoded[36..40].iter().all(|byte| *byte == 0));
+        let fixture_bindings = fixture.bindings_v1();
+        assert_eq!(fixture_bindings.len(), 1);
+        assert_eq!(fixture_bindings[0].kernarg_byte_offset, 16);
+        assert_eq!(fixture_bindings[0].region.byte_len, 16);
+        context.release_allocation(allocation).unwrap();
+        context.shutdown().unwrap();
+
+        let kernel = materialization_kernel(
+            vec![
+                scalar_argument(
+                    0,
+                    2,
+                    ScalarType::U16,
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    },
+                ),
+                scalar_argument(
+                    8,
+                    8,
+                    ScalarType::U64,
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    },
+                ),
+                ArgumentRecordV1 {
+                    offset: 16,
+                    size: 8,
+                    ty: Type::slice(
+                        Type::Scalar(ScalarType::U32),
+                        AddressSpace::Global,
+                        AccessMode::ReadOnly,
+                    ),
+                    materialization: ArgumentMaterializationV1::Region {
+                        metadata: Some(PhysicalSlotV1 {
+                            offset: 24,
+                            size: 8,
+                        }),
+                    },
+                },
+                scalar_argument(
+                    32,
+                    4,
+                    ScalarType::U32,
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    },
+                ),
+            ],
+            40,
+        );
+        let mut backend = SimRuntimeBackendV1::gfx942([0xa5; 32]).unwrap();
+        let backend_allocation = backend
+            .allocate_v1(DEVICE_HANDLE, RuntimeMemoryKindV1::HostVisible, 16, 4)
+            .unwrap();
+        let arguments = prepare_arguments(
+            &kernel,
+            &encoded,
+            &[BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: backend_allocation,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 16,
+                },
+                kernarg_byte_offset: fixture_bindings[0].kernarg_byte_offset,
+            }],
+            &backend.allocations,
+        )
+        .unwrap();
+        assert_eq!(arguments.len(), 4);
+        assert!(
+            matches!(&arguments[0], VirtualArgumentV1::Scalar(value) if value.bits() == 0x1234)
+        );
+        assert!(
+            matches!(&arguments[1], VirtualArgumentV1::Scalar(value) if value.bits() == 0x0102_0304_0506_0708)
+        );
+        assert!(matches!(
+            &arguments[2],
+            VirtualArgumentV1::Buffer {
+                element: ScalarType::U32,
+                access: AccessMode::ReadOnly,
+                elements: 4,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&arguments[3], VirtualArgumentV1::Scalar(value) if value.bits() == 0xaabb_ccdd)
+        );
+        backend.release_allocation_v1(backend_allocation).unwrap();
+    }
+
+    #[test]
+    fn physical_component_offsets_are_independent_but_width_and_alignment_are_exact() {
+        assert_eq!(
+            validate_component_physical_slot_v2(SemanticKernargSlotV2::new(0, 8, 8), 8, 8, 0,)
+                .unwrap()
+                .offset,
+            0
+        );
+        for substituted in [
+            SemanticKernargSlotV2::new(8, 4, 8),
+            SemanticKernargSlotV2::new(8, 8, 4),
+        ] {
+            assert!(matches!(
+                validate_component_physical_slot_v2(substituted, 8, 8, 0),
+                Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                    if detail.contains("wrong ABI width or alignment")
+            ));
+        }
+    }
+
+    #[test]
+    fn projected_components_require_producer_authenticated_packing() {
+        let projected = [SemanticArgumentStorageV2::new(
+            0,
+            1,
+            0,
+            SemanticArgumentOwnershipV1::ByValue,
+            SemanticComponentStorageBindingV2::exact(vec![
+                fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+                    vec![SemanticStorageProjectionV2::Field { index: 0 }],
+                    0,
+                    7,
+                    SemanticKirComponentRepresentationV2::ScalarValue,
+                    SemanticKernargSlotV2::new(8, 8, 8),
+                    None,
+                ),
+            ]),
+        )];
+        assert!(requires_producer_authenticated_packing_v2(&projected));
+
+        let unprojected = [SemanticArgumentStorageV2::new(
+            0,
+            1,
+            0,
+            SemanticArgumentOwnershipV1::ByValue,
+            SemanticComponentStorageBindingV2::exact(vec![
+                fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+                    Vec::new(),
+                    0,
+                    7,
+                    SemanticKirComponentRepresentationV2::ScalarValue,
+                    SemanticKernargSlotV2::new(0, 8, 8),
+                    None,
+                ),
+            ]),
+        )];
+        assert!(!requires_producer_authenticated_packing_v2(&unprojected));
+    }
+
+    fn direct_enum_decoder() -> EnumDecoderV1 {
+        EnumDecoderV1 {
+            byte_offset: 4,
+            byte_width: 1,
+            variants: vec![
+                EnumVariantValueV1 {
+                    index: 0,
+                    discriminant: 3,
+                    uninhabited: false,
+                },
+                EnumVariantValueV1 {
+                    index: 1,
+                    discriminant: 7,
+                    uninhabited: false,
+                },
+            ],
+            encoding: EnumDecoderEncodingV1::Direct {
+                physical_bits: 8,
+                logical_signed: false,
+                logical_bits: 8,
+                validity: Some(SemanticScalarValidityRangeV1::new(3, 7)),
+            },
+        }
+    }
+
+    #[test]
+    fn inactive_enum_payload_is_poisoned_before_kir_argument_use() {
+        let decoder = direct_enum_decoder();
+        let kernel = materialization_kernel(
+            vec![
+                scalar_argument(
+                    0,
+                    2,
+                    ScalarType::U16,
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    },
+                ),
+                scalar_argument(
+                    8,
+                    8,
+                    ScalarType::U64,
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: Vec::new(),
+                    },
+                ),
+                scalar_argument(
+                    4,
+                    0,
+                    ScalarType::U8,
+                    ArgumentMaterializationV1::EnumDiscriminant {
+                        decoder: decoder.clone(),
+                        guards: Vec::new(),
+                    },
+                ),
+                scalar_argument(
+                    5,
+                    2,
+                    ScalarType::U16,
+                    ArgumentMaterializationV1::ExactBytes {
+                        validity: Vec::new(),
+                        guards: vec![EnumVariantGuardV1 {
+                            decoder,
+                            required_variant: 1,
+                        }],
+                    },
+                ),
+            ],
+            16,
+        );
+        let mut bytes = [0xcc; 16];
+        bytes[0..2].copy_from_slice(&0x1234_u16.to_le_bytes());
+        bytes[4] = 3;
+        bytes[5..7].copy_from_slice(&0xffff_u16.to_le_bytes());
+        bytes[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+        assert!(matches!(
+            prepare_arguments(&kernel, &bytes, &[], &HashMap::new()),
+            Err(SimRuntimeBackendErrorV1::InvalidArguments(detail))
+                if detail.contains("inactive enum payload is poison")
+        ));
+
+        bytes[4] = 7;
+        bytes[5..7].copy_from_slice(&0xabcd_u16.to_le_bytes());
+        assert_eq!(
+            scalar_bits(prepare_arguments(&kernel, &bytes, &[], &HashMap::new()).unwrap()),
+            vec![0x1234, 0x0102_0304_0506_0708, 7, 0xabcd]
+        );
+    }
+
+    #[test]
+    fn direct_and_niche_enum_discriminants_are_exact_and_invalid_tags_fail() {
+        let direct = materialization_kernel(
+            vec![scalar_argument(
+                4,
+                0,
+                ScalarType::U8,
+                ArgumentMaterializationV1::EnumDiscriminant {
+                    decoder: direct_enum_decoder(),
+                    guards: Vec::new(),
+                },
+            )],
+            8,
+        );
+        let mut bytes = [0; 8];
+        bytes[4] = 7;
+        assert_eq!(
+            scalar_bits(prepare_arguments(&direct, &bytes, &[], &HashMap::new()).unwrap()),
+            vec![7]
+        );
+        bytes[4] = 5;
+        assert!(matches!(
+            prepare_arguments(&direct, &bytes, &[], &HashMap::new()),
+            Err(SimRuntimeBackendErrorV1::InvalidArguments(detail))
+                if detail.contains("direct enum tag")
+        ));
+
+        let niche_decoder = EnumDecoderV1 {
+            byte_offset: 0,
+            byte_width: 1,
+            variants: vec![
+                EnumVariantValueV1 {
+                    index: 0,
+                    discriminant: 11,
+                    uninhabited: false,
+                },
+                EnumVariantValueV1 {
+                    index: 1,
+                    discriminant: 29,
+                    uninhabited: false,
+                },
+            ],
+            encoding: EnumDecoderEncodingV1::Niche {
+                physical_bits: 8,
+                source_validity: SemanticScalarValidityRangeV1::new(1, 255),
+                untagged_variant: 1,
+                niche_variants_start: 0,
+                niche_variants_end: 0,
+                niche_start: 0,
+            },
+        };
+        let niche = materialization_kernel(
+            vec![scalar_argument(
+                0,
+                0,
+                ScalarType::U8,
+                ArgumentMaterializationV1::EnumDiscriminant {
+                    decoder: niche_decoder,
+                    guards: Vec::new(),
+                },
+            )],
+            1,
+        );
+        assert_eq!(
+            scalar_bits(prepare_arguments(&niche, &[0], &[], &HashMap::new()).unwrap()),
+            vec![11]
+        );
+        assert_eq!(
+            scalar_bits(prepare_arguments(&niche, &[9], &[], &HashMap::new()).unwrap()),
+            vec![29]
+        );
+    }
+
+    #[test]
+    fn aggregate_scalar_validity_is_checked_before_execution() {
+        let kernel = materialization_kernel(
+            vec![scalar_argument(
+                0,
+                1,
+                ScalarType::U8,
+                ArgumentMaterializationV1::ExactBytes {
+                    validity: vec![SemanticScalarValidityRangeV1::new(1, 10)],
+                    guards: Vec::new(),
+                },
+            )],
+            1,
+        );
+        assert!(matches!(
+            prepare_arguments(&kernel, &[0], &[], &HashMap::new()),
+            Err(SimRuntimeBackendErrorV1::InvalidArguments(detail))
+                if detail.contains("Rust validity")
+        ));
+        assert_eq!(
+            scalar_bits(prepare_arguments(&kernel, &[7], &[], &HashMap::new()).unwrap()),
+            vec![7]
+        );
     }
 }
