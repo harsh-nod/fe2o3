@@ -2130,6 +2130,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
+        | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum
+        | ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),

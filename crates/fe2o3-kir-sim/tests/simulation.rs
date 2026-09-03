@@ -3053,6 +3053,530 @@ fn lds_exchange_module(include_barrier: bool) -> Module {
     module
 }
 
+fn workgroup_scan_module(scalar: ScalarType, exclusive: bool) -> Module {
+    const LANES: u32 = 8;
+    let scalar_ty = Type::Scalar(scalar);
+    let global_pointer = Type::pointer(
+        scalar_ty.clone(),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let workgroup_pointer = Type::pointer(
+        scalar_ty.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let mut next_value = 2_u32;
+    let mut block = BasicBlock::new(BlockId(0));
+    macro_rules! push {
+        ($ty:expr, $kind:expr $(,)?) => {{
+            let id = ValueId(next_value);
+            next_value += 1;
+            block
+                .operations
+                .push(Operation::effect_free(ValueDef::new(id, $ty), $kind));
+            id
+        }};
+    }
+    let scratch = push!(
+        workgroup_pointer.clone(),
+        OperationKind::WorkgroupMemory(WorkgroupMemory {
+            element: scalar_ty.clone(),
+            extent: WorkgroupMemoryExtent::Static(LANES),
+            alignment: 4,
+        }),
+    );
+    let rank = push!(
+        Type::INDEX,
+        OperationKind::Intrinsic(IntrinsicOperation::new(
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+            Type::INDEX,
+        )),
+    );
+    let input_pointer = push!(
+        global_pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: ValueId(0),
+            offset: rank,
+        },
+    );
+    let input = push!(
+        scalar_ty.clone(),
+        OperationKind::Load {
+            pointer: input_pointer,
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    );
+    let initial_pointer = push!(
+        workgroup_pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: scratch,
+            offset: rank,
+        },
+    );
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::Store {
+            pointer: initial_pointer,
+            value: input,
+            access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+        },
+    ));
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    ));
+
+    let mut offset = 1_u32;
+    while offset < LANES {
+        let offset_value = push!(
+            Type::INDEX,
+            OperationKind::Constant(Constant::Index(u64::from(offset))),
+        );
+        let active = push!(
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::GreaterThanOrEqual,
+                lhs: rank,
+                rhs: offset_value,
+            },
+        );
+        let safe_rank = push!(
+            Type::INDEX,
+            OperationKind::Select {
+                condition: active,
+                true_value: rank,
+                false_value: offset_value,
+            },
+        );
+        let safe_source = push!(
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Subtract,
+                lhs: safe_rank,
+                rhs: offset_value,
+            },
+        );
+        let current_pointer = push!(
+            workgroup_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: rank,
+            },
+        );
+        let current = push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: current_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        );
+        let prefix_pointer = push!(
+            workgroup_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: safe_source,
+            },
+        );
+        let prefix = push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: prefix_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        );
+        let sum = push!(
+            scalar_ty.clone(),
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: prefix,
+                rhs: current,
+            },
+        );
+        let selected = push!(
+            scalar_ty.clone(),
+            OperationKind::Select {
+                condition: active,
+                true_value: sum,
+                false_value: current,
+            },
+        );
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ));
+        let output_pointer = push!(
+            workgroup_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: rank,
+            },
+        );
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::Store {
+                pointer: output_pointer,
+                value: selected,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ));
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ));
+        offset <<= 1;
+    }
+
+    let result = if exclusive {
+        let one = push!(Type::INDEX, OperationKind::Constant(Constant::Index(1)),);
+        let has_predecessor = push!(
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::GreaterThanOrEqual,
+                lhs: rank,
+                rhs: one,
+            },
+        );
+        let safe_rank = push!(
+            Type::INDEX,
+            OperationKind::Select {
+                condition: has_predecessor,
+                true_value: rank,
+                false_value: one,
+            },
+        );
+        let safe_predecessor = push!(
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Subtract,
+                lhs: safe_rank,
+                rhs: one,
+            },
+        );
+        let prior_pointer = push!(
+            workgroup_pointer,
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: safe_predecessor,
+            },
+        );
+        let prior = push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: prior_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        );
+        let identity = push!(
+            scalar_ty.clone(),
+            OperationKind::Constant(match scalar {
+                ScalarType::U32 => Constant::U32(0),
+                ScalarType::I32 => Constant::I32(0),
+                ScalarType::F32 => Constant::F32Bits(0.0_f32.to_bits()),
+                _ => unreachable!("scan test uses the admitted scalar matrix"),
+            }),
+        );
+        push!(
+            scalar_ty.clone(),
+            OperationKind::Select {
+                condition: has_predecessor,
+                true_value: prior,
+                false_value: identity,
+            },
+        )
+    } else {
+        let result_pointer = push!(
+            workgroup_pointer,
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: rank,
+            },
+        );
+        push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: result_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        )
+    };
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    ));
+    let result_pointer = push!(
+        global_pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: ValueId(1),
+            offset: rank,
+        },
+    );
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::Store {
+            pointer: result_pointer,
+            value: result,
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    block.terminator = Some(Terminator::Return { values: Vec::new() });
+    let _ = next_value;
+
+    let capabilities = std::collections::BTreeSet::from([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::WorkgroupBarrier,
+    ]);
+    let mut function = Function::kernel_entry(
+        "workgroup_scan_impl",
+        Signature::new(vec![global_pointer.clone(), global_pointer], Vec::new()),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    function.required_capabilities = capabilities.clone();
+    let mut kernel = Kernel::new("workgroup_scan", "workgroup_scan_impl", dynamic_domain_1d());
+    kernel.workgroup_size = Some(WorkgroupSize::new(LANES, 1, 1));
+    kernel.required_capabilities = capabilities.clone();
+    let mut module = Module::new("sim-tests::workgroup-scan");
+    module.required_capabilities = capabilities;
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn scan_buffer_v1(scalar: ScalarType, bits: &[u32]) -> BufferArgumentV1 {
+    let target = SimulationTargetV1::amdgpu_64();
+    let values = bits
+        .iter()
+        .map(|bits| ScalarBitsV1::new(scalar, u128::from(*bits), target).unwrap())
+        .collect::<Vec<_>>();
+    BufferArgumentV1::from_scalars(AccessMode::ReadWrite, 4, &values, target).unwrap()
+}
+
+fn scan_request_v1(scalar: ScalarType, bits: &[u32]) -> SimulationRequestV1 {
+    SimulationRequestV1::new(
+        "workgroup_scan",
+        [8, 1, 1],
+        [8, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, bits)),
+            SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, &[0; 8])),
+        ],
+    )
+}
+
+#[test]
+fn workgroup_scans_are_exact_under_canonical_seeded_and_replay_schedules() {
+    for scalar in [ScalarType::U32, ScalarType::I32, ScalarType::F32] {
+        let input = match scalar {
+            ScalarType::U32 => (1_u32..=8).collect::<Vec<_>>(),
+            ScalarType::I32 => [-4_i32, 7, -2, 9, -3, 1, 6, -5]
+                .map(|value| value as u32)
+                .to_vec(),
+            ScalarType::F32 => [1.0_f32; 8].map(f32::to_bits).to_vec(),
+            _ => unreachable!(),
+        };
+        for exclusive in [false, true] {
+            let module = admitted(workgroup_scan_module(scalar, exclusive));
+            let request = scan_request_v1(scalar, &input);
+            let canonical = module
+                .simulate(
+                    &request,
+                    SimulationTargetV1::amdgpu_64(),
+                    SimulationLimitsV1::default(),
+                )
+                .unwrap();
+            let seeded = module
+                .simulate_scheduled(
+                    &request,
+                    SimulationTargetV1::amdgpu_64(),
+                    SimulationLimitsV1::default(),
+                    SimulationScheduleRequestV1::RecordSeeded {
+                        seed: 0x5ca1,
+                        max_decisions: 10_000,
+                    },
+                )
+                .unwrap();
+            let replayed = module
+                .simulate_scheduled(
+                    &request,
+                    SimulationTargetV1::amdgpu_64(),
+                    SimulationLimitsV1::default(),
+                    SimulationScheduleRequestV1::Replay(seeded.schedule_record().unwrap()),
+                )
+                .unwrap();
+            assert_eq!(canonical.arguments(), seeded.arguments());
+            assert_eq!(seeded.arguments(), replayed.arguments());
+
+            let expected = match scalar {
+                ScalarType::U32 => {
+                    let inclusive = [1_u32, 3, 6, 10, 15, 21, 28, 36];
+                    if exclusive {
+                        [0_u32, 1, 3, 6, 10, 15, 21, 28]
+                    } else {
+                        inclusive
+                    }
+                }
+                ScalarType::I32 => {
+                    let inclusive = [-4_i32, 3, 1, 10, 7, 8, 14, 9].map(|value| value as u32);
+                    if exclusive {
+                        [0_i32, -4, 3, 1, 10, 7, 8, 14].map(|value| value as u32)
+                    } else {
+                        inclusive
+                    }
+                }
+                ScalarType::F32 => {
+                    if exclusive {
+                        [0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0].map(f32::to_bits)
+                    } else {
+                        [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0].map(f32::to_bits)
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(words(canonical.buffer(1).unwrap().bytes()), expected);
+        }
+    }
+}
+
+#[test]
+fn workgroup_scan_debug_records_retain_lane_lds_barrier_and_schedule_evidence() {
+    let module = admitted(workgroup_scan_module(ScalarType::U32, false));
+    let request = scan_request_v1(ScalarType::U32, &(1_u32..=8).collect::<Vec<_>>());
+    let mut debug = DebugCollector::default();
+    let execution = module
+        .simulate_debugged_scheduled_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 0xd38,
+                max_decisions: 10_000,
+            },
+            SimulationDebugCaptureLimitsV1::new(64, 4_096, 64, 65_536).unwrap(),
+            &mut debug,
+        )
+        .unwrap();
+    assert!(debug.0.iter().any(|record| {
+        matches!(
+            record.kind,
+            SimulationDebugRecordKindV1::Memory {
+                address_space: AddressSpace::Workgroup,
+                ..
+            }
+        )
+    }));
+    assert!(debug.0.iter().any(|record| {
+        matches!(
+            record.kind,
+            SimulationDebugRecordKindV1::WorkgroupBarrier {
+                action: fe2o3_kir_sim::SimulationDebugBarrierActionV1::Release,
+                participants: 8,
+                ..
+            }
+        )
+    }));
+    assert!(debug.0.iter().any(|record| record.invocation.local[0] == 7));
+    assert!(debug.0.iter().all(|record| {
+        record.schedule.identity
+            == SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1
+            && record.schedule.decision_ordinal < execution.schedule_coverage().decisions()
+    }));
+}
+
+#[test]
+fn workgroup_scan_rejects_workgroup_and_replay_input_substitution() {
+    let module = admitted(workgroup_scan_module(ScalarType::U32, false));
+    let request = scan_request_v1(ScalarType::U32, &(1_u32..=8).collect::<Vec<_>>());
+    let wrong_workgroup = SimulationRequestV1::new(
+        "workgroup_scan",
+        [8, 1, 1],
+        [4, 1, 1],
+        request.arguments.clone(),
+    );
+    assert!(matches!(
+        module.preflight(
+            &wrong_workgroup,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        ),
+        Err(SimulationPreflightErrorV1::WorkgroupMismatch { .. })
+    ));
+
+    let recorded = module
+        .simulate_scheduled(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordCanonical {
+                max_decisions: 10_000,
+            },
+        )
+        .unwrap();
+    let substituted = scan_request_v1(ScalarType::U32, &[9, 2, 3, 4, 5, 6, 7, 8]);
+    assert!(matches!(
+        module.simulate_scheduled(
+            &substituted,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::Replay(recorded.schedule_record().unwrap()),
+        ),
+        Err(SimulationErrorV1::Execution(
+            fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::ScheduleReplay(
+                    SimulationScheduleReplayErrorV1::ContextMismatch
+                ),
+                ..
+            }
+        ))
+    ));
+
+    let divergent = admitted(barrier_failure_module(false));
+    assert!(matches!(
+        divergent.simulate(
+            &SimulationRequestV1::new("barrier_failure", [8, 1, 1], [8, 1, 1], Vec::new()),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        ),
+        Err(SimulationErrorV1::Execution(
+            fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(_),
+                ..
+            }
+        ))
+    ));
+}
+
 fn dynamic_lds_exchange_module(include_barrier: bool) -> Module {
     let mut module = lds_exchange_module(include_barrier);
     let memory = module.functions[0].body.as_mut().unwrap().blocks[0]

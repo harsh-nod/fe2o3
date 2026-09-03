@@ -244,7 +244,7 @@ fn prepare_production_semantic_debug_from_live_v1(
         .iter()
         .filter(|function| function.body.is_some())
         .count();
-    if defined_function_count != live.lowered_functions().len() {
+    if live.lowered_functions().len() < defined_function_count {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
             "live correspondence does not cover every defined KIR function",
         ));
@@ -259,6 +259,7 @@ fn prepare_production_semantic_debug_from_live_v1(
         ));
     }
     let mut owners = BTreeMap::<u32, usize>::new();
+    let mut physical_functions = BTreeMap::new();
     for record in live.lowered_functions() {
         let mut matches = lowered
             .module()
@@ -292,6 +293,16 @@ fn prepare_production_semantic_debug_from_live_v1(
                 "correspondence KIR function role differs",
             ));
         }
+        if let Some((semantic_function, role)) =
+            physical_functions.insert(ordinal, (record.semantic_function().index(), record.role()))
+            && (semantic_function != record.semantic_function().index()
+                || role != SemanticKirFunctionRoleV1::InternalHelper
+                || record.role() != SemanticKirFunctionRoleV1::InternalHelper)
+        {
+            return Err(correspondence_error(
+                "only one exact semantic helper may share a physical KIR function",
+            ));
+        }
         if record.role() == SemanticKirFunctionRoleV1::KernelEntry {
             *owners
                 .entry(record.correspondence_owner().index())
@@ -313,6 +324,7 @@ fn prepare_production_semantic_debug_from_live_v1(
             ));
         }
         function_layouts.push((
+            record.correspondence_owner().index(),
             record.semantic_function().index(),
             u64::try_from(ordinal)
                 .map_err(|_| correspondence_error("KIR function ordinal overflow"))?,
@@ -325,13 +337,18 @@ fn prepare_production_semantic_debug_from_live_v1(
             "each correspondence root must own exactly one KIR entry",
         ));
     }
-    function_layouts.sort_unstable_by_key(|layout| layout.0);
+    if physical_functions.len() != defined_function_count {
+        return Err(correspondence_error(
+            "live correspondence omits a defined KIR function",
+        ));
+    }
+    function_layouts.sort_unstable_by_key(|layout| (layout.0, layout.1));
     if function_layouts
         .windows(2)
-        .any(|pair| pair[0].0 >= pair[1].0)
+        .any(|pair| (pair[0].0, pair[0].1) >= (pair[1].0, pair[1].1))
     {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "semantic functions shared across correspondence roots are ambiguous",
+            "correspondence has a duplicate function instance",
         ));
     }
 
@@ -353,9 +370,58 @@ fn prepare_production_semantic_debug_from_live_v1(
     }
     let context = debug_identity_context(&source_map_v2, canonical_kir.canonical_bytes());
 
-    let counts = live.statement_operation_spans().iter().try_fold(
+    let mut statement_groups = BTreeMap::new();
+    for span in live.statement_operation_spans() {
+        statement_groups
+            .entry((
+                span.semantic_function().index(),
+                span.semantic_block().index(),
+                span.statement_ordinal(),
+            ))
+            .or_insert_with(Vec::new)
+            .push(span);
+    }
+    for instances in statement_groups.values() {
+        let first = instances[0];
+        let first_layout = function_layouts
+            .binary_search_by_key(
+                &(
+                    first.correspondence_owner().index(),
+                    first.semantic_function().index(),
+                ),
+                |layout| (layout.0, layout.1),
+            )
+            .ok()
+            .and_then(|index| function_layouts.get(index))
+            .ok_or_else(|| correspondence_error("statement has no exact function instance"))?;
+        for instance in &instances[1..] {
+            let layout = function_layouts
+                .binary_search_by_key(
+                    &(
+                        instance.correspondence_owner().index(),
+                        instance.semantic_function().index(),
+                    ),
+                    |layout| (layout.0, layout.1),
+                )
+                .ok()
+                .and_then(|index| function_layouts.get(index))
+                .ok_or_else(|| correspondence_error("statement has no exact function instance"))?;
+            if layout.2 != first_layout.2
+                || instance.kernel_ir_block() != first.kernel_ir_block()
+                || instance.first_operation_ordinal() != first.first_operation_ordinal()
+                || instance.operation_count() != first.operation_count()
+            {
+                return Err(correspondence_error(
+                    "shared helper statement differs across root instances",
+                ));
+            }
+        }
+    }
+
+    let counts = statement_groups.values().try_fold(
         (0_usize, 0_usize),
-        |(statements, operations), span| {
+        |(statements, operations), instances| {
+            let span = instances[0];
             Some((
                 statements.checked_add(1)?,
                 operations.checked_add(span.operation_count() as usize)?,
@@ -394,9 +460,16 @@ fn prepare_production_semantic_debug_from_live_v1(
             ProductionSemanticDebugProducerGapV1::ResourceLimit,
         ));
     }
-    for span in live.statement_operation_spans() {
-        let (_, function_ordinal, body, block_ordinals) = function_layouts
-            .binary_search_by_key(&span.semantic_function().index(), |layout| layout.0)
+    for instances in statement_groups.values() {
+        let span = instances[0];
+        let (_, _, function_ordinal, body, block_ordinals) = function_layouts
+            .binary_search_by_key(
+                &(
+                    span.correspondence_owner().index(),
+                    span.semantic_function().index(),
+                ),
+                |layout| (layout.0, layout.1),
+            )
             .ok()
             .and_then(|index| function_layouts.get(index))
             .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -640,12 +713,9 @@ fn validate_multi_root_correspondence_v1(
 
     let live = lowered.correspondence();
     let mut owners = Vec::new();
-    let mut semantic_functions = Vec::new();
+    let mut semantic_functions = BTreeMap::new();
     owners
         .try_reserve_exact(roster.root_count())
-        .map_err(|_| correspondence_error("multi-root correspondence resource limit"))?;
-    semantic_functions
-        .try_reserve_exact(live.lowered_functions().len())
         .map_err(|_| correspondence_error("multi-root correspondence resource limit"))?;
     for ordinal in 0..roster.root_count() {
         let root = roster
@@ -740,12 +810,28 @@ fn validate_multi_root_correspondence_v1(
             ));
         }
         for (semantic_function, _, _) in payload_functions {
-            if semantic_functions.contains(&semantic_function) {
-                return Err(correspondence_error(
-                    "a semantic helper is shared across multi-root closures",
-                ));
+            let current = live
+                .lowered_functions()
+                .iter()
+                .position(|record| {
+                    record.correspondence_owner().index() == root.semantic_root()
+                        && record.semantic_function().index() == semantic_function
+                })
+                .ok_or_else(|| {
+                    correspondence_error("multi-root function has no live correspondence record")
+                })?;
+            if let Some(previous) = semantic_functions.insert(semantic_function, current) {
+                let previous = &live.lowered_functions()[previous];
+                let current = &live.lowered_functions()[current];
+                if previous.role() != SemanticKirFunctionRoleV1::InternalHelper
+                    || current.role() != SemanticKirFunctionRoleV1::InternalHelper
+                    || previous.kernel_ir_function() != current.kernel_ir_function()
+                {
+                    return Err(correspondence_error(
+                        "only an exact physical helper may be shared across roots",
+                    ));
+                }
             }
-            semantic_functions.push(semantic_function);
         }
 
         let mut payload_blocks = payload

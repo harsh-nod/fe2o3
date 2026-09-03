@@ -957,6 +957,7 @@ pub enum SourceIsaObservationErrorCodeV1 {
     FinalizedMapAllocationFailure = 0x100f,
     FinalizedMapInvalidBoundCorrespondenceV5 = 0x1010,
     FinalizedMapInvalidBoundMultiRootCorrespondenceV2 = 0x1011,
+    FinalizedMapInvalidInstanceCustodyV1 = 0x1012,
     SemanticMapInvalidLength = 0x1101,
     SemanticMapInvalidJson = 0x1102,
     SemanticMapNonCanonicalEncoding = 0x1103,
@@ -1066,6 +1067,9 @@ impl SourceIsaObservationErrorCodeV1 {
             Self::FinalizedMapInvalidBoundMultiRootCorrespondenceV2 => {
                 "finalized-map-invalid-bound-multi-root-correspondence-v2"
             }
+            Self::FinalizedMapInvalidInstanceCustodyV1 => {
+                "finalized-map-invalid-instance-custody-v1"
+            }
             Self::SemanticMapInvalidLength => "semantic-map-invalid-length",
             Self::SemanticMapInvalidJson => "semantic-map-invalid-json",
             Self::SemanticMapNonCanonicalEncoding => "semantic-map-noncanonical-encoding",
@@ -1173,6 +1177,7 @@ impl SourceIsaObservationErrorCodeV1 {
             0x100f => Ok(Self::FinalizedMapAllocationFailure),
             0x1010 => Ok(Self::FinalizedMapInvalidBoundCorrespondenceV5),
             0x1011 => Ok(Self::FinalizedMapInvalidBoundMultiRootCorrespondenceV2),
+            0x1012 => Ok(Self::FinalizedMapInvalidInstanceCustodyV1),
             0x1101 => Ok(Self::SemanticMapInvalidLength),
             0x1102 => Ok(Self::SemanticMapInvalidJson),
             0x1103 => Ok(Self::SemanticMapNonCanonicalEncoding),
@@ -2000,7 +2005,7 @@ mod tests {
             1,
             2,
             0x1000,
-            0x1012,
+            0x1013,
             0x1100,
             0x111d,
             0x1200,
@@ -2049,6 +2054,19 @@ mod tests {
         assert_eq!(
             SourceIsaObservationFrameV1::decode(&encoded),
             Ok(multi_root)
+        );
+
+        let instance_custody = frame(SourceIsaObservationOutcomeV1::Error(
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidInstanceCustodyV1,
+        ));
+        let encoded = instance_custody.encode();
+        assert_eq!(
+            u16::from_le_bytes(encoded[169..171].try_into().unwrap()),
+            0x1012
+        );
+        assert_eq!(
+            SourceIsaObservationFrameV1::decode(&encoded),
+            Ok(instance_custody)
         );
     }
 

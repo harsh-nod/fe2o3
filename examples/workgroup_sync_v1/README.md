@@ -14,6 +14,17 @@ barrier, deterministic reduction barriers, and final reuse barrier. Lane zero
 is the only global output writer. Admission rejects mathematical sums outside
 `i32`, so the device's wrapping tree computes the exact mathematical sum.
 
+## Inclusive and exclusive scans
+
+The `lds-scan-u32-kernel`, `lds-scan-i32-kernel`, and
+`lds-scan-f32-kernel` features compile ordinary attributed Rust examples using
+the same affine dynamic-LDS and workgroup-authority contract. The public
+`inclusive_scan_sum` and `exclusive_scan_sum` terminals order prefixes by
+linear work-item rank and return one result per lane through a typed
+`DisjointSlice`. Their exact compiler, CPU simulation, schedule replay, and
+debug evidence contract is documented in
+[`target-neutral-workgroup-scan-v1.md`](../../docs/target-neutral-workgroup-scan-v1.md).
+
 The source now requests `DynamicLds::<i32>::exact_current::<64>` and passes
 that linear capability directly to the collective terminal. It obtains
 `WorkgroupCollectives::current()` and calls
@@ -61,18 +72,19 @@ compiler-bound handoff, measured upstream LLVM target APIs plus in-process LLD,
 and COV6 inspection. There is no workload-profile selector on this route, and
 the compiler handoff grants no load or launch authority.
 
-The ignored neutral-reduction production drivers require the pinned nightly,
-protected authority launcher, and measured Worker V3 and LLVM build
-identities. The rustc driver authenticates the compiler-observed provider
-definition identities and recomputed complete source-closure pin, then checks
-the semantic MIR, ranked PLIRON, generic LDS/tree/barrier KIR, target binding,
-and LLVM route for `u32`, `i32`, and `f32` on both targets. The protected
-driver starts again from the immutable sources for all three scalar profiles
+The ignored neutral-collective rustc driver requires the pinned nightly. It
+authenticates the compiler-observed provider definition identities and
+recomputed complete source-closure pin, then checks semantic MIR, ranked
+PLIRON, generic LDS/tree/barrier KIR, target binding, and the LLVM route for
+the three reduction and three scan examples on both targets. The separate
+protected reduction driver requires the authority launcher and measured Worker
+V3 and LLVM build identities. It starts again from the immutable reduction
+sources for all three scalar profiles
 and checks real Worker/finalizer output for the exact
 256-byte static group segment, 288-byte complete kernarg ABI, required
 `64x1x1` workgroup, COV6 descriptor, and deterministic two-run HSACO. It does
 not dispatch the code object or grant load/launch authority. The scoped-atomic
-profile is outside this neutral-reduction driver.
+profile and scan HSACO qualification are outside this protected driver.
 
 This is bounded source-to-code-object evidence, not a compiler-refinement proof
 or a claim of generalized memory safety, race freedom, reduction coverage, or

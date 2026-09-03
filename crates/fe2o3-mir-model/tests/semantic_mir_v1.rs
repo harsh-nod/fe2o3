@@ -1918,28 +1918,38 @@ fn volatile_load_request(
 }
 
 #[test]
-fn volatile_load_v10_is_canonical_and_rejects_legacy_or_malformed_contracts() {
+fn volatile_load_v11_is_canonical_and_rejects_legacy_or_malformed_contracts() {
     let limits = SemanticMirLimitsV1::default();
     let request = volatile_load_request(
         vec![READ_VIEW_SLICE_REF, READ_VIEW_USIZE],
         READ_VIEW_ELEMENT,
         READ_VIEW_ELEMENT,
     );
-    let legacy = request.clone().admit_exact_v9(limits);
-    let legacy_debug = format!("{legacy:?}");
-    assert!(
-        matches!(
-            legacy,
-            Err(SemanticMirErrorV1::WireVersionCannotRepresent {
-                requested: SemanticMirWireVersionV1::V9,
-                required: SemanticMirWireVersionV1::V10,
-            })
+    for (requested, legacy) in [
+        (
+            SemanticMirWireVersionV1::V9,
+            request.clone().admit_exact_v9(limits),
         ),
-        "unexpected legacy admission result: {legacy_debug}"
-    );
+        (
+            SemanticMirWireVersionV1::V10,
+            request.clone().admit_exact_v10(limits),
+        ),
+    ] {
+        let legacy_debug = format!("{legacy:?}");
+        assert!(
+            matches!(
+                legacy,
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: actual,
+                    required: SemanticMirWireVersionV1::V11,
+                }) if actual == requested
+            ),
+            "unexpected legacy admission result: {legacy_debug}"
+        );
+    }
     let admitted = request.admit_current_production(limits).unwrap();
-    assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V10);
-    let decoded = AdmittedInertSemanticMirV1::decode_exact_v10_canonical(
+    assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V11);
+    let decoded = AdmittedInertSemanticMirV1::decode_exact_v11_canonical(
         admitted.canonical_encoding(),
         limits,
     )
@@ -1950,7 +1960,7 @@ fn volatile_load_v10_is_canonical_and_rejects_legacy_or_malformed_contracts() {
     let mut trailing = admitted.canonical_encoding().to_vec();
     trailing.push(0);
     assert!(matches!(
-        AdmittedInertSemanticMirV1::decode_exact_v10_canonical(&trailing, limits),
+        AdmittedInertSemanticMirV1::decode_exact_v11_canonical(&trailing, limits),
         Err(SemanticMirDecodeErrorV1::TrailingBytes { trailing: 1, .. })
     ));
 
@@ -1972,7 +1982,7 @@ fn volatile_load_v10_is_canonical_and_rejects_legacy_or_malformed_contracts() {
         ),
     ] {
         assert!(matches!(
-            invalid.admit_exact_v10(limits),
+            invalid.admit_exact_v11(limits),
             Err(SemanticMirErrorV1::InvalidFunctionAbi)
         ));
     }

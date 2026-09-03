@@ -14,7 +14,7 @@ use std::process::{
 };
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -1985,6 +1985,7 @@ struct BoundedChildV1<'a> {
     writer: Option<SyncSender<WriterCommandV1>>,
     stdout: Receiver<StdoutEventV1>,
     stderr: Receiver<StderrCaptureV1>,
+    progress_timeout: Duration,
     deadline: Instant,
     label: &'static str,
     executable: &'a PinnedExecutableV1,
@@ -2009,12 +2010,32 @@ impl<'a> BoundedChildV1<'a> {
     }
 
     fn spawn_with_timeout(
+        command: Command,
+        executable: &'a PinnedExecutableV1,
+        label: &'static str,
+        max_stdout_line: usize,
+        max_stdout_total: usize,
+        timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::spawn_with_timeout_after_spawn(
+            command,
+            executable,
+            label,
+            max_stdout_line,
+            max_stdout_total,
+            timeout,
+            || {},
+        )
+    }
+
+    fn spawn_with_timeout_after_spawn(
         mut command: Command,
         executable: &'a PinnedExecutableV1,
         label: &'static str,
         max_stdout_line: usize,
         max_stdout_total: usize,
         timeout: Duration,
+        after_spawn: impl FnOnce(),
     ) -> Result<Self, String> {
         if max_stdout_line == 0 || max_stdout_total < max_stdout_line {
             return Err("invalid child output bounds".into());
@@ -2053,16 +2074,21 @@ impl<'a> BoundedChildV1<'a> {
         let writer = spawn_child_writer_v1(input);
         let stdout = spawn_stdout_reader_v1(output, max_stdout_line, max_stdout_total)?;
         let stderr = spawn_stderr_reader_v1(error, MAX_CHILD_STDERR_BYTES_V1)?;
+        after_spawn();
+        executable.revalidate(label)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| format!("{label} deadline overflowed"))?;
         let result = Self {
             owned,
             writer: Some(writer),
             stdout,
             stderr,
-            deadline: Instant::now() + timeout,
+            progress_timeout: timeout,
+            deadline,
             label,
             executable,
         };
-        result.executable.revalidate(label)?;
         Ok(result)
     }
 
@@ -2070,6 +2096,13 @@ impl<'a> BoundedChildV1<'a> {
         self.deadline
             .checked_duration_since(Instant::now())
             .ok_or_else(|| format!("{} deadline expired", self.label))
+    }
+
+    fn record_progress(&mut self) -> Result<(), String> {
+        self.deadline = Instant::now()
+            .checked_add(self.progress_timeout)
+            .ok_or_else(|| format!("{} deadline overflowed", self.label))?;
+        Ok(())
     }
 
     fn exchange_line(&mut self, request: &Value, max_request: u64) -> Result<Vec<u8>, String> {
@@ -2102,21 +2135,34 @@ impl<'a> BoundedChildV1<'a> {
             ));
         }
         let (completed_tx, completed_rx) = sync_channel(1);
-        self.writer
+        let command = WriterCommandV1::Write {
+            bytes,
+            completed: completed_tx,
+        };
+        match self
+            .writer
             .as_ref()
             .ok_or_else(|| format!("{} input closed", self.label))?
-            .send(WriterCommandV1::Write {
-                bytes,
-                completed: completed_tx,
-            })
-            .map_err(|_| format!("{} request writer stopped", self.label))?;
+            .try_send(command)
+        {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                return Err(format!("{} request writer made no progress", self.label));
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err(format!("{} request writer stopped", self.label));
+            }
+        }
         match completed_rx.recv_timeout(self.remaining()?) {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => self.record_progress()?,
             Ok(Err(())) => return Err(format!("{} request write failed", self.label)),
             Err(_) => return Err(format!("{} request write timed out", self.label)),
         }
         match self.stdout.recv_timeout(self.remaining()?) {
-            Ok(StdoutEventV1::Line(line)) => Ok(line),
+            Ok(StdoutEventV1::Line(line)) => {
+                self.record_progress()?;
+                Ok(line)
+            }
             Ok(StdoutEventV1::Failure(reason)) => Err(format!("{} {reason}", self.label)),
             Ok(StdoutEventV1::Eof) => Err(format!("{} stdout ended before response", self.label)),
             Err(_) => Err(format!("{} response timed out", self.label)),
@@ -2691,6 +2737,12 @@ impl PinnedExecutableV1 {
         if !metadata_matches {
             return Err(format!("pinned {label} metadata changed"));
         }
+        if self.is_archive_sealed() {
+            // Admission hashes the completed image after sealing it. F_SEAL_WRITE,
+            // F_SEAL_GROW, and F_SEAL_SHRINK make that identity invariant, while
+            // F_SEAL_SEAL prevents weakening the custody contract later.
+            return validate_archive_executable_memfd_v1(&self.file, self.metadata, label);
+        }
         let identity = executable_content_identity(&self.file, self.metadata.bytes, label)?;
         let after = self
             .file
@@ -2705,9 +2757,6 @@ impl PinnedExecutableV1 {
         };
         if !metadata_matches || identity != self.identity {
             return Err(format!("pinned {label} content changed"));
-        }
-        if self.is_archive_sealed() {
-            validate_archive_executable_memfd_v1(&self.file, self.metadata, label)?;
         }
         Ok(())
     }
@@ -3615,6 +3664,68 @@ mod tests {
     }
 
     #[test]
+    fn bounded_child_deadline_starts_after_parent_admission_work() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-child-admission-deadline-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let executable = helper_shell(&root);
+        let mut command = Command::new(executable.proc_path());
+        command.args(["-c", "IFS= read -r line; printf 'ok\\n'"]);
+        let timeout = Duration::from_millis(100);
+        let started = Instant::now();
+        let mut child = BoundedChildV1::spawn_with_timeout_after_spawn(
+            command,
+            &executable,
+            "test producer",
+            32,
+            64,
+            timeout,
+            || thread::sleep(Duration::from_millis(250)),
+        )
+        .unwrap();
+        assert!(started.elapsed() > timeout);
+        assert_eq!(
+            child
+                .exchange_line(&json!({"request":"test"}), 1024)
+                .unwrap(),
+            b"ok\n"
+        );
+        child.finish().unwrap();
+        drop(executable);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_child_renews_deadline_only_after_protocol_progress() {
+        let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "fe2o3-child-progress-deadline-test-{}-{ordinal}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let executable = helper_shell(&root);
+        let timeout = Duration::from_millis(500);
+        let script = "IFS= read -r first; sleep 0.3; printf 'first\\n'; IFS= read -r second; sleep 0.3; printf 'second\\n'";
+        let mut child = helper_session(&executable, script, timeout);
+        let started = Instant::now();
+        assert_eq!(
+            child.exchange_line(&json!({"request":1}), 1024).unwrap(),
+            b"first\n"
+        );
+        assert_eq!(
+            child.exchange_line(&json!({"request":2}), 1024).unwrap(),
+            b"second\n"
+        );
+        assert!(started.elapsed() > timeout);
+        child.finish().unwrap();
+        drop(executable);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bounded_child_rejects_hostile_streams_and_reaps_owned_process_groups() {
         let ordinal = NEXT_SNAPSHOT_V1.fetch_add(1, Ordering::Relaxed);
         let root = env::temp_dir().join(format!(
@@ -3624,6 +3735,24 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let executable = helper_shell(&root);
         let request = json!({"request":"test"});
+
+        let blocked_writer_pid = root.join("blocked-writer.pid");
+        let script = format!(
+            "printf '%s\\n' $$ > {}; while :; do :; done",
+            blocked_writer_pid.display()
+        );
+        let mut child = helper_session(&executable, &script, Duration::from_millis(100));
+        let pid = wait_for_pid(&blocked_writer_pid);
+        let mut oversized_request = vec![b'x'; 2 * 1024 * 1024];
+        oversized_request.push(b'\n');
+        assert!(
+            child
+                .exchange_encoded_line(oversized_request, 3 * 1024 * 1024)
+                .unwrap_err()
+                .contains("request write timed out")
+        );
+        drop(child);
+        assert_pid_reaped(pid);
 
         let oversized_pid = root.join("oversized.pid");
         let script = format!(

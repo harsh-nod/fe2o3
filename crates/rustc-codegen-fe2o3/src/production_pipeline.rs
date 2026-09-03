@@ -1395,13 +1395,14 @@ fn exact_debug_map_functions_v1(
         .iter()
         .filter(|function| function.body.is_some())
         .count();
-    if defined_count == 0 || defined_count != lowered.correspondence().lowered_functions().len() {
+    if defined_count == 0 || lowered.correspondence().lowered_functions().len() < defined_count {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
             "live correspondence does not cover every defined KIR function",
         ));
     }
     let mut layouts = BTreeMap::new();
     let mut ordinals = BTreeSet::new();
+    let mut physical_functions = BTreeMap::new();
     for record in lowered.correspondence().lowered_functions() {
         let mut matches = lowered
             .module()
@@ -1414,7 +1415,7 @@ fn exact_debug_map_functions_v1(
                 "live correspondence names an unknown KIR function",
             ));
         };
-        if matches.next().is_some() || function.body.is_none() || !ordinals.insert(ordinal) {
+        if matches.next().is_some() || function.body.is_none() {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "live correspondence has an ambiguous KIR function owner",
             ));
@@ -1434,6 +1435,18 @@ fn exact_debug_map_functions_v1(
                 "live correspondence KIR function role differs",
             ));
         }
+        if let Some((semantic_function, role)) =
+            physical_functions.insert(ordinal, (record.semantic_function(), record.role()))
+            && (semantic_function != record.semantic_function()
+                || role != fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper
+                || record.role()
+                    != fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper)
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "only one exact semantic helper may share a physical KIR function",
+            ));
+        }
+        ordinals.insert(ordinal);
         let body = function.body.as_ref().expect("body checked");
         let block_ordinals = body
             .blocks
@@ -1681,6 +1694,12 @@ fn compiler_debug_source_map_v1(
             layout.function_ordinal,
             layout.body,
             &layout.block_ordinals,
+            (
+                1,
+                span.semantic_function().index(),
+                span.semantic_block().index(),
+                span.statement_ordinal(),
+            ),
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1706,6 +1725,12 @@ fn compiler_debug_source_map_v1(
             layout.function_ordinal,
             layout.body,
             &layout.block_ordinals,
+            (
+                2,
+                span.semantic_function().index(),
+                span.semantic_block().index(),
+                0,
+            ),
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1715,7 +1740,7 @@ fn compiler_debug_source_map_v1(
         )?;
     }
 
-    let mut synthetic = BTreeSet::new();
+    let mut synthetic = BTreeMap::new();
     for span in lowered.correspondence().synthetic_operation_spans() {
         let layout = function_layouts
             .get(&(span.correspondence_owner(), span.semantic_function()))
@@ -1742,7 +1767,20 @@ fn compiler_debug_source_map_v1(
                 block_ordinal,
                 u64::from(operation),
             );
-            if !synthetic.insert(site) || mapped.contains_key(&site) {
+            let rule = match span.rule() {
+                fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => {
+                    1
+                }
+                fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => {
+                    2
+                }
+            };
+            let owner = (span.semantic_function().index(), rule);
+            if mapped.contains_key(&site)
+                || synthetic
+                    .insert(site, owner)
+                    .is_some_and(|previous| previous != owner)
+            {
                 return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                     "synthetic and semantic operation ranges overlap",
                 ));
@@ -1765,7 +1803,7 @@ fn compiler_debug_source_map_v1(
                         )
                     })?,
                 );
-                if mapped.contains_key(&site) == synthetic.contains(&site) {
+                if mapped.contains_key(&site) == synthetic.contains_key(&site) {
                     return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                         "KIR operation is not covered exactly once by semantic or synthetic correspondence",
                     ));
@@ -1776,6 +1814,7 @@ fn compiler_debug_source_map_v1(
 
     let referenced_files = mapped
         .values()
+        .map(|(_, span)| span)
         .chain(&eliminated)
         .map(|span| span.file_identity())
         .collect::<BTreeSet<_>>();
@@ -1795,7 +1834,7 @@ fn compiler_debug_source_map_v1(
         .collect::<Result<Vec<_>, _>>()?;
     let sites = mapped
         .into_iter()
-        .map(|(site, span)| {
+        .map(|(site, (_, span))| {
             fe2o3_kernel_ir::DebugSourceMapSiteV1::new(site, vec![span])
                 .map_err(ProductionPipelineError::SimulationDebugMap)
         })
@@ -1820,12 +1859,12 @@ fn compiler_debug_source_map_v2(
     let function_layouts = exact_debug_map_functions_v1(lowered)?;
     let mut function_by_semantic = BTreeMap::new();
     for ((_, semantic_function), layout) in &function_layouts {
-        if function_by_semantic
-            .insert(*semantic_function, layout.function_ordinal)
-            .is_some()
+        if let Some(previous) =
+            function_by_semantic.insert(*semantic_function, layout.function_ordinal)
+            && previous != layout.function_ordinal
         {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "source-map V2 cannot disambiguate repeated semantic helper instances",
+                "one semantic function maps to different physical KIR functions",
             ));
         }
     }
@@ -1834,15 +1873,17 @@ fn compiler_debug_source_map_v2(
     for binding in lowered.correspondence().parameter_bindings() {
         if !function_layouts
             .contains_key(&(binding.correspondence_owner(), binding.semantic_function()))
-            || parameter_by_local
-                .insert(
-                    (binding.semantic_function(), binding.semantic_local()),
-                    binding.kernel_ir_value(),
-                )
-                .is_some()
         {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "KIR parameter correspondence is not unique for its semantic function",
+                "KIR parameter correspondence has no exact function instance",
+            ));
+        }
+        let key = (binding.semantic_function(), binding.semantic_local());
+        if let Some(previous) = parameter_by_local.insert(key, binding.kernel_ir_value())
+            && previous != binding.kernel_ir_value()
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "shared helper parameter correspondence differs across roots",
             ));
         }
     }
@@ -2658,19 +2699,26 @@ fn debug_source_scope_span_v2(
     .map_err(ProductionPipelineError::SimulationDebugMap)
 }
 
+type ExactDebugSemanticConstructV1 = (u8, u32, u32, u32);
+type ExactDebugMappedOperationsV1 = BTreeMap<
+    fe2o3_kernel_ir::DebugSourceMapKirSiteV1,
+    (
+        ExactDebugSemanticConstructV1,
+        fe2o3_kernel_ir::DebugSourceMapSpanV1,
+    ),
+>;
+
 #[allow(clippy::too_many_arguments)]
 fn insert_debug_operation_range_v1(
     function_ordinal: u64,
     body: &fe2o3_kernel_ir::FunctionBody,
     block_ordinals: &BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
+    semantic_owner: ExactDebugSemanticConstructV1,
     block: fe2o3_kernel_ir::BlockId,
     first_operation: u32,
     operation_count: u32,
     source: fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1,
-    mapped: &mut BTreeMap<
-        fe2o3_kernel_ir::DebugSourceMapKirSiteV1,
-        fe2o3_kernel_ir::DebugSourceMapSpanV1,
-    >,
+    mapped: &mut ExactDebugMappedOperationsV1,
     eliminated: &mut BTreeSet<fe2o3_kernel_ir::DebugSourceMapSpanV1>,
 ) -> Result<(), ProductionPipelineError> {
     // V1 intentionally resolves every macro-originated construct to rustc's
@@ -2729,7 +2777,10 @@ fn insert_debug_operation_range_v1(
             block_ordinal,
             u64::from(operation),
         );
-        if mapped.insert(site, source_span).is_some() {
+        if mapped
+            .insert(site, (semantic_owner, source_span))
+            .is_some_and(|previous| previous != (semantic_owner, source_span))
+        {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "one KIR operation is attributed to multiple semantic constructs",
             ));

@@ -3599,6 +3599,18 @@ const fn terminal_expansion_tag_for_schema_v1(
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
+        ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 113,
+            TerminalIdentitySchemaV1::CombinedV3 => 113,
+            TerminalIdentitySchemaV1::CombinedV4 => 116,
+        },
+        ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
+            TerminalIdentitySchemaV1::CombinedV3 => 114,
+            TerminalIdentitySchemaV1::CombinedV4 => 117,
+        },
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -4048,14 +4060,28 @@ mod tests {
             [
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
-                ProductionTerminalExpansionV1::RustcFabsF32,
-                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs,),
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(
                 expansion,
                 TerminalIdentitySchemaV1::CombinedV3,
             )),
             [111, 112, 113, 114],
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::RustcFabsF32,
+                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs,),
+                ProductionTerminalExpansionV1::MemoryVolatileLoad,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
+            ]
+            .map(|expansion| terminal_expansion_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV4,
+            )),
+            [113, 114, 115, 116, 117],
         );
 
         let gfx950 = [
@@ -4199,9 +4225,13 @@ mod tests {
                 ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(expansion, combined_schema)),
-            [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+            [
+                100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+            ]
         );
         assert_eq!(
             [

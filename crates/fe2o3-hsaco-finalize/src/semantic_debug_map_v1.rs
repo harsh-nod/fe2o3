@@ -38,12 +38,24 @@ use fe2o3_lower_mir_kernel::{
 };
 use fe2o3_mir_model::{
     InertCanonicalSemanticU32InductionEvidenceV1,
-    semantic_mir_v1::{AdmittedInertSemanticMirV1, SemanticFunctionIdV1, SemanticMirLimitsV1},
+    semantic_mir_v1::{
+        AdmittedInertSemanticMirV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+        SemanticLocalRoleV1, SemanticMirLimitsV1,
+    },
 };
 
 use crate::{
     ContentIdentityV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
     inspect_and_bind_kernel_descriptors,
+    semantic_debug_instance_custody_v1::{
+        ProductionSemanticDebugFunctionInstanceInputV1,
+        ProductionSemanticDebugFunctionInstanceRoleV1,
+        ProductionSemanticDebugInstanceCustodyAvailabilityV1,
+        ProductionSemanticDebugInstanceCustodyBindingV1,
+        ProductionSemanticDebugInstanceCustodyErrorV1,
+        ProductionSemanticDebugInstanceCustodyUnavailableV1,
+        ProductionSemanticDebugInstanceCustodyV1, ProductionSemanticDebugStatementInstanceInputV1,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -83,6 +95,7 @@ pub struct AdmittedFinalizedSemanticDebugMapV1 {
     document: SemanticDebugMapDocumentV1,
     graph_indices: SemanticDebugGraphIndicesV1,
     transformation_map_v2: Option<SemanticDebugTransformationMapDocumentV2>,
+    instance_custody_v1: ProductionSemanticDebugInstanceCustodyAvailabilityV1,
 }
 
 impl AdmittedFinalizedSemanticDebugMapV1 {
@@ -122,6 +135,13 @@ impl AdmittedFinalizedSemanticDebugMapV1 {
     /// Legacy artifact-only admission has no correspondence evidence and returns `None`.
     pub const fn transformation_map_v2(&self) -> Option<&SemanticDebugTransformationMapDocumentV2> {
         self.transformation_map_v2.as_ref()
+    }
+
+    /// Returns exact root-instance ownership or a typed correspondence boundary.
+    pub const fn instance_custody_v1(
+        &self,
+    ) -> &ProductionSemanticDebugInstanceCustodyAvailabilityV1 {
+        &self.instance_custody_v1
     }
 
     pub(crate) const fn graph_indices(&self) -> &SemanticDebugGraphIndicesV1 {
@@ -372,7 +392,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             SemanticDebugMapDocumentV1::from_canonical_json_bytes(fragment.pre_finalization_map())
                 .map_err(FinalizedSemanticDebugMapErrorV1::SemanticMap)?;
         let graph_indices = SemanticDebugGraphIndicesV1::try_new(&map)?;
-        validate_exact_production_correspondence(
+        let replayed_instances = validate_exact_production_correspondence(
             &map,
             &graph_indices,
             fragment.source_map_v2(),
@@ -407,6 +427,29 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             &admitted,
             correspondence_bytes,
         )?);
+        admitted.instance_custody_v1 = match replayed_instances {
+            Some(replayed) => {
+                let binding = ProductionSemanticDebugInstanceCustodyBindingV1::from_exact_bytes(
+                    fragment.source_map_v2(),
+                    &map_bytes,
+                    semantic_mir,
+                    fragment.canonical_kir_v7(),
+                    correspondence_bytes,
+                )
+                .map_err(FinalizedSemanticDebugMapErrorV1::InstanceCustodyV1)?;
+                let custody = ProductionSemanticDebugInstanceCustodyV1::from_replayed_inputs(
+                    binding,
+                    replayed.functions,
+                    replayed.statements,
+                    admitted.document(),
+                )
+                .map_err(FinalizedSemanticDebugMapErrorV1::InstanceCustodyV1)?;
+                ProductionSemanticDebugInstanceCustodyAvailabilityV1::Available(Box::new(custody))
+            }
+            None => ProductionSemanticDebugInstanceCustodyAvailabilityV1::Unavailable(
+                ProductionSemanticDebugInstanceCustodyUnavailableV1::LegacyCorrespondenceV4,
+            ),
+        };
         Ok(ProductionFinalizedSemanticDebugAdmissionV1::Admitted(
             Box::new(admitted),
         ))
@@ -521,6 +564,7 @@ fn bounded_copy(bytes: &[u8]) -> Result<Vec<u8>, FinalizedSemanticDebugMapErrorV
 
 #[derive(Clone, Copy)]
 struct ExactFinalizerStatementV1 {
+    correspondence_owner: u32,
     semantic_function: u32,
     semantic_block: u32,
     statement: u32,
@@ -530,11 +574,20 @@ struct ExactFinalizerStatementV1 {
 }
 
 struct ExactFinalizerFunctionV1<'a> {
+    correspondence_owner: u32,
     semantic_function: u32,
     function_ordinal: u64,
+    instance_role: ProductionSemanticDebugFunctionInstanceRoleV1,
     body: &'a fe2o3_kernel_ir::FunctionBody,
     block_ordinals: Vec<(u32, usize)>,
 }
+
+struct ReplayedProductionSemanticDebugInstancesV1 {
+    functions: Vec<ProductionSemanticDebugFunctionInstanceInputV1>,
+    statements: Vec<ProductionSemanticDebugStatementInstanceInputV1>,
+}
+
+type SharedHelperParameterBindingsV1 = BTreeMap<usize, (u32, Vec<(u32, u32)>)>;
 
 fn multi_root_finalizer_view_v1<'a>(
     roster: &MultiRootProofRosterTranscriptV2,
@@ -549,7 +602,9 @@ fn multi_root_finalizer_view_v1<'a>(
 > {
     let mut layouts = Vec::new();
     let mut statements = Vec::new();
-    let mut semantic_functions = BTreeSet::new();
+    let mut semantic_functions = BTreeMap::new();
+    let mut physical_functions = BTreeMap::new();
+    let mut shared_helper_parameters = BTreeMap::new();
     let mut kir_ordinals = BTreeSet::new();
     let mut previous_root = None;
     for root_ordinal in 0..roster.root_count() {
@@ -604,12 +659,27 @@ fn multi_root_finalizer_view_v1<'a>(
             let (ordinal, function) = matches
                 .next()
                 .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
-            if matches.next().is_some()
-                || !kir_ordinals.insert(ordinal)
-                || !semantic_functions.insert(record.semantic_function())
+            if matches.next().is_some() {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+            let role = record.role();
+            if let Some((previous_ordinal, previous_role)) =
+                semantic_functions.insert(record.semantic_function(), (ordinal, role))
+                && (previous_ordinal != ordinal
+                    || previous_role != MultiRootCorrespondenceFunctionRoleV2::InternalHelper
+                    || role != MultiRootCorrespondenceFunctionRoleV2::InternalHelper)
             {
                 return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
             }
+            if let Some((previous_semantic, previous_role)) =
+                physical_functions.insert(ordinal, (record.semantic_function(), role))
+                && (previous_semantic != record.semantic_function()
+                    || previous_role != MultiRootCorrespondenceFunctionRoleV2::InternalHelper
+                    || role != MultiRootCorrespondenceFunctionRoleV2::InternalHelper)
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+            kir_ordinals.insert(ordinal);
             let body = function
                 .body
                 .as_ref()
@@ -638,9 +708,18 @@ fn multi_root_finalizer_view_v1<'a>(
                 }
             }
             layouts.push(ExactFinalizerFunctionV1 {
+                correspondence_owner: root.semantic_root(),
                 semantic_function: record.semantic_function(),
                 function_ordinal: u64::try_from(ordinal)
                     .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?,
+                instance_role: match record.role() {
+                    MultiRootCorrespondenceFunctionRoleV2::KernelEntry => {
+                        ProductionSemanticDebugFunctionInstanceRoleV1::KernelEntry
+                    }
+                    MultiRootCorrespondenceFunctionRoleV2::InternalHelper => {
+                        ProductionSemanticDebugFunctionInstanceRoleV1::InternalHelper
+                    }
+                },
                 body,
                 block_ordinals: exact_block_ordinals_v1(body)?,
             });
@@ -782,6 +861,7 @@ fn multi_root_finalizer_view_v1<'a>(
                         .checked_add(span.operation_count())
                         .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
                     statements.push(ExactFinalizerStatementV1 {
+                        correspondence_owner: root.semantic_root(),
                         semantic_function,
                         semantic_block,
                         statement,
@@ -826,27 +906,38 @@ fn multi_root_finalizer_view_v1<'a>(
         if !synthetic_by_block.is_empty() {
             return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
         }
-        let mut parameters = BTreeSet::new();
-        for parameter in payload.parameters() {
-            let (semantic, _, body) = local_functions
-                .get(&parameter.semantic_function())
-                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
-            if semantic
-                .locals()
-                .get(parameter.semantic_local() as usize)
-                .is_none()
-                || !body
-                    .parameters
-                    .iter()
-                    .any(|value| value.0 == parameter.kernel_ir_value())
-                || !parameters.insert((
+        let expected_parameters = expected_multi_root_parameter_bindings_v1(&local_functions)?;
+        require_exact_parameter_bindings_v1(
+            &expected_parameters,
+            payload.parameters().iter().map(|parameter| {
+                (
                     parameter.semantic_function(),
                     parameter.semantic_local(),
                     parameter.kernel_ir_value(),
-                ))
-            {
-                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
-            }
+                )
+            }),
+        )?;
+        for record in payload
+            .functions()
+            .iter()
+            .filter(|record| record.role() == MultiRootCorrespondenceFunctionRoleV2::InternalHelper)
+        {
+            let (_, ordinal, _) = local_functions
+                .get(&record.semantic_function())
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            let bindings = expected_parameters
+                .iter()
+                .filter_map(|(&(semantic_function, semantic_local), &kernel_ir_value)| {
+                    (semantic_function == record.semantic_function())
+                        .then_some((semantic_local, kernel_ir_value))
+                })
+                .collect::<Vec<_>>();
+            retain_shared_helper_parameter_bindings_v1(
+                &mut shared_helper_parameters,
+                *ordinal,
+                record.semantic_function(),
+                bindings,
+            )?;
         }
     }
     let defined_count = module
@@ -857,16 +948,106 @@ fn multi_root_finalizer_view_v1<'a>(
     if kir_ordinals.len() != defined_count {
         return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
     }
-    layouts.sort_unstable_by_key(|layout| layout.semantic_function);
-    statements
-        .sort_unstable_by_key(|span| (span.semantic_function, span.semantic_block, span.statement));
-    if layouts
-        .windows(2)
-        .any(|pair| pair[0].semantic_function >= pair[1].semantic_function)
-    {
+    layouts.sort_unstable_by_key(|layout| (layout.correspondence_owner, layout.semantic_function));
+    statements.sort_unstable_by_key(|span| {
+        (
+            span.correspondence_owner,
+            span.semantic_function,
+            span.semantic_block,
+            span.statement,
+        )
+    });
+    if layouts.windows(2).any(|pair| {
+        (pair[0].correspondence_owner, pair[0].semantic_function)
+            >= (pair[1].correspondence_owner, pair[1].semantic_function)
+    }) {
         return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
     }
     Ok((layouts, statements))
+}
+
+fn expected_multi_root_parameter_bindings_v1(
+    functions: &BTreeMap<
+        u32,
+        (
+            &SemanticFunctionDeclV1,
+            usize,
+            &fe2o3_kernel_ir::FunctionBody,
+        ),
+    >,
+) -> Result<BTreeMap<(u32, u32), u32>, FinalizedSemanticDebugMapErrorV1> {
+    let mut expected = BTreeMap::new();
+    for (&semantic_function, (semantic, _, body)) in functions {
+        let mut arguments = semantic
+            .locals()
+            .iter()
+            .enumerate()
+            .filter_map(|(local, declaration)| match declaration.role() {
+                SemanticLocalRoleV1::Argument(argument) => Some((argument, local)),
+                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => None,
+            })
+            .collect::<Vec<_>>();
+        arguments.sort_unstable();
+        if arguments.len() != body.parameters.len()
+            || arguments
+                .iter()
+                .enumerate()
+                .any(|(expected, (actual, _))| usize::try_from(*actual) != Ok(expected))
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        for (argument, (_, local)) in arguments.into_iter().enumerate() {
+            let local = u32::try_from(local)
+                .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            let kernel_ir_value = body
+                .parameters
+                .get(argument)
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?
+                .0;
+            if expected
+                .insert((semantic_function, local), kernel_ir_value)
+                .is_some()
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+        }
+    }
+    Ok(expected)
+}
+
+fn require_exact_parameter_bindings_v1(
+    expected: &BTreeMap<(u32, u32), u32>,
+    observed: impl IntoIterator<Item = (u32, u32, u32)>,
+) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
+    let mut exact = BTreeMap::new();
+    for (semantic_function, semantic_local, kernel_ir_value) in observed {
+        if exact
+            .insert((semantic_function, semantic_local), kernel_ir_value)
+            .is_some()
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+    }
+    if &exact != expected {
+        return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+    }
+    Ok(())
+}
+
+fn retain_shared_helper_parameter_bindings_v1(
+    retained: &mut SharedHelperParameterBindingsV1,
+    physical_function: usize,
+    semantic_function: u32,
+    bindings: Vec<(u32, u32)>,
+) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
+    if let Some((previous_semantic, previous_bindings)) = retained.get(&physical_function) {
+        if *previous_semantic != semantic_function || previous_bindings != &bindings {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+    } else {
+        retained.insert(physical_function, (semantic_function, bindings));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -878,7 +1059,7 @@ fn validate_exact_production_correspondence(
     canonical_kir_v8_bytes: &[u8],
     canonical_kir_v7_bytes: &[u8],
     correspondence_bytes: &[u8],
-) -> Result<(), FinalizedSemanticDebugMapErrorV1> {
+) -> Result<Option<ReplayedProductionSemanticDebugInstancesV1>, FinalizedSemanticDebugMapErrorV1> {
     let source_map = DebugSourceMapDocumentV2::from_canonical_json_bytes(source_map_bytes)
         .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidBoundSourceMap)?;
     let semantic_mir = AdmittedInertSemanticMirV1::decode_current_production_canonical(
@@ -921,6 +1102,7 @@ fn validate_exact_production_correspondence(
         .as_ref()
         .map(InertCanonicalMirToKirCorrespondenceEvidenceV5::nested_v4)
         .or(legacy_v4.as_ref());
+    let retain_instances = multi_root.is_some() || correspondence_v5.is_some();
     let (canonical_kir_v8, module_v8) =
         VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(bounded_copy(
             canonical_kir_v8_bytes,
@@ -1020,8 +1202,17 @@ fn validate_exact_production_correspondence(
                 return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
             }
             function_layouts.push(ExactFinalizerFunctionV1 {
+                correspondence_owner: record.correspondence_owner(),
                 semantic_function: record.semantic_function(),
                 function_ordinal: u64::from(record.kernel_ir_function_ordinal()),
+                instance_role: match record.role() {
+                    MirToKirFunctionRoleEvidenceV5::KernelEntry => {
+                        ProductionSemanticDebugFunctionInstanceRoleV1::KernelEntry
+                    }
+                    MirToKirFunctionRoleEvidenceV5::InternalHelper => {
+                        ProductionSemanticDebugFunctionInstanceRoleV1::InternalHelper
+                    }
+                },
                 body,
                 block_ordinals: exact_block_ordinals_v1(body)?,
             });
@@ -1049,9 +1240,11 @@ fn validate_exact_production_correspondence(
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?
             .semantic_function();
         function_layouts.push(ExactFinalizerFunctionV1 {
+            correspondence_owner: semantic_function,
             semantic_function,
             function_ordinal: u64::try_from(ordinal)
                 .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?,
+            instance_role: ProductionSemanticDebugFunctionInstanceRoleV1::KernelEntry,
             body,
             block_ordinals: exact_block_ordinals_v1(body)?,
         });
@@ -1062,6 +1255,11 @@ fn validate_exact_production_correspondence(
             .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
         statement_spans.extend(correspondence.statement_spans().iter().map(|span| {
             ExactFinalizerStatementV1 {
+                correspondence_owner: function_layouts
+                    .first()
+                    .map_or(span.semantic_function(), |layout| {
+                        layout.correspondence_owner
+                    }),
                 semantic_function: span.semantic_function(),
                 semantic_block: span.semantic_block(),
                 statement: span.statement(),
@@ -1071,17 +1269,61 @@ fn validate_exact_production_correspondence(
             }
         }));
     }
-    function_layouts.sort_unstable_by_key(|layout| layout.semantic_function);
-    if function_layouts
-        .windows(2)
-        .any(|pair| pair[0].semantic_function >= pair[1].semantic_function)
-    {
+    function_layouts
+        .sort_unstable_by_key(|layout| (layout.correspondence_owner, layout.semantic_function));
+    if function_layouts.windows(2).any(|pair| {
+        (pair[0].correspondence_owner, pair[0].semantic_function)
+            >= (pair[1].correspondence_owner, pair[1].semantic_function)
+    }) {
         return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
     }
 
-    let counts = statement_spans
-        .iter()
-        .try_fold((0_usize, 0_usize), |(statements, operations), span| {
+    let mut statement_groups = BTreeMap::new();
+    for span in &statement_spans {
+        statement_groups
+            .entry((span.semantic_function, span.semantic_block, span.statement))
+            .or_insert_with(Vec::new)
+            .push(span);
+    }
+    let mut instance_statements = Vec::new();
+    if retain_instances {
+        instance_statements
+            .try_reserve_exact(statement_spans.len())
+            .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+    }
+    for instances in statement_groups.values() {
+        let first = instances[0];
+        let first_layout = function_layouts
+            .binary_search_by_key(
+                &(first.correspondence_owner, first.semantic_function),
+                |layout| (layout.correspondence_owner, layout.semantic_function),
+            )
+            .ok()
+            .and_then(|index| function_layouts.get(index))
+            .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+        for instance in &instances[1..] {
+            let layout = function_layouts
+                .binary_search_by_key(
+                    &(instance.correspondence_owner, instance.semantic_function),
+                    |layout| (layout.correspondence_owner, layout.semantic_function),
+                )
+                .ok()
+                .and_then(|index| function_layouts.get(index))
+                .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
+            if layout.function_ordinal != first_layout.function_ordinal
+                || instance.kernel_ir_block != first.kernel_ir_block
+                || instance.first_operation != first.first_operation
+                || instance.operation_count != first.operation_count
+            {
+                return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+            }
+        }
+    }
+
+    let counts = statement_groups
+        .values()
+        .try_fold((0_usize, 0_usize), |(statements, operations), instances| {
+            let span = instances[0];
             Some((
                 statements.checked_add(1)?,
                 operations.checked_add(span.operation_count as usize)?,
@@ -1122,9 +1364,13 @@ fn validate_exact_production_correspondence(
             .map(|index| nodes_by_location[index].1)
     };
 
-    for span in &statement_spans {
+    for instances in statement_groups.values() {
+        let span = instances[0];
         let layout = function_layouts
-            .binary_search_by_key(&span.semantic_function, |layout| layout.semantic_function)
+            .binary_search_by_key(
+                &(span.correspondence_owner, span.semantic_function),
+                |layout| (layout.correspondence_owner, layout.semantic_function),
+            )
             .ok()
             .and_then(|index| function_layouts.get(index))
             .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
@@ -1203,6 +1449,19 @@ fn validate_exact_production_correspondence(
                 SemanticDebugTransformationV1::Eliminated,
                 SemanticDebugUnavailableReasonV1::Eliminated,
             )?;
+            if retain_instances {
+                for instance in instances {
+                    instance_statements.push(ProductionSemanticDebugStatementInstanceInputV1 {
+                        correspondence_owner: instance.correspondence_owner,
+                        semantic_function: instance.semantic_function,
+                        semantic_block: instance.semantic_block,
+                        statement: instance.statement,
+                        source_node: source_id,
+                        mir_node: mir_id,
+                        kir_nodes: Vec::new(),
+                    });
+                }
+            }
             continue;
         }
 
@@ -1281,8 +1540,40 @@ fn validate_exact_production_correspondence(
             SemanticDebugLayerV1::Kir,
             transformation,
         )?;
+        if retain_instances {
+            for instance in instances {
+                instance_statements.push(ProductionSemanticDebugStatementInstanceInputV1 {
+                    correspondence_owner: instance.correspondence_owner,
+                    semantic_function: instance.semantic_function,
+                    semantic_block: instance.semantic_block,
+                    statement: instance.statement,
+                    source_node: source_id,
+                    mir_node: mir_id,
+                    kir_nodes: bounded_copy_identities(&kir_ids)?,
+                });
+            }
+        }
     }
-    Ok(())
+    if !retain_instances {
+        return Ok(None);
+    }
+    let mut instance_functions = Vec::new();
+    instance_functions
+        .try_reserve_exact(function_layouts.len())
+        .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+    for layout in function_layouts {
+        instance_functions.push(ProductionSemanticDebugFunctionInstanceInputV1 {
+            correspondence_owner: layout.correspondence_owner,
+            semantic_function: layout.semantic_function,
+            kernel_ir_function_ordinal: u32::try_from(layout.function_ordinal)
+                .map_err(|_| FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?,
+            role: layout.instance_role,
+        });
+    }
+    Ok(Some(ReplayedProductionSemanticDebugInstancesV1 {
+        functions: instance_functions,
+        statements: instance_statements,
+    }))
 }
 
 fn exact_block_ordinals_v1(
@@ -1426,6 +1717,9 @@ fn admit_with_entry_sizes_and_status(
         document,
         graph_indices,
         transformation_map_v2: None,
+        instance_custody_v1: ProductionSemanticDebugInstanceCustodyAvailabilityV1::Unavailable(
+            ProductionSemanticDebugInstanceCustodyUnavailableV1::CorrespondenceUnavailable,
+        ),
     })
 }
 
@@ -1536,6 +1830,7 @@ pub enum FinalizedSemanticDebugMapErrorV1 {
     CorrespondenceIdentityMismatch,
     InvalidSemanticCorrespondence,
     TransformationMapV2(SemanticDebugTransformationMapErrorV2),
+    InstanceCustodyV1(ProductionSemanticDebugInstanceCustodyErrorV1),
     ArtifactInspection,
     AllocationFailure,
 }
@@ -1554,6 +1849,7 @@ impl Error for FinalizedSemanticDebugMapErrorV1 {
         match self {
             Self::SemanticMap(error) => Some(error),
             Self::TransformationMapV2(error) => Some(error),
+            Self::InstanceCustodyV1(error) => Some(error),
             Self::ProductionFragment(error) => Some(error),
             Self::ProductionAssociation
             | Self::ProductionAssociationMismatch
@@ -1678,6 +1974,12 @@ mod tests {
         assert!(!admitted.validates_all_input_axes());
         assert!(!admitted.authenticates_compiler_execution());
         assert!(!admitted.grants_load_authority());
+        assert!(matches!(
+            admitted.instance_custody_v1(),
+            ProductionSemanticDebugInstanceCustodyAvailabilityV1::Unavailable(
+                ProductionSemanticDebugInstanceCustodyUnavailableV1::CorrespondenceUnavailable
+            )
+        ));
 
         let mut substituted = artifact.to_vec();
         substituted[0] ^= 1;
@@ -1813,6 +2115,12 @@ mod tests {
             FinalizedSemanticDebugMapAdmissionStatusV1::ExactInputsAndArtifact
         );
         assert!(admitted.validates_all_input_axes());
+        assert!(matches!(
+            admitted.instance_custody_v1(),
+            ProductionSemanticDebugInstanceCustodyAvailabilityV1::Unavailable(
+                ProductionSemanticDebugInstanceCustodyUnavailableV1::CorrespondenceUnavailable
+            )
+        ));
 
         let (_, other_identity) = canonical_kir("substituted-finalizer-semantic-debug-map-test");
         let substituted_source_map = DebugSourceMapDocumentV2::new(
@@ -2234,5 +2542,48 @@ mod production_correspondence_tests {
             ),
             Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
         ));
+    }
+
+    #[test]
+    fn shared_helper_parameters_reject_swapped_different_missing_and_duplicate_bindings() {
+        let expected = BTreeMap::from([((2, 3), 20), ((2, 7), 21)]);
+        require_exact_parameter_bindings_v1(&expected, [(2, 3, 20), (2, 7, 21)]).unwrap();
+
+        for hostile in [
+            vec![(2, 3, 21), (2, 7, 20)],
+            vec![(2, 3, 20), (2, 7, 99)],
+            vec![(2, 3, 20)],
+            vec![(2, 3, 20), (2, 3, 21), (2, 7, 21)],
+        ] {
+            assert!(matches!(
+                require_exact_parameter_bindings_v1(&expected, hostile),
+                Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+            ));
+        }
+    }
+
+    #[test]
+    fn shared_physical_helper_requires_equal_parameter_bindings_across_owners() {
+        let mut retained = BTreeMap::new();
+        retain_shared_helper_parameter_bindings_v1(&mut retained, 5, 2, vec![(3, 20), (7, 21)])
+            .unwrap();
+        retain_shared_helper_parameter_bindings_v1(&mut retained, 5, 2, vec![(3, 20), (7, 21)])
+            .unwrap();
+
+        for (semantic_function, hostile) in [
+            (2, vec![(3, 21), (7, 20)]),
+            (2, vec![(3, 20)]),
+            (9, vec![(3, 20), (7, 21)]),
+        ] {
+            assert!(matches!(
+                retain_shared_helper_parameter_bindings_v1(
+                    &mut retained,
+                    5,
+                    semantic_function,
+                    hostile,
+                ),
+                Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)
+            ));
+        }
     }
 }

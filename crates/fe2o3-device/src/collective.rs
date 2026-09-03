@@ -3,11 +3,12 @@
 //! The public algorithms expose their exact shuffle, LDS, and barrier shape,
 //! while target operations remain compiler-recognized hooks that panic closed
 //! on a host or unsupported compilation path. The target-neutral workgroup
-//! profile admits only sum over `u32`, `i32`, and `f32` in one-dimensional,
-//! power-of-two workgroups no larger than 256 invocations. Its compiler
-//! expansion uses shared LDS state and a uniform acquire-release barrier phase
-//! before and after every reduction update. gfx942 retains its additional
-//! wave64-only operations as a separate compatibility contract.
+//! profile admits reduction plus inclusive and exclusive scan sum over `u32`,
+//! `i32`, and `f32` in one-dimensional, power-of-two workgroups no larger than
+//! 256 invocations. Its compiler expansion uses shared LDS state and a uniform
+//! acquire-release barrier phase before and after every tree update. gfx942
+//! retains its additional wave64-only operations as a separate compatibility
+//! contract.
 //! The bounded V1 compiler path recognizes the authenticated operations in this
 //! module. Producing and launching a code object remains a separate compiler and
 //! runtime admission boundary.
@@ -627,6 +628,40 @@ impl WorkgroupCollectives {
     ) -> T {
         let _ = (scratch, value);
         unreachable!("workgroup sum must be lowered by the authenticated fe2o3 backend")
+    }
+
+    /// Returns the inclusive prefix sum in increasing linear work-item rank.
+    ///
+    /// The geometry, LDS ownership, uniformity, type, target-binding, and
+    /// barrier requirements of [`Self::reduce_sum_portable`] apply. Integer
+    /// addition wraps at 32 bits. `f32` uses the authenticated target's strict
+    /// scalar-add policy and the fixed Hillis-Steele association recorded by
+    /// the compiler; unsupported numerical modes fail before execution.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_inclusive_scan_sum_v1"]
+    pub fn inclusive_scan_sum<T: WorkgroupCollectiveElement>(
+        &self,
+        scratch: DynamicLds<'_, T, LdsUninitialized>,
+        value: T,
+    ) -> T {
+        let _ = (scratch, value);
+        unreachable!("workgroup inclusive scan must be lowered by the authenticated fe2o3 backend")
+    }
+
+    /// Returns the exclusive prefix sum in increasing linear work-item rank.
+    ///
+    /// Rank zero receives the additive identity (`0`, `0_u32`, or positive
+    /// `0.0_f32`). All other requirements and numerical semantics match
+    /// [`Self::inclusive_scan_sum`].
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_exclusive_scan_sum_v1"]
+    pub fn exclusive_scan_sum<T: WorkgroupCollectiveElement>(
+        &self,
+        scratch: DynamicLds<'_, T, LdsUninitialized>,
+        value: T,
+    ) -> T {
+        let _ = (scratch, value);
+        unreachable!("workgroup exclusive scan must be lowered by the authenticated fe2o3 backend")
     }
 
     /// Returns compiler-authenticated authority for the current workgroup.

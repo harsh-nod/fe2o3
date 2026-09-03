@@ -56,6 +56,28 @@ fn portable_workgroup_contract<'group>(
     let _: f32 = context.reduce_sum_portable(f32_scratch, 1.0_f32);
 }
 
+fn portable_workgroup_inclusive_scan_contract<'group>(
+    context: &WorkgroupCollectives,
+    u32_scratch: DynamicLds<'group, u32>,
+    i32_scratch: DynamicLds<'group, i32>,
+    f32_scratch: DynamicLds<'group, f32>,
+) {
+    let _: u32 = context.inclusive_scan_sum(u32_scratch, 1_u32);
+    let _: i32 = context.inclusive_scan_sum(i32_scratch, -1_i32);
+    let _: f32 = context.inclusive_scan_sum(f32_scratch, 1.0_f32);
+}
+
+fn portable_workgroup_exclusive_scan_contract<'group>(
+    context: &WorkgroupCollectives,
+    u32_scratch: DynamicLds<'group, u32>,
+    i32_scratch: DynamicLds<'group, i32>,
+    f32_scratch: DynamicLds<'group, f32>,
+) {
+    let _: u32 = context.exclusive_scan_sum(u32_scratch, 1_u32);
+    let _: i32 = context.exclusive_scan_sum(i32_scratch, -1_i32);
+    let _: f32 = context.exclusive_scan_sum(f32_scratch, 1.0_f32);
+}
+
 fn main() {
     let _ = wave_contract;
     let _ = exact_wave_lds_contract;
@@ -63,4 +85,6 @@ fn main() {
     let _ = workgroup_i32_contract;
     let _ = workgroup_f32_contract;
     let _ = portable_workgroup_contract;
+    let _ = portable_workgroup_inclusive_scan_contract;
+    let _ = portable_workgroup_exclusive_scan_contract;
 }

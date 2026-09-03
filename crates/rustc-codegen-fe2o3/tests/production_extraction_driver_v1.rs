@@ -4,8 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_kernel_ir::{
-    ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugReceiptExtensionV1,
-    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapDocumentV1,
+    FunctionRole, ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugReceiptExtensionV1,
+    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapDocumentV1, decode_module_v7,
 };
 use fe2o3_verifier::{
     validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
@@ -597,6 +597,31 @@ fn proof_carrying_two_kernel_collection_reaches_exact_multi_root_target_lineage(
     let debug_map =
         SemanticDebugMapDocumentV1::from_canonical_json_bytes(fragment.pre_finalization_map())
             .expect("decode multi-root semantic debug map");
+    let module = decode_module_v7(fragment.canonical_kir_v7()).expect("decode exact KIR V7");
+    let defined_functions = module
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, function)| function.body.as_ref().map(|_| (ordinal, function.role)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        defined_functions
+            .iter()
+            .filter(|(_, role)| *role == FunctionRole::KernelEntry)
+            .count(),
+        2
+    );
+    assert_eq!(
+        defined_functions
+            .iter()
+            .filter(|(_, role)| *role == FunctionRole::InternalHelper)
+            .count(),
+        1
+    );
+    let expected_functions = defined_functions
+        .iter()
+        .map(|(ordinal, _)| u64::try_from(*ordinal).unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
     let kir_functions = debug_map
         .nodes()
         .iter()
@@ -607,7 +632,7 @@ fn proof_carrying_two_kernel_collection_reaches_exact_multi_root_target_lineage(
             _ => None,
         })
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(kir_functions, [0, 1].into_iter().collect());
+    assert_eq!(kir_functions, expected_functions);
 
     let mut queried_functions = std::collections::BTreeSet::new();
     for node in debug_map.nodes() {
@@ -650,7 +675,7 @@ fn proof_carrying_two_kernel_collection_reaches_exact_multi_root_target_lineage(
         }
         queried_functions.insert(function_ordinal);
     }
-    assert_eq!(queried_functions, [0, 1].into_iter().collect());
+    assert_eq!(queried_functions, expected_functions);
 
     let llvm = std::str::from_utf8(handoff.module_handoff().module_bytes())
         .expect("proof-carrying module is LLVM text");

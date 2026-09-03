@@ -83,8 +83,14 @@ fn main() {
     assert_marker::<__fe2o3_kernel_marker_assembly_declared>();
     assert_marker::<__fe2o3_kernel_marker_structured_control_flow>();
     assert_marker::<__fe2o3_kernel_marker_optional_raw_u32_control>();
-    assert_eq!(optional_raw_u32_control(0), 0);
-    assert_eq!(optional_raw_u32_control(4), 8);
+    assert_eq!(
+        <__fe2o3_kernel_marker_optional_raw_u32_control as KernelMarkerV1>::FUNCTION(0),
+        0
+    );
+    assert_eq!(
+        <__fe2o3_kernel_marker_optional_raw_u32_control as KernelMarkerV1>::FUNCTION(4),
+        8
+    );
     assert_marker::<__fe2o3_kernel_marker_literal_for_unroll>();
     assert_eq!(
         <__fe2o3_kernel_marker_literal_for_unroll as KernelMarkerV1>::FUNCTION(10),
