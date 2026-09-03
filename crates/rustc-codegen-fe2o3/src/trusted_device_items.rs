@@ -19,7 +19,9 @@ use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::mir::{BinOp, Operand, Rvalue, StatementKind, TerminatorKind, UnwindAction};
+use rustc_middle::mir::{
+    BinOp, Body, Operand, Rvalue, StatementKind, TerminatorKind, UnwindAction,
+};
 use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, TypingEnv, UintTy};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
@@ -2184,26 +2186,166 @@ fn reviewed_safe_core_f32_is_finite_body_v1<'tcx>(
     instance: Instance<'tcx>,
 ) -> bool {
     let body = tcx.instance_mir(instance.def);
+    reviewed_safe_core_f32_is_finite_route_body_v1(tcx, body)
+        || reviewed_safe_core_f32_is_finite_optimized_body_v1(tcx, body)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+    argument_count: usize,
+    local_count: usize,
+    block_count: usize,
+    source_scope_count: usize,
+    exact_local_types: bool,
+    root_scope_not_inlined: bool,
+    entry_has_no_statements: bool,
+    exact_abs_callee: bool,
+    copies_input: bool,
+    writes_absolute_temporary: bool,
+    comparison_target: bool,
+    unwind_unreachable: bool,
+    exact_less_than_infinity: bool,
+    returns_result: bool,
+}
+
+fn authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1(
+    contract: ReviewedSafeCoreF32IsFiniteRouteBodyContractV1,
+) -> bool {
+    contract.argument_count == 1
+        && contract.local_count == 3
+        && contract.block_count == 2
+        && contract.source_scope_count == 1
+        && contract.exact_local_types
+        && contract.root_scope_not_inlined
+        && contract.entry_has_no_statements
+        && contract.exact_abs_callee
+        && contract.copies_input
+        && contract.writes_absolute_temporary
+        && contract.comparison_target
+        && contract.unwind_unreachable
+        && contract.exact_less_than_infinity
+        && contract.returns_result
+}
+
+// Production and engineering extraction disable MIR inlining. Bind the exact
+// retained wrapper before treating its unavailable cross-crate HIR as safe.
+fn reviewed_safe_core_f32_is_finite_route_body_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> bool {
+    let mut locals = body.local_decls.iter();
+    let exact_local_types = matches!(locals.next(), Some(result) if matches!(result.ty.kind(), TyKind::Bool))
+        && matches!(locals.next(), Some(input) if matches!(input.ty.kind(), TyKind::Float(FloatTy::F32)))
+        && matches!(locals.next(), Some(absolute) if matches!(absolute.ty.kind(), TyKind::Float(FloatTy::F32)))
+        && locals.next().is_none();
+    let mut scopes = body.source_scopes.iter();
+    let root_scope_not_inlined =
+        matches!(scopes.next(), Some(scope) if scope.inlined.is_none()) && scopes.next().is_none();
+
+    let mut blocks = body.basic_blocks.iter();
+    let Some(entry) = blocks.next() else {
+        return false;
+    };
+    let Some(comparison) = blocks.next() else {
+        return false;
+    };
+    if blocks.next().is_some() {
+        return false;
+    }
+    let Some(entry_terminator) = &entry.terminator else {
+        return false;
+    };
+    let TerminatorKind::Call {
+        func,
+        args,
+        destination,
+        target,
+        unwind,
+        ..
+    } = &entry_terminator.kind
+    else {
+        return false;
+    };
+    let Some(target) = target else {
+        return false;
+    };
+    let Operand::Constant(function) = func else {
+        return false;
+    };
+    let TyKind::FnDef(def_id, arguments) = function.const_.ty().kind() else {
+        return false;
+    };
+    let Ok(Some(abs)) =
+        Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, arguments)
+    else {
+        return false;
+    };
+    let exact_abs_callee = authenticate_reviewed_safe_core_fabs_f32_helper_v1(tcx, abs);
+
+    let [statement] = comparison.statements.as_slice() else {
+        return false;
+    };
+    let StatementKind::Assign(assignment) = &statement.kind else {
+        return false;
+    };
+    let (result, rvalue) = &**assignment;
+    let Rvalue::BinaryOp(BinOp::Lt, operands) = rvalue else {
+        return false;
+    };
+    let (absolute, infinity) = &**operands;
+    let Operand::Constant(infinity) = infinity else {
+        return false;
+    };
+    let exact_less_than_infinity = result.local.as_usize() == 0
+        && result.projection.is_empty()
+        && matches!(absolute, Operand::Move(place) if place.local.as_usize() == 2 && place.projection.is_empty())
+        && matches!(infinity.const_.ty().kind(), TyKind::Float(FloatTy::F32))
+        && infinity
+            .const_
+            .try_eval_bits(tcx, TypingEnv::fully_monomorphized())
+            == Some(u128::from(f32::INFINITY.to_bits()));
+
+    authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1(
+        ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+            argument_count: body.arg_count,
+            local_count: body.local_decls.len(),
+            block_count: body.basic_blocks.len(),
+            source_scope_count: body.source_scopes.len(),
+            exact_local_types,
+            root_scope_not_inlined,
+            entry_has_no_statements: entry.statements.is_empty(),
+            exact_abs_callee,
+            copies_input: matches!(&args[..], [argument] if matches!(&argument.node, Operand::Copy(place) if place.local.as_usize() == 1 && place.projection.is_empty())),
+            writes_absolute_temporary: destination.local.as_usize() == 2
+                && destination.projection.is_empty(),
+            comparison_target: target.index() == 1,
+            unwind_unreachable: matches!(unwind, UnwindAction::Unreachable),
+            exact_less_than_infinity,
+            returns_result: matches!(
+                comparison.terminator.as_ref().map(|term| &term.kind),
+                Some(TerminatorKind::Return)
+            ),
+        },
+    )
+}
+
+// An independently closed form covers opt3 extraction tests, where rustc
+// inlines `f32::abs` but retains its exact core instance in the source scope.
+fn reviewed_safe_core_f32_is_finite_optimized_body_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> bool {
     if body.arg_count != 1 || body.local_decls.len() != 3 || body.basic_blocks.len() != 2 {
         return false;
     }
     let mut locals = body.local_decls.iter();
-    let Some(result) = locals.next() else {
-        return false;
-    };
-    let Some(input) = locals.next() else {
-        return false;
-    };
-    let Some(absolute) = locals.next() else {
-        return false;
-    };
-    if !matches!(result.ty.kind(), TyKind::Bool)
-        || !matches!(input.ty.kind(), TyKind::Float(FloatTy::F32))
-        || !matches!(absolute.ty.kind(), TyKind::Float(FloatTy::F32))
+    if !matches!(locals.next(), Some(result) if matches!(result.ty.kind(), TyKind::Bool))
+        || !matches!(locals.next(), Some(input) if matches!(input.ty.kind(), TyKind::Float(FloatTy::F32)))
+        || !matches!(locals.next(), Some(absolute) if matches!(absolute.ty.kind(), TyKind::Float(FloatTy::F32)))
+        || locals.next().is_some()
     {
         return false;
     }
-
     let mut scopes = body.source_scopes.iter();
     let Some(root_scope) = scopes.next() else {
         return false;
@@ -2882,10 +3024,12 @@ mod tests {
     use super::{
         CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
         ReviewedProviderSemanticDefinitionV1, ReviewedSafeCoreF32IsFiniteContractV1,
-        TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
-        TrustedHalfOperation, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        ReviewedSafeCoreF32IsFiniteRouteBodyContractV1, TrustedAmdGpuDiagnosticOperation,
+        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedHalfOperation,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         authenticate_reviewed_safe_core_f32_is_finite_contract_v1,
+        authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1,
         canonical_compiler_definition_path, exact_provider_compiler_definition_path_v1,
         pinned_core_semantic_terminal_identity_v1,
         reviewed_provider_source_closure_from_definition,
@@ -2971,6 +3115,91 @@ mod tests {
             assert!(
                 !authenticate_reviewed_safe_core_f32_is_finite_contract_v1(hostile),
                 "hostile near-name/provider/kind/generic/body/ABI/type mutation was admitted: {hostile:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn safe_core_f32_is_finite_route_body_contract_is_exact_and_closed() {
+        let reviewed = ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+            argument_count: 1,
+            local_count: 3,
+            block_count: 2,
+            source_scope_count: 1,
+            exact_local_types: true,
+            root_scope_not_inlined: true,
+            entry_has_no_statements: true,
+            exact_abs_callee: true,
+            copies_input: true,
+            writes_absolute_temporary: true,
+            comparison_target: true,
+            unwind_unreachable: true,
+            exact_less_than_infinity: true,
+            returns_result: true,
+        };
+        assert!(authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1(reviewed));
+
+        for hostile in [
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                argument_count: 2,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                local_count: 4,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                block_count: 3,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                source_scope_count: 2,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                exact_local_types: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                root_scope_not_inlined: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                entry_has_no_statements: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                exact_abs_callee: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                copies_input: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                writes_absolute_temporary: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                comparison_target: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                unwind_unreachable: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                exact_less_than_infinity: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+                returns_result: false,
+                ..reviewed
+            },
+        ] {
+            assert!(
+                !authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1(hostile),
+                "hostile route-form call/type/body/CFG mutation was admitted: {hostile:?}",
             );
         }
     }

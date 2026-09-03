@@ -250,33 +250,52 @@ fn rustc_fabs_f32_reaches_exact_llvm_intrinsic() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn exact_core_f32_is_finite_wrapper_reaches_fabs_and_float_compare() {
-    let target = ScratchTarget::new();
-    let llvm_output = target.path().join("is-finite-fabs-f32.ll");
-    let output = run_llvm_extraction_command(&target, "is-finite-fabs-f32", &llvm_output);
-    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
-    assert!(
-        output.status.success(),
-        "exact core f32::is_finite -> f32::abs -> fabs::<f32> extraction failed:\n{stderr}"
-    );
-    let llvm = std::fs::read_to_string(&llvm_output).expect("read is-finite/fabs LLVM observation");
-    assert!(
-        llvm.contains("define amdgpu_kernel void @is_finite_fabs_f32(")
-            && llvm.contains("declare float @llvm.fabs.f32(float)")
-            && llvm.contains("call float @llvm.fabs.f32(float")
-            && llvm.contains("fcmp olt float"),
-        "is-finite/fabs extraction omitted the exact reviewed chain:\n{llvm}",
-    );
-    assert!(!llvm.contains("@llvm.fabs.f64"));
-    for forbidden in [
-        "cannot authenticate the absence of user-provided unsafe blocks",
-        "unsupported rustc compiler intrinsic",
-        "semantic importer rejected complete semantic MIR",
-        "semantic importer rejected semantic body construction",
+    for (profile, target_rustflags) in [
+        (
+            "engineering-route",
+            "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack",
+        ),
+        (
+            "optimized",
+            "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        ),
     ] {
-        assert!(
-            !stderr.contains(forbidden),
-            "exact core f32::is_finite chain entered forbidden path {forbidden:?}:\n{stderr}",
+        let target = ScratchTarget::new();
+        let llvm_output = target
+            .path()
+            .join(format!("is-finite-fabs-f32-{profile}.ll"));
+        let output = run_llvm_extraction_command_with_rustflags(
+            &target,
+            "is-finite-fabs-f32",
+            &llvm_output,
+            target_rustflags,
         );
+        let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+        assert!(
+            output.status.success(),
+            "{profile} core f32::is_finite -> f32::abs -> fabs::<f32> extraction failed:\n{stderr}"
+        );
+        let llvm =
+            std::fs::read_to_string(&llvm_output).expect("read is-finite/fabs LLVM observation");
+        assert!(
+            llvm.contains("define amdgpu_kernel void @is_finite_fabs_f32(")
+                && llvm.contains("declare float @llvm.fabs.f32(float)")
+                && llvm.contains("call float @llvm.fabs.f32(float")
+                && llvm.contains("fcmp olt float"),
+            "{profile} is-finite/fabs extraction omitted the exact reviewed chain:\n{llvm}",
+        );
+        assert!(!llvm.contains("@llvm.fabs.f64"));
+        for forbidden in [
+            "cannot authenticate the absence of user-provided unsafe blocks",
+            "unsupported rustc compiler intrinsic",
+            "semantic importer rejected complete semantic MIR",
+            "semantic importer rejected semantic body construction",
+        ] {
+            assert!(
+                !stderr.contains(forbidden),
+                "{profile} core f32::is_finite chain entered forbidden path {forbidden:?}:\n{stderr}",
+            );
+        }
     }
 }
 
@@ -707,6 +726,20 @@ fn run_llvm_extraction_command(
     feature: &str,
     llvm_output: &Path,
 ) -> std::process::Output {
+    run_llvm_extraction_command_with_rustflags(
+        target,
+        feature,
+        llvm_output,
+        "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    )
+}
+
+fn run_llvm_extraction_command_with_rustflags(
+    target: &ScratchTarget,
+    feature: &str,
+    llvm_output: &Path,
+    target_rustflags: &str,
+) -> std::process::Output {
     let mut command = Command::new(env!("CARGO"));
     command
         .current_dir(workspace())
@@ -723,10 +756,7 @@ fn run_llvm_extraction_command(
         .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .env(
-            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
-        )
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", target_rustflags)
         .args([
             "check",
             "--locked",
