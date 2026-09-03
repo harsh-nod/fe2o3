@@ -1,9 +1,34 @@
 # cargo-fe2o3
 
-`cargo-fe2o3` coordinates fe2o3 build, binding-only host
-checks/tests, inspection, and debugging workflows.
+`cargo-fe2o3` coordinates fe2o3 builds, binding-aware host checks, Clippy,
+tests, inspection, and debugging workflows.
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
+
+## Typed-kernel commands
+
+The supported author form is `#[kernel(typed)]`. Authors do not provide a hash
+to namespace the kernel. The wrapper derives a crate binding from the Cargo
+crate name and ordered rustc metadata, and the macro derives the kernel binding
+from that value plus the kernel profile, logical name, and export name.
+
+```text
+cargo fe2o3 check --all-targets
+cargo fe2o3 clippy --all-targets -- -D warnings
+cargo fe2o3 test --all-targets
+cargo fe2o3 build
+```
+
+`check`, `clippy`, and `test` use a sealed, authority-free host wrapper. Clippy
+uses the selected toolchain's pinned `clippy-driver`; `--fix` is rejected
+because the checked source projection is immutable. `test` requires exact
+`--all-targets`. None of these host commands grants backend, HSACO,
+publication, GPU, or performance-evidence authority. `build` is the production
+device compilation route.
+
+Explicit namespace syntax is retained as an internal compatibility hook for
+compiler and adversarial fixtures. It is not a public authoring workflow and
+does not establish authenticity.
 
 ## Protected authority release
 

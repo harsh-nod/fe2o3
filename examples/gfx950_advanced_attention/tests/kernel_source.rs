@@ -64,7 +64,7 @@ fn source_contains_the_eight_expected_typed_kernels() {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(attributes.contains("typed"));
-        assert!(attributes.contains("namespace"));
+        assert!(!attributes.contains("namespace"));
         assert!(attributes.contains("required = [64 , 1 , 1]"));
         assert!(attributes.contains("max = [64 , 1 , 1]"));
         assert!(attributes.contains("max_grid = [1 , 1 , 1]"));

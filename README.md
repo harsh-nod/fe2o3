@@ -29,6 +29,39 @@ artifact, runtime, and proof boundaries described below. See the
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
 hardware execution lanes.
 
+## Typed kernel authoring
+
+Kernel authors write `#[kernel(typed)]`; they do not choose or maintain a
+namespace hash:
+
+```rust
+#[kernel(typed)]
+pub fn saxpy(x: &[f32], mut y: DisjointSlice<f32>, alpha: f32) {
+    let index = thread::index_1d();
+    if index < x.len() && index < y.len() {
+        let output = y.get_mut(index);
+        *output = alpha * x[index] + *output;
+    }
+}
+```
+
+Run the package through `cargo-fe2o3` so the compiler can derive its binding
+from Cargo's crate name and ordered rustc metadata:
+
+```text
+cargo fe2o3 check --all-targets
+cargo fe2o3 clippy --all-targets -- -D warnings
+cargo fe2o3 test --all-targets
+cargo fe2o3 build
+```
+
+The first three commands are authority-free host workflows. `build` enters the
+production GPU compiler path. Binding hashes shown in compiler evidence are
+outputs for reproducibility and cross-stage identity joins, not source syntax
+for an author to invent or copy. An explicit namespace remains accepted only
+for compiler compatibility and adversarial fixtures; public kernels must use
+the compiler-derived form.
+
 CPU-only source extraction is available through the explicit, authority-free
 [`fe2o3-export-sim` bundle workflow](docs/simulation-bundle-v1.md). It reuses
 the production source/MIR/KIR stages under extraction-only custody, records

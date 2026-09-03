@@ -224,7 +224,6 @@ fn kda_update_v1(
 ))]
 #[kernel(
     typed,
-    namespace = "1bb95ea1c1a6dba00f16cefba570323638c550b4df1192d82c45817088520f10",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(
@@ -327,7 +326,6 @@ pub fn gfx950_kda_gdn_decode(
     not(feature = "kernel-kda-prefill-channel-mask-v1"),
     kernel(
         typed,
-        namespace = "65c813046838ac237dbc845ddb78d0b61db8c031914908a6a0a1304a338e68c0",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -335,7 +333,6 @@ pub fn gfx950_kda_gdn_decode(
     feature = "kernel-kda-prefill-channel-mask-v1",
     kernel(
         typed,
-        namespace = "a615c0a65c792796355f0c284c3964ec7f3a5485546a907d5b6e1876ec240a9f",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -645,7 +642,6 @@ fn deepseek_attention_score_v1(q: &[f32], k: &[f32], token: usize) -> Option<f32
     not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"),
     kernel(
         typed,
-        namespace = "8e4b6794b9080758a96900d9f3bedc81f043b9c733ce0348fd3d56ab46e4ccf7",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -653,7 +649,6 @@ fn deepseek_attention_score_v1(q: &[f32], k: &[f32], token: usize) -> Option<f32
     feature = "kernel-content-sparse-attention-reciprocal-reuse-v1",
     kernel(
         typed,
-        namespace = "f218efb0354f7130940595fdb01023c6a5ec4dfd290be3858934c069d0db78b7",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1198,7 +1193,6 @@ pub fn gfx950_content_sparse_attention(
 #[cfg(all(target_arch = "amdgpu", feature = "kernel-deepseek-sparse-attention"))]
 #[kernel(
     typed,
-    namespace = "62a1ee5804a9926ebb929061195f2229630ebdaf5a13a19d17ce7ddb4fcbbbe3",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_deepseek_sparse_attention(
@@ -1509,7 +1503,6 @@ pub fn gfx950_deepseek_sparse_attention(
     not(feature = "kernel-compressed-hybrid-attention-division-baseline-v1"),
     kernel(
         typed,
-        namespace = "c8cf1919826911b62fad830db644250616be68fd3aa252db280fb6cbf9157d3b",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1517,7 +1510,6 @@ pub fn gfx950_deepseek_sparse_attention(
     feature = "kernel-compressed-hybrid-attention-division-baseline-v1",
     kernel(
         typed,
-        namespace = "df561e677c408c086c041faff22c05436c173edc2e4f9deda3eeaca93dc2a32b",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -1766,7 +1758,6 @@ pub fn gfx950_compressed_hybrid_attention(
 ))]
 #[kernel(
     typed,
-    namespace = "0f1b91664465bf059b47aa1fda8168a1cb4901cbfb81fd4dc770184520fca412",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4, 4))
 )]
@@ -1865,7 +1856,6 @@ pub fn gfx950_attnres_aggregate(
 ))]
 #[kernel(
     typed,
-    namespace = "5a21124887ab5e89f2893f9a688ddc75efe2cf1c40dfda56be36acb530d69326",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(4))
 )]
@@ -1944,7 +1934,6 @@ pub fn gfx950_four_branch_residual(
 ))]
 #[kernel(
     typed,
-    namespace = "e2bce999a5fa1929fa89c847d6dade5511566efd3cffca3003a77d00e870fdbf",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(3))
 )]

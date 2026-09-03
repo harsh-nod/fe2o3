@@ -221,7 +221,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
         (
             "missing_namespace",
             &[
-                "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace",
+                "#[kernel(typed)] must be compiled through cargo fe2o3 build, check, test, or clippy",
             ],
         ),
         (

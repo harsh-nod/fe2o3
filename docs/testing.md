@@ -13,6 +13,21 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
+Kernel authors use `#[kernel(typed)]` without an explicit namespace. The same
+compiler-derived binding is available to every supported developer command:
+
+```text
+cargo fe2o3 check --all-targets
+cargo fe2o3 clippy --all-targets -- -D warnings
+cargo fe2o3 test --all-targets
+cargo fe2o3 build
+```
+
+The first three commands are host-only and authority-free. Clippy pins the
+selected toolchain driver and rejects `--fix`; tests require `--all-targets`.
+`build` is the production GPU compilation route. Hashes recorded in evidence
+are compiler outputs, not author-supplied macro arguments.
+
 The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest
 separates source-artifact inventory from explicit qualification authority. It
@@ -96,9 +111,19 @@ scripts/ci-local.sh workspace-test
 This is equivalent to the following required process boundary:
 
 ```text
-cargo test --locked --workspace --all-targets --exclude rustc-codegen-fe2o3
+cargo test --locked --workspace --all-targets \
+  --exclude rustc-codegen-fe2o3 \
+  --exclude fe2o3-artifact-transaction \
+  --exclude <binding-managed-example>...
+cargo fe2o3 test --locked --all-targets -p <binding-managed-example>...
 scripts/ci-local.sh rustc-codegen-test
 ```
+
+The gate computes `<binding-managed-example>` as the exact intersection of the
+manifest's Rust-tested examples and the sealed source projection, then
+revalidates that projection after testing. This keeps raw Cargo for ordinary
+workspace packages while ensuring namespace-free typed kernels never depend on
+an ambient binding.
 
 `rustc-codegen-fe2o3` has `crate-type = ["rlib", "dylib"]`. An `--all-targets`
 Cargo process can build more than one backend variant while integration tests

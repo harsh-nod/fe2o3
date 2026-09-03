@@ -19,7 +19,6 @@ use crate::{
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
 #[kernel(
     typed,
-    namespace = "bb933fcd1e3f8124227991b6743de97b6fa108551cc44c617d9450933ad98170",
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(128, 32))
 )]
@@ -195,7 +194,6 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     not(feature = "ablation-expert-serial"),
     kernel(
         typed,
-        namespace = "dad4ffb4c5c270c853b36fbb21ecc1095dcf33cf74d9585029fdce96e90d38e2",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -203,7 +201,6 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     feature = "ablation-expert-serial",
     kernel(
         typed,
-        namespace = "6de3151d7e205de375cd16a46b09c84211346b063664d0da16cd9f9b698efe2f",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -515,7 +512,6 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     not(feature = "ablation-combine-transposed"),
     kernel(
         typed,
-        namespace = "75b93b89a635855d620e2974e64c7ad6299d75329410616cdceaaabe02db89ae",
         launch(required = [256, 1, 1], max = [256, 1, 1])
     )
 )]
@@ -523,7 +519,6 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     feature = "ablation-combine-transposed",
     kernel(
         typed,
-        namespace = "8f3e0270da0acba280e5bf515bd6a4b11b5c0f615947fcf5569bc1feab92f923",
         launch(required = [256, 1, 1], max = [256, 1, 1])
     )
 )]
@@ -567,7 +562,6 @@ pub fn gfx950_combine_expert_ranks_v1(
     not(feature = "ablation-speculative-recompute-prefix"),
     kernel(
         typed,
-        namespace = "712bf821d681a74855c892c7f02fb02b2c64fe36617092999f673a1531777f8b",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -575,7 +569,6 @@ pub fn gfx950_combine_expert_ranks_v1(
     feature = "ablation-speculative-recompute-prefix",
     kernel(
         typed,
-        namespace = "bdec264337e1f6c31dec20bfe6cabbebb62ad36d413a66e8876279753c46ee26",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -711,7 +704,6 @@ pub fn gfx950_speculative_transaction_v1(
     not(feature = "ablation-ngram-reverse-probe"),
     kernel(
         typed,
-        namespace = "a9bf254981d5af7855538f611e59b2a273ed274201689cd16443b7279c327175",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -719,7 +711,6 @@ pub fn gfx950_speculative_transaction_v1(
     feature = "ablation-ngram-reverse-probe",
     kernel(
         typed,
-        namespace = "a62bfd564c731058a0a6b9f3b1b710180c36b311241a8db5e3e4be664e5cf449",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -842,7 +833,6 @@ pub fn gfx950_qwen_ngram_gather_v1(
     not(feature = "ablation-stage-tile4"),
     kernel(
         typed,
-        namespace = "487472b4b767bb11afc7a2d5bb85795b2b538c040432da4c0d5755900dd4867e",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -850,7 +840,6 @@ pub fn gfx950_qwen_ngram_gather_v1(
     feature = "ablation-stage-tile4",
     kernel(
         typed,
-        namespace = "3acc801a14754fb8c218f9aba13cbeb53c41427b68ab12bc651da79d5574f410",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -905,7 +894,6 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
     not(feature = "ablation-muon-broadcast16"),
     kernel(
         typed,
-        namespace = "9640ccf630920dc28c840f4d796dab11ddd9cebf804b0315b877e0c048eb7829",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]
@@ -913,7 +901,6 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
     feature = "ablation-muon-broadcast16",
     kernel(
         typed,
-        namespace = "6de7921154ed6a9f640c8cb2ca93cfc312b36de60ead0f02bf1157c1765ee2a9",
         launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
     )
 )]

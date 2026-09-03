@@ -85,12 +85,12 @@ no COMGR and no shell linker; it does not shell out to `clang`, `llc`, or
 ## Validation
 
 ```sh
-export FE2O3_CRATE_BINDING_ID_V1=\
-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-cargo test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml
-cargo test --release --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml
-cargo clippy --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml \
-  --all-targets -- -D warnings
+cargo fe2o3 test --locked --all-targets \
+  --manifest-path examples/workgroup_sync_v1/Cargo.toml
+cargo fe2o3 test --release --locked --all-targets \
+  --manifest-path examples/workgroup_sync_v1/Cargo.toml
+cargo fe2o3 clippy --locked --all-targets \
+  --manifest-path examples/workgroup_sync_v1/Cargo.toml -- -D warnings
 VERUS=/absolute/path/to/pinned/verus \
   examples/workgroup_sync_v1/run-verus.sh
 ```

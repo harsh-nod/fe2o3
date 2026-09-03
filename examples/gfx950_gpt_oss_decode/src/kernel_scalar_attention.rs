@@ -84,7 +84,6 @@ fn widen_bf16(bits: u16) -> f32 {
 ))]
 #[kernel(
     typed,
-    namespace = "8d28f0b43fc6168ab91cf651fa3ff0ff54911fc53053cc94e49b6d72a5cf4211",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(2880, 64, 64, 16))
 )]

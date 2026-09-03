@@ -85,6 +85,7 @@ const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const CARGO_BINDING_CHECK_WRAPPER_CHILD_FD: std::os::fd::RawFd = 200;
 const CARGO_BINDING_CHECK_PROJECTION_CHILD_FD: std::os::fd::RawFd = 201;
+const CLIPPY_DRIVER_CHILD_FD: std::os::fd::RawFd = 202;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
 const RUSTC_INVOCATION_CHILD_FD: std::os::fd::RawFd =
@@ -113,6 +114,10 @@ const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != CARGO_BINDING_T
 const _: () = assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != BACKEND_BUILD_CHILD_FD);
 const _: () =
     assert!(CARGO_BINDING_CHECK_PROJECTION_CHILD_FD != CARGO_BINDING_CHECK_WRAPPER_CHILD_FD);
+const _: () = assert!(CLIPPY_DRIVER_CHILD_FD != CARGO_BINDING_CHECK_WRAPPER_CHILD_FD);
+const _: () = assert!(CLIPPY_DRIVER_CHILD_FD != CARGO_BINDING_CHECK_PROJECTION_CHILD_FD);
+const _: () = assert!(CLIPPY_DRIVER_CHILD_FD != RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(CLIPPY_DRIVER_CHILD_FD != RUSTC_CHILD_FD);
 const _: () = assert!(
     CARGO_BINDING_CHECK_PROJECTION_CHILD_FD
         != fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1
@@ -184,6 +189,7 @@ fn main() -> ExitCode {
         Some("authority") => authority_release::command(&rest),
         Some("doctor") => doctor(),
         Some("check") => binding_host_command(BindingHostMode::Check, &rest),
+        Some("clippy") => binding_host_command(BindingHostMode::Clippy, &rest),
         Some("test") => binding_host_command(BindingHostMode::Test, &rest),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
@@ -308,11 +314,13 @@ fn clean_command(args: &[OsString]) -> ExitCode {
     }
 }
 
-/// Host checks and tests compile trusted workspace code without artifact or GPU authority. The
-/// test runner fixes tool selection and child custody; it is not a sandbox for hostile test code.
+/// Host checks, lints, and tests compile trusted workspace code without artifact or GPU authority.
+/// The test runner fixes tool selection and child custody; it is not a sandbox for hostile test
+/// code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BindingHostMode {
     Check,
+    Clippy,
     Test,
 }
 
@@ -320,6 +328,7 @@ impl BindingHostMode {
     const fn cargo_command(self) -> &'static str {
         match self {
             Self::Check => "check",
+            Self::Clippy => "clippy",
             Self::Test => "test",
         }
     }
@@ -341,6 +350,11 @@ fn binding_host_command(mode: BindingHostMode, args: &[OsString]) -> ExitCode {
 
 fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), String> {
     binding_check_wrapper::reject_prohibited_environment().map_err(|error| error.to_string())?;
+    if env::var_os(binding_check_wrapper::CLIPPY_DRIVER_ENV_V1).is_some()
+        || env::var_os("CLIPPY_ARGS").is_some()
+    {
+        return Err("binding-only host commands reject inherited Clippy configuration".to_owned());
+    }
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
     if mode.executes_tests() {
@@ -361,6 +375,13 @@ fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), S
     let project = project::CargoProject::discover(args, Some(&pinned_cargo), None, false)?;
     reject_configured_compiler_selection(&project, args, &pinned_cargo, None, false)?;
     let pinned_rustc = pin_default_rustc(&project)?;
+    let clippy_driver = if mode == BindingHostMode::Clippy {
+        Some(pin_default_clippy_driver(
+            project.invocation_dir().child_path().as_path(),
+        )?)
+    } else {
+        None
+    };
     let host_target = pinned_rustc_host_target(&pinned_rustc)?;
     if mode.executes_tests() {
         reject_configured_cargo_test_runners(&project, args, &pinned_cargo)?;
@@ -393,7 +414,17 @@ fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), S
         cargo.as_command_mut(),
         CARGO_BINDING_CHECK_PROJECTION_CHILD_FD,
     )?;
-    let mut forwarded_args = args.to_vec();
+    if let Some(driver) = &clippy_driver {
+        driver
+            .inherit_for_child_at(cargo.as_command_mut(), CLIPPY_DRIVER_CHILD_FD)
+            .map_err(|error| format!("failed to inherit the pinned Clippy driver: {error}"))?;
+    }
+    let (cargo_command, mut forwarded_args, clippy_args) = if mode == BindingHostMode::Clippy {
+        let (forwarded, clippy_args) = prepare_binding_clippy_args(args)?;
+        ("check", forwarded, Some(clippy_args))
+    } else {
+        (mode.cargo_command(), args.to_vec(), None)
+    };
     let separator = forwarded_args
         .iter()
         .position(|argument| argument == "--")
@@ -412,7 +443,7 @@ fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), S
     clear_inherited_cargo_unit_identity(cargo.as_command_mut());
     cargo
         .as_command_mut()
-        .arg(mode.cargo_command())
+        .arg(cargo_command)
         .args(&forwarded_args)
         .current_dir(project.invocation_dir().child_path())
         .env("RUSTC_WRAPPER", "")
@@ -429,6 +460,17 @@ fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), S
         .env_remove("CARGO_MANIFEST_DIR")
         .env(binding_check_wrapper::MODE_ENV_V1, "1")
         .env("FE2O3_HIP_SYS_DISABLE", "1");
+    if let Some(clippy_args) = clippy_args {
+        cargo
+            .as_command_mut()
+            .env("CLIPPY_ARGS", clippy_args)
+            .env(binding_check_wrapper::CLIPPY_DRIVER_ENV_V1, "1");
+    } else {
+        cargo
+            .as_command_mut()
+            .env_remove("CLIPPY_ARGS")
+            .env_remove(binding_check_wrapper::CLIPPY_DRIVER_ENV_V1);
+    }
     remove_dynamic_loader_environment(cargo.as_command_mut());
     configure_pinned_rustc_child(cargo.as_command_mut(), &pinned_rustc)?;
     cargo.as_command_mut().env(
@@ -475,6 +517,43 @@ fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), S
             ),
         ],
     )
+}
+
+fn prepare_binding_clippy_args(args: &[OsString]) -> Result<(Vec<OsString>, OsString), String> {
+    let separator = args.iter().position(|argument| argument == "--");
+    let cargo_end = separator.unwrap_or(args.len());
+    if args[..cargo_end].iter().any(|argument| argument == "--fix") {
+        return Err(
+            "binding-aware Clippy does not support --fix because its source projection is immutable"
+                .to_owned(),
+        );
+    }
+
+    let mut forwarded = Vec::with_capacity(cargo_end);
+    let mut clippy = Vec::new();
+    for argument in &args[..cargo_end] {
+        if argument == "--no-deps" {
+            clippy.push(argument.clone());
+        } else {
+            forwarded.push(argument.clone());
+        }
+    }
+    if let Some(separator) = separator {
+        clippy.extend_from_slice(&args[separator + 1..]);
+    }
+
+    let mut encoded = OsString::new();
+    for argument in clippy {
+        let argument = argument
+            .to_str()
+            .ok_or_else(|| "Clippy arguments must be UTF-8".to_owned())?;
+        if argument.contains("__CLIPPY_HACKERY__") {
+            return Err("Clippy argument contains its reserved separator".to_owned());
+        }
+        encoded.push(argument);
+        encoded.push("__CLIPPY_HACKERY__");
+    }
+    Ok((forwarded, encoded))
 }
 
 fn reject_binding_test_invocation_config(args: &[OsString]) -> Result<(), String> {
@@ -3330,6 +3409,32 @@ fn pin_default_cargo(
         .map_err(|error| format!("failed to pin Cargo executable: {error}"))
 }
 
+fn pin_default_clippy_driver(
+    invocation_directory: &Path,
+) -> Result<pinned_executable::PinnedExecutable, String> {
+    let resolved = binding_wrapper::resolve_command_executable(
+        OsStr::new("clippy-driver"),
+        invocation_directory,
+    )
+    .map_err(|error| format!("failed to resolve clippy-driver executable: {error}"))?;
+    let canonical = std::fs::canonicalize(&resolved)
+        .map_err(|error| format!("failed to inspect clippy-driver executable: {error}"))?;
+    let driver_path = if canonical.file_name() == Some(OsStr::new("rustup")) {
+        resolve_rustup_toolchain_tool(&canonical, invocation_directory, "clippy-driver")?
+    } else {
+        canonical
+    };
+    if driver_path.file_name() != Some(OsStr::new("clippy-driver")) {
+        return Err(format!(
+            "resolved Clippy driver has unexpected name: {}",
+            driver_path.display()
+        ));
+    }
+    pinned_executable::PinnedExecutable::open(&driver_path)
+        .and_then(|driver| driver.seal_executable_image())
+        .map_err(|error| format!("failed to pin clippy-driver executable: {error}"))
+}
+
 fn rustc_lib_tree_directory(rustc_path: &Path) -> Result<project::PinnedDirectory, String> {
     let executable_directory = rustc_path
         .parent()
@@ -3738,7 +3843,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived binding only\n  test --all-targets  run trusted binding-only host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact, HSACO, or observation metadata\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check               check host targets with compiler-derived kernel bindings\n  clippy              lint host targets with compiler-derived kernel bindings\n  test --all-targets  run trusted binding-aware host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact, HSACO, or observation metadata\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
     );
 }
 
@@ -3759,11 +3864,11 @@ mod tests {
         clear_cargo_unit_identity_names, configure_production_cargo_tool_environment,
         configure_production_target_environment, inject_binding_host_test_custody,
         is_cargo_target_runner_environment_name, normalize_invocation, parse_rocminfo_target,
-        parse_rustup_tool_path, reject_authority_configured_environment,
-        reject_authority_rustup_proxy, reject_binding_test_invocation_config,
-        reject_obsolete_codegen_pipeline, selected_run_target, source_isa_collection_hex,
-        source_isa_collection_hex_length, validate_production_cargo_inputs,
-        validate_production_compilation_environment,
+        parse_rustup_tool_path, prepare_binding_clippy_args,
+        reject_authority_configured_environment, reject_authority_rustup_proxy,
+        reject_binding_test_invocation_config, reject_obsolete_codegen_pipeline,
+        selected_run_target, source_isa_collection_hex, source_isa_collection_hex_length,
+        validate_production_cargo_inputs, validate_production_compilation_environment,
     };
     use crate::observer_telemetry;
     use crate::pinned_executable_test_directory::TestDirectory;
@@ -3823,6 +3928,7 @@ mod tests {
             "authority",
             "doctor",
             "check",
+            "clippy",
             "test",
             "build",
             "run",
@@ -3849,8 +3955,38 @@ mod tests {
     fn binding_host_modes_select_only_the_exact_cargo_command() {
         assert_eq!(BindingHostMode::Check.cargo_command(), "check");
         assert!(!BindingHostMode::Check.executes_tests());
+        assert_eq!(BindingHostMode::Clippy.cargo_command(), "clippy");
+        assert!(!BindingHostMode::Clippy.executes_tests());
         assert_eq!(BindingHostMode::Test.cargo_command(), "test");
         assert!(BindingHostMode::Test.executes_tests());
+    }
+
+    #[test]
+    fn binding_clippy_arguments_follow_the_clippy_driver_protocol() {
+        let args = [
+            OsString::from("--locked"),
+            OsString::from("--no-deps"),
+            OsString::from("-p"),
+            OsString::from("managed"),
+            OsString::from("--"),
+            OsString::from("-D"),
+            OsString::from("warnings"),
+        ];
+        let (cargo, clippy) = prepare_binding_clippy_args(&args).unwrap();
+        assert_eq!(cargo, ["--locked", "-p", "managed"].map(OsString::from));
+        assert_eq!(
+            clippy,
+            "--no-deps__CLIPPY_HACKERY__-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
+        );
+
+        assert!(prepare_binding_clippy_args(&[OsString::from("--fix")]).is_err());
+        assert!(
+            prepare_binding_clippy_args(&[
+                OsString::from("--"),
+                OsString::from("bad__CLIPPY_HACKERY__argument"),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

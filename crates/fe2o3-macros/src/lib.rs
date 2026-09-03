@@ -1028,7 +1028,7 @@ fn reconcile_crate_binding_v1(
         (None, Some(explicit)) => Ok(explicit),
         (None, None) => Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "#[kernel(typed)] requires the cargo-fe2o3 rustc wrapper or an explicit 256-bit namespace",
+            "#[kernel(typed)] must be compiled through cargo fe2o3 build, check, test, or clippy",
         )),
     }
 }
@@ -4646,7 +4646,7 @@ mod tests {
             reconcile_crate_binding_v1(None, None)
                 .unwrap_err()
                 .to_string()
-                .contains("requires the cargo-fe2o3 rustc wrapper")
+                .contains("must be compiled through cargo fe2o3")
         );
     }
 

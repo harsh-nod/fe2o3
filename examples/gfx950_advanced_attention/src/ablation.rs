@@ -17,7 +17,6 @@ const RMS_EPSILON_V1: f32 = 1.0e-5;
 #[cfg(feature = "kernel-kda-decode-wave-tiled-v1")]
 #[kernel(
     typed,
-    namespace = "8694f5eade82ca24253b385db2193a3828e5be457049e9ebfd6cc05e300abf00",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_gdn_decode(
@@ -80,7 +79,6 @@ pub fn gfx950_kda_gdn_decode(
 #[cfg(feature = "kernel-attnres-aggregate-explicit-reuse-v1")]
 #[kernel(
     typed,
-    namespace = "fe6d11c689feb27ace6afe63785978ffefe8668f0b93fa0e33b50e5185b6fb43",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_attnres_aggregate(
@@ -139,7 +137,6 @@ pub fn gfx950_attnres_aggregate(
 #[cfg(feature = "kernel-four-branch-residual-explicit-v1")]
 #[kernel(
     typed,
-    namespace = "5972789e1c05e3508b65dd3ce977460423b63b30b306e0a5d82ff4003d8b4d67",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_four_branch_residual(
@@ -182,7 +179,6 @@ pub fn gfx950_four_branch_residual(
 #[cfg(feature = "kernel-mhc-sinkhorn-mix-scalar-v1")]
 #[kernel(
     typed,
-    namespace = "0e2a561e71ced26b05bcaf0287320b4e1969b9909709417dfafb4299ecc6eb92",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(3))
 )]

@@ -23,7 +23,6 @@ use crate::contract::{
 /// rows are required to contain BF16 +0 padding.
 #[kernel(
     typed,
-    namespace = "222c78b29207fdc638c693ee6a170e728e9acd790821ca9c3d2d0b9dce183b5c",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
@@ -95,7 +94,6 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
 /// order. Dropped routes contribute zero and are not renormalized.
 #[kernel(
     typed,
-    namespace = "f26cfdf5303f4cf4f897e7408cdef56fbd1dd7947fcc64386480278a3deb0feb",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
     control_flow(loop_bounds(2))
 )]
