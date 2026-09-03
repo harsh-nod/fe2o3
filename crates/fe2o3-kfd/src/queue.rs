@@ -65,9 +65,10 @@ pub use device_content::{
 };
 
 pub use live::{
-    ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
-    ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
-    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
+    ComputeAqlQueueDestroyedV1, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
+    ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942BarrierProbeExecutionObservationV1,
     Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
     Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942DetachedFixedDispatchV1,
@@ -261,6 +262,9 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         if self.authority_poisoned {
             return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
         }
+        self.resources
+            .try_reserve(1)
+            .map_err(|_| NativeQueueAdapterErrorV1::JournalCapacity)?;
         let view = self.backend.resource_view(&authority)?;
         if view.buffers.ring_base_address == 0
             || view.buffers.write_pointer_address == 0

@@ -1,7 +1,7 @@
 //! Pure-Rust KFD implementation of the backend-neutral runtime SPI.
 //!
 //! The admitted gfx942 KFD surface owns explicit process VMs and native queues.
-//! The single-device adapter multiplexes logical streams onto one compute queue
+//! The single-device adapter owns a bounded set of independent compute queues
 //! and directional SDMA queues. The separate two-device adapter retains exact
 //! directional XGMI routes for copy-only peer execution. Neither adapter
 //! advertises atomic or collective execution.
@@ -20,18 +20,19 @@ use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_hsaco::{ArgumentAccess, ExplicitValueKind};
 use fe2o3_kfd::topology::Gfx942XgmiRouteV1;
 use fe2o3_kfd::{
-    CheckedGfx942XnackMinusDevice, ComputeAqlQueueSessionV1, DeviceSelector,
-    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
-    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
-    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
-    Gfx942DeviceMemoryUnmappedV1, Gfx942DispatchBatchV1, Gfx942DispatchBufferBindingV1,
-    Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
-    Gfx942NativeXgmiSdmaQueueV1, Gfx942RecycledDispatchWriteRequestV1, Gfx942SdmaBufferKindV1,
-    Gfx942SdmaBufferV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyTicketV1,
-    Gfx942SdmaMemoryPoolObservationV1, Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiCopyFailureV1,
-    Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1, Gfx942XgmiMappedDeviceMemoryV1,
-    Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
-    OpenedKfd, SharedGttMemorySessionV1,
+    CheckedGfx942XnackMinusDevice, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
+    ComputeAqlQueueSessionV1, DeviceSelector, GFX942_MAX_FIXED_DISPATCH_DATA_V1,
+    GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
+    Gfx942CompletedDispatchReadRequestV1, Gfx942DeviceContentDescriptorV1,
+    Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryUnmappedV1,
+    Gfx942DispatchBatchV1, Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1,
+    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942NativeXgmiSdmaQueueV1,
+    Gfx942RecycledDispatchWriteRequestV1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
+    Gfx942SdmaCopyPollV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaMemoryPoolObservationV1,
+    Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1,
+    Gfx942XgmiMapRecoveryV1, Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiSdmaCopyRequestV1,
+    Gfx942XgmiUnmapRecoveryV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd,
+    SharedGttMemorySessionV1,
 };
 use fe2o3_profiler_protocol::{
     KfdProfileAccessV1, KfdProfileBindingV1, KfdProfileHostContentV1, KfdProfileHostTimingV1,
@@ -49,6 +50,8 @@ use crate::{
 };
 
 const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
+/// Reviewed V1 bound for independently in-flight native compute queues.
+pub const KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1: usize = 2;
 const COV6_IMPLICIT_KERNARG_BYTES_V1: usize = 256;
 const WAIT_SPINS_V1: u32 = 32;
 const WAIT_YIELDS_V1: u32 = 8;
@@ -282,6 +285,7 @@ struct AllocationRecordV1 {
 
 #[derive(Clone, Copy, Debug)]
 struct NativeDirtyExtentV1 {
+    compute_lane: usize,
     data_index: usize,
     allocation_offset: usize,
     data_offset: u64,
@@ -440,6 +444,17 @@ fn launch_overlaps_active_sdma_v1<'a>(
     })
 }
 
+fn launch_overlaps_active_compute_v1<'a>(
+    bindings: &[BackendBindingV1],
+    mut active: impl Iterator<Item = &'a ActiveSubmissionV1>,
+) -> bool {
+    active.any(|submission| {
+        bindings
+            .iter()
+            .any(|binding| submission.allocations.contains(&binding.region.allocation))
+    })
+}
+
 fn native_sdma_region_is_admitted_v1(
     allocation: Option<&AllocationRecordV1>,
     device: u64,
@@ -557,6 +572,24 @@ struct RecycledDispatchV1 {
     descriptors: Vec<ResidentDataDescriptorV1>,
 }
 
+struct NativeComputeLaneRuntimeV1 {
+    owner_stream: Option<u64>,
+    active: Option<ActiveSubmissionV1>,
+    resident_data: Option<ResidentDataRosterV1>,
+    recycled_dispatch: Option<RecycledDispatchV1>,
+}
+
+impl NativeComputeLaneRuntimeV1 {
+    const fn vacant() -> Self {
+        Self {
+            owner_stream: None,
+            active: None,
+            resident_data: None,
+            recycled_dispatch: None,
+        }
+    }
+}
+
 struct PreparedLaunchV1 {
     stream: u64,
     kernel: u64,
@@ -611,8 +644,8 @@ struct OwnedAbiRowV1 {
 /// teardown. Clean implicit drop performs the same teardown and aborts if it
 /// cannot prove success; dropping live or terminal native custody also aborts.
 ///
-/// The adapter exposes multiple logical streams over one reusable compute queue
-/// and serializes compute dispatches. Live allocations retain native SDMA
+/// The adapter assigns active logical streams to at most two persistent,
+/// independently publishable compute queues. Live allocations retain native SDMA
 /// storage, and same-device asynchronous copies can wait on explicit event
 /// dependencies. One compute dispatch and SDMA copies may overlap only when
 /// their allocation sets are disjoint. An overlapping copy can wait unpublished
@@ -638,12 +671,17 @@ pub struct KfdRuntimeBackendV1 {
     modules: HashMap<u64, ModuleRecordV1>,
     kernels: HashMap<u64, KernelRecordV1>,
     submissions: HashMap<u64, SubmissionRecordV1>,
+    compute_completion_reservations: usize,
     events: HashMap<u64, EventRecordV1>,
     active: Option<ActiveSubmissionV1>,
-    active_sdma: HashMap<u64, ActiveSdmaCopyV1>,
-    sdma_dependency_retain_counts: HashMap<u64, usize>,
     resident_data: Option<ResidentDataRosterV1>,
     recycled_dispatch: Option<RecycledDispatchV1>,
+    auxiliary_compute_lanes: Vec<NativeComputeLaneRuntimeV1>,
+    native_compute_lanes: Vec<Option<ComputeAqlQueueLaneV1>>,
+    stream_compute_lanes: HashMap<u64, usize>,
+    selected_compute_lane: usize,
+    active_sdma: HashMap<u64, ActiveSdmaCopyV1>,
+    sdma_dependency_retain_counts: HashMap<u64, usize>,
     last_launch_performance: Option<KfdRuntimeLaunchPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
     staged_context_bytes: u64,
@@ -672,28 +710,27 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             .field("modules", &self.modules.len())
             .field("kernels", &self.kernels.len())
             .field("submissions", &self.submissions.len())
+            .field(
+                "compute_completion_reservations",
+                &self.compute_completion_reservations,
+            )
             .field("events", &self.events.len())
-            .field("active", &self.active)
+            .field(
+                "active_compute_lanes",
+                &(self
+                    .auxiliary_compute_lanes
+                    .iter()
+                    .filter(|lane| lane.active.is_some())
+                    .count()
+                    + usize::from(self.active.is_some())),
+            )
             .field("active_sdma", &self.active_sdma.len())
             .field(
                 "sdma_dependency_retain_counts",
                 &self.sdma_dependency_retain_counts.len(),
             )
-            .field(
-                "resident_data",
-                &self
-                    .resident_data
-                    .as_ref()
-                    .map(|resident| resident.data.len()),
-            )
+            .field("compute_lanes", &(1 + self.auxiliary_compute_lanes.len()))
             .field("last_launch_performance", &self.last_launch_performance)
-            .field(
-                "recycled_dispatch",
-                &self
-                    .recycled_dispatch
-                    .as_ref()
-                    .map(|recycled| recycled.kernel),
-            )
             .field("staged_context_bytes", &self.staged_context_bytes)
             .field("sdma_enabled", &self.sdma_enabled)
             .field("staging_budgets", &self.staging_budgets)
@@ -845,12 +882,17 @@ impl KfdRuntimeBackendV1 {
             modules: HashMap::new(),
             kernels: HashMap::new(),
             submissions: HashMap::new(),
+            compute_completion_reservations: 0,
             events: HashMap::new(),
             active: None,
-            active_sdma: HashMap::new(),
-            sdma_dependency_retain_counts: HashMap::new(),
             resident_data: None,
             recycled_dispatch: None,
+            auxiliary_compute_lanes: vec![NativeComputeLaneRuntimeV1::vacant()],
+            native_compute_lanes: vec![None; KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1],
+            stream_compute_lanes: HashMap::new(),
+            selected_compute_lane: 0,
+            active_sdma: HashMap::new(),
+            sdma_dependency_retain_counts: HashMap::new(),
             last_launch_performance: None,
             staging_budgets,
             staged_context_bytes: 0,
@@ -878,7 +920,7 @@ impl KfdRuntimeBackendV1 {
             || !self.kernels.is_empty()
             || !self.submissions.is_empty()
             || !self.events.is_empty()
-            || self.active.is_some()
+            || self.any_compute_active_v1()
             || self.queue.is_some()
         {
             return Err(Self::rejected(
@@ -909,7 +951,7 @@ impl KfdRuntimeBackendV1 {
             || !self.kernels.is_empty()
             || !self.submissions.is_empty()
             || !self.events.is_empty()
-            || self.active.is_some()
+            || self.any_compute_active_v1()
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -1052,10 +1094,151 @@ impl KfdRuntimeBackendV1 {
         self.active
             .as_ref()
             .is_some_and(|active| active.allocations.contains(&allocation))
+            || self.auxiliary_compute_lanes.iter().any(|lane| {
+                lane.active
+                    .as_ref()
+                    .is_some_and(|active| active.allocations.contains(&allocation))
+            })
             || self
                 .active_sdma
                 .values()
                 .any(|copy| copy.source == allocation || copy.destination == allocation)
+    }
+
+    fn any_compute_active_v1(&self) -> bool {
+        self.active.is_some()
+            || self
+                .auxiliary_compute_lanes
+                .iter()
+                .any(|lane| lane.active.is_some())
+    }
+
+    fn active_compute_lane_v1(&self, submission: u64) -> Option<usize> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == submission)
+        {
+            return Some(0);
+        }
+        self.auxiliary_compute_lanes
+            .iter()
+            .position(|lane| {
+                lane.active
+                    .as_ref()
+                    .is_some_and(|active| active.id == submission)
+            })
+            .map(|index| index + 1)
+    }
+
+    fn active_compute_submission_v1(&self, submission: u64) -> Option<&ActiveSubmissionV1> {
+        self.active
+            .as_ref()
+            .filter(|active| active.id == submission)
+            .or_else(|| {
+                self.auxiliary_compute_lanes
+                    .iter()
+                    .filter_map(|lane| lane.active.as_ref())
+                    .find(|active| active.id == submission)
+            })
+    }
+
+    fn compute_lane_caches_allocation_v1(&self, lane: usize, allocation: u64) -> bool {
+        let (recycled, resident) = if lane == 0 {
+            (self.recycled_dispatch.as_ref(), self.resident_data.as_ref())
+        } else {
+            let state = &self.auxiliary_compute_lanes[lane - 1];
+            (
+                state.recycled_dispatch.as_ref(),
+                state.resident_data.as_ref(),
+            )
+        };
+        recycled.is_some_and(|recycled| {
+            recycled
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.allocation == allocation)
+        }) || resident.is_some_and(|resident| {
+            resident
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.allocation == allocation)
+        })
+    }
+
+    fn release_compute_lane_cache_v1(
+        &mut self,
+        lane: usize,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.with_compute_lane_state_v1(lane, |backend| {
+            backend.detach_recycled_dispatch()?;
+            backend.release_resident_data()
+        })
+    }
+
+    fn release_all_compute_caches_for_allocation_v1(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        for lane in 0..self.native_compute_lanes.len() {
+            if self.compute_lane_caches_allocation_v1(lane, allocation) {
+                self.release_compute_lane_cache_v1(lane)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn with_compute_lane_state_v1<R>(
+        &mut self,
+        lane: usize,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if lane == 0 {
+            let prior = core::mem::replace(&mut self.selected_compute_lane, 0);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self)));
+            self.selected_compute_lane = prior;
+            return match result {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+        }
+        let index = lane - 1;
+        let auxiliary = &mut self.auxiliary_compute_lanes[index];
+        core::mem::swap(&mut self.active, &mut auxiliary.active);
+        core::mem::swap(&mut self.resident_data, &mut auxiliary.resident_data);
+        core::mem::swap(
+            &mut self.recycled_dispatch,
+            &mut auxiliary.recycled_dispatch,
+        );
+        let prior = core::mem::replace(&mut self.selected_compute_lane, lane);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self)));
+        self.selected_compute_lane = prior;
+        let auxiliary = &mut self.auxiliary_compute_lanes[index];
+        core::mem::swap(&mut self.active, &mut auxiliary.active);
+        core::mem::swap(&mut self.resident_data, &mut auxiliary.resident_data);
+        core::mem::swap(
+            &mut self.recycled_dispatch,
+            &mut auxiliary.recycled_dispatch,
+        );
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    fn selected_native_compute_lane_v1(
+        &self,
+    ) -> Result<ComputeAqlQueueLaneV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.native_compute_lanes
+            .get(self.selected_compute_lane)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "selected KFD compute queue has not been materialized",
+                )
+            })
     }
 
     fn ensure_sdma_queue_v1(
@@ -1067,7 +1250,7 @@ impl KfdRuntimeBackendV1 {
                 "native KFD SDMA is unavailable on a synthetic backend",
             ));
         }
-        if self.active.is_some() {
+        if self.any_compute_active_v1() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "cannot change native SDMA ownership while compute is pending",
@@ -1703,9 +1886,7 @@ impl KfdRuntimeBackendV1 {
                 .submissions
                 .get(&event.submission)
                 .or_else(|| {
-                    self.active
-                        .as_ref()
-                        .filter(|active| active.id == event.submission)
+                    self.active_compute_submission_v1(event.submission)
                         .map(|active| {
                             // Only status is inspected below; a pending synthetic
                             // record does not escape this call.
@@ -2026,14 +2207,18 @@ impl KfdRuntimeBackendV1 {
             profile_bindings,
             mut performance,
         } = prepared;
+        let next_completion_reservations = self
+            .compute_completion_reservations
+            .checked_add(1)
+            .ok_or_else(|| Self::capacity("KFD compute completion reservation overflow"))?;
         self.submissions
-            .try_reserve(1)
+            .try_reserve(next_completion_reservations)
             .map_err(|_| Self::capacity("KFD submission-table growth failed"))?;
         let id = self.next_id()?;
         let resident_descriptors = resident_descriptors_v1(&data)?;
 
         let native_binding_started = Instant::now();
-        let creates_native_queue = self.queue.is_none();
+        let creates_native_queue = self.native_compute_lanes[self.selected_compute_lane].is_none();
         let mut reused_attached = false;
         let reuse_attached = self.recycled_dispatch.as_ref().is_some_and(|recycled| {
             recycled_dispatch_reuse_is_admitted_v1(
@@ -2052,38 +2237,44 @@ impl KfdRuntimeBackendV1 {
                 .take()
                 .expect("admitted attached dispatch remains retained");
             let overwrite = {
+                let native_lane = self.selected_native_compute_lane_v1()?;
                 let queue = self
                     .queue
                     .as_mut()
                     .expect("recycled dispatch retains queue");
                 queue
-                    .recycled_fixed_dispatch_generation()
-                    .map_err(|error| format!("KFD recycled generation: {error}"))
-                    .and_then(|generation| {
-                        recycled
-                            .descriptors
-                            .iter()
-                            .zip(&data)
-                            .enumerate()
-                            .try_for_each(|(index, (prior, spec))| {
-                                if !prior.device_may_have_modified
-                                    && prior.host_content_sha256.is_some()
-                                    && prior.host_content_sha256 == spec.content_sha256
-                                {
-                                    return Ok(());
-                                }
-                                queue
-                                    .overwrite_recycled_fixed_dispatch_host_data(
-                                        Gfx942RecycledDispatchWriteRequestV1::new(
-                                            generation, index, 0,
-                                        ),
-                                        spec.bytes(),
-                                    )
-                                    .map_err(|error| {
-                                        format!("KFD recycled-data overwrite: {error}")
+                    .with_compute_lane_v1(native_lane, |queue| {
+                        queue
+                            .recycled_fixed_dispatch_generation()
+                            .map_err(|error| format!("KFD recycled generation: {error}"))
+                            .and_then(|generation| {
+                                recycled
+                                    .descriptors
+                                    .iter()
+                                    .zip(&data)
+                                    .enumerate()
+                                    .try_for_each(|(index, (prior, spec))| {
+                                        if !prior.device_may_have_modified
+                                            && prior.host_content_sha256.is_some()
+                                            && prior.host_content_sha256 == spec.content_sha256
+                                        {
+                                            return Ok(());
+                                        }
+                                        queue
+                                            .overwrite_recycled_fixed_dispatch_host_data(
+                                                Gfx942RecycledDispatchWriteRequestV1::new(
+                                                    generation, index, 0,
+                                                ),
+                                                spec.bytes(),
+                                            )
+                                            .map_err(|error| {
+                                                format!("KFD recycled-data overwrite: {error}")
+                                            })
                                     })
                             })
                     })
+                    .map_err(|error| format!("KFD compute-lane selection: {error}"))
+                    .and_then(core::convert::identity)
             };
             if let Err(detail) = overwrite {
                 return Err(self.terminal_error(detail));
@@ -2105,7 +2296,7 @@ impl KfdRuntimeBackendV1 {
                 kernarg,
                 buffer_bindings,
             );
-            if self.queue.is_none() {
+            if creates_native_queue && self.queue.is_none() {
                 let device = self.admitted_device.take().ok_or_else(|| {
                     Self::rejected(
                         KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -2130,53 +2321,91 @@ impl KfdRuntimeBackendV1 {
                         native_data,
                     )
                     .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
+                let primary_lane = queue.primary_compute_lane_v1();
                 self.queue = Some(queue);
+                self.native_compute_lanes[self.selected_compute_lane] = Some(primary_lane);
+            } else if creates_native_queue {
+                let mut materialization_error = None;
+                let lane = self
+                    .queue
+                    .as_mut()
+                    .expect("shared KFD queue owner exists")
+                    .create_auxiliary_compute_lane_with_fixed_dispatch(
+                        KFD_RUNTIME_RING_BYTES_V1,
+                        programs,
+                        [packet],
+                        |memory| {
+                            materialize_initial_data_v1(memory, data, signature).map_err(|detail| {
+                                materialization_error = Some(detail);
+                                fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
+                                    "KFD auxiliary data materialization",
+                                )
+                            })
+                        },
+                    )
+                    .map_err(|error| {
+                        self.terminal_error(
+                            materialization_error.unwrap_or_else(|| {
+                                format!("KFD auxiliary queue creation: {error}")
+                            }),
+                        )
+                    })?;
+                self.native_compute_lanes[self.selected_compute_lane] = Some(lane);
             } else {
                 let rebound = {
+                    let native_lane = self.selected_native_compute_lane_v1()?;
                     let queue = self.queue.as_mut().expect("checked queue");
-                    let native_data = match self.resident_data.take() {
-                        Some(mut resident)
-                            if same_resident_storage_shape_v1(
-                                &resident.descriptors,
-                                &resident_descriptors,
-                            ) && data
-                                .iter()
-                                .all(|spec| spec.kind == RuntimeMemoryKindV1::HostVisible) =>
-                        {
-                            let overwrite = resident
-                                .data
-                                .iter_mut()
-                                .zip(resident.descriptors.iter().zip(&data))
-                                .enumerate()
-                                .try_for_each(|(index, (native, (prior, spec)))| {
-                                    if !prior.device_may_have_modified
-                                        && prior.host_content_sha256.is_some()
-                                        && prior.host_content_sha256 == spec.content_sha256
-                                    {
-                                        return Ok(());
-                                    }
-                                    queue
-                                        .overwrite_detached_initialized_host_visible_fixed_dispatch_data(
-                                            index,
-                                            native,
-                                            0,
-                                            spec.bytes(),
-                                        )
-                                        .map_err(|error| {
-                                            format!("KFD resident-data overwrite: {error}")
-                                        })
-                                });
-                            overwrite.map(|()| resident.data)
-                        }
-                        Some(resident) => release_resident_data_v1(queue, resident)
-                            .and_then(|()| materialize_rebound_data_v1(queue, data, signature)),
-                        None => materialize_rebound_data_v1(queue, data, signature),
-                    };
-                    native_data.and_then(|native_data| {
-                        queue
-                            .bind_fixed_dispatch(programs, [packet], native_data)
-                            .map_err(|error| format!("KFD dispatch rebind: {error}"))
-                    })
+                    queue
+                        .with_compute_lane_v1(native_lane, |queue| {
+                            let native_data = match self.resident_data.take() {
+                                Some(mut resident)
+                                    if same_resident_storage_shape_v1(
+                                        &resident.descriptors,
+                                        &resident_descriptors,
+                                    ) && data.iter().all(|spec| {
+                                        spec.kind == RuntimeMemoryKindV1::HostVisible
+                                    }) =>
+                                {
+                                    let overwrite = resident
+                                        .data
+                                        .iter_mut()
+                                        .zip(resident.descriptors.iter().zip(&data))
+                                        .enumerate()
+                                        .try_for_each(|(index, (native, (prior, spec)))| {
+                                            if !prior.device_may_have_modified
+                                                && prior.host_content_sha256.is_some()
+                                                && prior.host_content_sha256
+                                                    == spec.content_sha256
+                                            {
+                                                return Ok(());
+                                            }
+                                            queue
+                                                .overwrite_detached_initialized_host_visible_fixed_dispatch_data(
+                                                    index,
+                                                    native,
+                                                    0,
+                                                    spec.bytes(),
+                                                )
+                                                .map_err(|error| {
+                                                    format!("KFD resident-data overwrite: {error}")
+                                                })
+                                        });
+                                    overwrite.map(|()| resident.data)
+                                }
+                                Some(resident) => release_resident_data_v1(queue, resident)
+                                    .and_then(|()| {
+                                        materialize_rebound_data_v1(queue, data, signature)
+                                    }),
+                                None => materialize_rebound_data_v1(queue, data, signature),
+                            };
+                            native_data.and_then(|native_data| {
+                                queue
+                                    .bind_fixed_dispatch(programs, [packet], native_data)
+                                    .map_err(|error| format!("KFD dispatch rebind: {error}"))
+                            })
+                        })
+                        .map_err(|error| format!("KFD compute-lane selection: {error}"))
+                        .and_then(core::convert::identity)
                 };
                 if let Err(detail) = rebound {
                     return Err(self.terminal_error(detail));
@@ -2187,7 +2416,7 @@ impl KfdRuntimeBackendV1 {
         if creates_native_queue {
             let queue = self.profile_resource_v1(
                 KfdProfileResourceKindV1::NativeQueue,
-                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1,
+                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + self.selected_compute_lane as u64,
             );
             self.observe_profile_v1(
                 queue.map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue }),
@@ -2195,11 +2424,13 @@ impl KfdRuntimeBackendV1 {
         }
 
         let publication_started = Instant::now();
+        let native_lane = self.selected_native_compute_lane_v1()?;
         let batch = self
             .queue
             .as_mut()
             .expect("queue was created or rebound")
-            .submit_fixed_dispatch::<1>()
+            .with_compute_lane_v1(native_lane, |queue| queue.submit_fixed_dispatch::<1>())
+            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?
             .map_err(|error| self.terminal_error(format!("KFD dispatch publication: {error}")))?;
         performance.publication = publication_started.elapsed();
         let published_at = Instant::now();
@@ -2215,10 +2446,11 @@ impl KfdRuntimeBackendV1 {
             performance,
             batch: Some(batch),
         });
+        self.compute_completion_reservations = next_completion_reservations;
         let profile_dispatch = self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, id);
         let profile_queue = self.profile_resource_v1(
             KfdProfileResourceKindV1::NativeQueue,
-            KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1,
+            KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + self.selected_compute_lane as u64,
         );
         let profile_stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, stream);
         let profile_kernel = self.profile_resource_v1(KfdProfileResourceKindV1::Kernel, kernel);
@@ -2253,6 +2485,8 @@ impl KfdRuntimeBackendV1 {
         completed: fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         active.performance.publish_to_completion = active.published_at.elapsed();
+        let compute_lane = self.selected_compute_lane;
+        let native_lane = self.selected_native_compute_lane_v1()?;
         let native_result = (|| -> Result<_, String> {
             let queue = self
                 .queue
@@ -2260,7 +2494,8 @@ impl KfdRuntimeBackendV1 {
                 .expect("active submission retains queue");
             let recycle_started = Instant::now();
             queue
-                .recycle_fixed_dispatch(completed)
+                .with_compute_lane_v1(native_lane, |queue| queue.recycle_fixed_dispatch(completed))
+                .map_err(|error| format!("KFD compute-lane selection: {error}"))?
                 .map_err(|error| format!("KFD completion recycle: {error}"))?;
             let initial_recycle = recycle_started.elapsed();
             Ok(initial_recycle)
@@ -2278,6 +2513,7 @@ impl KfdRuntimeBackendV1 {
                 .expect("active allocation remains retained");
             record.content_sha256 = None;
             record.native_dirty.push(NativeDirtyExtentV1 {
+                compute_lane,
                 data_index: writeback.data_index,
                 allocation_offset: writeback.allocation_offset,
                 data_offset: writeback.data_offset,
@@ -2301,6 +2537,10 @@ impl KfdRuntimeBackendV1 {
                 status,
             },
         );
+        self.compute_completion_reservations = self
+            .compute_completion_reservations
+            .checked_sub(1)
+            .expect("published compute reserves one completion slot");
         self.last_launch_performance = Some(active.performance);
         let profile_dispatch =
             self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, active.id);
@@ -2366,9 +2606,10 @@ impl KfdRuntimeBackendV1 {
             || !self.submissions.is_empty()
             || !self.modules.is_empty()
             || !self.allocations.is_empty()
-            || self.active.is_some()
+            || self.any_compute_active_v1()
             || !self.active_sdma.is_empty()
             || !self.sdma_dependency_retain_counts.is_empty()
+            || self.compute_completion_reservations != 0
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -2377,6 +2618,12 @@ impl KfdRuntimeBackendV1 {
         }
         self.detach_recycled_dispatch()?;
         self.release_resident_data()?;
+        for lane in 1..self.native_compute_lanes.len() {
+            self.with_compute_lane_state_v1(lane, |backend| {
+                backend.detach_recycled_dispatch()?;
+                backend.release_resident_data()
+            })?;
+        }
         if self.sdma_enabled {
             let trimmed = self
                 .queue
@@ -2387,10 +2634,40 @@ impl KfdRuntimeBackendV1 {
                 self.terminal_error(format!("KFD SDMA memory-pool trim: {error}"))
             })?;
         }
-        let profile_queue = self.queue.as_ref().and_then(|_| {
+        for index in 0..self.native_compute_lanes.len() {
+            let Some(native_lane) = self.native_compute_lanes[index] else {
+                continue;
+            };
+            if native_lane.ordinal() == 0 {
+                continue;
+            }
+            let result = self
+                .queue
+                .as_mut()
+                .expect("auxiliary queue retains its shared owner")
+                .destroy_auxiliary_compute_lane_v1(native_lane);
+            if let Err(error) = result {
+                return Err(
+                    self.terminal_error(format!("explicit auxiliary KFD queue teardown: {error}"))
+                );
+            }
+            let profile_queue = self.profile_resource_v1(
+                KfdProfileResourceKindV1::NativeQueue,
+                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + index as u64,
+            );
+            self.observe_profile_v1(
+                profile_queue
+                    .map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue }),
+            );
+        }
+        let primary_logical_lane = self
+            .native_compute_lanes
+            .iter()
+            .position(|lane| lane.is_some_and(|lane| lane.ordinal() == 0));
+        let profile_queue = primary_logical_lane.and_then(|lane| {
             self.profile_resource_v1(
                 KfdProfileResourceKindV1::NativeQueue,
-                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1,
+                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + lane as u64,
             )
         });
         if let Some(queue) = self.queue.take() {
@@ -2403,6 +2680,7 @@ impl KfdRuntimeBackendV1 {
             );
         }
         self.admitted_device.take();
+        self.native_compute_lanes.fill(None);
         self.queue_retired = true;
         Ok(())
     }
@@ -2411,18 +2689,36 @@ impl KfdRuntimeBackendV1 {
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if self.recycled_dispatch.is_some() {
-            self.synchronize_all_native_allocations_v1()?;
+            let lane = self.selected_compute_lane;
+            let mut dirty = Vec::new();
+            dirty
+                .try_reserve_exact(self.allocations.len())
+                .map_err(|_| Self::capacity("KFD native-dirty synchronization roster failed"))?;
+            dirty.extend(self.allocations.iter().filter_map(|(allocation, record)| {
+                record
+                    .native_dirty
+                    .iter()
+                    .any(|extent| extent.compute_lane == lane)
+                    .then_some(*allocation)
+            }));
+            for allocation in dirty {
+                self.synchronize_native_allocation_lane_v1(allocation, lane)?;
+            }
         }
         let Some(recycled) = self.recycled_dispatch.take() else {
             return Ok(());
         };
+        let native_lane = self.selected_native_compute_lane_v1()?;
         let result = self
             .queue
             .as_mut()
             .ok_or_else(|| "KFD recycled dispatch exists without a native queue".to_owned())
             .and_then(|queue| {
                 queue
-                    .detach_recycled_fixed_dispatch()
+                    .with_compute_lane_v1(native_lane, |queue| {
+                        queue.detach_recycled_fixed_dispatch()
+                    })
+                    .map_err(|error| format!("KFD compute-lane selection: {error}"))?
                     .map_err(|error| format!("KFD recycled dispatch detach: {error}"))
             });
         match result {
@@ -2437,33 +2733,24 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn synchronize_all_native_allocations_v1(
-        &mut self,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let mut dirty = Vec::new();
-        dirty
-            .try_reserve_exact(self.allocations.len())
-            .map_err(|_| Self::capacity("KFD native-dirty synchronization roster failed"))?;
-        dirty.extend(self.allocations.iter().filter_map(|(allocation, record)| {
-            (!record.native_dirty.is_empty()).then_some(*allocation)
-        }));
-        for allocation in dirty {
-            self.synchronize_native_allocation_v1(allocation)?;
-        }
-        Ok(())
-    }
-
     fn release_resident_data(
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let Some(resident) = self.resident_data.take() else {
             return Ok(());
         };
+        let native_lane = self.selected_native_compute_lane_v1()?;
         let result = self
             .queue
             .as_mut()
             .ok_or_else(|| "KFD resident data exists without a native queue".to_owned())
-            .and_then(|queue| release_resident_data_v1(queue, resident));
+            .and_then(|queue| {
+                queue
+                    .with_compute_lane_v1(native_lane, |queue| {
+                        release_resident_data_v1(queue, resident)
+                    })
+                    .map_err(|error| format!("KFD compute-lane selection: {error}"))?
+            });
         match result {
             Ok(()) => Ok(()),
             Err(detail) => Err(self.terminal_error(detail)),
@@ -2474,7 +2761,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let dirty = self
+        let dirty_lanes = self
             .allocations
             .get(&allocation)
             .ok_or_else(|| {
@@ -2484,7 +2771,40 @@ impl KfdRuntimeBackendV1 {
                 )
             })?
             .native_dirty
-            .clone();
+            .iter()
+            .fold(
+                [false; KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1],
+                |mut lanes, extent| {
+                    if let Some(lane) = lanes.get_mut(extent.compute_lane) {
+                        *lane = true;
+                    }
+                    lanes
+                },
+            );
+        for (lane, dirty) in dirty_lanes.into_iter().enumerate() {
+            if dirty {
+                self.with_compute_lane_state_v1(lane, |backend| {
+                    backend.synchronize_native_allocation_lane_v1(allocation, lane)
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn synchronize_native_allocation_lane_v1(
+        &mut self,
+        allocation: u64,
+        compute_lane: usize,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let dirty: Vec<_> = self
+            .allocations
+            .get(&allocation)
+            .expect("validated allocation remains indexed")
+            .native_dirty
+            .iter()
+            .filter(|extent| extent.compute_lane == compute_lane)
+            .copied()
+            .collect();
         if dirty.is_empty() {
             return Ok(());
         }
@@ -2506,30 +2826,40 @@ impl KfdRuntimeBackendV1 {
             );
         }
         let native_result = {
+            let native_lane = self.selected_native_compute_lane_v1()?;
             let queue = self
                 .queue
                 .as_mut()
                 .expect("native-dirty allocation retains its queue");
             queue
-                .recycled_fixed_dispatch_generation()
-                .map_err(|error| format!("KFD recycled generation before readback: {error}"))
-                .and_then(|generation| {
-                    dirty
-                        .iter()
-                        .map(|extent| {
-                            queue
-                                .read_recycled_fixed_dispatch_data(
-                                    Gfx942CompletedDispatchReadRequestV1::new(
-                                        generation,
-                                        extent.data_index,
-                                        extent.data_offset,
-                                        extent.byte_len,
-                                    ),
-                                )
-                                .map(|readback| (extent.allocation_offset, readback.into_bytes()))
-                                .map_err(|error| format!("KFD coherent readback: {error}"))
+                .with_compute_lane_v1(native_lane, |queue| {
+                    queue
+                        .recycled_fixed_dispatch_generation()
+                        .and_then(|generation| {
+                            dirty
+                                .iter()
+                                .map(|extent| {
+                                    queue
+                                        .read_recycled_fixed_dispatch_data(
+                                            Gfx942CompletedDispatchReadRequestV1::new(
+                                                generation,
+                                                extent.data_index,
+                                                extent.data_offset,
+                                                extent.byte_len,
+                                            ),
+                                        )
+                                        .map(|readback| {
+                                            (extent.allocation_offset, readback.into_bytes())
+                                        })
+                                })
+                                .collect::<Result<Vec<_>, _>>()
                         })
-                        .collect::<Result<Vec<_>, _>>()
+                })
+                .map_err(|error| format!("KFD compute-lane selection: {error}"))
+                .and_then(|result| {
+                    result.map_err(|error| {
+                        format!("KFD recycled generation before readback: {error}")
+                    })
                 })
         };
         let updates = match native_result {
@@ -2550,7 +2880,9 @@ impl KfdRuntimeBackendV1 {
                 Arc::make_mut(&mut record.bytes)[offset..end].copy_from_slice(&bytes);
             }
         }
-        record.native_dirty.clear();
+        record
+            .native_dirty
+            .retain(|extent| extent.compute_lane != compute_lane);
         record.content_sha256 = None;
         let bytes = Arc::clone(&record.bytes);
         let _ = record;
@@ -2606,26 +2938,43 @@ impl KfdRuntimeBackendV1 {
             .data_offset
             .checked_add(delta as u64)
             .expect("contained native-dirty read offset does not overflow");
+        let compute_lane = extent.compute_lane;
+        self.with_compute_lane_state_v1(compute_lane, |backend| {
+            backend.read_native_allocation_extent_into_v1(extent, data_offset, destination)
+        })
+    }
+
+    fn read_native_allocation_extent_into_v1(
+        &mut self,
+        extent: NativeDirtyExtentV1,
+        data_offset: u64,
+        destination: &mut [u8],
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let native_result = {
+            let native_lane = self.selected_native_compute_lane_v1()?;
             let queue = self
                 .queue
                 .as_mut()
                 .expect("native-dirty allocation retains its queue");
             queue
-                .recycled_fixed_dispatch_generation()
-                .map_err(|error| format!("KFD recycled generation before direct read: {error}"))
-                .and_then(|generation| {
+                .with_compute_lane_v1(native_lane, |queue| {
                     queue
-                        .read_recycled_fixed_dispatch_data_into(
-                            Gfx942CompletedDispatchReadRequestV1::new(
-                                generation,
-                                extent.data_index,
-                                data_offset,
-                                destination.len() as u64,
-                            ),
-                            destination,
-                        )
-                        .map_err(|error| format!("KFD direct coherent readback: {error}"))
+                        .recycled_fixed_dispatch_generation()
+                        .and_then(|generation| {
+                            queue.read_recycled_fixed_dispatch_data_into(
+                                Gfx942CompletedDispatchReadRequestV1::new(
+                                    generation,
+                                    extent.data_index,
+                                    data_offset,
+                                    destination.len() as u64,
+                                ),
+                                destination,
+                            )
+                        })
+                })
+                .map_err(|error| format!("KFD compute-lane selection: {error}"))
+                .and_then(|result| {
+                    result.map_err(|error| format!("KFD direct coherent readback: {error}"))
                 })
         };
         match native_result {
@@ -2963,7 +3312,7 @@ fn same_resident_storage_shape_v1(
 }
 
 fn release_resident_data_v1(
-    queue: &mut ComputeAqlQueueSessionV1,
+    queue: &mut ComputeAqlQueueLaneDispatchV1<'_>,
     resident: ResidentDataRosterV1,
 ) -> Result<(), String> {
     for data in resident.data {
@@ -2975,7 +3324,7 @@ fn release_resident_data_v1(
 }
 
 fn materialize_rebound_data_v1(
-    queue: &mut ComputeAqlQueueSessionV1,
+    queue: &mut ComputeAqlQueueLaneDispatchV1<'_>,
     specs: Vec<DataSpecV1>,
     role_identity: [u8; 32],
 ) -> Result<Vec<Gfx942FixedDispatchDataV1>, String> {
@@ -3092,6 +3441,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             return RuntimeExecutionCapabilitiesV1::default();
         }
         RuntimeExecutionCapabilitiesV1 {
+            concurrent_compute: true,
             native_async_copy: true,
             compute_copy_overlap: true,
             memory_pool: true,
@@ -3119,8 +3469,31 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "KFD VM/queue ownership was retired after its last stream",
             ));
         }
+        let lane = (0..self.native_compute_lanes.len())
+            .find(|lane| {
+                !self
+                    .stream_compute_lanes
+                    .values()
+                    .any(|owned| owned == lane)
+            })
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "all native KFD compute queue lanes are assigned",
+                )
+            })?;
+        self.streams
+            .try_reserve(1)
+            .map_err(|_| Self::capacity("KFD stream-table growth failed"))?;
+        self.stream_compute_lanes
+            .try_reserve(1)
+            .map_err(|_| Self::capacity("KFD stream-to-queue index growth failed"))?;
         let id = self.next_id()?;
         self.streams.insert(id, device);
+        self.stream_compute_lanes.insert(id, lane);
+        if lane != 0 {
+            self.auxiliary_compute_lanes[lane - 1].owner_stream = Some(id);
+        }
         let stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, id);
         self.observe_profile_v1(
             stream.map(|stream| KfdRuntimeProfileEventKindV1::StreamCreated { stream }),
@@ -3143,6 +3516,11 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             .active
             .as_ref()
             .is_some_and(|active| active.stream == stream)
+            || self.auxiliary_compute_lanes.iter().any(|lane| {
+                lane.active
+                    .as_ref()
+                    .is_some_and(|active| active.stream == stream)
+            })
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -3156,6 +3534,13 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             ));
         }
         let profile_stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, stream);
+        let lane = self
+            .stream_compute_lanes
+            .remove(&stream)
+            .expect("known stream retains a compute lane");
+        if lane != 0 {
+            self.auxiliary_compute_lanes[lane - 1].owner_stream = None;
+        }
         self.streams.remove(&stream);
         self.observe_profile_v1(
             profile_stream.map(|stream| KfdRuntimeProfileEventKindV1::StreamDestroyed { stream }),
@@ -3306,6 +3691,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "allocation is retained by a pending KFD dispatch",
             ));
         }
+        self.release_all_compute_caches_for_allocation_v1(allocation)?;
         if self.recycled_dispatch.as_ref().is_some_and(|recycled| {
             recycled
                 .descriptors
@@ -3394,6 +3780,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "allocation is retained by a pending KFD dispatch",
             ));
         }
+        self.release_all_compute_caches_for_allocation_v1(allocation)?;
         self.synchronize_sdma_shadow_v1(allocation)?;
         let record = self.allocations.get(&allocation).ok_or_else(|| {
             Self::rejected(
@@ -3456,24 +3843,29 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         }
         if let Some(data_index) = attached_index {
             let native_write = {
+                let native_lane = self.selected_native_compute_lane_v1()?;
                 let queue = self
                     .queue
                     .as_mut()
                     .expect("recycled dispatch retains its queue");
                 queue
-                    .recycled_fixed_dispatch_generation()
-                    .map_err(|error| format!("KFD recycled generation before host write: {error}"))
-                    .and_then(|generation| {
+                    .with_compute_lane_v1(native_lane, |queue| {
                         queue
-                            .overwrite_recycled_fixed_dispatch_host_data(
-                                Gfx942RecycledDispatchWriteRequestV1::new(
-                                    generation, data_index, 0,
-                                ),
-                                bytes,
-                            )
-                            .map_err(|error| {
-                                format!("KFD attached host-visible allocation write: {error}")
+                            .recycled_fixed_dispatch_generation()
+                            .and_then(|generation| {
+                                queue.overwrite_recycled_fixed_dispatch_host_data(
+                                    Gfx942RecycledDispatchWriteRequestV1::new(
+                                        generation, data_index, 0,
+                                    ),
+                                    bytes,
+                                )
                             })
+                    })
+                    .map_err(|error| format!("KFD compute-lane selection: {error}"))
+                    .and_then(|result| {
+                        result.map_err(|error| {
+                            format!("KFD attached host-visible allocation write: {error}")
+                        })
                     })
             };
             if let Err(detail) = native_write {
@@ -3667,6 +4059,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             self.kernels
                 .get(&active.kernel)
                 .is_some_and(|kernel| kernel.module == module)
+        }) || self.auxiliary_compute_lanes.iter().any(|lane| {
+            lane.active.as_ref().is_some_and(|active| {
+                self.kernels
+                    .get(&active.kernel)
+                    .is_some_and(|kernel| kernel.module == module)
+            })
         }) {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -3679,6 +4077,19 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 .is_some_and(|kernel| kernel.module == module)
         }) {
             self.detach_recycled_dispatch()?;
+        }
+        for lane in 1..self.native_compute_lanes.len() {
+            let detach = self.auxiliary_compute_lanes[lane - 1]
+                .recycled_dispatch
+                .as_ref()
+                .is_some_and(|recycled| {
+                    self.kernels
+                        .get(&recycled.kernel)
+                        .is_some_and(|kernel| kernel.module == module)
+                });
+            if detach {
+                self.with_compute_lane_state_v1(lane, Self::detach_recycled_dispatch)?;
+            }
         }
         let profile_module = self.profile_resource_v1(KfdProfileResourceKindV1::Module, module);
         self.modules.remove(&module);
@@ -3746,10 +4157,38 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        if self.active.is_some() {
+        let lane = *self
+            .stream_compute_lanes
+            .get(&launch.stream)
+            .ok_or_else(|| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                    "unknown KFD stream",
+                )
+            })?;
+        let selected_active = if lane == 0 {
+            self.active.is_some()
+        } else {
+            self.auxiliary_compute_lanes[lane - 1].active.is_some()
+        };
+        if selected_active {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
-                "the admitted KFD queue already has a live dispatch",
+                "the stream's native KFD queue already has a live dispatch",
+            ));
+        }
+        let conflicts = launch_overlaps_active_compute_v1(
+            launch.bindings,
+            self.active.iter().chain(
+                self.auxiliary_compute_lanes
+                    .iter()
+                    .filter_map(|lane| lane.active.as_ref()),
+            ),
+        );
+        if conflicts {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "KFD compute bindings overlap another live compute queue",
             ));
         }
         if launch_overlaps_active_sdma_v1(launch.bindings, self.active_sdma.values()) {
@@ -3759,8 +4198,21 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             ));
         }
         self.check_dependencies(launch.dependencies)?;
-        let prepared = self.prepare_launch(launch)?;
-        self.publish(prepared)
+        for binding in launch.bindings {
+            self.synchronize_native_allocation_v1(binding.region.allocation)?;
+            for cached_lane in 0..self.native_compute_lanes.len() {
+                if cached_lane != lane
+                    && self
+                        .compute_lane_caches_allocation_v1(cached_lane, binding.region.allocation)
+                {
+                    self.release_compute_lane_cache_v1(cached_lane)?;
+                }
+            }
+        }
+        self.with_compute_lane_state_v1(lane, |backend| {
+            let prepared = backend.prepare_launch(launch)?;
+            backend.publish(prepared)
+        })
     }
 
     fn poll_v1(
@@ -3794,37 +4246,41 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 }
             };
         }
-        let mut active = self.active.take().ok_or_else(|| {
+        let lane = self.active_compute_lane_v1(submission).ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
                 "unknown KFD submission",
             )
         })?;
-        if active.id != submission {
-            self.active = Some(active);
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                "unknown KFD submission",
-            ));
-        }
-        let batch = active
-            .batch
-            .take()
-            .expect("active submission retains batch");
-        let poll = self
-            .queue
-            .as_mut()
-            .expect("active submission retains queue")
-            .poll_fixed_dispatch(batch)
-            .map_err(|error| self.terminal_error(format!("KFD completion observation: {error}")))?;
-        match poll {
-            Gfx942DispatchPollV1::Pending(batch) => {
-                active.batch = Some(batch);
-                self.active = Some(active);
-                Ok(BackendPollV1::Pending)
+        self.with_compute_lane_state_v1(lane, |backend| {
+            let mut active = backend.active.take().expect("selected active lane");
+            let batch = active
+                .batch
+                .take()
+                .expect("active submission retains batch");
+            let native_lane = backend.selected_native_compute_lane_v1()?;
+            let poll = backend
+                .queue
+                .as_mut()
+                .expect("active submission retains queue")
+                .with_compute_lane_v1(native_lane, |queue| queue.poll_fixed_dispatch(batch))
+                .map_err(|error| {
+                    backend.terminal_error(format!("KFD completion observation: {error}"))
+                })?
+                .map_err(|error| {
+                    backend.terminal_error(format!("KFD completion observation: {error}"))
+                })?;
+            match poll {
+                Gfx942DispatchPollV1::Pending(batch) => {
+                    active.batch = Some(batch);
+                    backend.active = Some(active);
+                    Ok(BackendPollV1::Pending)
+                }
+                Gfx942DispatchPollV1::Ready(completed) => {
+                    backend.finish_completed(active, completed)
+                }
             }
-            Gfx942DispatchPollV1::Ready(completed) => self.finish_completed(active, completed),
-        }
+        })
     }
 
     fn wait_v1(
@@ -3840,11 +4296,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        if self
-            .active
-            .as_ref()
-            .is_some_and(|active| active.id == submission)
-        {
+        if self.active_compute_lane_v1(submission).is_some() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "submission still owns a pending KFD dispatch",
@@ -3904,9 +4356,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             .get(&submission)
             .map(|record| record.stream)
             .or_else(|| {
-                self.active
-                    .as_ref()
-                    .filter(|active| active.id == submission)
+                self.active_compute_submission_v1(submission)
                     .map(|active| active.stream)
             })
             .or_else(|| {
@@ -8059,12 +8509,34 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
                     };
                     Self::capacity(detail)
                 })?;
-        let compute_admission = admit_copy_against_active_compute_v1(
-            self.active.as_ref(),
-            source.allocation,
-            destination.allocation,
-            &dependency_submissions,
-        );
+        let compute_admission =
+            self.active
+                .iter()
+                .chain(
+                    self.auxiliary_compute_lanes
+                        .iter()
+                        .filter_map(|lane| lane.active.as_ref()),
+                )
+                .map(|active| {
+                    admit_copy_against_active_compute_v1(
+                        Some(active),
+                        source.allocation,
+                        destination.allocation,
+                        &dependency_submissions,
+                    )
+                })
+                .fold(
+                    KfdCopyComputeAdmissionV1::Concurrent,
+                    |admission, next| match (admission, next) {
+                        (KfdCopyComputeAdmissionV1::Busy, _)
+                        | (_, KfdCopyComputeAdmissionV1::Busy) => KfdCopyComputeAdmissionV1::Busy,
+                        (KfdCopyComputeAdmissionV1::DeferredByDependency, _)
+                        | (_, KfdCopyComputeAdmissionV1::DeferredByDependency) => {
+                            KfdCopyComputeAdmissionV1::DeferredByDependency
+                        }
+                        _ => KfdCopyComputeAdmissionV1::Concurrent,
+                    },
+                );
         if compute_admission == KfdCopyComputeAdmissionV1::Busy {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -8072,7 +8544,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             ));
         }
         if compute_admission == KfdCopyComputeAdmissionV1::Concurrent {
-            if self.active.is_some()
+            if self.any_compute_active_v1()
                 && [source.allocation, destination.allocation]
                     .into_iter()
                     .any(|allocation| !self.allocations[&allocation].native_dirty.is_empty())
@@ -8082,7 +8554,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
                     "disjoint KFD copy requires deferred native-data reconciliation",
                 ));
             }
-            if self.active.is_none() {
+            if !self.any_compute_active_v1() {
                 self.synchronize_native_allocation_v1(source.allocation)?;
                 self.synchronize_native_allocation_v1(destination.allocation)?;
             }
@@ -8159,10 +8631,7 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
     ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         if self.submissions.contains_key(&submission)
-            || self
-                .active
-                .as_ref()
-                .is_some_and(|active| active.id == submission)
+            || self.active_compute_lane_v1(submission).is_some()
         {
             // Direct KFD returns handles only after the AQL/SDMA doorbell has
             // been published. The reviewed queue has no withdrawal primitive.
@@ -8268,8 +8737,9 @@ impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
 impl Drop for KfdRuntimeBackendV1 {
     fn drop(&mut self) {
         if self.terminal
-            || self.active.is_some()
+            || self.any_compute_active_v1()
             || !self.active_sdma.is_empty()
+            || self.compute_completion_reservations != 0
             || self.terminal_memory.is_some()
             || self.terminal_sdma_buffer.is_some()
         {
@@ -8277,10 +8747,24 @@ impl Drop for KfdRuntimeBackendV1 {
             // caller. Process termination is the fail-closed transition.
             std::process::abort();
         }
-        if let Some(queue) = self.queue.take()
-            && queue.destroy().is_err()
-        {
-            std::process::abort();
+        if let Some(mut queue) = self.queue.take() {
+            for native_lane in self
+                .native_compute_lanes
+                .iter()
+                .copied()
+                .flatten()
+                .filter(|lane| lane.ordinal() != 0)
+            {
+                if queue
+                    .destroy_auxiliary_compute_lane_v1(native_lane)
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+            }
+            if queue.destroy().is_err() {
+                std::process::abort();
+            }
         }
     }
 }
@@ -10113,7 +10597,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_kfd_execution_capabilities_claim_only_implemented_overlap() {
+    fn direct_kfd_execution_capabilities_claim_native_queue_concurrency() {
         let mut backend = KfdRuntimeBackendV1::mock();
         assert_eq!(
             backend
@@ -10132,7 +10616,7 @@ mod tests {
         assert!(capabilities.memory_pool);
         assert!(capabilities.cancellation);
         assert!(!capabilities.native_peer_copy);
-        assert!(!capabilities.concurrent_compute);
+        assert!(capabilities.concurrent_compute);
         assert!(capabilities.compute_copy_overlap);
         backend.native_available = false;
 
@@ -10143,10 +10627,126 @@ mod tests {
         multi.children[0].native_available = true;
         let capabilities = multi.execution_capabilities_v1(7);
         assert!(capabilities.native_async_copy);
-        assert!(!capabilities.concurrent_compute);
+        assert!(capabilities.concurrent_compute);
         assert!(capabilities.compute_copy_overlap);
         multi.children[0].native_available = false;
         multi.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn direct_kfd_stream_queue_ownership_is_bounded_and_reusable() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let first = backend.create_stream_v1(7).unwrap();
+        let second = backend.create_stream_v1(7).unwrap();
+        assert_eq!(backend.stream_compute_lanes[&first], 0);
+        assert_eq!(backend.stream_compute_lanes[&second], 1);
+        assert_eq!(
+            backend.auxiliary_compute_lanes[0].owner_stream,
+            Some(second)
+        );
+        assert!(matches!(
+            backend.create_stream_v1(7),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
+        ));
+
+        backend.destroy_stream_v1(first).unwrap();
+        let replacement = backend.create_stream_v1(7).unwrap();
+        assert_eq!(backend.stream_compute_lanes[&replacement], 0);
+        backend.destroy_stream_v1(second).unwrap();
+        backend.destroy_stream_v1(replacement).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn direct_kfd_active_compute_custody_is_exact_per_lane() {
+        fn active(id: u64, stream: u64, allocation: u64) -> ActiveSubmissionV1 {
+            ActiveSubmissionV1 {
+                id,
+                stream,
+                kernel: 9,
+                allocations: HashSet::from([allocation]),
+                writebacks: Vec::new(),
+                resident_descriptors: Vec::new(),
+                dispatch_shape_sha256: [0; 32],
+                published_at: Instant::now(),
+                performance: KfdRuntimeLaunchPerformanceV1::default(),
+                batch: None,
+            }
+        }
+
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend.active = Some(active(11, 1, 101));
+        backend.auxiliary_compute_lanes[0].active = Some(active(12, 2, 202));
+        assert_eq!(backend.active_compute_lane_v1(11), Some(0));
+        assert_eq!(backend.active_compute_lane_v1(12), Some(1));
+        assert!(backend.allocation_is_active(101));
+        assert!(backend.allocation_is_active(202));
+        assert!(!backend.allocation_is_active(303));
+        let disjoint = [BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation: 303,
+                access: RuntimeAccessV1::ReadWrite,
+                byte_offset: 0,
+                byte_len: 8,
+            },
+            kernarg_byte_offset: 0,
+        }];
+        let conflicting = [BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation: 202,
+                access: RuntimeAccessV1::ReadWrite,
+                byte_offset: 0,
+                byte_len: 8,
+            },
+            kernarg_byte_offset: 0,
+        }];
+        let active = backend.active.iter().chain(
+            backend
+                .auxiliary_compute_lanes
+                .iter()
+                .filter_map(|lane| lane.active.as_ref()),
+        );
+        assert!(!launch_overlaps_active_compute_v1(&disjoint, active));
+        let active = backend.active.iter().chain(
+            backend
+                .auxiliary_compute_lanes
+                .iter()
+                .filter_map(|lane| lane.active.as_ref()),
+        );
+        assert!(launch_overlaps_active_compute_v1(&conflicting, active));
+
+        backend.with_compute_lane_state_v1(1, |selected| {
+            assert_eq!(selected.active.as_ref().map(|active| active.id), Some(12));
+        });
+        let failed: Result<(), &'static str> = backend.with_compute_lane_state_v1(1, |selected| {
+            assert_eq!(selected.active.as_ref().map(|active| active.id), Some(12));
+            Err("injected lane-local rejection")
+        });
+        assert_eq!(failed, Err("injected lane-local rejection"));
+        assert_eq!(backend.active.as_ref().map(|active| active.id), Some(11));
+        assert_eq!(
+            backend.auxiliary_compute_lanes[0]
+                .active
+                .as_ref()
+                .map(|active| active.id),
+            Some(12)
+        );
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            backend.with_compute_lane_state_v1(1, |_| panic!("injected lane-local panic"));
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(backend.active.as_ref().map(|active| active.id), Some(11));
+        assert_eq!(
+            backend.auxiliary_compute_lanes[0]
+                .active
+                .as_ref()
+                .map(|active| active.id),
+            Some(12)
+        );
+        backend.active = None;
+        backend.auxiliary_compute_lanes[0].active = None;
+        backend.shutdown_native_v1().unwrap();
     }
 
     #[test]

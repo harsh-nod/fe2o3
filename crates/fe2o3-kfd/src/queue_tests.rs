@@ -474,6 +474,53 @@ fn complete_lifecycle_projects_exact_history_and_releases_only_explicitly() {
 }
 
 #[test]
+fn two_queue_keys_remain_independently_active_and_destroyable() {
+    let mut fixture = fixture();
+    let first = fixture.authority(10);
+    let second = fixture.authority(20);
+    let first_key = first.0.plan.queue;
+    let second_key = second.0.plan.queue;
+    let mut engine = NativeQueueEngineV1::new(FakeBackend::new(
+        fixture.foundation,
+        vec![
+            success(Mutation::CreateId(31)),
+            success(Mutation::CreateId(32)),
+            success(Mutation::None),
+            success(Mutation::None),
+        ],
+    ))
+    .unwrap();
+    engine.admit(first).unwrap();
+    engine.admit(second).unwrap();
+    engine.create(first_key).unwrap();
+    engine.create(second_key).unwrap();
+
+    assert_eq!(
+        engine.phase(first_key),
+        Some(ComputeAqlQueuePhaseV1::Active)
+    );
+    assert_eq!(
+        engine.phase(second_key),
+        Some(ComputeAqlQueuePhaseV1::Active)
+    );
+    assert_eq!(engine.native_queue_id(first_key), Some(31));
+    assert_eq!(engine.native_queue_id(second_key), Some(32));
+    assert_eq!(engine.journal_summary().live_publications, 8);
+
+    engine.destroy(second_key).unwrap();
+    let _second = engine.release_destroyed_resources(second_key).unwrap();
+    assert_eq!(
+        engine.phase(first_key),
+        Some(ComputeAqlQueuePhaseV1::Active)
+    );
+    assert_eq!(engine.journal_summary().live_publications, 4);
+    engine.destroy(first_key).unwrap();
+    let _first = engine.release_destroyed_resources(first_key).unwrap();
+    assert_eq!(engine.journal_summary().live_publications, 0);
+    engine.into_backend().unwrap();
+}
+
+#[test]
 fn backend_return_rejects_live_or_unreleased_queue_resources() {
     let (engine, _) = active_engine(Vec::new());
     assert_eq!(

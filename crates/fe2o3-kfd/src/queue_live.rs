@@ -1459,6 +1459,7 @@ fn admit_detached_returning_destroy(
 pub struct ComputeAqlQueueSessionV1 {
     engine: Option<NativeQueueEngineV1<LinuxNativeQueueBackendV1>>,
     key: QueueKeyV1,
+    compute_lane_session: QueueKeyV1,
     doorbell: Option<LinuxDoorbellSliceV1>,
     submission: Option<NativeAqlSubmissionOwnerV1>,
     completion_signals: Option<CompletionSignalAuthority>,
@@ -1475,6 +1476,320 @@ pub struct ComputeAqlQueueSessionV1 {
     sdma_pool_reuse_count: u64,
     terminal_poisoned: bool,
     observation: ComputeAqlQueueObservationV1,
+    auxiliary_compute_lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1>>,
+}
+
+/// Stable queue-local lane selected inside one exact shared KFD VM session.
+///
+/// Lane zero is the original queue. Additional lanes own distinct KFD queue,
+/// ring, doorbell, completion, exception-event, and dispatch authorities. The
+/// private session occurrence and generation prevent cross-session and stale
+/// slot substitution.
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub struct ComputeAqlQueueLaneV1 {
+    session: QueueKeyV1,
+    ordinal: usize,
+    generation: u64,
+}
+
+impl ComputeAqlQueueLaneV1 {
+    pub const fn ordinal(self) -> usize {
+        self.ordinal
+    }
+
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+impl fmt::Debug for ComputeAqlQueueLaneV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ComputeAqlQueueLaneV1")
+            .field("ordinal", &self.ordinal)
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
+
+struct AuxiliaryComputeLaneSlotV1<T> {
+    generation: u64,
+    state: Option<T>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedAuxiliaryComputeLaneSlotV1 {
+    index: usize,
+    generation: u64,
+    append: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdmittedComputeLaneV1 {
+    Primary,
+    Auxiliary(usize),
+}
+
+struct ComputeAqlQueueLaneStateV1 {
+    key: QueueKeyV1,
+    doorbell: Option<LinuxDoorbellSliceV1>,
+    submission: Option<NativeAqlSubmissionOwnerV1>,
+    completion_signals: Option<CompletionSignalAuthority>,
+    completion_owner: CompletionSignalArenaOwnerV1,
+    dispatch: Option<DispatchResourceOwnerV1>,
+    detached_data_count: usize,
+    detached_dispatch_generation: Option<u64>,
+    detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
+    detached_next_insertion_index: Option<usize>,
+    exception: Option<QueueExceptionStateV1>,
+    observation: ComputeAqlQueueObservationV1,
+}
+
+struct PreparedAuxiliaryComputeLaneV1 {
+    authority: QueueResourceAuthorityV1,
+    completion_signals: CompletionSignalAuthority,
+    completion_owner: CompletionSignalArenaOwnerV1,
+    submission: NativeAqlSubmissionOwnerV1,
+    dispatch: DispatchResourceOwnerV1,
+    exception: QueueExceptionStateV1,
+    ring_bytes: u32,
+}
+
+fn prepare_auxiliary_compute_lane_slot_v1<T>(
+    slots: &[AuxiliaryComputeLaneSlotV1<T>],
+) -> Result<PreparedAuxiliaryComputeLaneSlotV1, ComputeAqlQueueSessionErrorV1> {
+    if let Some((index, slot)) = slots
+        .iter()
+        .enumerate()
+        .find(|(_, slot)| slot.state.is_none())
+    {
+        let generation =
+            slot.generation
+                .checked_add(1)
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "compute queue lane generation exhausted",
+                ))?;
+        return Ok(PreparedAuxiliaryComputeLaneSlotV1 {
+            index,
+            generation,
+            append: false,
+        });
+    }
+    if slots.len() + 1 >= ComputeAqlQueueSessionV1::MAX_COMPUTE_LANES_V1 {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute queue lane capacity exhausted",
+        ));
+    }
+    Ok(PreparedAuxiliaryComputeLaneSlotV1 {
+        index: slots.len(),
+        generation: 1,
+        append: true,
+    })
+}
+
+fn install_auxiliary_compute_lane_slot_v1<T>(
+    slots: &mut Vec<AuxiliaryComputeLaneSlotV1<T>>,
+    prepared: PreparedAuxiliaryComputeLaneSlotV1,
+    state: T,
+) {
+    if prepared.append {
+        slots.push(AuxiliaryComputeLaneSlotV1 {
+            generation: prepared.generation,
+            state: Some(state),
+        });
+    } else {
+        let slot = &mut slots[prepared.index];
+        slot.generation = prepared.generation;
+        slot.state = Some(state);
+    }
+}
+
+fn admit_compute_lane_v1<T>(
+    session: QueueKeyV1,
+    auxiliary: &[AuxiliaryComputeLaneSlotV1<T>],
+    lane: ComputeAqlQueueLaneV1,
+) -> Result<AdmittedComputeLaneV1, ComputeAqlQueueSessionErrorV1> {
+    if lane.session != session {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute queue lane session substitution",
+        ));
+    }
+    if lane.ordinal == 0 {
+        if lane.generation != session.generation.0 {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "stale primary compute queue lane",
+            ));
+        }
+        return Ok(AdmittedComputeLaneV1::Primary);
+    }
+    let index = lane
+        .ordinal
+        .checked_sub(1)
+        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+            "invalid compute queue lane",
+        ))?;
+    let slot = auxiliary
+        .get(index)
+        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+            "unknown compute queue lane",
+        ))?;
+    if lane.generation != slot.generation {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "stale compute queue lane",
+        ));
+    }
+    if slot.state.is_none() {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "unknown compute queue lane",
+        ));
+    }
+    Ok(AdmittedComputeLaneV1::Auxiliary(index))
+}
+
+fn take_after_auxiliary_destroy_preflight_v1<T>(
+    state: &mut Option<T>,
+    preflight: impl FnOnce(&T) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+) -> Result<T, ComputeAqlQueueSessionErrorV1> {
+    let retained = state
+        .as_ref()
+        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+            "unknown compute queue lane",
+        ))?;
+    preflight(retained)?;
+    Ok(state.take().expect("preflight retained auxiliary lane"))
+}
+
+/// Narrow fixed-dispatch access to one admitted compute lane.
+///
+/// Session-global transitions such as SDMA creation are deliberately absent.
+///
+/// ```compile_fail
+/// use fe2o3_kfd::ComputeAqlQueueLaneDispatchV1;
+///
+/// fn cannot_enable_session_global_sdma(lane: &mut ComputeAqlQueueLaneDispatchV1<'_>) {
+///     lane.enable_gfx942_directional_sdma_copy_engines();
+/// }
+/// ```
+pub struct ComputeAqlQueueLaneDispatchV1<'a> {
+    session: &'a mut ComputeAqlQueueSessionV1,
+}
+
+impl ComputeAqlQueueLaneDispatchV1<'_> {
+    pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
+        self.session.observation()
+    }
+
+    pub fn detach_recycled_fixed_dispatch(
+        &mut self,
+    ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
+        self.session.detach_recycled_fixed_dispatch()
+    }
+
+    pub fn bind_fixed_dispatch<const N: usize>(
+        &mut self,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session.bind_fixed_dispatch(programs, packets, data)
+    }
+
+    pub fn preflight_fixed_dispatch_data_insertion(
+        &self,
+        data_index: usize,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .preflight_fixed_dispatch_data_insertion(data_index)
+    }
+
+    pub fn insert_initialized_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .insert_initialized_fixed_dispatch_data(data_index, bytes, alignment, content)
+    }
+
+    pub fn overwrite_detached_initialized_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        data: &mut Gfx942FixedDispatchDataV1,
+        offset: u64,
+        source: &[u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .overwrite_detached_initialized_host_visible_fixed_dispatch_data(
+                data_index, data, offset, source,
+            )
+    }
+
+    pub fn insert_initialized_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        bytes: Box<[u8]>,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .insert_initialized_host_visible_fixed_dispatch_data(data_index, bytes)
+    }
+
+    pub fn release_detached_fixed_dispatch_data(
+        &mut self,
+        data: Gfx942FixedDispatchDataV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session.release_detached_fixed_dispatch_data(data)
+    }
+
+    pub fn submit_fixed_dispatch<const N: usize>(
+        &mut self,
+    ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.session.submit_fixed_dispatch::<N>()
+    }
+
+    pub fn poll_fixed_dispatch<const N: usize>(
+        &mut self,
+        batch: Gfx942DispatchBatchV1<N>,
+    ) -> Result<Gfx942DispatchPollV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.session.poll_fixed_dispatch(batch)
+    }
+
+    pub fn recycle_fixed_dispatch<const N: usize>(
+        &mut self,
+        completed: Gfx942CompletedDispatchBatchV1<N>,
+    ) -> Result<Gfx942CompletionRecycleObservationV1, ComputeAqlQueueSessionErrorV1> {
+        self.session.recycle_fixed_dispatch(completed)
+    }
+
+    pub fn recycled_fixed_dispatch_generation(&self) -> Result<u64, ComputeAqlQueueSessionErrorV1> {
+        self.session.recycled_fixed_dispatch_generation()
+    }
+
+    pub fn read_recycled_fixed_dispatch_data(
+        &mut self,
+        request: Gfx942CompletedDispatchReadRequestV1,
+    ) -> Result<Gfx942CompletedDispatchReadbackV1, ComputeAqlQueueSessionErrorV1> {
+        self.session.read_recycled_fixed_dispatch_data(request)
+    }
+
+    pub fn read_recycled_fixed_dispatch_data_into(
+        &mut self,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .read_recycled_fixed_dispatch_data_into(request, destination)
+    }
+
+    pub fn overwrite_recycled_fixed_dispatch_host_data(
+        &mut self,
+        request: Gfx942RecycledDispatchWriteRequestV1,
+        source: &[u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .overwrite_recycled_fixed_dispatch_host_data(request, source)
+    }
 }
 
 struct QueueExceptionStateV1 {
@@ -1981,6 +2296,398 @@ impl SharedGttMemorySessionV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
+    /// Maximum number of independently publishable compute queues retained by
+    /// one checked process-VM session in the reviewed runtime profile.
+    pub const MAX_COMPUTE_LANES_V1: usize = 2;
+
+    fn swap_primary_compute_lane(&mut self, lane: &mut ComputeAqlQueueLaneStateV1) {
+        core::mem::swap(&mut self.key, &mut lane.key);
+        core::mem::swap(&mut self.doorbell, &mut lane.doorbell);
+        core::mem::swap(&mut self.submission, &mut lane.submission);
+        core::mem::swap(&mut self.completion_signals, &mut lane.completion_signals);
+        core::mem::swap(&mut self.completion_owner, &mut lane.completion_owner);
+        core::mem::swap(&mut self.dispatch, &mut lane.dispatch);
+        core::mem::swap(&mut self.detached_data_count, &mut lane.detached_data_count);
+        core::mem::swap(
+            &mut self.detached_dispatch_generation,
+            &mut lane.detached_dispatch_generation,
+        );
+        core::mem::swap(
+            &mut self.detached_data_identities,
+            &mut lane.detached_data_identities,
+        );
+        core::mem::swap(
+            &mut self.detached_next_insertion_index,
+            &mut lane.detached_next_insertion_index,
+        );
+        core::mem::swap(&mut self.exception, &mut lane.exception);
+        core::mem::swap(&mut self.observation, &mut lane.observation);
+    }
+
+    /// Returns the session-bound handle for the original compute queue.
+    pub const fn primary_compute_lane_v1(&self) -> ComputeAqlQueueLaneV1 {
+        ComputeAqlQueueLaneV1 {
+            session: self.compute_lane_session,
+            ordinal: 0,
+            generation: self.compute_lane_session.generation.0,
+        }
+    }
+
+    /// Runs one fixed-dispatch transition against an exact queue-local lane.
+    ///
+    /// The callback receives only fixed-dispatch and queue-observation methods;
+    /// session-global SDMA remains owned outside lane selection. Queue-local
+    /// authorities are restored to their stable slots before this method
+    /// returns, including on an ordinary callback error.
+    pub fn with_compute_lane_v1<R>(
+        &mut self,
+        lane: ComputeAqlQueueLaneV1,
+        operation: impl FnOnce(&mut ComputeAqlQueueLaneDispatchV1<'_>) -> R,
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        let admitted = admit_compute_lane_v1(
+            self.compute_lane_session,
+            &self.auxiliary_compute_lanes,
+            lane,
+        )?;
+        let AdmittedComputeLaneV1::Auxiliary(index) = admitted else {
+            let mut lane = ComputeAqlQueueLaneDispatchV1 { session: self };
+            return Ok(operation(&mut lane));
+        };
+        let mut selected = self.auxiliary_compute_lanes[index]
+            .state
+            .take()
+            .expect("admitted auxiliary compute lane retains state");
+        self.swap_primary_compute_lane(&mut selected);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(&mut ComputeAqlQueueLaneDispatchV1 { session: self })
+        }));
+        self.swap_primary_compute_lane(&mut selected);
+        self.auxiliary_compute_lanes[index].state = Some(selected);
+        match result {
+            Ok(result) => Ok(result),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    /// Creates one additional native compute queue under this session's exact
+    /// VM/model owner and binds an initial fixed dispatch without publishing it.
+    pub fn create_auxiliary_compute_lane_with_fixed_dispatch<const N: usize>(
+        &mut self,
+        ring_bytes: u32,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        prepare_data: impl FnOnce(
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<
+            Vec<Gfx942FixedDispatchDataV1>,
+            ComputeAqlQueueSessionErrorV1,
+        >,
+    ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        validate_fixed_batch_ring::<N>(ring_bytes)?;
+        let slot = prepare_auxiliary_compute_lane_slot_v1(&self.auxiliary_compute_lanes)?;
+        if slot.append {
+            self.auxiliary_compute_lanes
+                .try_reserve_exact(1)
+                .map_err(|_| {
+                    ComputeAqlQueueSessionErrorV1::Contract("compute queue lane roster allocation")
+                })?;
+        }
+        self.check_currentness()?;
+
+        let prepared = self.with_live_queue_memory_model(move |memory| {
+            let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+            let data = prepare_data(memory)?;
+            let dispatch = prepare_public_fixed_dispatch_resources(memory, programs, packets, data)
+                .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)?;
+            let mut ring = CpuRingAuthorityV1::allocate(
+                memory,
+                QueueRingBackingV1::AqlSpecial,
+                usize::try_from(ring_bytes)
+                    .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
+            )?;
+            let mut control = memory.allocate_userptr_aql_control()?;
+            let mut completion_signals =
+                memory.allocate_host_visible_coherent(COMPLETION_SIGNAL_ARENA_BYTES_V1)?;
+            let mut eop = memory.allocate_executable(
+                usize::try_from(geometry.end_of_pipe().mapping_bytes())
+                    .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("EOP size conversion"))?,
+            )?;
+            let mut context_save = memory.allocate_executable(
+                usize::try_from(geometry.context_save().mapping_bytes()).map_err(|_| {
+                    ComputeAqlQueueSessionErrorV1::Contract("context-save size conversion")
+                })?,
+            )?;
+            ring.initialize_invalid(memory)?.map_err(|_| {
+                ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization")
+            })?;
+            memory
+                .with_bytes_mut(&mut control, initialize_amd_aql_control)?
+                .map_err(|_| {
+                    ComputeAqlQueueSessionErrorV1::Contract("AMD AQL control initialization")
+                })?;
+            memory.with_bytes_mut(
+                &mut completion_signals,
+                initialize_pending_completion_signal_arena,
+            )??;
+            memory.with_bytes_mut(&mut eop, |bytes| bytes.fill(0))?;
+            memory.with_bytes_mut(&mut context_save, |bytes| bytes.fill(0))?;
+            memory.check_queue_currentness()?;
+
+            let runtime = LinuxKfdRuntimeEnabledV1::enable(memory.kfd_fd(), memory.opener_pid())?;
+            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
+            let event = LinuxQueueExceptionEventV1::create(memory.kfd_fd(), memory.opener_pid())?;
+            memory.check_queue_currentness()?;
+            let shadow_plan = memory.cwsr_shadow_plan(&context_save)?;
+            let shadows = LinuxCwsrShadowPagesV1::install(shadow_plan, &event)?;
+            let cwsr_initialization = memory.with_bytes_mut(&mut context_save, |bytes| {
+                shadows.initialize_and_validate_bo_headers(bytes)
+            })?;
+            cwsr_initialization.map_err(|_| {
+                ComputeAqlQueueSessionErrorV1::Contract("CWSR header initialization")
+            })?;
+            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
+            event.validate_live_with_shadows(memory.kfd_fd(), memory.opener_pid(), &shadows)?;
+            memory.check_queue_currentness()?;
+
+            let eop = memory.seal_executable(eop)?;
+            let context_save = memory.seal_executable(context_save)?;
+            let ring = ring.map_and_retain(memory)?;
+            let control = memory.map_to_gpu(control)?;
+            let completion_signals = memory.map_to_gpu(completion_signals)?;
+            let eop = memory.map_executable_to_gpu(eop)?;
+            let context_save = memory.map_executable_to_gpu(context_save)?;
+            let control = memory.retain_aql_control_resource(control)?;
+            let completion_signals =
+                memory.retain_aql_completion_signal_resource(completion_signals)?;
+            let eop = memory.retain_aql_eop_resource(eop)?;
+            let context_save = memory.retain_aql_context_save_resource(context_save)?;
+            let authority = build_resource_authority(
+                memory.queue_model_device(),
+                geometry,
+                ring,
+                control,
+                eop,
+                context_save,
+            )?;
+            let completion_owner = CompletionSignalArenaOwnerV1::new(
+                authority.view.plan.queue,
+                completion_signals.facts(),
+            )?;
+            let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes).map_err(|_| {
+                ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model")
+            })?;
+            Ok(PreparedAuxiliaryComputeLaneV1 {
+                authority,
+                completion_signals,
+                completion_owner,
+                submission,
+                dispatch,
+                exception: QueueExceptionStateV1 {
+                    runtime,
+                    runtime_control: None,
+                    event,
+                    shadows,
+                },
+                ring_bytes,
+            })
+        });
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.poison_terminal();
+                return Err(error);
+            }
+        };
+        let result = self.finish_auxiliary_compute_lane_creation_v1(prepared, slot);
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result
+    }
+
+    fn finish_auxiliary_compute_lane_creation_v1(
+        &mut self,
+        mut prepared: PreparedAuxiliaryComputeLaneV1,
+        slot: PreparedAuxiliaryComputeLaneSlotV1,
+    ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
+        let (key, outputs, queue_id) = {
+            let engine = self
+                .engine
+                .as_mut()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing queue engine",
+                ))?;
+            let key = engine.admit(prepared.authority).map_err(map_native)?;
+            engine.create(key).map_err(map_create)?;
+            prepared
+                .exception
+                .runtime
+                .mark_queue_created()
+                .map_err(|error| {
+                    terminal_creation("runtime queue-live transition", error.into())
+                })?;
+            let outputs = engine.create_outputs(key).ok_or_else(|| {
+                terminal_creation(
+                    "CREATE_QUEUE output recovery",
+                    ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
+                )
+            })?;
+            let queue_id = engine.native_queue_id(key).ok_or_else(|| {
+                terminal_creation(
+                    "CREATE_QUEUE identity recovery",
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
+                )
+            })?;
+            (key, outputs, queue_id)
+        };
+        let mut observation = ComputeAqlQueueObservationV1 {
+            queue_id,
+            ring_bytes: prepared.ring_bytes,
+            doorbell_slice_bytes: 0,
+            doorbell_byte_offset: 0,
+            event_id: prepared.exception.event.event_id_observation(),
+            cwsr_shadow_pages: 8,
+        };
+        self.check_currentness()?;
+        let doorbell = {
+            let engine = self.engine.as_ref().expect("checked queue engine");
+            LinuxDoorbellSliceV1::map(engine.backend.session.kfd_fd(), outputs, engine.opener_pid)
+        }
+        .map_err(|error| terminal_creation("doorbell mapping", error.into()))?;
+        observation.doorbell_slice_bytes = doorbell.slice_bytes();
+        observation.doorbell_byte_offset = doorbell.queue_byte_offset();
+        self.check_currentness()?;
+        install_auxiliary_compute_lane_slot_v1(
+            &mut self.auxiliary_compute_lanes,
+            slot,
+            ComputeAqlQueueLaneStateV1 {
+                key,
+                doorbell: Some(doorbell),
+                submission: Some(prepared.submission),
+                completion_signals: Some(prepared.completion_signals),
+                completion_owner: prepared.completion_owner,
+                dispatch: Some(prepared.dispatch),
+                detached_data_count: 0,
+                detached_dispatch_generation: None,
+                detached_data_identities: Vec::new(),
+                detached_next_insertion_index: None,
+                exception: Some(prepared.exception),
+                observation,
+            },
+        );
+        Ok(ComputeAqlQueueLaneV1 {
+            session: self.compute_lane_session,
+            ordinal: slot.index + 1,
+            generation: slot.generation,
+        })
+    }
+
+    pub fn auxiliary_compute_lane_count_v1(&self) -> usize {
+        self.auxiliary_compute_lanes
+            .iter()
+            .filter(|lane| lane.state.is_some())
+            .count()
+    }
+
+    /// Destroys one quiescent auxiliary queue and releases all of its native
+    /// resources while retaining the shared VM and primary queue.
+    pub fn destroy_auxiliary_compute_lane_v1(
+        &mut self,
+        lane: ComputeAqlQueueLaneV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        let admitted = admit_compute_lane_v1(
+            self.compute_lane_session,
+            &self.auxiliary_compute_lanes,
+            lane,
+        )?;
+        let AdmittedComputeLaneV1::Auxiliary(index) = admitted else {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "the primary queue is destroyed with its session",
+            ));
+        };
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        let mut state = take_after_auxiliary_destroy_preflight_v1(
+            &mut self.auxiliary_compute_lanes[index].state,
+            |state| {
+                state.completion_owner.ensure_releasable()?;
+                state
+                    .dispatch
+                    .as_ref()
+                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+                    .ensure_releasable()?;
+                Ok(())
+            },
+        )?;
+
+        let result =
+            (|| {
+                let engine =
+                    self.engine
+                        .as_mut()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue engine",
+                        ))?;
+                engine.destroy(state.key).map_err(map_native)?;
+                let mut exception =
+                    state
+                        .exception
+                        .take()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing queue exception state",
+                        ))?;
+                exception.runtime.mark_queue_destroyed()?;
+                let destroyed_event = exception.event.destroy(
+                    engine.backend.session.kfd_fd(),
+                    engine.backend.session.opener_pid(),
+                )?;
+                exception.runtime.mark_event_destroyed()?;
+                let disabled_runtime = exception.runtime.disable(
+                    engine.backend.session.kfd_fd(),
+                    engine.backend.session.opener_pid(),
+                )?;
+                let shadow_release = exception
+                    .shadows
+                    .after_event_and_runtime_destroy(destroyed_event, disabled_runtime)?;
+                state
+                    .doorbell
+                    .take()
+                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract("missing doorbell"))?
+                    .release()?;
+                self.check_currentness()?;
+                let authority = self
+                    .engine
+                    .as_mut()
+                    .expect("checked queue engine")
+                    .release_destroyed_resources(state.key)
+                    .map_err(map_native)?;
+                let dispatch = state
+                    .dispatch
+                    .take()
+                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+                let completion_signals = state.completion_signals.take().ok_or(
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                )?;
+                self.with_live_queue_memory_model(move |memory| {
+                    release_resource_authority(memory, authority, shadow_release)?;
+                    dispatch.release(memory)?;
+                    let completion_signals =
+                        memory.unmap_from_gpu(completion_signals.into_token())?;
+                    memory.release(completion_signals)?;
+                    Ok(())
+                })
+            })();
+        if let Err(error) = result {
+            self.poison_terminal();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn create_compute_aql_queue_inner(
         mut memory: SharedGttMemorySessionV1,
         geometry: Gfx942AqlQueueResourcePlanV1,
@@ -2205,6 +2912,7 @@ impl ComputeAqlQueueSessionV1 {
         let mut session = ComputeAqlQueueSessionV1 {
             engine: Some(engine),
             key,
+            compute_lane_session: key,
             doorbell: None,
             submission: Some(submission),
             completion_signals: Some(completion_signals),
@@ -2233,6 +2941,7 @@ impl ComputeAqlQueueSessionV1 {
                 event_id: 0,
                 cwsr_shadow_pages: 0,
             },
+            auxiliary_compute_lanes: Vec::new(),
         };
         let exception = session.exception.as_ref().expect("queue exception state");
         session.observation.event_id = exception.event.event_id_observation();
@@ -5182,6 +5891,15 @@ impl ComputeAqlQueueSessionV1 {
                 "all SDMA buffers must be released before queue destruction",
             ));
         }
+        if self
+            .auxiliary_compute_lanes
+            .iter()
+            .any(|lane| lane.state.is_some())
+        {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "auxiliary compute queues must be destroyed before the primary queue",
+            ));
+        }
         if !self.sdma_pool_free.is_empty() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "the SDMA memory pool must be trimmed before queue destruction",
@@ -5918,6 +6636,106 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_queue_key(queue: u64, generation: u64) -> QueueKeyV1 {
+        QueueKeyV1 {
+            vm: fe2o3_runtime_model::VmKeyV1 {
+                device: fe2o3_runtime_model::DeviceKeyV1 {
+                    physical: fe2o3_runtime_model::PhysicalDeviceIdV1(7),
+                    generation: fe2o3_runtime_model::DeviceGenerationV1(11),
+                },
+                id: fe2o3_runtime_model::VmIdV1(13),
+            },
+            id: QueueInstanceIdV1(queue),
+            generation: QueueGenerationV1(generation),
+        }
+    }
+
+    #[test]
+    fn auxiliary_destroy_preflight_rejection_preserves_custody_for_retry() {
+        struct TestLane {
+            leased: bool,
+        }
+
+        let mut state = Some(TestLane { leased: true });
+        let rejected = take_after_auxiliary_destroy_preflight_v1(&mut state, |lane| {
+            if lane.leased {
+                Err(ComputeAqlQueueSessionErrorV1::Contract(
+                    "injected live completion lease",
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(
+            rejected,
+            Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "injected live completion lease"
+            ))
+        ));
+        assert!(state.as_ref().is_some_and(|lane| lane.leased));
+
+        state.as_mut().unwrap().leased = false;
+        let released = take_after_auxiliary_destroy_preflight_v1(&mut state, |_| Ok(())).unwrap();
+        assert!(!released.leased);
+        assert!(state.is_none());
+    }
+
+    #[test]
+    fn auxiliary_lane_reuse_advances_generation_and_rejects_substitution() {
+        let session = test_queue_key(17, 3);
+        let other_session = test_queue_key(19, 3);
+        let mut slots = Vec::<AuxiliaryComputeLaneSlotV1<&'static str>>::new();
+        let first = prepare_auxiliary_compute_lane_slot_v1(&slots).unwrap();
+        assert_eq!(
+            first,
+            PreparedAuxiliaryComputeLaneSlotV1 {
+                index: 0,
+                generation: 1,
+                append: true,
+            }
+        );
+        install_auxiliary_compute_lane_slot_v1(&mut slots, first, "first");
+        let first_handle = ComputeAqlQueueLaneV1 {
+            session,
+            ordinal: 1,
+            generation: first.generation,
+        };
+        assert!(matches!(
+            admit_compute_lane_v1(session, &slots, first_handle),
+            Ok(AdmittedComputeLaneV1::Auxiliary(0))
+        ));
+        assert!(matches!(
+            admit_compute_lane_v1(other_session, &slots, first_handle),
+            Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "compute queue lane session substitution"
+            ))
+        ));
+
+        assert_eq!(slots[0].state.take(), Some("first"));
+        let replacement = prepare_auxiliary_compute_lane_slot_v1(&slots).unwrap();
+        assert_eq!(replacement.index, first.index);
+        assert_eq!(replacement.generation, first.generation + 1);
+        assert!(!replacement.append);
+        install_auxiliary_compute_lane_slot_v1(&mut slots, replacement, "replacement");
+
+        assert!(matches!(
+            admit_compute_lane_v1(session, &slots, first_handle),
+            Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "stale compute queue lane"
+            ))
+        ));
+        let replacement_handle = ComputeAqlQueueLaneV1 {
+            session,
+            ordinal: 1,
+            generation: replacement.generation,
+        };
+        assert!(matches!(
+            admit_compute_lane_v1(session, &slots, replacement_handle),
+            Ok(AdmittedComputeLaneV1::Auxiliary(0))
+        ));
+        assert_eq!(slots[0].state, Some("replacement"));
+    }
 
     #[test]
     fn sdma_dispatch_content_check_rejects_length_and_digest_substitution() {
