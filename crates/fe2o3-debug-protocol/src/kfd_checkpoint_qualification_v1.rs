@@ -439,6 +439,13 @@ impl std::error::Error for KfdOpaqueCheckpointQualificationErrorV1 {}
 mod tests {
     use super::*;
 
+    const MI300X_QUALIFICATION_RECEIPT_V1: &[u8] = include_bytes!(
+        "../../../docs/evidence/mi300x-direct-kfd-opaque-checkpoint-qualification-v1.json"
+    );
+    const MI300X_QUALIFICATION_NARRATIVE_V1: &str = include_str!(
+        "../../../docs/evidence/mi300x-direct-kfd-opaque-checkpoint-qualification-2026-09-03.md"
+    );
+
     fn identity(byte: u8) -> OpaqueIdentityV1 {
         OpaqueIdentityV1::new([byte; 32]).unwrap()
     }
@@ -524,6 +531,52 @@ mod tests {
             decode_kfd_opaque_checkpoint_qualification_v1(&noncanonical),
             Err(KfdOpaqueCheckpointQualificationErrorV1::NonCanonicalEncoding)
         );
+    }
+
+    #[test]
+    fn checked_mi300x_receipt_is_exact_redacted_nonempty_evidence() {
+        assert_eq!(MI300X_QUALIFICATION_RECEIPT_V1.len(), 3_407);
+        let raw_sha256: [u8; 32] = Sha256::digest(MI300X_QUALIFICATION_RECEIPT_V1).into();
+        assert_eq!(
+            raw_sha256,
+            [
+                0x9e, 0x9e, 0x63, 0x3b, 0x1a, 0x5f, 0x71, 0x46, 0x62, 0x03, 0x63, 0x17, 0x29, 0x03,
+                0x38, 0xa8, 0x6c, 0xac, 0xc2, 0x7e, 0x52, 0x65, 0x70, 0x4b, 0xd0, 0x8b, 0x74, 0x4d,
+                0x4b, 0x6e, 0xcd, 0xf1,
+            ]
+        );
+
+        let receipt =
+            decode_kfd_opaque_checkpoint_qualification_v1(MI300X_QUALIFICATION_RECEIPT_V1).unwrap();
+        assert_eq!(receipt.observation.capture_limit_bytes, 185_630_720);
+        assert_eq!(receipt.observation.captured_bytes, 2_324);
+        assert_eq!(receipt.observation.ranges.len(), 16);
+        let nonempty = receipt
+            .observation
+            .ranges
+            .iter()
+            .filter(|slot| slot.bytes != 0)
+            .map(|slot| (slot.xcc_ordinal, slot.kind, slot.offset, slot.bytes))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            nonempty,
+            vec![
+                (0, KfdOpaqueCheckpointRangeKindV1::ControlStack, 12_268, 20),
+                (0, KfdOpaqueCheckpointRangeKindV1::WaveState, 14_592, 2_304),
+            ]
+        );
+        assert!(!receipt.grants_observation_authority());
+        assert!(!receipt.grants_execution_authority());
+        assert!(!receipt.grants_resume_authority());
+        assert!(!receipt.grants_memory_authority());
+
+        for pin in [
+            "7c2db0c15664fcc2671796f6cc62219fc935cfa9",
+            "0b354b4ec534383eff9b1162c20c34392cbbacc9",
+            "9e9e633b1a5f714662036317290338a86cacc27e5265704bd08b744d4b6ecdf1",
+        ] {
+            assert!(MI300X_QUALIFICATION_NARRATIVE_V1.contains(pin));
+        }
     }
 
     #[test]

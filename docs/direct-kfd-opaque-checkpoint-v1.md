@@ -98,6 +98,10 @@ idle zero-byte checkpoint, truncation, unavailable capture, failed resume,
 incorrect output, incomplete target lifecycle, failed session cleanup, or
 failed child exit produces no blessed record.
 
+The checked-in 2026-09-03 run retains the
+[canonical redacted receipt](evidence/mi300x-direct-kfd-opaque-checkpoint-qualification-v1.json)
+and its [exact producer and claim-boundary narrative](evidence/mi300x-direct-kfd-opaque-checkpoint-qualification-2026-09-03.md).
+
 The receipt self-identity and the checked-in raw file digest detect
 substitution after pinning. They are not signatures, do not authenticate the
 producer, and do not upgrade target-declared artifact correlation into proof of
