@@ -909,6 +909,22 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
             &["output", "element"][..],
         ),
         (
+            "debug_helper",
+            "debug_helper",
+            json!([
+                {"kind": "scalar", "type": "f32", "bits": "0x3f800000"},
+                {
+                    "kind": "buffer",
+                    "element": "f32",
+                    "access": "read_write",
+                    "alignment": 4,
+                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                },
+            ]),
+            &["value"][..],
+            &[][..],
+        ),
+        (
             "shifted",
             "checked_shifted",
             json!([{
@@ -1022,10 +1038,95 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
             .unwrap(),
         )
         .unwrap();
-        let protocol_input = concat!(
-            "{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"direction\":\"forward\",\"granularity\":\"operation\",\"count\":1}\n",
-            "{\"operation\":\"inspect_source_variables\",\"schema\":\"fe2o3-debug-source-variable-request-v2\",\"request_id\":2,\"expected_revision\":1,\"scope\":{\"level\":\"dispatch\"},\"frame\":1,\"selector\":{\"selector\":\"all\"},\"page\":{\"limit\":64}}\n",
-        );
+        let mut protocol_input = Vec::new();
+        let helper_site = if feature == "debug_helper" {
+            let module = fe2o3_kernel_ir::decode_module_v7(bundle.inner_v1().canonical_kir_v7())
+                .expect("decode helper KIR");
+            let helper_ordinal = module
+                .functions
+                .iter()
+                .position(|function| function.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
+                .expect("ordinary helper survives as an internal KIR function")
+                as u64;
+            let helper_site = map
+                .sites()
+                .iter()
+                .find(|site| site.site().function_ordinal() == helper_ordinal)
+                .expect("source map contains an exact helper KIR site");
+            let ordinals = map
+                .sites()
+                .iter()
+                .map(|site| site.site().function_ordinal())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(ordinals.len(), 2);
+            assert!(
+                map.scopes()
+                    .iter()
+                    .any(|scope| scope.function_ordinal() == helper_ordinal)
+            );
+            for request in [
+                json!({
+                    "operation": "set_breakpoints",
+                    "schema": "fe2o3-debug-request-v1",
+                    "request_id": 1,
+                    "expected_revision": 0,
+                    "breakpoints": [{
+                        "enabled": true,
+                        "kind": {
+                            "kind": "site",
+                            "site": {
+                                "function_ordinal": helper_site.site().function_ordinal(),
+                                "block_ordinal": helper_site.site().block_ordinal(),
+                                "point": {
+                                    "kind": "operation",
+                                    "operation_ordinal": helper_site.site().operation_ordinal(),
+                                },
+                            },
+                            "phase": "before_operation",
+                        },
+                    }],
+                }),
+                json!({
+                    "operation": "continue",
+                    "schema": "fe2o3-debug-request-v1",
+                    "request_id": 2,
+                    "expected_revision": 1,
+                    "max_events": 65536,
+                }),
+                json!({
+                    "operation": "inspect_stack",
+                    "schema": "fe2o3-debug-request-v1",
+                    "request_id": 3,
+                    "expected_revision": 2,
+                    "scope": {"level": "dispatch"},
+                    "page": {"limit": 16},
+                }),
+                json!({
+                    "operation": "resolve_source",
+                    "schema": "fe2o3-debug-request-v1",
+                    "request_id": 4,
+                    "expected_revision": 2,
+                    "site": {
+                        "function_ordinal": helper_site.site().function_ordinal(),
+                        "block_ordinal": helper_site.site().block_ordinal(),
+                        "point": {
+                            "kind": "operation",
+                            "operation_ordinal": helper_site.site().operation_ordinal(),
+                        },
+                    },
+                }),
+            ] {
+                serde_json::to_writer(&mut protocol_input, &request).unwrap();
+                protocol_input.push(b'\n');
+            }
+            Some(helper_site.site())
+        } else {
+            protocol_input.extend_from_slice(concat!(
+                "{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"direction\":\"forward\",\"granularity\":\"operation\",\"count\":1}\n",
+                "{\"operation\":\"inspect_source_variables\",\"schema\":\"fe2o3-debug-source-variable-request-v2\",\"request_id\":2,\"expected_revision\":1,\"scope\":{\"level\":\"dispatch\"},\"frame\":1,\"selector\":{\"selector\":\"all\"},\"page\":{\"limit\":64}}\n",
+            ).as_bytes());
+            None
+        };
         let mut debugger = Command::new(debug_target.join("debug/fe2o3-debug"))
             .args(["sim", "--bundle-v2"])
             .arg(&bundle_path)
@@ -1041,7 +1142,7 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
             .stdin
             .take()
             .unwrap()
-            .write_all(protocol_input.as_bytes())
+            .write_all(&protocol_input)
             .unwrap();
         let debug_output = debugger.wait_with_output().unwrap();
         assert!(
@@ -1056,9 +1157,22 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
             .filter(|line| !line.is_empty())
             .map(|line| serde_json::from_slice::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(responses.len(), 2);
-        assert_eq!(responses[0]["status"], "ok");
-        assert_eq!(responses[1]["status"], "ok");
+        assert_eq!(responses.len(), if helper_site.is_some() { 4 } else { 2 });
+        assert!(
+            responses.iter().all(|response| response["status"] == "ok"),
+            "debugger returned a typed failure for {feature}: {responses:#?}"
+        );
+        if helper_site.is_some() {
+            assert_eq!(responses[1]["result"]["stop"]["reason"], "breakpoint");
+            assert!(
+                responses[2]["result"]["frames"]
+                    .as_array()
+                    .is_some_and(|frames| frames.len() >= 2)
+            );
+            assert_eq!(responses[3]["result"]["result"], "source");
+            exported.push((bundle.inner_v1().canonical_bytes().to_vec(), map));
+            continue;
+        }
         let values = responses[1]["values"]
             .as_array()
             .expect("source-variable response has values");

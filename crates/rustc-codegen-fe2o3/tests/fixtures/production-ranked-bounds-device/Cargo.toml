@@ -9,6 +9,7 @@ publish = false
 
 [features]
 debug_scalar = []
+debug_helper = []
 debug_long_name = []
 debug_mutated_argument = []
 oob = []

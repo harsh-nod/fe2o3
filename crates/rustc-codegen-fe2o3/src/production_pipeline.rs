@@ -1371,7 +1371,13 @@ fn require_complete_simulation_debug_source_capture_v2(
     }
 }
 
-fn sole_debug_map_body_v1(
+struct ExactDebugMapFunctionV1<'a> {
+    function_ordinal: u64,
+    body: &'a fe2o3_kernel_ir::FunctionBody,
+    block_ordinals: BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
+}
+
+fn sole_storage_map_body_v1(
     module: &fe2o3_kernel_ir::Module,
 ) -> Result<(usize, &fe2o3_kernel_ir::FunctionBody), ProductionPipelineError> {
     let mut bodies = module
@@ -1386,10 +1392,108 @@ fn sole_debug_map_body_v1(
         ))?;
     if bodies.next().is_some() {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "V1 correspondence does not distinguish multiple KIR function bodies",
+            "this legacy storage-map contract does not distinguish multiple KIR function bodies",
         ));
     }
     Ok(body)
+}
+
+fn exact_debug_map_functions_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+) -> Result<
+    BTreeMap<
+        (
+            fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+            fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+        ),
+        ExactDebugMapFunctionV1<'_>,
+    >,
+    ProductionPipelineError,
+> {
+    let defined_count = lowered
+        .module()
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some())
+        .count();
+    if defined_count == 0 || defined_count != lowered.correspondence().lowered_functions().len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "live correspondence does not cover every defined KIR function",
+        ));
+    }
+    let mut layouts = BTreeMap::new();
+    let mut ordinals = BTreeSet::new();
+    for record in lowered.correspondence().lowered_functions() {
+        let mut matches = lowered
+            .module()
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| &function.id == record.kernel_ir_function());
+        let Some((ordinal, function)) = matches.next() else {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence names an unknown KIR function",
+            ));
+        };
+        if matches.next().is_some() || function.body.is_none() || !ordinals.insert(ordinal) {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence has an ambiguous KIR function owner",
+            ));
+        }
+        let role_matches = matches!(
+            (record.role(), function.role),
+            (
+                fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::KernelEntry,
+                fe2o3_kernel_ir::FunctionRole::KernelEntry
+            ) | (
+                fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper,
+                fe2o3_kernel_ir::FunctionRole::InternalHelper
+            )
+        );
+        if !role_matches {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence KIR function role differs",
+            ));
+        }
+        let body = function.body.as_ref().expect("body checked");
+        let block_ordinals = body
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(block_ordinal, block)| (block.id, block_ordinal))
+            .collect::<BTreeMap<_, _>>();
+        if block_ordinals.len() != body.blocks.len() {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "KIR body has duplicate block identities",
+            ));
+        }
+        let key = (record.correspondence_owner(), record.semantic_function());
+        if layouts
+            .insert(
+                key,
+                ExactDebugMapFunctionV1 {
+                    function_ordinal: u64::try_from(ordinal).map_err(|_| {
+                        ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "KIR function ordinal does not fit the source-map wire",
+                        )
+                    })?,
+                    body,
+                    block_ordinals,
+                },
+            )
+            .is_some()
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence has a duplicate semantic function owner",
+            ));
+        }
+    }
+    if ordinals.len() != defined_count {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "live correspondence omits a defined KIR function",
+        ));
+    }
+    Ok(layouts)
 }
 
 fn prepare_production_semantic_debug_inputs_v1(
@@ -1535,27 +1639,16 @@ fn compiler_debug_source_map_v1(
     captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
     binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV1, ProductionPipelineError> {
-    let (function_ordinal, body) = sole_debug_map_body_v1(lowered.module())?;
-    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
-        ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR function ordinal does not fit the source-map wire",
-        )
-    })?;
-    let block_ordinals = body
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(ordinal, block)| (block.id, ordinal))
-        .collect::<BTreeMap<_, _>>();
-    if block_ordinals.len() != body.blocks.len() {
-        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR body has duplicate block identities",
-        ));
-    }
+    let function_layouts = exact_debug_map_functions_v1(lowered)?;
 
     let mut mapped = BTreeMap::new();
     let mut eliminated = BTreeSet::new();
     for span in lowered.correspondence().statement_operation_spans() {
+        let layout = function_layouts
+            .get(&(span.correspondence_owner(), span.semantic_function()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement correspondence has no exact KIR function owner",
+            ))?;
         let source = lowered
             .semantic()
             .resolve_statement(
@@ -1568,9 +1661,9 @@ fn compiler_debug_source_map_v1(
             ))?
             .source();
         insert_debug_operation_range_v1(
-            function_ordinal,
-            body,
-            &block_ordinals,
+            layout.function_ordinal,
+            layout.body,
+            &layout.block_ordinals,
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1580,6 +1673,11 @@ fn compiler_debug_source_map_v1(
         )?;
     }
     for span in lowered.correspondence().terminator_operation_spans() {
+        let layout = function_layouts
+            .get(&(span.correspondence_owner(), span.semantic_function()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "terminator correspondence has no exact KIR function owner",
+            ))?;
         let source = lowered
             .semantic()
             .resolve_terminator(span.semantic_function(), span.semantic_block())
@@ -1588,9 +1686,9 @@ fn compiler_debug_source_map_v1(
             ))?
             .source();
         insert_debug_operation_range_v1(
-            function_ordinal,
-            body,
-            &block_ordinals,
+            layout.function_ordinal,
+            layout.body,
+            &layout.block_ordinals,
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1602,9 +1700,14 @@ fn compiler_debug_source_map_v1(
 
     let mut synthetic = BTreeSet::new();
     for span in lowered.correspondence().synthetic_operation_spans() {
+        let layout = function_layouts
+            .get(&(span.correspondence_owner(), span.semantic_function()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "synthetic correspondence has no exact KIR function owner",
+            ))?;
         let block_ordinal = debug_block_ordinal_v1(
-            body,
-            &block_ordinals,
+            layout.body,
+            &layout.block_ordinals,
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1618,7 +1721,7 @@ fn compiler_debug_source_map_v1(
                 ))?
         {
             let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
-                function_ordinal,
+                layout.function_ordinal,
                 block_ordinal,
                 u64::from(operation),
             );
@@ -1629,25 +1732,27 @@ fn compiler_debug_source_map_v1(
             }
         }
     }
-    for (block_ordinal, block) in body.blocks.iter().enumerate() {
-        for operation_ordinal in 0..block.operations.len() {
-            let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
-                function_ordinal,
-                u64::try_from(block_ordinal).map_err(|_| {
-                    ProductionPipelineError::SimulationDebugMapCorrespondence(
-                        "KIR block ordinal does not fit the source-map wire",
-                    )
-                })?,
-                u64::try_from(operation_ordinal).map_err(|_| {
-                    ProductionPipelineError::SimulationDebugMapCorrespondence(
-                        "KIR operation ordinal does not fit the source-map wire",
-                    )
-                })?,
-            );
-            if mapped.contains_key(&site) == synthetic.contains(&site) {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "KIR operation is not covered exactly once by semantic or synthetic correspondence",
-                ));
+    for layout in function_layouts.values() {
+        for (block_ordinal, block) in layout.body.blocks.iter().enumerate() {
+            for operation_ordinal in 0..block.operations.len() {
+                let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
+                    layout.function_ordinal,
+                    u64::try_from(block_ordinal).map_err(|_| {
+                        ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "KIR block ordinal does not fit the source-map wire",
+                        )
+                    })?,
+                    u64::try_from(operation_ordinal).map_err(|_| {
+                        ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "KIR operation ordinal does not fit the source-map wire",
+                        )
+                    })?,
+                );
+                if mapped.contains_key(&site) == synthetic.contains(&site) {
+                    return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        "KIR operation is not covered exactly once by semantic or synthetic correspondence",
+                    ));
+                }
             }
         }
     }
@@ -1695,37 +1800,39 @@ fn compiler_debug_source_map_v2(
     binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV2, ProductionPipelineError> {
     let base = compiler_debug_source_map_v1(lowered, captured_files, binding)?;
-    let (function_ordinal, _) = sole_debug_map_body_v1(lowered.module())?;
-    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
-        ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR function ordinal does not fit the source-map V2 wire",
-        )
-    })?;
-    let selected_semantic_function = lowered
-        .correspondence()
-        .blocks()
-        .first()
-        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "lowering correspondence has no selected semantic function",
-        ))?
-        .semantic_function();
+    let function_layouts = exact_debug_map_functions_v1(lowered)?;
+    let mut function_by_semantic = BTreeMap::new();
+    for ((_, semantic_function), layout) in &function_layouts {
+        if function_by_semantic
+            .insert(*semantic_function, layout.function_ordinal)
+            .is_some()
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "source-map V2 cannot disambiguate repeated semantic helper instances",
+            ));
+        }
+    }
 
     let mut parameter_by_local = BTreeMap::new();
     for binding in lowered.correspondence().parameter_bindings() {
-        if binding.semantic_function() != selected_semantic_function
+        if !function_layouts
+            .contains_key(&(binding.correspondence_owner(), binding.semantic_function()))
             || parameter_by_local
-                .insert(binding.semantic_local(), binding.kernel_ir_value())
+                .insert(
+                    (binding.semantic_function(), binding.semantic_local()),
+                    binding.kernel_ir_value(),
+                )
                 .is_some()
         {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "KIR parameter correspondence is not unique for the selected semantic function",
+                "KIR parameter correspondence is not unique for its semantic function",
             ));
         }
     }
 
     let selected_scope_count = captured_scopes
         .iter()
-        .filter(|scope| scope.function == selected_semantic_function)
+        .filter(|scope| function_by_semantic.contains_key(&scope.function))
         .count();
     if selected_scope_count > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2 {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -1742,8 +1849,13 @@ fn compiler_debug_source_map_v2(
         })?;
     for scope in captured_scopes
         .iter()
-        .filter(|scope| scope.function == selected_semantic_function)
+        .filter(|scope| function_by_semantic.contains_key(&scope.function))
     {
+        let function_ordinal = *function_by_semantic.get(&scope.function).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source scope has no exact KIR function owner",
+            ),
+        )?;
         scopes.push(
             fe2o3_kernel_ir::DebugSourceScopeV2::new(
                 scope.identity,
@@ -1762,7 +1874,7 @@ fn compiler_debug_source_map_v2(
 
     let selected_variable_count = captured_variables
         .iter()
-        .filter(|variable| variable.function == selected_semantic_function)
+        .filter(|variable| function_by_semantic.contains_key(&variable.function))
         .count();
     if selected_variable_count > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -1779,8 +1891,13 @@ fn compiler_debug_source_map_v2(
         })?;
     for variable in captured_variables
         .iter()
-        .filter(|variable| variable.function == selected_semantic_function)
+        .filter(|variable| function_by_semantic.contains_key(&variable.function))
     {
+        let function_ordinal = *function_by_semantic.get(&variable.function).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source variable has no exact KIR function owner",
+            ),
+        )?;
         if !scope_identities.contains(&variable.scope_identity) {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "compiler source variable references an unretained lexical scope",
@@ -1794,7 +1911,7 @@ fn compiler_debug_source_map_v2(
         let (fallback, parameter) = match variable.class {
             crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Local(local) => {
                 match parameter_by_local
-                    .get(&local)
+                    .get(&(variable.function, local))
                     .copied()
                     .filter(|_| variable.entry_value_preserved)
                 {
@@ -1919,7 +2036,7 @@ fn compiler_semantic_storage_map_v1(
         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
             "typed storage map semantic body is absent",
         ))?;
-    let (kir_function_ordinal, kir_body) = sole_debug_map_body_v1(lowered.module())?;
+    let (kir_function_ordinal, kir_body) = sole_storage_map_body_v1(lowered.module())?;
     let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
         ProductionPipelineError::SimulationDebugMapCorrespondence(
             "typed storage map KIR function is absent",
@@ -2110,7 +2227,7 @@ fn compiler_semantic_storage_map_v2(
         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
             MAP_ERROR,
         ))?;
-    let (kir_function_ordinal, kir_body) = sole_debug_map_body_v1(lowered.module())?;
+    let (kir_function_ordinal, kir_body) = sole_storage_map_body_v1(lowered.module())?;
     let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
         ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
     )?;
@@ -3100,10 +3217,10 @@ mod tests {
     }
 
     #[test]
-    fn debug_map_body_selection_fails_closed_until_correspondence_names_functions() {
+    fn legacy_storage_map_body_selection_remains_single_function() {
         let empty = fe2o3_kernel_ir::Module::new("empty");
         assert!(matches!(
-            sole_debug_map_body_v1(&empty),
+            sole_storage_map_body_v1(&empty),
             Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "lowered KIR has no function body"
             ))
@@ -3113,9 +3230,9 @@ mod tests {
         multiple.functions.push(debug_map_test_function("kernel"));
         multiple.functions.push(debug_map_test_function("helper"));
         assert!(matches!(
-            sole_debug_map_body_v1(&multiple),
+            sole_storage_map_body_v1(&multiple),
             Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "V1 correspondence does not distinguish multiple KIR function bodies"
+                "this legacy storage-map contract does not distinguish multiple KIR function bodies"
             ))
         ));
     }
@@ -3473,7 +3590,7 @@ mod tests {
             .map(|offset| protected_prepare + offset)
             .expect("protected publication method remains explicit");
         let protected_pipeline_end = pipeline[protected_pipeline..]
-            .find("\nfn sole_debug_map_body_v1(")
+            .find("\nfn require_complete_simulation_debug_source_capture_v2(")
             .map(|offset| protected_pipeline + offset)
             .expect("protected publication method remains bounded");
         let protected_pipeline = &pipeline[protected_pipeline..protected_pipeline_end];

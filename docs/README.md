@@ -58,6 +58,7 @@ documentation.
 - [Semantic debug transformation map V2](semantic-debug-transformation-map-v2.md): exact
   cross-layer cardinality separated from producer-authenticated optimization classification.
 - [Debugger and profiler task matrix](debugger-profiler-task-matrix-v1.md)
+- [Production multi-function semantic debug](production-multifunction-semantic-debug-v1.md)
 - [Decoded ATT interchange](decoded-att-interchange-v1.md)
 - [Debugger and profiler qualification](debugger-profiler-qualification-v1.md)
 - [Direct-KFD runtime profiler](kfd-native-profiler-v1.md)

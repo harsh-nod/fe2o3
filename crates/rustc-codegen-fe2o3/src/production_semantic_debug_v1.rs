@@ -16,7 +16,8 @@ use fe2o3_kernel_ir::{
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalMirToKirCorrespondenceEvidenceV4, ProductionSemanticKirOwnerV1,
+    InertCanonicalMirToKirCorrespondenceEvidenceV5, MirToKirFunctionRoleEvidenceV5,
+    ProductionSemanticKirOwnerV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -175,7 +176,7 @@ const fn semantic_fragment_resource_error(error: ProductionSemanticDebugFragment
 
 pub(crate) fn prepare_production_semantic_debug_v1(
     lowered: &ProductionSemanticKirOwnerV1,
-    correspondence: &InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    correspondence: &InertCanonicalMirToKirCorrespondenceEvidenceV5,
     source_map: DebugSourceMapDocumentV2,
     canonical_kir: &VerifiedCanonicalKernelIrV7,
 ) -> Result<PreparedProductionSemanticDebugV1, ProductionPipelineError> {
@@ -193,36 +194,109 @@ pub(crate) fn prepare_production_semantic_debug_v1(
         };
     }
 
-    let mut bodies = lowered
-        .module()
-        .functions
-        .iter()
-        .enumerate()
-        .filter_map(|(ordinal, function)| function.body.as_ref().map(|body| (ordinal, body)));
-    let Some((function_ordinal, body)) = bodies.next() else {
+    let nested_v4 = correspondence.nested_v4();
+    correspondence
+        .validate_against_module(lowered.module())
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "V5 correspondence does not exactly match the live KIR function roster",
+            )
+        })?;
+    if correspondence.functions().is_empty() {
         return Ok(PreparedProductionSemanticDebugV1::Unavailable(
             ProductionSemanticDebugProducerGapV1::NoStatementCorrespondence,
         ));
-    };
-    if bodies.next().is_some() {
-        return Ok(PreparedProductionSemanticDebugV1::Unavailable(
-            ProductionSemanticDebugProducerGapV1::MultipleKirFunctionBodies,
+    }
+    let owner = correspondence.functions()[0].correspondence_owner();
+    if correspondence
+        .functions()
+        .iter()
+        .any(|record| record.correspondence_owner() != owner)
+        || correspondence
+            .functions()
+            .iter()
+            .filter(|record| record.role() == MirToKirFunctionRoleEvidenceV5::KernelEntry)
+            .count()
+            != 1
+    {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "V5 singleton correspondence has ambiguous function ownership",
         ));
     }
-    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
-        ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR function ordinal exceeds the semantic debug wire",
-        )
-    })?;
-    let block_ordinals = body
-        .blocks
+    let defined_function_count = lowered
+        .module()
+        .functions
         .iter()
-        .enumerate()
-        .map(|(ordinal, block)| (block.id, ordinal))
-        .collect::<BTreeMap<_, _>>();
-    if block_ordinals.len() != body.blocks.len() {
+        .filter(|function| function.body.is_some())
+        .count();
+    if defined_function_count != correspondence.functions().len() {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR block identities are not unique",
+            "V5 correspondence does not cover every defined KIR function",
+        ));
+    }
+    let mut function_layouts = Vec::new();
+    if function_layouts
+        .try_reserve_exact(correspondence.functions().len())
+        .is_err()
+    {
+        return Ok(PreparedProductionSemanticDebugV1::Unavailable(
+            ProductionSemanticDebugProducerGapV1::ResourceLimit,
+        ));
+    }
+    for record in correspondence.functions() {
+        let ordinal = usize::try_from(record.kernel_ir_function_ordinal()).map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "KIR function ordinal exceeds the host address space",
+            )
+        })?;
+        let function = lowered.module().functions.get(ordinal).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "V5 correspondence names an unknown KIR function ordinal",
+            ),
+        )?;
+        let expected_role = match record.role() {
+            MirToKirFunctionRoleEvidenceV5::KernelEntry => {
+                fe2o3_kernel_ir::FunctionRole::KernelEntry
+            }
+            MirToKirFunctionRoleEvidenceV5::InternalHelper => {
+                fe2o3_kernel_ir::FunctionRole::InternalHelper
+            }
+        };
+        let body = function.body.as_ref().ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "V5 correspondence names a KIR declaration",
+            ),
+        )?;
+        if function.id.as_str() != record.kernel_ir_function() || function.role != expected_role {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "V5 correspondence KIR function identity or role differs",
+            ));
+        }
+        let block_ordinals = body
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(block_ordinal, block)| (block.id, block_ordinal))
+            .collect::<BTreeMap<_, _>>();
+        if block_ordinals.len() != body.blocks.len() {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "KIR block identities are not unique within their function",
+            ));
+        }
+        function_layouts.push((
+            record.semantic_function(),
+            u64::from(record.kernel_ir_function_ordinal()),
+            body,
+            block_ordinals,
+        ));
+    }
+    function_layouts.sort_unstable_by_key(|layout| layout.0);
+    if function_layouts
+        .windows(2)
+        .any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "V5 correspondence semantic functions are ambiguous",
         ));
     }
 
@@ -244,16 +318,15 @@ pub(crate) fn prepare_production_semantic_debug_v1(
     }
     let context = debug_identity_context(&source_map_v2, canonical_kir.canonical_bytes());
 
-    if *correspondence.semantic_sha256()
-        != *lowered.semantic().semantic().semantic_sha256().as_bytes()
-        || correspondence.canonical_kernel_ir_identity() != lowered.canonical_kernel_ir_identity()
+    if *nested_v4.semantic_sha256() != *lowered.semantic().semantic().semantic_sha256().as_bytes()
+        || nested_v4.canonical_kernel_ir_identity() != lowered.canonical_kernel_ir_identity()
     {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
             "V4 correspondence names different semantic MIR or production KIR",
         ));
     }
 
-    let counts = correspondence.statement_spans().iter().try_fold(
+    let counts = nested_v4.statement_spans().iter().try_fold(
         (0_usize, 0_usize),
         |(statements, operations), span| {
             Some((
@@ -294,7 +367,14 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             ProductionSemanticDebugProducerGapV1::ResourceLimit,
         ));
     }
-    for span in correspondence.statement_spans() {
+    for span in nested_v4.statement_spans() {
+        let (_, function_ordinal, body, block_ordinals) = function_layouts
+            .binary_search_by_key(&span.semantic_function(), |layout| layout.0)
+            .ok()
+            .and_then(|index| function_layouts.get(index))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement debug correspondence has no exact KIR function owner",
+            ))?;
         let source = lowered
             .semantic()
             .resolve_statement(
@@ -392,14 +472,12 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             continue;
         }
 
-        let block_ordinal = u64::try_from(
-            *block_ordinals
-                .get(&fe2o3_kernel_ir::BlockId(span.kernel_ir_block()))
-                .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "statement debug correspondence names an unknown KIR block",
-                ))?,
-        )
-        .map_err(|_| {
+        let block_index = *block_ordinals
+            .get(&fe2o3_kernel_ir::BlockId(span.kernel_ir_block()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement debug correspondence names an unknown KIR block",
+            ))?;
+        let block_ordinal = u64::try_from(block_index).map_err(|_| {
             ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "KIR block ordinal exceeds the semantic debug wire",
             )
@@ -414,16 +492,24 @@ pub(crate) fn prepare_production_semantic_debug_v1(
                 ProductionSemanticDebugProducerGapV1::ResourceLimit,
             ));
         }
-        for operation in span.first_operation()
-            ..span
-                .first_operation()
-                .checked_add(span.operation_count())
-                .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "statement KIR operation range overflows",
-                ))?
-        {
+        let operation_end = span
+            .first_operation()
+            .checked_add(span.operation_count())
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement KIR operation range overflows",
+            ))?;
+        if usize::try_from(operation_end).map_or(true, |end| {
+            body.blocks
+                .get(block_index)
+                .is_none_or(|block| end > block.operations.len())
+        }) {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement KIR operation range exceeds its exact function body",
+            ));
+        }
+        for operation in span.first_operation()..operation_end {
             let site = DebugSourceMapKirSiteV1::operation(
-                function_ordinal,
+                *function_ordinal,
                 block_ordinal,
                 u64::from(operation),
             );
@@ -443,7 +529,7 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             let kir_id = node_identity(
                 context,
                 3,
-                function_ordinal,
+                *function_ordinal,
                 block_ordinal,
                 u64::from(operation),
                 0,
@@ -451,7 +537,7 @@ pub(crate) fn prepare_production_semantic_debug_v1(
             nodes.push(semantic_map_value!(SemanticDebugNodeV1::new(
                 kir_id,
                 SemanticDebugLocationV1::Kir {
-                    function_ordinal,
+                    function_ordinal: *function_ordinal,
                     block_ordinal,
                     operation_ordinal: u64::from(operation),
                 },
