@@ -158,6 +158,7 @@ pub use generated_kfd_invocation::{
     GeneratedWorkerV3KfdDifferentialAvailabilityV1, GeneratedWorkerV3KfdDifferentialBindingV1,
     GeneratedWorkerV3KfdDifferentialObservationV1, GeneratedWorkerV3KfdExecutionError,
     GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
+    WorkerV3ApplicationExecutionBindingV1,
 };
 #[doc(hidden)]
 #[cfg(feature = "qualification-legacy-hip-hsa")]

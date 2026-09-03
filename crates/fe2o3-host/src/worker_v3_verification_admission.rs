@@ -1001,6 +1001,24 @@ pub struct WorkerV3VerificationDecisionV1 {
     rust_type_layout_contract_sha256: [u8; 32],
     rust_effect_contract_sha256: [u8; 32],
     safety_properties: WorkerV3SafetyPropertiesV1,
+    authority_evidence: WorkerV3VerifierAuthorityEvidenceV1,
+}
+
+#[derive(Debug)]
+enum WorkerV3VerifierAuthorityEvidenceV1 {
+    ProtectedBackend,
+    #[cfg(any(test, feature = "worker-v3-verifier-test-support"))]
+    Synthetic,
+}
+
+impl WorkerV3VerifierAuthorityEvidenceV1 {
+    const fn admits_production_application(&self, retained_evidence_is_current: bool) -> bool {
+        match self {
+            Self::ProtectedBackend => retained_evidence_is_current,
+            #[cfg(any(test, feature = "worker-v3-verifier-test-support"))]
+            Self::Synthetic => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1023,7 +1041,7 @@ impl WorkerV3VerificationDecisionV1 {
         reason = "reserved for the crate-owned production verifier; synthetic builds enter through the explicitly gated constructor"
     )]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    fn new(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -1070,6 +1088,7 @@ impl WorkerV3VerificationDecisionV1 {
             rust_type_layout_contract_sha256,
             rust_effect_contract_sha256,
             safety_properties,
+            WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend,
         )
     }
 
@@ -1097,6 +1116,7 @@ impl WorkerV3VerificationDecisionV1 {
         rust_type_layout_contract_sha256: [u8; 32],
         rust_effect_contract_sha256: [u8; 32],
         safety_properties: WorkerV3SafetyPropertiesV1,
+        authority_evidence: WorkerV3VerifierAuthorityEvidenceV1,
     ) -> Self {
         Self {
             challenge,
@@ -1121,6 +1141,7 @@ impl WorkerV3VerificationDecisionV1 {
             rust_type_layout_contract_sha256,
             rust_effect_contract_sha256,
             safety_properties,
+            authority_evidence,
         }
     }
 
@@ -1173,6 +1194,7 @@ impl WorkerV3VerificationDecisionV1 {
             rust_type_layout_contract_sha256,
             rust_effect_contract_sha256,
             safety_properties,
+            WorkerV3VerifierAuthorityEvidenceV1::Synthetic,
         )
     }
 
@@ -1194,6 +1216,36 @@ impl WorkerV3VerificationDecisionV1 {
 
     pub const fn finalized_hsaco_length(&self) -> u64 {
         self.finalized_length
+    }
+
+    /// Returns the exact code-object version authenticated by the protected decision.
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.code_object_version
+    }
+
+    /// Returns the protected verifier deployment measurement retained by this decision.
+    pub const fn verifier_measurement_sha256(&self) -> [u8; 32] {
+        self.verifier_measurement_sha256
+    }
+
+    /// Returns the authenticated protected-verification transcript identity.
+    pub const fn verification_transcript_sha256(&self) -> [u8; 32] {
+        self.verification_transcript_sha256
+    }
+
+    /// Returns the protected proof-to-final-executable binding identity.
+    pub const fn proof_executable_binding_sha256(&self) -> [u8; 32] {
+        self.proof_executable_binding_sha256
+    }
+
+    /// Returns the protected Rust type/layout contract identity.
+    pub const fn rust_type_layout_contract_sha256(&self) -> [u8; 32] {
+        self.rust_type_layout_contract_sha256
+    }
+
+    /// Returns the protected Rust effect contract identity.
+    pub const fn rust_effect_contract_sha256(&self) -> [u8; 32] {
+        self.rust_effect_contract_sha256
     }
 
     pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
@@ -1249,6 +1301,18 @@ impl WorkerV3VerificationDecisionV1 {
             #[cfg(feature = "worker-v3-verifier-test-support")]
             _ => false,
         }
+    }
+
+    /// Reports that the sealed production adapter retained its unsafe protected-backend provenance
+    /// together with the currently authenticated compiler and signed-Verus evidence.
+    ///
+    /// This is a provenance gate for the application transition. It does not synthesize or claim
+    /// the still-missing semantic-to-machine refinement proofs; those remain obligations of the
+    /// explicit unsafe protected-verifier boundary.
+    pub(crate) const fn retains_protected_application_execution_evidence(&self) -> bool {
+        self.authority_evidence.admits_production_application(
+            self.retains_current_compiler_and_signed_verus_evidence(),
+        )
     }
 }
 
@@ -3598,5 +3662,20 @@ mod tests {
         ] {
             assert!(required.contains(property));
         }
+    }
+
+    #[test]
+    fn protected_application_provenance_rejects_synthetic_and_failed_currentness() {
+        assert!(
+            WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
+                .admits_production_application(true)
+        );
+        assert!(
+            !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
+                .admits_production_application(false)
+        );
+        assert!(
+            !WorkerV3VerifierAuthorityEvidenceV1::Synthetic.admits_production_application(true)
+        );
     }
 }
