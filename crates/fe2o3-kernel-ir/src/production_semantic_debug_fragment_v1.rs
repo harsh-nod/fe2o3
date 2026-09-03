@@ -236,8 +236,10 @@ impl ProductionSemanticDebugTransformationCapabilityV1 {
 
 /// Reports the transformation vocabulary of the current production semantic-debug producer.
 ///
-/// `Representable` means the schema and producer can retain an observation when that shape occurs;
-/// it does not claim that any particular compilation observed the shape.
+/// `Representable` means the schema and producer can retain an authenticated observation when that
+/// shape occurs; it does not claim that any particular compilation observed the shape. In
+/// particular, a V4 correspondence span with multiple KIR operations proves cardinality, not
+/// semantic duplication.
 pub const fn production_semantic_debug_transformation_capabilities_v1()
 -> [ProductionSemanticDebugTransformationCapabilityV1; 6] {
     use ProductionSemanticDebugTransformationAvailabilityV1::{
@@ -249,7 +251,7 @@ pub const fn production_semantic_debug_transformation_capabilities_v1()
     [
         ProductionSemanticDebugTransformationCapabilityV1 {
             class: Duplicated,
-            availability: Representable,
+            availability: UnavailableNoProductionEmitter,
         },
         ProductionSemanticDebugTransformationCapabilityV1 {
             class: Fused,
@@ -833,7 +835,7 @@ mod tests {
             [
                 ProductionSemanticDebugTransformationCapabilityV1 {
                     class: ProductionSemanticDebugTransformationClassV1::Duplicated,
-                    availability: ProductionSemanticDebugTransformationAvailabilityV1::Representable,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
                 },
                 ProductionSemanticDebugTransformationCapabilityV1 {
                     class: ProductionSemanticDebugTransformationClassV1::Fused,

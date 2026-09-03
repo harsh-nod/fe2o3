@@ -182,6 +182,14 @@ typed schedule-unavailable status, and a partial Source-to-MIR-to-KIR map. Final
 projection to decode to the identical `Module`, and checks every map edge against the exact V4
 statement correspondence, semantic MIR call-site span, and Source Map operation site.
 
+Exact production admission also constructs the additive Semantic Debug Transformation Map V2
+sidecar documented in `../../docs/semantic-debug-transformation-map-v2.md`. It retains one-to-one,
+one-to-many, many-to-one, many-to-many, and eliminated endpoint relations independently of an
+optimization label. The current V4 correspondence authenticates preservation and elimination, but
+does not classify multi-operation lowering spans; those remain exact one-to-many relations with
+`ProducerDidNotClassify`, not fabricated duplication. Legacy artifact-only admission has no V2
+projection.
+
 The finalizer also independently replays the retained whole-module neutral-KIR-to-target-KIR-to-
 pre-descriptor-LLVM evidence. For exact V8 inputs, the bounded source/ISA correlation API joins the
 Source Map V2 span and node, semantic MIR, neutral KIR coordinate, target KIR coordinate, Worker-

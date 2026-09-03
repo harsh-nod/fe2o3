@@ -40,6 +40,8 @@
 //! [`SemanticDebugMapDocumentV1`] is a separate, finalized-artifact-bound sidecar for exact
 //! bidirectional source/MIR/KIR/schedule/LLVM/ISA correlation. It represents optimization shape
 //! and typed absence explicitly and does not broaden Source Map V1/V2 authority.
+//! [`SemanticDebugTransformationMapDocumentV2`] adds exact many-valued relation cardinality and
+//! separates it from producer-authenticated transformation classification without changing V1.
 //!
 //! SemanticOperation is the versioned extension boundary for typed
 //! target-neutral operation families. Its separate schema and payload-bearing
@@ -67,6 +69,7 @@ mod production_semantic_debug_fragment_v1;
 mod region_effects;
 pub mod scalar_ops_v2;
 mod semantic_debug_map_v1;
+mod semantic_debug_transformation_map_v2;
 mod semantic_operations;
 mod simulation_bundle_v1;
 mod simulation_bundle_v2;
@@ -115,6 +118,7 @@ pub use matrix::*;
 pub use production_semantic_debug_fragment_v1::*;
 pub use region_effects::*;
 pub use semantic_debug_map_v1::*;
+pub use semantic_debug_transformation_map_v2::*;
 pub use semantic_operations::*;
 pub use simulation_bundle_v1::*;
 pub use simulation_bundle_v2::*;

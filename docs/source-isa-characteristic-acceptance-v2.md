@@ -36,12 +36,13 @@ transformation field. Exact duplicate catalog facts and exact duplicate ISA
 intervals retain distinct occurrence ordinals; set projection must not erase
 their multiplicity.
 
-The current producer can represent `Duplicated` and `Eliminated` records.
+The Source/ISA catalog producer can represent backend `Duplicated` and `Eliminated` records.
 `Fused`, `Inlined`, and `Moved` are typed
 `UnavailableNoProductionEmitter`; `Outlined` is typed
 `UnavailableNoSchemaRepresentation`. These capabilities describe producer
 expressiveness, not an assertion that a particular compilation observed a
-shape. The existing coalesced and duplicated-and-coalesced records remain exact
+shape. This does not authenticate semantic duplication in MIR-to-KIR correspondence. The existing
+coalesced and duplicated-and-coalesced records remain exact
 backend observations rather than aliases for those unavailable classes.
 Independent producer and parser tests preserve duplicate and
 duplicated-and-coalesced cardinality. No current ordinary-source or canonical

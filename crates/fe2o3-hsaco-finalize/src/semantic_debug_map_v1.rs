@@ -15,7 +15,13 @@ use fe2o3_kernel_ir::{
     ProductionSemanticDebugReceiptExtensionV1, SemanticDebugBoundaryDirectionV1,
     SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1, SemanticDebugLayerV1,
     SemanticDebugLocationV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
-    SemanticDebugMapInputsV1, SemanticDebugMappingV1, SemanticDebugTransformationV1,
+    SemanticDebugMapInputsV1, SemanticDebugMappingV1, SemanticDebugRelationCardinalityV2,
+    SemanticDebugTransformationAvailabilityV2, SemanticDebugTransformationCapabilityV2,
+    SemanticDebugTransformationClassV2, SemanticDebugTransformationClassificationV2,
+    SemanticDebugTransformationEvidenceKindV2, SemanticDebugTransformationEvidenceV2,
+    SemanticDebugTransformationMapBindingV2, SemanticDebugTransformationMapDocumentV2,
+    SemanticDebugTransformationMapErrorV2, SemanticDebugTransformationRelationV2,
+    SemanticDebugTransformationUnavailableReasonV2, SemanticDebugTransformationV1,
     SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV8, decode_module_v7,
     semantic_debug_map_identity_v1,
 };
@@ -65,6 +71,7 @@ pub struct AdmittedFinalizedSemanticDebugMapV1 {
     canonical_bytes: Vec<u8>,
     document: SemanticDebugMapDocumentV1,
     graph_indices: SemanticDebugGraphIndicesV1,
+    transformation_map_v2: Option<SemanticDebugTransformationMapDocumentV2>,
 }
 
 impl AdmittedFinalizedSemanticDebugMapV1 {
@@ -97,6 +104,13 @@ impl AdmittedFinalizedSemanticDebugMapV1 {
 
     pub const fn document(&self) -> &SemanticDebugMapDocumentV1 {
         &self.document
+    }
+
+    /// Returns exact cardinality and only producer-authenticated transformation classes.
+    ///
+    /// Legacy artifact-only admission has no correspondence evidence and returns `None`.
+    pub const fn transformation_map_v2(&self) -> Option<&SemanticDebugTransformationMapDocumentV2> {
+        self.transformation_map_v2.as_ref()
     }
 
     pub(crate) const fn graph_indices(&self) -> &SemanticDebugGraphIndicesV1 {
@@ -367,7 +381,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         let map_bytes = map
             .to_canonical_json_bytes()
             .map_err(FinalizedSemanticDebugMapErrorV1::SemanticMap)?;
-        let admitted = self.admit_semantic_debug_map_with_inputs_v1(
+        let mut admitted = self.admit_semantic_debug_map_with_inputs_v1(
             &map_bytes,
             SemanticDebugMapInputsV1 {
                 source_map_v2: fragment.source_map_v2(),
@@ -378,6 +392,10 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 finalized_artifact: self.exact_finalized_bytes(),
             },
         )?;
+        admitted.transformation_map_v2 = Some(build_production_transformation_map_v2(
+            &admitted,
+            correspondence_bytes,
+        )?);
         Ok(ProductionFinalizedSemanticDebugAdmissionV1::Admitted(
             Box::new(admitted),
         ))
@@ -740,6 +758,8 @@ fn validate_exact_production_correspondence(
             }
             kir_ids.push(kir_id);
         }
+        // This validates the frozen V1 carrier shape, not semantic duplication. Exact production
+        // classification is emitted separately by Transformation Map V2.
         let transformation = if kir_ids.len() == 1 {
             SemanticDebugTransformationV1::Preserved
         } else {
@@ -878,7 +898,88 @@ fn admit_with_entry_sizes_and_status(
         canonical_bytes,
         document,
         graph_indices,
+        transformation_map_v2: None,
     })
+}
+
+fn build_production_transformation_map_v2(
+    admitted: &AdmittedFinalizedSemanticDebugMapV1,
+    correspondence_bytes: &[u8],
+) -> Result<SemanticDebugTransformationMapDocumentV2, FinalizedSemanticDebugMapErrorV1> {
+    let evidence = SemanticDebugTransformationEvidenceV2::from_exact_bytes(
+        SemanticDebugTransformationEvidenceKindV2::MirKirCorrespondenceV4,
+        correspondence_bytes,
+    )
+    .map_err(FinalizedSemanticDebugMapErrorV1::TransformationMapV2)?;
+    let binding =
+        SemanticDebugTransformationMapBindingV2::from_exact_map(admitted.canonical_bytes())
+            .map_err(FinalizedSemanticDebugMapErrorV1::TransformationMapV2)?;
+    let capabilities = SemanticDebugTransformationClassV2::all_v2()
+        .into_iter()
+        .map(|class| {
+            let availability = if class == SemanticDebugTransformationClassV2::Eliminated {
+                SemanticDebugTransformationAvailabilityV2::AuthenticatedProducer
+            } else {
+                SemanticDebugTransformationAvailabilityV2::UnavailableNoAuthenticatedProducer
+            };
+            SemanticDebugTransformationCapabilityV2::new(class, availability)
+        })
+        .collect();
+    let mut relations = Vec::new();
+    relations
+        .try_reserve_exact(admitted.document().mappings().len())
+        .map_err(|_| FinalizedSemanticDebugMapErrorV1::AllocationFailure)?;
+    for mapping in admitted.document().mappings() {
+        if !matches!(
+            (mapping.input_layer(), mapping.output_layer()),
+            (SemanticDebugLayerV1::Source, SemanticDebugLayerV1::Mir)
+                | (SemanticDebugLayerV1::Mir, SemanticDebugLayerV1::Kir)
+        ) {
+            continue;
+        }
+        let classification = match (mapping.input_layer(), mapping.output().nodes().len()) {
+            (SemanticDebugLayerV1::Source, 1) => {
+                SemanticDebugTransformationClassificationV2::Preserved
+            }
+            (SemanticDebugLayerV1::Mir, 0) => {
+                SemanticDebugTransformationClassificationV2::Observed {
+                    class: SemanticDebugTransformationClassV2::Eliminated,
+                }
+            }
+            (SemanticDebugLayerV1::Mir, 1) => {
+                SemanticDebugTransformationClassificationV2::Preserved
+            }
+            (SemanticDebugLayerV1::Mir, _) => {
+                SemanticDebugTransformationClassificationV2::Unavailable {
+                    reason: SemanticDebugTransformationUnavailableReasonV2::ProducerDidNotClassify,
+                }
+            }
+            _ => return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence),
+        };
+        let relation = SemanticDebugTransformationRelationV2::new(
+            mapping.input_layer(),
+            mapping.output_layer(),
+            evidence.identity(),
+            bounded_copy_identities(mapping.inputs())?,
+            bounded_copy_identities(mapping.output().nodes())?,
+            classification,
+        )
+        .map_err(FinalizedSemanticDebugMapErrorV1::TransformationMapV2)?;
+        if mapping.output().nodes().len() > 1
+            && relation.cardinality() != SemanticDebugRelationCardinalityV2::OneToMany
+        {
+            return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
+        }
+        relations.push(relation);
+    }
+    SemanticDebugTransformationMapDocumentV2::new(
+        binding,
+        capabilities,
+        vec![evidence],
+        relations,
+        admitted.document(),
+    )
+    .map_err(FinalizedSemanticDebugMapErrorV1::TransformationMapV2)
 }
 
 #[derive(Debug)]
@@ -898,6 +999,7 @@ pub enum FinalizedSemanticDebugMapErrorV1 {
     CanonicalKirProjectionMismatch,
     CorrespondenceIdentityMismatch,
     InvalidSemanticCorrespondence,
+    TransformationMapV2(SemanticDebugTransformationMapErrorV2),
     ArtifactInspection,
     AllocationFailure,
 }
@@ -915,6 +1017,7 @@ impl Error for FinalizedSemanticDebugMapErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SemanticMap(error) => Some(error),
+            Self::TransformationMapV2(error) => Some(error),
             Self::ProductionFragment(error) => Some(error),
             Self::ProductionAssociation
             | Self::ProductionAssociationMismatch

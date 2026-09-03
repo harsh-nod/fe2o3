@@ -42,7 +42,10 @@ the conditions in the [release process](docs/release-process.md) and
   This model-only path grants no KFD, load, launch, or hardware authority.
 - **Semantic debugging and profiling.** Agent-facing JSONL protocols preserve
   provenance and distinguish declared, observed, inferred, and unavailable
-  facts. CPU replay supports reverse navigation and structured diagnosis;
+  facts. An artifact-bound transformation sidecar preserves exact one-to-one,
+  one-to-many, many-to-one, many-to-many, and eliminated relations without
+  mistaking cardinality for an optimization observation. CPU replay supports
+  reverse navigation and structured diagnosis;
   bounded ROCgdb control and rocprofv3 planning/import workflows are
   implemented. Admitted stopped-GPU state, protected real-dispatch capture, and
   ATT decoding remain incomplete.
