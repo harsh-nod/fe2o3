@@ -6,8 +6,9 @@ fn expose<K>(invocation: GeneratedWorkerV3KfdInvocation<'static, K>) {
         device,
         prepared,
         completion,
+        differential,
     } = invocation;
-    let _ = (authority, device, prepared, completion);
+    let _ = (authority, device, prepared, completion, differential);
 }
 
 fn main() {}

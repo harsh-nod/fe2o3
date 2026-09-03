@@ -1,4 +1,4 @@
-error[E0451]: fields `authority`, `device`, `prepared` and `completion` of struct `GeneratedWorkerV3KfdInvocation` are private
+error[E0451]: fields `authority`, `device`, `prepared`, `completion` and `differential` of struct `GeneratedWorkerV3KfdInvocation` are private
  --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:5:9
   |
 4 |     let GeneratedWorkerV3KfdInvocation {
@@ -11,6 +11,8 @@ error[E0451]: fields `authority`, `device`, `prepared` and `completion` of struc
   |         ^^^^^^^^ private field
 8 |         completion,
   |         ^^^^^^^^^^ private field
+9 |         differential,
+  |         ^^^^^^^^^^^^ private field
 
 error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecutionAuthority<K>` is private
  --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:5:9
@@ -19,7 +21,7 @@ error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecution
   |         ^^^^^^^^^ private type
 
 error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecutionAuthority<K>` is private
-  --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:10:13
+  --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:11:13
    |
-10 |     let _ = (authority, device, prepared, completion);
-   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type
+11 |     let _ = (authority, device, prepared, completion, differential);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type
