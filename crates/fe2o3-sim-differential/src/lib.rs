@@ -24,7 +24,19 @@ use fe2o3_kir_sim::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod physical_v1;
 mod semantic_v2;
+
+pub use physical_v1::{
+    MAX_PHYSICAL_DIFFERENTIAL_BYTES_V1, PHYSICAL_DIFFERENTIAL_CAPABILITIES_SCHEMA_V1,
+    PHYSICAL_DIFFERENTIAL_SCHEMA_V1, PHYSICAL_DIFFERENTIAL_SIMULATOR_CONTRACT_V1,
+    PhysicalDifferentialBufferV1, PhysicalDifferentialByteMismatchV1,
+    PhysicalDifferentialCapabilitiesV1, PhysicalDifferentialDispositionV1,
+    PhysicalDifferentialErrorV1, PhysicalDifferentialLimitsV1, PhysicalDifferentialReportV1,
+    PhysicalDifferentialUnavailableV1, PreparedPhysicalDifferentialV1,
+    physical_differential_capabilities_v1, physical_differential_production_readiness_v1,
+    prepare_physical_differential_v1,
+};
 
 pub use semantic_v2::{
     SEMANTIC_DIFFERENTIAL_CAPABILITIES_SCHEMA_V2, SEMANTIC_DIFFERENTIAL_FAILURE_SCHEMA_V2,
@@ -771,6 +783,16 @@ pub fn main() -> ExitCode {
     let mut arguments = std::env::args_os().skip(1);
     let first = arguments.next();
     match first.as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("physical-capabilities-v1") => {
+            if arguments.next().is_some() {
+                emit_command_error(
+                    "invalid_command_line",
+                    "usage: fe2o3-sim-differential physical-capabilities-v1",
+                );
+                return ExitCode::FAILURE;
+            }
+            return write_json_stdout(&physical_differential_capabilities_v1());
+        }
         Some("semantic-capabilities-v2") => {
             if arguments.next().is_some() {
                 emit_command_error(

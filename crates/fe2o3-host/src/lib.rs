@@ -147,13 +147,17 @@ pub use generated_argument_plan::{
 #[doc(hidden)]
 pub use generated_kfd_arguments::{
     CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
-    GeneratedKfdCompletion, GeneratedKfdCompletionError, GeneratedKfdPackedArguments,
-    GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
-    GeneratedKfdSliceBinding, GeneratedKfdWriteSlice,
+    GeneratedKfdBufferBindingObservationV1, GeneratedKfdCompletion, GeneratedKfdCompletionError,
+    GeneratedKfdPackedArguments, GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError,
+    GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
+    GeneratedKfdWriteSlice,
 };
 pub use generated_kfd_invocation::{
-    GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
-    GeneratedWorkerV3KfdInvocationError,
+    GENERATED_KFD_DIFFERENTIAL_OBSERVATION_SCHEMA_V1,
+    GENERATED_WORKER_V3_DIRECT_KFD_RUNTIME_CONTRACT_V1,
+    GeneratedWorkerV3KfdDifferentialAvailabilityV1, GeneratedWorkerV3KfdDifferentialBindingV1,
+    GeneratedWorkerV3KfdDifferentialObservationV1, GeneratedWorkerV3KfdExecutionError,
+    GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
 };
 #[doc(hidden)]
 #[cfg(feature = "qualification-legacy-hip-hsa")]
