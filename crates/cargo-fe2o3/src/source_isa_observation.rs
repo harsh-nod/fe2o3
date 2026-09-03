@@ -464,6 +464,9 @@ const fn map_semantic_debug_map_error(
         FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2
         }
+        FinalizedSemanticDebugMapErrorV1::InstanceCustodyV1(_) => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidInstanceCustodyV1
+        }
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8
         }
@@ -820,6 +823,12 @@ mod tests {
             (
                 FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2,
                 SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InstanceCustodyV1(
+                    fe2o3_hsaco_finalize::ProductionSemanticDebugInstanceCustodyErrorV1::InvalidEncoding,
+                ),
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidInstanceCustodyV1,
             ),
             (
                 FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8,

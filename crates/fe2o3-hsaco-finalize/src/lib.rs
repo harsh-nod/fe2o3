@@ -31,6 +31,7 @@ mod production_source_isa_characteristic_observer_v1;
 mod production_source_isa_characteristic_v1;
 mod production_source_isa_correlation_v1;
 mod request_construction;
+mod semantic_debug_instance_custody_v1;
 mod semantic_debug_map_v1;
 mod worker_executor;
 mod worker_protocol;
@@ -165,6 +166,19 @@ pub use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
     MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
     derive_device_ffi_contract_id_v1,
+};
+pub use semantic_debug_instance_custody_v1::{
+    MAX_PRODUCTION_SEMANTIC_DEBUG_FUNCTION_INSTANCES_V1,
+    MAX_PRODUCTION_SEMANTIC_DEBUG_INSTANCE_CUSTODY_BYTES_V1,
+    MAX_PRODUCTION_SEMANTIC_DEBUG_STATEMENT_INSTANCES_V1,
+    PRODUCTION_SEMANTIC_DEBUG_INSTANCE_CUSTODY_MAGIC_V1,
+    PRODUCTION_SEMANTIC_DEBUG_INSTANCE_CUSTODY_VERSION_V1,
+    ProductionSemanticDebugFunctionInstanceRoleV1, ProductionSemanticDebugFunctionInstanceV1,
+    ProductionSemanticDebugInstanceCustodyAvailabilityV1,
+    ProductionSemanticDebugInstanceCustodyBindingV1, ProductionSemanticDebugInstanceCustodyErrorV1,
+    ProductionSemanticDebugInstanceCustodyIdentityV1,
+    ProductionSemanticDebugInstanceCustodyUnavailableV1, ProductionSemanticDebugInstanceCustodyV1,
+    ProductionSemanticDebugStatementInstanceV1,
 };
 pub use semantic_debug_map_v1::{
     AdmittedFinalizedSemanticDebugMapV1, FinalizedSemanticDebugMapAdmissionStatusV1,

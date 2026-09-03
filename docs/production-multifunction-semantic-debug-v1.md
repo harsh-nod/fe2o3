@@ -3,10 +3,11 @@
 Status: implemented additive slice for GitHub issue #215 T1.
 
 Production semantic debugging no longer treats a semantic function index as a
-canonical KIR function ordinal. For singleton and disjoint multi-root kernel
-closures, the compiler carries an exact function roster through Source Map V2,
-the pre-finalization semantic map, protected lineage, independent finalizer
-replay, and debugger queries.
+canonical KIR function ordinal. For singleton and multi-root kernel closures,
+including one exact semantic helper shared by several roots, the compiler
+carries an exact function roster through Source Map V2, the pre-finalization
+semantic map, protected lineage, independent finalizer replay, and debugger
+queries.
 
 ## Exact contract
 
@@ -44,10 +45,35 @@ synthetic spans, and parameter bindings. Compiler preparation replays all of
 those records against the live correspondence owner. Finalizer admission
 independently resolves every function symbol to one absolute KIR ordinal,
 verifies semantic root identities, checks complete contiguous operation
-coverage, and rejects reordered roots, substituted identities, duplicate
-ordinals, overlapping spans, and shared semantic helpers. Transformation Map
-V2 uses `multi_root_mir_kir_correspondence_roster_v2`; V1-V5 bytes are
-unchanged.
+coverage, and rejects reordered roots, substituted identities, entry-function
+reuse, overlapping spans, and ambiguous helper reuse. One helper may appear in
+several root payloads only when its semantic identity, KIR symbol, physical
+ordinal, body, parameter bindings, statement spans, and role are byte-for-byte
+the same. Transformation Map V2 uses
+`multi_root_mir_kir_correspondence_roster_v2`; V1-V5 bytes are unchanged.
+
+## Root-instance custody
+
+`ProductionSemanticDebugInstanceCustodyV1` is an additive finalizer-owned
+sidecar. It binds exact Source Map V2, finalized Semantic Debug Map V1,
+semantic MIR, canonical KIR V7 projection, and correspondence bytes. Its
+function and statement occurrence records retain the correspondence owner
+without changing or duplicating the physical Source, MIR, KIR, or ISA graph.
+
+The canonical binary decoder is byte- and count-bounded, checks the exact
+remaining encoded size before allocation, rejects unknown roles and nonzero
+reserved bytes, and revalidates every record identity and graph reference.
+Every owner has exactly one distinct kernel entry. A physical function may be
+associated with several owners only when every occurrence names the same
+semantic `InternalHelper`; kernel-entry reuse remains rejected.
+
+Forward queries return every owner of a semantic helper. Reverse queries return
+every owner of a physical KIR function or KIR statement node. Both are ordered
+by canonical owner-qualified coordinates. Artifact-only and direct caller map
+admission report `CorrespondenceUnavailable`; legacy V4 production
+correspondence reports `LegacyCorrespondenceV4`. The sidecar is association
+evidence only and grants no execution, load, attach, or debugger-control
+authority.
 
 ## Debugger behavior
 
@@ -77,10 +103,10 @@ ordinary-source production exit criterion.
 
 ## Remaining boundary
 
-- Multi-root admission is exact only for disjoint root closures. Reusing one
-  semantic helper in more than one root is deliberately unavailable because
-  Source Map V2 and Semantic Debug Map V1 cannot distinguish repeated
-  instances of the same semantic function ordinal without a new wire version.
+- Shared-helper custody does not synthesize one physical KIR or ISA node per
+  root. Consumers join the root-qualified sidecar to the one authenticated
+  physical node. Context-specialized helper clones require distinct exact
+  physical functions and are not inferred from this association.
 - Multi-root `F2MRCOP2` synthetic spans are function-qualified and admitted.
   Legacy singleton V4 synthetic spans remain unqualified; this change does not
   reinterpret or upgrade those frozen bytes.
