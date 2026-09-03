@@ -2,10 +2,9 @@
 //!
 //! V2 always imports into a fresh [`PlironSession`]. A failed import, pass, or
 //! extraction therefore drops the entire private candidate; neither the input
-//! module nor a partially mutated graph can escape. This path is intentionally
-//! separate from the frozen production V1 replay and its evidence formats. A
-//! V2 report is optimization accounting, not a production replay receipt or a
-//! formal semantic-preservation proof.
+//! module nor a partially mutated graph can escape. Production V4 replay
+//! evidence embeds and independently validates V2 accounting. A V2 report is
+//! not by itself a replay receipt or a formal semantic-preservation proof.
 
 use std::{error::Error, fmt};
 
@@ -24,8 +23,70 @@ use fe2o3_pliron::{
 /// Hard byte cap inherited from canonical Kernel IR V9 encoding.
 pub const MAX_KERNEL_IR_PLIRON_OPTIMIZATION_MODULE_BYTES_V2: usize = MAX_MODULE_BYTES_V1;
 
-/// V2 reports are deliberately not accepted by the frozen production replay.
-pub const KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE: bool = false;
+/// Version of the closed optimizer policy used for new production compilations.
+pub const KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2: u16 = 1;
+
+/// Stable pass identity owned by the V2 production optimizer policy.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum KernelIrPlironProductionPassV2 {
+    SparseConditionalConstantPropagation,
+    SimplifyControlFlow,
+    SelectSameValueCanonicalization,
+    DeadCodeElimination,
+    LocalPureCommonSubexpressionElimination,
+}
+
+impl KernelIrPlironProductionPassV2 {
+    pub const fn name(self) -> &'static str {
+        self.pliron().name()
+    }
+
+    const fn pliron(self) -> fe2o3_pliron::PlironOptimizationPassV1 {
+        use fe2o3_pliron::PlironOptimizationPassV1;
+
+        match self {
+            Self::SparseConditionalConstantPropagation => {
+                PlironOptimizationPassV1::SparseConditionalConstantPropagation
+            }
+            Self::SimplifyControlFlow => PlironOptimizationPassV1::SimplifyControlFlow,
+            Self::SelectSameValueCanonicalization => {
+                PlironOptimizationPassV1::SelectSameValueCanonicalization
+            }
+            Self::DeadCodeElimination => PlironOptimizationPassV1::DeadCodeElimination,
+            Self::LocalPureCommonSubexpressionElimination => {
+                PlironOptimizationPassV1::LocalPureCommonSubexpressionElimination
+            }
+        }
+    }
+}
+
+/// Exact, ordered pass roster for production optimizer policy version 1.
+pub const KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2: [KernelIrPlironProductionPassV2;
+    7] = [
+    KernelIrPlironProductionPassV2::SparseConditionalConstantPropagation,
+    KernelIrPlironProductionPassV2::SimplifyControlFlow,
+    KernelIrPlironProductionPassV2::SelectSameValueCanonicalization,
+    KernelIrPlironProductionPassV2::DeadCodeElimination,
+    KernelIrPlironProductionPassV2::LocalPureCommonSubexpressionElimination,
+    KernelIrPlironProductionPassV2::DeadCodeElimination,
+    KernelIrPlironProductionPassV2::SimplifyControlFlow,
+];
+
+/// Production-policy V2 reports can be accepted by production V4 replay evidence.
+///
+/// This constant advertises format support only. Call
+/// [`KernelIrPlironOptimizationReportV2::is_production_replay_compatible`] to
+/// admit an individual report.
+pub const KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE: bool = true;
+
+/// Provenance of the policy that produced a V2 optimization report.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelIrPlironOptimizationPolicyV2 {
+    /// Caller-selected limits or mutation lineage.
+    Configurable,
+    /// Closed production policy version 1 with its fixed limits and epoch.
+    ProductionV1,
+}
 
 /// Which canonical-byte admission limit was rejected.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,6 +160,20 @@ impl Default for KernelIrPlironOptimizationLimitsV2 {
     }
 }
 
+/// Returns the frozen limits for production optimizer policy version 1.
+///
+/// Literal values keep the policy independent of mutable `Default`
+/// implementations. Construction will fail loudly if an underlying hard cap
+/// is ever reduced below the versioned policy.
+pub fn production_kernel_ir_pliron_optimization_limits_v2() -> KernelIrPlironOptimizationLimitsV2 {
+    let shell = ShellLimits::new(32, 64, 512)
+        .expect("production optimizer V1 shell limits must remain supported");
+    let pliron = PlironOptimizationLimitsV1::new(256, 16_384, 12_636_160)
+        .expect("production optimizer V1 execution limits must remain supported");
+    KernelIrPlironOptimizationLimitsV2::new(16_777_216, 16_777_216, shell, pliron)
+        .expect("production optimizer V1 byte limits must remain supported")
+}
+
 fn validate_byte_limit(
     limit: KernelIrPlironOptimizationByteLimitV2,
     value: usize,
@@ -138,6 +213,8 @@ impl KernelIrPlironOptimizationPassReportV2 {
 /// Immutable accounting for one successfully extracted V2 candidate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelIrPlironOptimizationReportV2 {
+    policy: KernelIrPlironOptimizationPolicyV2,
+    limits: KernelIrPlironOptimizationLimitsV2,
     initial_epoch: u64,
     final_epoch: u64,
     bridge: KirBridgeOptimizedReceiptV1,
@@ -146,6 +223,14 @@ pub struct KernelIrPlironOptimizationReportV2 {
 }
 
 impl KernelIrPlironOptimizationReportV2 {
+    pub const fn policy(&self) -> KernelIrPlironOptimizationPolicyV2 {
+        self.policy
+    }
+
+    pub const fn limits(&self) -> KernelIrPlironOptimizationLimitsV2 {
+        self.limits
+    }
+
     pub const fn initial_epoch(&self) -> u64 {
         self.initial_epoch
     }
@@ -178,9 +263,12 @@ impl KernelIrPlironOptimizationReportV2 {
         &self.passes
     }
 
-    /// This report cannot satisfy frozen production replay evidence.
-    pub const fn is_production_replay_compatible(&self) -> bool {
+    /// Whether this report came from the exact policy admitted by production replay.
+    pub fn is_production_replay_compatible(&self) -> bool {
         KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE
+            && self.policy == KernelIrPlironOptimizationPolicyV2::ProductionV1
+            && self.limits == production_kernel_ir_pliron_optimization_limits_v2()
+            && self.initial_epoch == 0
     }
 }
 
@@ -343,7 +431,29 @@ pub fn optimize_kernel_ir_module_v2(
     input: &Module,
     limits: KernelIrPlironOptimizationLimitsV2,
 ) -> Result<OptimizedKernelIrModuleV2, KernelIrPlironOptimizationErrorV2> {
-    optimize_kernel_ir_module_at_epoch_v2(input, 0, limits)
+    optimize_kernel_ir_module_with_policy_at_epoch_v2(
+        input,
+        0,
+        limits,
+        KernelIrPlironOptimizationPolicyV2::Configurable,
+    )
+}
+
+/// Runs the only optimizer admitted for new production compilations.
+///
+/// This entry point deliberately exposes neither an optimizer selector nor
+/// caller-controlled limits. Any V2 admission, optimization, or extraction
+/// failure is returned to the production transaction; there is no legacy or
+/// unoptimized fallback path.
+pub fn optimize_production_kernel_ir_module_v2(
+    input: &Module,
+) -> Result<OptimizedKernelIrModuleV2, KernelIrPlironOptimizationErrorV2> {
+    optimize_kernel_ir_module_with_policy_at_epoch_v2(
+        input,
+        0,
+        production_kernel_ir_pliron_optimization_limits_v2(),
+        KernelIrPlironOptimizationPolicyV2::ProductionV1,
+    )
 }
 
 /// Runs V2 using `initial_epoch` as the caller's mutation lineage.
@@ -355,6 +465,20 @@ pub fn optimize_kernel_ir_module_at_epoch_v2(
     input: &Module,
     initial_epoch: u64,
     limits: KernelIrPlironOptimizationLimitsV2,
+) -> Result<OptimizedKernelIrModuleV2, KernelIrPlironOptimizationErrorV2> {
+    optimize_kernel_ir_module_with_policy_at_epoch_v2(
+        input,
+        initial_epoch,
+        limits,
+        KernelIrPlironOptimizationPolicyV2::Configurable,
+    )
+}
+
+fn optimize_kernel_ir_module_with_policy_at_epoch_v2(
+    input: &Module,
+    initial_epoch: u64,
+    limits: KernelIrPlironOptimizationLimitsV2,
+    policy: KernelIrPlironOptimizationPolicyV2,
 ) -> Result<OptimizedKernelIrModuleV2, KernelIrPlironOptimizationErrorV2> {
     validate_byte_limit(
         KernelIrPlironOptimizationByteLimitV2::Input,
@@ -389,8 +513,18 @@ pub fn optimize_kernel_ir_module_at_epoch_v2(
     let graph = session
         .import_canonical_kir_v9_o0(&canonical)
         .map_err(KernelIrPlironOptimizationErrorV2::Import)?;
-    let standard = PlironOptimizationPlanV1::standard();
-    let plan = PlironOptimizationPlanV1::new(standard.passes().to_vec(), limits.pliron)
+    let passes = match policy {
+        KernelIrPlironOptimizationPolicyV2::Configurable => {
+            PlironOptimizationPlanV1::standard().passes().to_vec()
+        }
+        KernelIrPlironOptimizationPolicyV2::ProductionV1 => {
+            KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2
+                .into_iter()
+                .map(KernelIrPlironProductionPassV2::pliron)
+                .collect()
+        }
+    };
+    let plan = PlironOptimizationPlanV1::new(passes, limits.pliron)
         .map_err(KernelIrPlironOptimizationErrorV2::Plan)?;
     let pliron = session
         .execute_optimization_v1(graph.root(), &plan)
@@ -413,6 +547,8 @@ pub fn optimize_kernel_ir_module_at_epoch_v2(
 
     let (passes, final_epoch) = epoch_reports(pliron.passes(), initial_epoch)?;
     let report = KernelIrPlironOptimizationReportV2 {
+        policy,
+        limits,
         initial_epoch,
         final_epoch,
         bridge,

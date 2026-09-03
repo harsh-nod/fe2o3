@@ -39,29 +39,32 @@ reconvergence must establish that premise separately.
 ## Transformation Ownership
 
 `fe2o3-kernel-opt` depends on KIR definitions, while `fe2o3-kernel-ir` remains
-the canonical representation and verifier owner. The current passes need no
-whole-function analysis; later passes should depend on
-`fe2o3-kernel-analysis` only when they consume its stamped immutable reports.
-The closed V1 pass order is:
+the canonical representation and verifier owner. New production compilations
+use the single closed Pliron-backed V2 entry point. The fixed pass order is:
 
-1. remove unreachable blocks;
-2. eliminate transitively dead operations from a conservative pure-operation
-   whitelist.
+1. sparse conditional constant propagation;
+2. control-flow simplification;
+3. select canonicalization;
+4. dead-code elimination;
+5. conservative same-block pure common-subexpression elimination;
+6. dead-code elimination;
+7. control-flow simplification.
 
-Each pass receives independent work and mutation budgets. It transforms a
-single private candidate, verifies the admitted input and every changed
-checkpoint, and publishes a result only when the entire pipeline succeeds.
+The optimizer transforms a fresh private Pliron candidate, verifies the
+admitted input and every changed checkpoint, and publishes a result only when
+the entire pipeline succeeds. Unsupported import, optimization, or export
+fails the production transaction; there is no legacy or unoptimized fallback.
 Calls, memory operations, wave operations, assembly, synchronization,
 potentially trapping arithmetic or casts, pointer arithmetic, and operations
 without complete pure effect summaries are retained.
 
-The production transaction retains per-pass work, mutation, and epoch data.
-KIR-to-LLVM replay reconstructs target binding and the same fixed optimizer
-from the original canonical KIR, then requires exact optimized KIR and LLVM
-identity. These are reproducibility and structural-validity properties. No
-optimizer semantic-refinement theorem exists yet. When a pass mutates KIR,
-exact source-to-ISA correlation is explicitly unavailable until a canonical
-pre-to-post optimization coordinate map is carried alongside the replay.
+The production transaction retains per-pass structural work, changed-pass
+epochs, and typed bridge identities. KIR-to-LLVM replay V4 reconstructs target
+binding and the same fixed optimizer from the original canonical KIR, then
+requires exact optimized KIR, optimizer accounting, and LLVM identity.
+Historical V3 records are decoded by inert replay-local structures and cannot
+select the live optimizer. These are reproducibility and structural-validity
+properties; no optimizer semantic-refinement theorem exists yet.
 
 ## Rust Semantic Coverage
 
@@ -79,9 +82,8 @@ variants, so `i128` and `u128` switches are rejected explicitly.
   optimized KIR.
 - Add dominator-frontier, loop-forest, alias/effect, divergence, and
   reconvergence analyses with the same epoch and budget discipline.
-- Add constant propagation, sparse conditional constant propagation, CFG
-  simplification, common-subexpression elimination, loop canonicalization,
-  and GPU-specific scheduling behind explicit legality contracts.
+- Add loop canonicalization and GPU-specific scheduling behind explicit
+  legality and cost-model contracts.
 - Expand MIR coverage for aggregates, enums, calls, panics, atomics, and
   pointer/provenance behavior; add 128-bit KIR constants before enabling
   128-bit switches.

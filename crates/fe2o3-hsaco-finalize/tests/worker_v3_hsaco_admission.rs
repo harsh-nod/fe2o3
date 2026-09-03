@@ -3445,37 +3445,40 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
         }
     };
     let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
+    let optimized =
+        fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(target_bound.module()).unwrap();
     let anchor_identity = match replay_version {
         ProductionReplayKernelIrVersionV1::V8 => {
             let owner =
-                VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();
+                VerifiedCanonicalKernelIrV8::from_module(optimized.module().clone()).unwrap();
             dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
         }
         ProductionReplayKernelIrVersionV1::V9 => {
             let owner =
-                VerifiedCanonicalKernelIrV9::from_module(target_bound.module().clone()).unwrap();
+                VerifiedCanonicalKernelIrV9::from_module(optimized.module().clone()).unwrap();
             dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
         }
     };
     let dialect_llvm = match profile {
         ProductionAmdTargetProfileV1::Gfx942 => {
             lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                target_bound.module(),
+                optimized.module(),
                 anchor_identity,
             )
         }
         ProductionAmdTargetProfileV1::Gfx950 => {
             lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                target_bound.module(),
+                optimized.module(),
                 anchor_identity,
             )
         }
     }
     .unwrap();
     let pre_descriptor_llvm = bind_production_llvm22_worker_layout_v1(&dialect_llvm).unwrap();
-    let lowering = CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+    let lowering = CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
         &receipts[4].0,
-        target_bound.module(),
+        optimized.module(),
+        optimized.report(),
         profile,
         &pre_descriptor_llvm,
     )

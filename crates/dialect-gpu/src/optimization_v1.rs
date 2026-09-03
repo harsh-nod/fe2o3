@@ -12,11 +12,11 @@ use pliron::{
     basic_block::BasicBlock,
     builtin::{
         attr_interfaces::{MaterializableAttr, TypedAttrInterface},
-        attributes::{IntegerAttr, StringAttr, TypeAttr},
+        attributes::{IntegerAttr, OperandSegmentSizesAttr, StringAttr, TypeAttr},
         op_interfaces::{
-            BranchOpInterface, IsTerminatorInterface, NOpdsInterface, NRegionsInterface,
-            NResultsInterface, NSuccsInterface, OneOpdInterface, OneResultInterface,
-            OneSuccInterface, OperandSegmentInterface,
+            ATTR_KEY_OPERAND_SEGMENT_SIZES, BranchOpInterface, IsTerminatorInterface,
+            NOpdsInterface, NRegionsInterface, NResultsInterface, NSuccsInterface, OneOpdInterface,
+            OneResultInterface, OneSuccInterface, OperandSegmentInterface,
         },
         ops::FuncOp,
         type_interfaces::FunctionTypeInterface,
@@ -114,6 +114,42 @@ pub enum CastKindAttr {
     IntegerToFloat,
     FloatToInteger,
     Bitcast,
+}
+
+/// Canonical Kernel IR operation families preserved opaquely by the generic
+/// optimizing middle end.
+///
+/// The operation's SSA operands and result types remain first-class Pliron
+/// values. The family tag prevents one preserved semantic operation from being
+/// mistaken for another, while the bridge-owned origin table retains the exact
+/// versioned payload. These operations are intentionally effectful until a
+/// dedicated executable dialect operation is implemented for the family.
+#[pliron_attr(name = "gpu.preserved_operation_kind", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum PreservedOperationKindAttr {
+    Intrinsic,
+    MemoryIntrinsic,
+    Alloca,
+    GuardedLoad,
+    GuardedStore,
+    Barrier,
+    Atomic,
+    Fence,
+    WorkgroupBarrier,
+    WorkgroupMemory,
+    Matrix,
+    Gfx950LdsTranspose,
+    Wave,
+    InlineAssembly,
+}
+
+/// Canonical Kernel IR terminators whose payload is retained by the bridge.
+#[pliron_attr(name = "gpu.preserved_terminator_kind", format, verifier = "succ")]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum PreservedTerminatorKindAttr {
+    Switch,
+    IntegerSwitch,
+    Unreachable,
 }
 
 /// Required alignment for a memory operation.
@@ -1396,6 +1432,229 @@ impl Verify for StoreOp {
                 self.loc(ctx),
                 "gpu.store violates pointer access or pointee type"
             );
+        }
+        Ok(())
+    }
+}
+
+/// A typed, fail-closed carrier for canonical Kernel IR semantics that do not
+/// yet have a dedicated optimizing Pliron operation.
+///
+/// Operand identities and result types are represented directly in the graph.
+/// Exact versioned semantic fields are retained in the importing bridge's
+/// private origin metadata. This operation is always effectful: generic passes
+/// may propagate values through its operands but may not fold, CSE, or erase
+/// the operation based on an incomplete semantic model.
+#[pliron_op(
+    name = "gpu.preserved_operation",
+    format,
+    interfaces = [TargetNeutralGpuOpInterface, NRegionsInterface<0>],
+    attributes = (gpu_preserved_operation_kind: PreservedOperationKindAttr)
+)]
+pub struct PreservedOperationOp;
+
+impl PreservedOperationOp {
+    pub fn new(
+        ctx: &mut Context,
+        kind: PreservedOperationKindAttr,
+        operands: Vec<Value>,
+        result_types: Vec<TypeHandle>,
+    ) -> Self {
+        let operation = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                result_types,
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        operation.set_attr_gpu_preserved_operation_kind(ctx, kind);
+        operation
+    }
+
+    pub fn kind(&self, ctx: &Context) -> Option<PreservedOperationKindAttr> {
+        self.get_attr_gpu_preserved_operation_kind(ctx)
+            .map(|kind| *kind)
+    }
+
+    pub fn operands(&self, ctx: &Context) -> Vec<Value> {
+        self.get_operation().deref(ctx).operands().collect()
+    }
+}
+
+impl Verify for PreservedOperationOp {
+    fn verify(&self, ctx: &Context) -> Result<()> {
+        let raw = self.get_operation().deref(ctx);
+        if self.kind(ctx).is_none() || raw.get_num_successors() != 0 || raw.num_regions() != 0 {
+            return verify_err!(
+                self.loc(ctx),
+                "gpu.preserved_operation requires a semantic family and no CFG structure"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[op_interface_impl]
+impl SideEffects for PreservedOperationOp {
+    fn has_side_effects(&self, _ctx: &Context) -> bool {
+        true
+    }
+}
+
+/// A CFG-aware carrier for switch-like and unreachable Kernel IR terminators.
+///
+/// Operand segment zero contains the selector for switch variants. Each
+/// remaining segment corresponds positionally to one real Pliron successor.
+/// The exact case constants and variant payload remain bridge-owned metadata.
+#[pliron_op(
+    name = "gpu.preserved_terminator",
+    format,
+    interfaces = [TargetNeutralGpuOpInterface, IsTerminatorInterface, NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (gpu_preserved_terminator_kind: PreservedTerminatorKindAttr)
+)]
+pub struct PreservedTerminatorOp;
+
+impl PreservedTerminatorOp {
+    pub fn new_switch(
+        ctx: &mut Context,
+        kind: PreservedTerminatorKindAttr,
+        selector: Value,
+        successors: Vec<Ptr<BasicBlock>>,
+        successor_arguments: Vec<Vec<Value>>,
+    ) -> Option<Self> {
+        if kind == PreservedTerminatorKindAttr::Unreachable
+            || successors.is_empty()
+            || successors.len() != successor_arguments.len()
+        {
+            return None;
+        }
+        let mut segments = Vec::with_capacity(successor_arguments.len() + 1);
+        segments.push(vec![selector]);
+        segments.extend(successor_arguments);
+        let (operands, sizes) = Self::compute_segment_sizes(segments);
+        let operation = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![],
+                operands,
+                successors,
+                0,
+            ),
+        };
+        operation.set_operand_segment_sizes(ctx, sizes);
+        operation.set_attr_gpu_preserved_terminator_kind(ctx, kind);
+        Some(operation)
+    }
+
+    pub fn new_unreachable(ctx: &mut Context) -> Self {
+        let operation = Self {
+            op: Operation::new(ctx, Self::get_concrete_op_info(), vec![], vec![], vec![], 0),
+        };
+        operation.set_operand_segment_sizes(ctx, OperandSegmentSizesAttr(vec![]));
+        operation
+            .set_attr_gpu_preserved_terminator_kind(ctx, PreservedTerminatorKindAttr::Unreachable);
+        operation
+    }
+
+    pub fn kind(&self, ctx: &Context) -> Option<PreservedTerminatorKindAttr> {
+        self.get_attr_gpu_preserved_terminator_kind(ctx)
+            .map(|kind| *kind)
+    }
+
+    pub fn selector(&self, ctx: &Context) -> Option<Value> {
+        self.get_segment(ctx, 0).first().copied()
+    }
+}
+
+#[op_interface_impl]
+impl OperandSegmentInterface for PreservedTerminatorOp {}
+
+#[op_interface_impl]
+impl BranchOpInterface for PreservedTerminatorOp {
+    fn successor_operands(&self, ctx: &Context, succ_idx: usize) -> Vec<Value> {
+        assert!(
+            succ_idx < self.get_operation().deref(ctx).get_num_successors(),
+            "gpu.preserved_terminator successor index out of range"
+        );
+        self.get_segment(ctx, succ_idx + 1)
+    }
+
+    fn add_successor_operand(&self, ctx: &mut Context, succ_idx: usize, operand: Value) -> usize {
+        assert!(
+            succ_idx < self.get_operation().deref(ctx).get_num_successors(),
+            "gpu.preserved_terminator successor index out of range"
+        );
+        self.push_to_segment(ctx, succ_idx + 1, operand)
+    }
+
+    fn remove_successor_operand(
+        &self,
+        ctx: &mut Context,
+        succ_idx: usize,
+        operand_idx: usize,
+    ) -> Value {
+        assert!(
+            succ_idx < self.get_operation().deref(ctx).get_num_successors(),
+            "gpu.preserved_terminator successor index out of range"
+        );
+        self.remove_from_segment(ctx, succ_idx + 1, operand_idx)
+    }
+}
+
+impl Verify for PreservedTerminatorOp {
+    fn verify(&self, ctx: &Context) -> Result<()> {
+        let raw = self.get_operation().deref(ctx);
+        if raw.get_num_results() != 0 || raw.num_regions() != 0 {
+            return verify_err!(
+                self.loc(ctx),
+                "gpu.preserved_terminator requires no results or regions"
+            );
+        }
+        let Some(kind) = self.kind(ctx) else {
+            return verify_err!(
+                self.loc(ctx),
+                "gpu.preserved_terminator requires a semantic kind"
+            );
+        };
+        let Some(segments) = raw
+            .attributes
+            .get::<OperandSegmentSizesAttr>(&ATTR_KEY_OPERAND_SEGMENT_SIZES)
+            .map(|segments| &segments.0)
+        else {
+            return verify_err!(
+                self.loc(ctx),
+                "gpu.preserved_terminator requires operand segment metadata"
+            );
+        };
+        match kind {
+            PreservedTerminatorKindAttr::Switch | PreservedTerminatorKindAttr::IntegerSwitch => {
+                if raw.get_num_successors() == 0
+                    || segments.len() != raw.get_num_successors() + 1
+                    || segments.first() != Some(&1)
+                    || raw.get_num_operands() == 0
+                    || !is_integer(ctx, raw.get_operand(0).get_type(ctx))
+                {
+                    return verify_err!(
+                        self.loc(ctx),
+                        "preserved switch requires one integer selector and one operand segment per successor"
+                    );
+                }
+            }
+            PreservedTerminatorKindAttr::Unreachable => {
+                if raw.get_num_operands() != 0
+                    || raw.get_num_successors() != 0
+                    || !segments.is_empty()
+                {
+                    return verify_err!(
+                        self.loc(ctx),
+                        "preserved unreachable cannot have operands or successors"
+                    );
+                }
+            }
         }
         Ok(())
     }

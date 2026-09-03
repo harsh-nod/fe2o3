@@ -1241,6 +1241,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",

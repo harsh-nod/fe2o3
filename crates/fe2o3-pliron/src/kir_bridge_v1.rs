@@ -1,9 +1,9 @@
-//! Typed, O0-only bridge between canonical Kernel IR V9 and Pliron.
+//! Typed bridge between canonical Kernel IR V9 and Pliron.
 //!
 //! This bridge is deliberately not a textual import path.  It constructs a
-//! live operation graph and extracts Kernel IR from that graph.  The report is
-//! evidence of exact structural replay only; it makes no optimization or
-//! semantic-preservation claim.
+//! live operation graph and extracts either an exact O0 replay or a rewritten
+//! Kernel IR module from that graph. Bridge receipts bind structural identity;
+//! they do not by themselves prove semantic preservation of optimization.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -19,7 +19,8 @@ use dialect_gpu::{
         AccessModeAttr, BFloat16Attr, BFloat16Type, BinaryKindAttr, BinaryOp as PlironBinaryOp,
         BranchOp, CallOp, CastKindAttr, CastOp, CompareOp as PlironCompareOp, ComparePredicateAttr,
         CondBranchOp, ConstantOp as PlironConstantOp, GetElementPointerOp, IndexAttr, IndexType,
-        LoadOp, PointerType as PlironPointerType, ReturnOp, SelectOp as PlironSelectOp,
+        LoadOp, PointerType as PlironPointerType, PreservedOperationKindAttr, PreservedOperationOp,
+        PreservedTerminatorKindAttr, PreservedTerminatorOp, ReturnOp, SelectOp as PlironSelectOp,
         SliceDataOp, SliceLengthOp, SliceType as PlironSliceType, StoreOp, UnaryKindAttr,
         UnaryOp as PlironUnaryOp,
     },
@@ -61,6 +62,10 @@ const BUILTIN_MODULE_ROOT_TREE_WORK_V1: usize = 3;
 /// Domain separator for identities of exact canonical Kernel IR at this bridge.
 pub const KIR_PLIRON_BRIDGE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/KIR-PLIRON-BRIDGE/CANONICAL-KIR-V9/V1\0";
+
+/// Domain separator for the canonical bridge-correspondence transcript.
+pub const KIR_PLIRON_BRIDGE_CORRESPONDENCE_DOMAIN_V1: &[u8] =
+    b"FE2O3/KIR-PLIRON-BRIDGE/CORRESPONDENCE/V1\0";
 
 /// Stable identity of one canonical Kernel IR endpoint of the bridge.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -120,6 +125,23 @@ impl KirBridgeCorrespondenceV1 {
     }
 }
 
+/// Stable identity of the complete ordered Pliron-to-Kernel-IR correspondence.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KirBridgeCorrespondenceDigestV1 {
+    digest: [u8; 32],
+    count: u64,
+}
+
+impl KirBridgeCorrespondenceDigestV1 {
+    pub const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+
+    pub const fn count(self) -> u64 {
+        self.count
+    }
+}
+
 /// Exact O0 import/extraction result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KirBridgeRoundTripReportV1 {
@@ -152,6 +174,10 @@ impl KirBridgeOptimizedReceiptV1 {
         &self.correspondence
     }
 
+    pub fn correspondence_digest(&self) -> KirBridgeCorrespondenceDigestV1 {
+        correspondence_digest_v1(&self.correspondence)
+    }
+
     pub fn changed(&self) -> bool {
         self.input != self.output
     }
@@ -170,8 +196,58 @@ impl KirBridgeRoundTripReportV1 {
         &self.correspondence
     }
 
+    pub fn correspondence_digest(&self) -> KirBridgeCorrespondenceDigestV1 {
+        correspondence_digest_v1(&self.correspondence)
+    }
+
     pub fn is_exact(&self) -> bool {
         self.input == self.output
+    }
+}
+
+fn correspondence_digest_v1(
+    correspondence: &[KirBridgeCorrespondenceV1],
+) -> KirBridgeCorrespondenceDigestV1 {
+    use sha2::{Digest, Sha256};
+
+    // Import preflight bounds correspondence well below u64::MAX.
+    let count = u64::try_from(correspondence.len())
+        .expect("bridge correspondence count is bounded by the operation-tree limit");
+    let mut hasher = Sha256::new();
+    hasher.update(KIR_PLIRON_BRIDGE_CORRESPONDENCE_DOMAIN_V1);
+    hasher.update(count.to_le_bytes());
+    for record in correspondence {
+        hasher.update(record.pliron_ordinal.to_le_bytes());
+        match record.coordinate {
+            KirBridgeCoordinateV1::Function { function } => {
+                hasher.update([1]);
+                hasher.update(function.to_le_bytes());
+            }
+            KirBridgeCoordinateV1::Block { function, block } => {
+                hasher.update([2]);
+                hasher.update(function.to_le_bytes());
+                hasher.update(block.to_le_bytes());
+            }
+            KirBridgeCoordinateV1::Operation {
+                function,
+                block,
+                operation,
+            } => {
+                hasher.update([3]);
+                hasher.update(function.to_le_bytes());
+                hasher.update(block.to_le_bytes());
+                hasher.update(operation.to_le_bytes());
+            }
+            KirBridgeCoordinateV1::Terminator { function, block } => {
+                hasher.update([4]);
+                hasher.update(function.to_le_bytes());
+                hasher.update(block.to_le_bytes());
+            }
+        }
+    }
+    KirBridgeCorrespondenceDigestV1 {
+        digest: hasher.finalize().into(),
+        count,
     }
 }
 
@@ -194,6 +270,8 @@ struct KirBridgeOriginsV1 {
     functions: HashMap<Ptr<Operation>, usize>,
     blocks: HashMap<Ptr<BasicBlock>, (usize, BlockId)>,
     values: HashMap<Value, ValueId>,
+    preserved_operations: HashMap<Ptr<Operation>, OperationKind>,
+    preserved_terminators: HashMap<Ptr<Operation>, Terminator>,
 }
 
 impl KirPlironGraphV1 {
@@ -217,7 +295,6 @@ pub enum KirBridgeErrorV1 {
     Session(OperationHandleError),
     SizeOverflow,
     UnsupportedType,
-    UnsupportedGenericAddressSpace,
     UnsupportedOperation { coordinate: KirBridgeCoordinateV1 },
     UnsupportedTerminator { coordinate: KirBridgeCoordinateV1 },
     MissingFunctionBody { function: u32 },
@@ -241,9 +318,6 @@ impl fmt::Display for KirBridgeErrorV1 {
             Self::SizeOverflow => formatter.write_str("bridge graph size exceeds its fixed bounds"),
             Self::UnsupportedType => {
                 formatter.write_str("Kernel IR type is unsupported by the bridge")
-            }
-            Self::UnsupportedGenericAddressSpace => {
-                formatter.write_str("generic Kernel IR address space is unsupported by the bridge")
             }
             Self::UnsupportedOperation { coordinate } => {
                 write!(
@@ -423,7 +497,7 @@ fn extract_module(
         .copied()
         .ok_or(KirBridgeErrorV1::GraphIdentityMismatch)?;
     match catch_unwind(AssertUnwindSafe(|| {
-        extract_module_graph(&session.context, root, &graph.metadata)
+        extract_module_graph(&session.context, root, &graph.metadata, &graph.origins)
     })) {
         Ok(result) => result,
         Err(_) => {
@@ -565,31 +639,41 @@ fn preflight_type(ty: &Type) -> Result<(), KirBridgeErrorV1> {
 }
 
 fn preflight_address_space(address_space: AddressSpace) -> Result<(), KirBridgeErrorV1> {
-    if address_space == AddressSpace::Generic {
-        Err(KirBridgeErrorV1::UnsupportedGenericAddressSpace)
-    } else {
-        Ok(())
-    }
+    let _ = address_space;
+    Ok(())
 }
 
 fn preflight_operation(
     operation: &KirOperation,
-    coordinate: KirBridgeCoordinateV1,
+    _coordinate: KirBridgeCoordinateV1,
 ) -> Result<(), KirBridgeErrorV1> {
     match &operation.kind {
         OperationKind::Constant(_)
+        | OperationKind::Intrinsic(_)
+        | OperationKind::MemoryIntrinsic(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }
         | OperationKind::Compare { .. }
         | OperationKind::Cast { .. }
         | OperationKind::Select { .. }
         | OperationKind::Call { .. }
+        | OperationKind::Alloca { .. }
         | OperationKind::SliceLength { .. }
         | OperationKind::SliceData { .. }
         | OperationKind::GetElementPointer { .. }
         | OperationKind::Load { .. }
-        | OperationKind::Store { .. } => Ok(()),
-        _ => Err(KirBridgeErrorV1::UnsupportedOperation { coordinate }),
+        | OperationKind::GuardedLoad { .. }
+        | OperationKind::GuardedStore { .. }
+        | OperationKind::Store { .. }
+        | OperationKind::Barrier(_)
+        | OperationKind::Atomic(_)
+        | OperationKind::Fence(_)
+        | OperationKind::WorkgroupBarrier(_)
+        | OperationKind::WorkgroupMemory(_)
+        | OperationKind::Matrix(_)
+        | OperationKind::Gfx950LdsTranspose(_)
+        | OperationKind::Wave(_)
+        | OperationKind::InlineAssembly(_) => Ok(()),
     }
 }
 
@@ -601,7 +685,10 @@ fn preflight_terminator(
         Some(
             Terminator::Branch { .. }
             | Terminator::ConditionalBranch { .. }
-            | Terminator::Return { .. },
+            | Terminator::Switch { .. }
+            | Terminator::IntegerSwitch { .. }
+            | Terminator::Return { .. }
+            | Terminator::Unreachable,
         ) => Ok(()),
         _ => Err(KirBridgeErrorV1::UnsupportedTerminator { coordinate }),
     }
@@ -701,6 +788,14 @@ fn build_module_graph(
             let live_block = block_for(&blocks, function_index, block.id)?;
             let live = build_operation(context, function_index, operation, &values)?;
             live.insert_at_back(live_block, context);
+            if Operation::is_op::<PreservedOperationOp>(live, context)
+                && origins
+                    .preserved_operations
+                    .insert(live, operation.kind.clone())
+                    .is_some()
+            {
+                return Err(KirBridgeErrorV1::MalformedGraph);
+            }
             let raw = live.deref(context);
             if raw.get_num_results() != operation.results.len() {
                 return Err(KirBridgeErrorV1::MalformedGraph);
@@ -728,6 +823,20 @@ fn build_module_graph(
                 &blocks,
             )?;
             terminator.insert_at_back(live_block, context);
+            if Operation::is_op::<PreservedTerminatorOp>(terminator, context)
+                && origins
+                    .preserved_terminators
+                    .insert(
+                        terminator,
+                        block
+                            .terminator
+                            .clone()
+                            .ok_or(KirBridgeErrorV1::MalformedGraph)?,
+                    )
+                    .is_some()
+            {
+                return Err(KirBridgeErrorV1::MalformedGraph);
+            }
         }
     }
     Ok(origins)
@@ -949,9 +1058,44 @@ fn build_operation(
         )
         .ok_or(KirBridgeErrorV1::MalformedGraph)?
         .get_operation(),
-        _ => return Err(KirBridgeErrorV1::MalformedGraph),
+        kind => {
+            let result_types = operation
+                .results
+                .iter()
+                .map(|result| type_to_pliron(context, &result.ty))
+                .collect::<Result<Vec<_>, _>>()?;
+            PreservedOperationOp::new(
+                context,
+                preserved_operation_kind(kind)?,
+                values_for(values, function, &operation.operands())?,
+                result_types,
+            )
+            .get_operation()
+        }
     };
     Ok(live)
+}
+
+fn preserved_operation_kind(
+    kind: &OperationKind,
+) -> Result<PreservedOperationKindAttr, KirBridgeErrorV1> {
+    Ok(match kind {
+        OperationKind::Intrinsic(_) => PreservedOperationKindAttr::Intrinsic,
+        OperationKind::MemoryIntrinsic(_) => PreservedOperationKindAttr::MemoryIntrinsic,
+        OperationKind::Alloca { .. } => PreservedOperationKindAttr::Alloca,
+        OperationKind::GuardedLoad { .. } => PreservedOperationKindAttr::GuardedLoad,
+        OperationKind::GuardedStore { .. } => PreservedOperationKindAttr::GuardedStore,
+        OperationKind::Barrier(_) => PreservedOperationKindAttr::Barrier,
+        OperationKind::Atomic(_) => PreservedOperationKindAttr::Atomic,
+        OperationKind::Fence(_) => PreservedOperationKindAttr::Fence,
+        OperationKind::WorkgroupBarrier(_) => PreservedOperationKindAttr::WorkgroupBarrier,
+        OperationKind::WorkgroupMemory(_) => PreservedOperationKindAttr::WorkgroupMemory,
+        OperationKind::Matrix(_) => PreservedOperationKindAttr::Matrix,
+        OperationKind::Gfx950LdsTranspose(_) => PreservedOperationKindAttr::Gfx950LdsTranspose,
+        OperationKind::Wave(_) => PreservedOperationKindAttr::Wave,
+        OperationKind::InlineAssembly(_) => PreservedOperationKindAttr::InlineAssembly,
+        _ => return Err(KirBridgeErrorV1::MalformedGraph),
+    })
 }
 
 fn build_terminator(
@@ -986,7 +1130,78 @@ fn build_terminator(
         Some(Terminator::Return { values: returned }) => {
             Ok(ReturnOp::new(context, values_for(values, function, returned)?).get_operation())
         }
-        _ => Err(KirBridgeErrorV1::MalformedGraph),
+        Some(Terminator::Switch {
+            selector,
+            cases,
+            default_target,
+            default_arguments,
+        }) => {
+            let successors = cases
+                .iter()
+                .map(|case| block_for(blocks, function, case.target))
+                .chain(std::iter::once(block_for(
+                    blocks,
+                    function,
+                    *default_target,
+                )))
+                .collect::<Result<Vec<_>, _>>()?;
+            let successor_arguments = cases
+                .iter()
+                .map(|case| values_for(values, function, &case.arguments))
+                .chain(std::iter::once(values_for(
+                    values,
+                    function,
+                    default_arguments,
+                )))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(PreservedTerminatorOp::new_switch(
+                context,
+                PreservedTerminatorKindAttr::Switch,
+                value_for(values, function, *selector)?,
+                successors,
+                successor_arguments,
+            )
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?
+            .get_operation())
+        }
+        Some(Terminator::IntegerSwitch {
+            selector,
+            cases,
+            default_target,
+            default_arguments,
+        }) => {
+            let successors = cases
+                .iter()
+                .map(|case| block_for(blocks, function, case.target))
+                .chain(std::iter::once(block_for(
+                    blocks,
+                    function,
+                    *default_target,
+                )))
+                .collect::<Result<Vec<_>, _>>()?;
+            let successor_arguments = cases
+                .iter()
+                .map(|case| values_for(values, function, &case.arguments))
+                .chain(std::iter::once(values_for(
+                    values,
+                    function,
+                    default_arguments,
+                )))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(PreservedTerminatorOp::new_switch(
+                context,
+                PreservedTerminatorKindAttr::IntegerSwitch,
+                value_for(values, function, *selector)?,
+                successors,
+                successor_arguments,
+            )
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?
+            .get_operation())
+        }
+        Some(Terminator::Unreachable) => {
+            Ok(PreservedTerminatorOp::new_unreachable(context).get_operation())
+        }
+        None => Err(KirBridgeErrorV1::MalformedGraph),
     }
 }
 
@@ -1036,7 +1251,7 @@ fn address_space_to_pliron(
         AddressSpace::Workgroup => Ok(AddressSpaceAttr::Workgroup),
         AddressSpace::Global => Ok(AddressSpaceAttr::Global),
         AddressSpace::Constant => Ok(AddressSpaceAttr::Constant),
-        AddressSpace::Generic => Err(KirBridgeErrorV1::UnsupportedGenericAddressSpace),
+        AddressSpace::Generic => Ok(AddressSpaceAttr::Generic),
     }
 }
 
@@ -1367,8 +1582,13 @@ fn extract_optimized_module_graph(
                     let id = id_for(&reverse_values, live_result)?;
                     results.push(fe2o3_kernel_ir::ValueDef::new(id, ty));
                 }
-                let kind =
-                    extract_any_operation(context, *live_operation, &reverse_values, coordinate)?;
+                let kind = extract_any_operation(
+                    context,
+                    *live_operation,
+                    &reverse_values,
+                    coordinate,
+                    origins,
+                )?;
                 block.operations.push(KirOperation::new(results, kind));
             }
             let coordinate = KirBridgeCoordinateV1::Terminator {
@@ -1381,6 +1601,7 @@ fn extract_optimized_module_graph(
                 *live_terminator,
                 &reverse_values,
                 &reverse_blocks,
+                origins,
             )?);
             blocks.push(block);
         }
@@ -1443,6 +1664,7 @@ fn extract_any_operation(
     live: Ptr<Operation>,
     reverse: &HashMap<Value, ValueId>,
     coordinate: KirBridgeCoordinateV1,
+    origins: &KirBridgeOriginsV1,
 ) -> Result<OperationKind, KirBridgeErrorV1> {
     let raw = live.deref(context);
     if let Some(operation) = Operation::get_op::<PlironConstantOp>(live, context) {
@@ -1545,6 +1767,16 @@ fn extract_any_operation(
             value: id_for(reverse, raw.get_operand(1))?,
             access: memory_access_from_store(context, &operation)?,
         });
+    }
+    if let Some(operation) = Operation::get_op::<PreservedOperationOp>(live, context) {
+        let template = origins
+            .preserved_operations
+            .get(&live)
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+        if operation.kind(context) != Some(preserved_operation_kind(template)?) {
+            return Err(KirBridgeErrorV1::MalformedGraph);
+        }
+        return remap_preserved_operation(template, ids_for(reverse, operation.operands(context))?);
     }
     Err(KirBridgeErrorV1::UnsupportedOperation { coordinate })
 }
@@ -1657,6 +1889,7 @@ fn extract_module_graph(
     context: &Context,
     root: Ptr<Operation>,
     metadata: &Module,
+    origins: &KirBridgeOriginsV1,
 ) -> Result<Module, KirBridgeErrorV1> {
     if !Operation::is_op::<ModuleOp>(root, context) {
         return Err(KirBridgeErrorV1::MalformedGraph);
@@ -1800,6 +2033,7 @@ fn extract_module_graph(
                     *live_operation,
                     &source_operation.kind,
                     &reverse_values,
+                    origins,
                 )?;
                 for (index, result) in output_operation.results.iter_mut().enumerate() {
                     result.ty =
@@ -1813,6 +2047,7 @@ fn extract_module_graph(
                     .ok_or(KirBridgeErrorV1::MalformedGraph)?,
                 &reverse_values,
                 &reverse_blocks,
+                origins,
             )?);
             for (index, parameter) in output_block.parameters.iter_mut().enumerate() {
                 let offset = usize::from(output_block.id == source_body.blocks[0].id)
@@ -1867,6 +2102,7 @@ fn extract_operation(
     live: Ptr<Operation>,
     expected: &OperationKind,
     reverse: &HashMap<Value, ValueId>,
+    origins: &KirBridgeOriginsV1,
 ) -> Result<OperationKind, KirBridgeErrorV1> {
     let raw = live.deref(context);
     match expected {
@@ -2026,8 +2262,213 @@ fn extract_operation(
                 },
             })
         }
-        _ => Err(KirBridgeErrorV1::MalformedGraph),
+        template => {
+            let Some(operation) = Operation::get_op::<PreservedOperationOp>(live, context) else {
+                return Err(KirBridgeErrorV1::MalformedGraph);
+            };
+            if origins.preserved_operations.get(&live) != Some(template)
+                || operation.kind(context) != Some(preserved_operation_kind(template)?)
+            {
+                return Err(KirBridgeErrorV1::MalformedGraph);
+            }
+            remap_preserved_operation(template, ids_for(reverse, operation.operands(context))?)
+        }
     }
+}
+
+fn remap_preserved_operation(
+    template: &OperationKind,
+    live_operands: Vec<ValueId>,
+) -> Result<OperationKind, KirBridgeErrorV1> {
+    let source_operands = template.operands();
+    if source_operands.len() != live_operands.len() {
+        return Err(KirBridgeErrorV1::MalformedGraph);
+    }
+    let mut replacements = BTreeMap::new();
+    for (source, live) in source_operands.into_iter().zip(live_operands) {
+        if replacements
+            .insert(source, live)
+            .is_some_and(|old| old != live)
+        {
+            return Err(KirBridgeErrorV1::MalformedGraph);
+        }
+    }
+    let remap = |value: &mut ValueId| -> Result<(), KirBridgeErrorV1> {
+        *value = replacements
+            .get(value)
+            .copied()
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+        Ok(())
+    };
+
+    let mut kind = template.clone();
+    match &mut kind {
+        OperationKind::Intrinsic(_) => {}
+        OperationKind::MemoryIntrinsic(intrinsic) => match intrinsic {
+            fe2o3_kernel_ir::MemoryIntrinsicOperation::PointerDistance {
+                pointer, origin, ..
+            } => {
+                remap(pointer)?;
+                remap(origin)?;
+            }
+            fe2o3_kernel_ir::MemoryIntrinsicOperation::VolatileLoad { pointer, .. } => {
+                remap(pointer)?;
+            }
+            fe2o3_kernel_ir::MemoryIntrinsicOperation::VolatileStore { pointer, value, .. } => {
+                remap(pointer)?;
+                remap(value)?;
+            }
+            fe2o3_kernel_ir::MemoryIntrinsicOperation::CopyNonOverlapping {
+                source,
+                destination,
+                count,
+                ..
+            } => {
+                remap(source)?;
+                remap(destination)?;
+                remap(count)?;
+            }
+        },
+        OperationKind::Alloca { count, .. } => {
+            if let Some(count) = count {
+                remap(count)?;
+            }
+        }
+        OperationKind::GuardedLoad {
+            pointer,
+            predicate,
+            fallback,
+            ..
+        } => {
+            remap(pointer)?;
+            remap(predicate)?;
+            remap(fallback)?;
+        }
+        OperationKind::GuardedStore {
+            pointer,
+            predicate,
+            value,
+            ..
+        } => {
+            remap(pointer)?;
+            remap(predicate)?;
+            remap(value)?;
+        }
+        OperationKind::Atomic(atomic) => {
+            remap(&mut atomic.pointer)?;
+            if let Some(value) = &mut atomic.value {
+                remap(value)?;
+            }
+            if let Some(compare) = &mut atomic.compare {
+                remap(compare)?;
+            }
+        }
+        OperationKind::Matrix(matrix) => match &mut matrix.kind {
+            fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate {
+                lhs,
+                rhs,
+                accumulator,
+                ..
+            } => {
+                for value in lhs.iter_mut().chain(rhs).chain(accumulator) {
+                    remap(value)?;
+                }
+            }
+            fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate {
+                lhs,
+                rhs,
+                accumulator,
+                ..
+            } => {
+                for value in lhs.iter_mut().chain(rhs).chain(accumulator) {
+                    remap(value)?;
+                }
+            }
+            fe2o3_kernel_ir::MatrixOperationKind::LdsLoad { base, .. } => remap(base)?,
+            fe2o3_kernel_ir::MatrixOperationKind::LdsStore { base, values, .. } => {
+                remap(base)?;
+                for value in values {
+                    remap(value)?;
+                }
+            }
+        },
+        OperationKind::Gfx950LdsTranspose(transpose) => match &mut transpose.kind {
+            fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { .. } => {}
+            fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Stage {
+                storage,
+                source_slice,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+                ..
+            } => {
+                for value in [
+                    storage,
+                    source_slice,
+                    offset,
+                    rows,
+                    columns,
+                    stride,
+                    token_base,
+                    reduction_base,
+                ] {
+                    remap(value)?;
+                }
+            }
+            fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Publish { storage, .. }
+            | fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Read { storage, .. } => {
+                remap(storage)?;
+            }
+        },
+        OperationKind::Wave(wave) => match &mut wave.kind {
+            fe2o3_kernel_ir::WaveOperationKind::LaneId => {}
+            fe2o3_kernel_ir::WaveOperationKind::Ballot { predicate }
+            | fe2o3_kernel_ir::WaveOperationKind::Any { predicate }
+            | fe2o3_kernel_ir::WaveOperationKind::All { predicate } => remap(predicate)?,
+            fe2o3_kernel_ir::WaveOperationKind::ShuffleIndex {
+                value, source_lane, ..
+            }
+            | fe2o3_kernel_ir::WaveOperationKind::BroadcastF32 {
+                value, source_lane, ..
+            } => {
+                remap(value)?;
+                remap(source_lane)?;
+            }
+            fe2o3_kernel_ir::WaveOperationKind::ReduceF32 { value, .. } => remap(value)?,
+        },
+        OperationKind::InlineAssembly(assembly) => {
+            for operand in &mut assembly.operands {
+                match &mut operand.kind {
+                    fe2o3_kernel_ir::AssemblyOperandKind::Input(value)
+                    | fe2o3_kernel_ir::AssemblyOperandKind::InOut { input: value, .. } => {
+                        remap(value)?;
+                    }
+                    fe2o3_kernel_ir::AssemblyOperandKind::Output { .. }
+                    | fe2o3_kernel_ir::AssemblyOperandKind::ImmediateI32(_) => {}
+                }
+            }
+        }
+        OperationKind::Barrier(_)
+        | OperationKind::Fence(_)
+        | OperationKind::WorkgroupBarrier(_)
+        | OperationKind::WorkgroupMemory(_) => {}
+        OperationKind::Constant(_)
+        | OperationKind::Unary { .. }
+        | OperationKind::Binary { .. }
+        | OperationKind::Compare { .. }
+        | OperationKind::Cast { .. }
+        | OperationKind::Select { .. }
+        | OperationKind::Call { .. }
+        | OperationKind::SliceLength { .. }
+        | OperationKind::SliceData { .. }
+        | OperationKind::GetElementPointer { .. }
+        | OperationKind::Load { .. }
+        | OperationKind::Store { .. } => return Err(KirBridgeErrorV1::MalformedGraph),
+    }
+    Ok(kind)
 }
 
 fn extract_terminator(
@@ -2035,6 +2476,7 @@ fn extract_terminator(
     live: Ptr<Operation>,
     reverse_values: &HashMap<Value, ValueId>,
     reverse_blocks: &HashMap<Ptr<BasicBlock>, BlockId>,
+    origins: &KirBridgeOriginsV1,
 ) -> Result<Terminator, KirBridgeErrorV1> {
     let raw = live.deref(context);
     if let Some(operation) = Operation::get_op::<BranchOp>(live, context) {
@@ -2056,6 +2498,79 @@ fn extract_terminator(
         return Ok(Terminator::Return {
             values: ids_for(reverse_values, operation.values(context))?,
         });
+    }
+    if let Some(operation) = Operation::get_op::<PreservedTerminatorOp>(live, context) {
+        let template = origins
+            .preserved_terminators
+            .get(&live)
+            .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+        return match (operation.kind(context), template) {
+            (Some(PreservedTerminatorKindAttr::Switch), Terminator::Switch { cases, .. }) => {
+                if raw.get_num_successors() != cases.len() + 1 {
+                    return Err(KirBridgeErrorV1::MalformedGraph);
+                }
+                let selector = operation
+                    .selector(context)
+                    .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+                let mut output_cases = Vec::with_capacity(cases.len());
+                for (index, case) in cases.iter().enumerate() {
+                    output_cases.push(fe2o3_kernel_ir::SwitchCase {
+                        value: case.value,
+                        target: block_id_for(reverse_blocks, raw.get_successor(index))?,
+                        arguments: ids_for(
+                            reverse_values,
+                            operation.successor_operands(context, index),
+                        )?,
+                    });
+                }
+                let default_index = cases.len();
+                Ok(Terminator::Switch {
+                    selector: id_for(reverse_values, selector)?,
+                    cases: output_cases,
+                    default_target: block_id_for(reverse_blocks, raw.get_successor(default_index))?,
+                    default_arguments: ids_for(
+                        reverse_values,
+                        operation.successor_operands(context, default_index),
+                    )?,
+                })
+            }
+            (
+                Some(PreservedTerminatorKindAttr::IntegerSwitch),
+                Terminator::IntegerSwitch { cases, .. },
+            ) => {
+                if raw.get_num_successors() != cases.len() + 1 {
+                    return Err(KirBridgeErrorV1::MalformedGraph);
+                }
+                let selector = operation
+                    .selector(context)
+                    .ok_or(KirBridgeErrorV1::MalformedGraph)?;
+                let mut output_cases = Vec::with_capacity(cases.len());
+                for (index, case) in cases.iter().enumerate() {
+                    output_cases.push(fe2o3_kernel_ir::IntegerSwitchCase {
+                        value: case.value.clone(),
+                        target: block_id_for(reverse_blocks, raw.get_successor(index))?,
+                        arguments: ids_for(
+                            reverse_values,
+                            operation.successor_operands(context, index),
+                        )?,
+                    });
+                }
+                let default_index = cases.len();
+                Ok(Terminator::IntegerSwitch {
+                    selector: id_for(reverse_values, selector)?,
+                    cases: output_cases,
+                    default_target: block_id_for(reverse_blocks, raw.get_successor(default_index))?,
+                    default_arguments: ids_for(
+                        reverse_values,
+                        operation.successor_operands(context, default_index),
+                    )?,
+                })
+            }
+            (Some(PreservedTerminatorKindAttr::Unreachable), Terminator::Unreachable) => {
+                Ok(Terminator::Unreachable)
+            }
+            _ => Err(KirBridgeErrorV1::MalformedGraph),
+        };
     }
     Err(KirBridgeErrorV1::MalformedGraph)
 }
@@ -2131,6 +2646,7 @@ const fn address_space_from_pliron(address_space: AddressSpaceAttr) -> AddressSp
         AddressSpaceAttr::Workgroup => AddressSpace::Workgroup,
         AddressSpaceAttr::Global => AddressSpace::Global,
         AddressSpaceAttr::Constant => AddressSpace::Constant,
+        AddressSpaceAttr::Generic => AddressSpace::Generic,
     }
 }
 
@@ -2304,6 +2820,88 @@ mod tests {
             vec![entry, exit],
         ));
         module
+    }
+
+    #[test]
+    fn correspondence_digest_has_a_fixed_complete_transcript() {
+        let records = [
+            KirBridgeCorrespondenceV1 {
+                pliron_ordinal: 0,
+                coordinate: KirBridgeCoordinateV1::Function { function: 7 },
+            },
+            KirBridgeCorrespondenceV1 {
+                pliron_ordinal: 1,
+                coordinate: KirBridgeCoordinateV1::Operation {
+                    function: 7,
+                    block: 2,
+                    operation: 9,
+                },
+            },
+        ];
+        let digest = correspondence_digest_v1(&records);
+        assert_eq!(digest.count(), 2);
+        assert_eq!(
+            digest.digest(),
+            [
+                0xa7, 0x24, 0xd2, 0x85, 0x3b, 0xba, 0x9d, 0x50, 0x90, 0xb3, 0x40, 0x0c, 0x49, 0x9f,
+                0xf5, 0xd9, 0x6c, 0x46, 0x7d, 0x38, 0x26, 0x96, 0x87, 0xad, 0xbf, 0x5c, 0x26, 0xe2,
+                0x36, 0xf7, 0x8b, 0x88,
+            ]
+        );
+
+        let mut reordered = records;
+        reordered.swap(0, 1);
+        assert_ne!(
+            correspondence_digest_v1(&reordered).digest(),
+            digest.digest()
+        );
+        let mut changed_coordinate = records;
+        changed_coordinate[1].coordinate = KirBridgeCoordinateV1::Terminator {
+            function: 7,
+            block: 2,
+        };
+        assert_ne!(
+            correspondence_digest_v1(&changed_coordinate).digest(),
+            digest.digest()
+        );
+    }
+
+    #[test]
+    fn semantic_memory_carrier_remaps_ssa_without_changing_its_contract() {
+        use fe2o3_kernel_ir::{
+            MemoryElementType, MemoryIntrinsicOperation, MemoryLayout, VolatileAccessContract,
+        };
+
+        let template = OperationKind::MemoryIntrinsic(MemoryIntrinsicOperation::VolatileStore {
+            pointer: ValueId(1),
+            value: ValueId(2),
+            element: MemoryElementType::Scalar(ScalarType::U32),
+            address_space: AddressSpace::Global,
+            layout: MemoryLayout::new(4, 4),
+            contract: VolatileAccessContract::rust_allocation_store(),
+        });
+        assert_eq!(
+            preserved_operation_kind(&template),
+            Ok(PreservedOperationKindAttr::MemoryIntrinsic)
+        );
+        let remapped = remap_preserved_operation(&template, vec![ValueId(10), ValueId(20)])
+            .expect("semantic memory SSA remap");
+        let OperationKind::MemoryIntrinsic(MemoryIntrinsicOperation::VolatileStore {
+            pointer,
+            value,
+            element,
+            address_space,
+            layout,
+            contract,
+        }) = remapped
+        else {
+            panic!("wrong remapped operation family")
+        };
+        assert_eq!((pointer, value), (ValueId(10), ValueId(20)));
+        assert_eq!(element, MemoryElementType::Scalar(ScalarType::U32));
+        assert_eq!(address_space, AddressSpace::Global);
+        assert_eq!(layout, MemoryLayout::new(4, 4));
+        assert_eq!(contract, VolatileAccessContract::rust_allocation_store());
     }
 
     #[test]

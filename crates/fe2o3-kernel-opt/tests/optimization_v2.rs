@@ -4,10 +4,14 @@ use fe2o3_kernel_ir::{
     encode_module_v9, verify_module,
 };
 use fe2o3_kernel_opt::{
+    KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2,
+    KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2,
     KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE,
     KernelIrPlironOptimizationByteLimitV2, KernelIrPlironOptimizationErrorV2,
-    KernelIrPlironOptimizationLimitsV2, MAX_KERNEL_IR_PLIRON_OPTIMIZATION_MODULE_BYTES_V2,
-    optimize_kernel_ir_module_at_epoch_v2, optimize_kernel_ir_module_v2,
+    KernelIrPlironOptimizationLimitsV2, KernelIrPlironOptimizationPolicyV2,
+    MAX_KERNEL_IR_PLIRON_OPTIMIZATION_MODULE_BYTES_V2, optimize_kernel_ir_module_at_epoch_v2,
+    optimize_kernel_ir_module_v2, optimize_production_kernel_ir_module_v2,
+    production_kernel_ir_pliron_optimization_limits_v2,
 };
 use fe2o3_pliron::{
     PlironOptimizationErrorV1, PlironOptimizationLimitsV1, PlironOptimizationPlanErrorV1,
@@ -114,6 +118,56 @@ fn standard_pipeline_publishes_verified_output_digests_reports_and_epochs() {
     }
     assert_eq!(report.final_epoch(), epoch);
     assert!(report.final_epoch() > report.initial_epoch());
+}
+
+#[test]
+fn production_entry_uses_the_fixed_v2_pipeline() {
+    let input = optimizable_module();
+    let production = optimize_production_kernel_ir_module_v2(&input).unwrap();
+    let configured =
+        optimize_kernel_ir_module_v2(&input, KernelIrPlironOptimizationLimitsV2::default())
+            .unwrap();
+
+    assert_eq!(production.module(), configured.module());
+    assert_eq!(production.canonical(), configured.canonical());
+    assert_eq!(
+        production.report().limits(),
+        production_kernel_ir_pliron_optimization_limits_v2()
+    );
+    assert_eq!(
+        configured.report().limits(),
+        KernelIrPlironOptimizationLimitsV2::default()
+    );
+    assert_eq!(production.report().bridge(), configured.report().bridge());
+    assert_eq!(production.report().pliron(), configured.report().pliron());
+    assert_eq!(production.report().passes(), configured.report().passes());
+    assert_eq!(
+        production.report().policy(),
+        KernelIrPlironOptimizationPolicyV2::ProductionV1
+    );
+    assert_eq!(
+        configured.report().policy(),
+        KernelIrPlironOptimizationPolicyV2::Configurable
+    );
+    assert_eq!(production.report().passes().len(), 7);
+    assert_eq!(
+        KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2,
+        1
+    );
+    assert_eq!(
+        production
+            .report()
+            .passes()
+            .iter()
+            .map(|pass| pass.pliron().pass().name())
+            .collect::<Vec<_>>(),
+        KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2
+            .iter()
+            .map(|pass| pass.name())
+            .collect::<Vec<_>>()
+    );
+    assert!(production.report().is_production_replay_compatible());
+    assert!(!configured.report().is_production_replay_compatible());
 }
 
 #[test]
@@ -315,14 +369,47 @@ fn byte_limits_are_nonzero_hard_bounded_admission_controls() {
 }
 
 #[test]
-fn v2_evidence_is_explicitly_outside_frozen_production_replay() {
+fn only_the_closed_production_report_is_admitted_by_production_v4_replay() {
     const {
-        assert!(!KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE);
+        assert!(KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE);
     }
-    let optimized = optimize_kernel_ir_module_v2(
+    let production = optimize_production_kernel_ir_module_v2(&optimizable_module()).unwrap();
+    let configured = optimize_kernel_ir_module_v2(
         &optimizable_module(),
         KernelIrPlironOptimizationLimitsV2::default(),
     )
     .unwrap();
-    assert!(!optimized.report().is_production_replay_compatible());
+    let custom_limits = KernelIrPlironOptimizationLimitsV2::new(
+        MAX_KERNEL_IR_PLIRON_OPTIMIZATION_MODULE_BYTES_V2 - 1,
+        MAX_KERNEL_IR_PLIRON_OPTIMIZATION_MODULE_BYTES_V2 - 1,
+        ShellLimits::default(),
+        PlironOptimizationLimitsV1::default(),
+    )
+    .unwrap();
+    let custom = optimize_kernel_ir_module_v2(&optimizable_module(), custom_limits).unwrap();
+    let nonzero_epoch = optimize_kernel_ir_module_at_epoch_v2(
+        &optimizable_module(),
+        1,
+        KernelIrPlironOptimizationLimitsV2::default(),
+    )
+    .unwrap();
+
+    assert!(production.report().is_production_replay_compatible());
+    assert!(!configured.report().is_production_replay_compatible());
+    assert!(!custom.report().is_production_replay_compatible());
+    assert!(!nonzero_epoch.report().is_production_replay_compatible());
+    assert_eq!(custom.report().limits(), custom_limits);
+    assert_eq!(
+        production.report().limits(),
+        production_kernel_ir_pliron_optimization_limits_v2()
+    );
+    let production_limits = production_kernel_ir_pliron_optimization_limits_v2();
+    assert_eq!(production_limits.max_input_canonical_bytes(), 16_777_216);
+    assert_eq!(production_limits.max_output_canonical_bytes(), 16_777_216);
+    assert_eq!(production_limits.shell().max_dialects(), 32);
+    assert_eq!(production_limits.shell().max_passes(), 64);
+    assert_eq!(production_limits.shell().max_diagnostic_bytes(), 512);
+    assert_eq!(production_limits.pliron().max_passes(), 256);
+    assert_eq!(production_limits.pliron().max_graph_work(), 16_384);
+    assert_eq!(production_limits.pliron().max_work_units(), 12_636_160);
 }

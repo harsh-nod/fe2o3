@@ -1591,21 +1591,24 @@ mod tests {
         let target =
             bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
                 .unwrap();
+        let optimized =
+            fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(target.module()).unwrap();
         let target_owner =
-            VerifiedCanonicalKernelIrV8::from_module(target.module().clone()).unwrap();
+            VerifiedCanonicalKernelIrV8::from_module(optimized.module().clone()).unwrap();
         let [kernel_id] = target.kernel_ids() else {
             panic!("source/ISA test fixture must contain one kernel");
         };
         let dialect = lower_kernel_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-            target.module(),
+            optimized.module(),
             kernel_id,
             ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner),
         )
         .unwrap();
         let llvm = bind_production_llvm22_worker_layout_v1(&dialect).unwrap();
-        CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+        CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
             &neutral_bytes,
-            target.module(),
+            optimized.module(),
+            optimized.report(),
             ProductionAmdTargetProfileV1::Gfx942,
             &llvm,
         )

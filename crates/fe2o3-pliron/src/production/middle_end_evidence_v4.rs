@@ -1956,6 +1956,7 @@ const fn address_space_tag(value: AddressSpaceAttr) -> u8 {
         AddressSpaceAttr::Workgroup => 2,
         AddressSpaceAttr::Global => 3,
         AddressSpaceAttr::Constant => 4,
+        AddressSpaceAttr::Generic => 5,
     }
 }
 

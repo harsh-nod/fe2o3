@@ -102,11 +102,6 @@ impl Error for CompilerKirToLlvmReplayValidationErrorV1 {
 
 #[cfg(test)]
 mod tests {
-    use dialect_amdgcn::{
-        bind_production_target_v1, bind_production_upstream_llvm_layout_v1,
-        lower_compiler_module_to_gfx942_xnack_minus_llvm_ir,
-    };
-    use fe2o3_amd_target::ProductionAmdTargetProfileV1;
     use fe2o3_compiler_lineage::{InertAmdgpuLoweringReceiptV3, InertKernelIrReceiptV3};
     use fe2o3_kernel_ir::{
         BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Module, Signature,
@@ -138,32 +133,35 @@ mod tests {
         module
     }
 
-    fn receipts(name: &str) -> (InertKernelIrReceiptV3, InertAmdgpuLoweringReceiptV3) {
-        let neutral_module = neutral_module(name);
-        let neutral = VerifiedCanonicalKernelIrV8::from_module(neutral_module.clone()).unwrap();
-        let neutral_bytes = neutral.canonical_bytes();
-        let target =
-            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
-                .unwrap();
-        let dialect = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(target.module()).unwrap();
-        let llvm = bind_production_upstream_llvm_layout_v1(&dialect).unwrap();
-        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v3(
-            neutral_bytes,
-            target.module(),
-            ProductionAmdTargetProfileV1::Gfx942,
-            &llvm,
-        )
-        .unwrap();
+    fn decode_hex(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0, "fixture hex must contain whole bytes");
+        (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn receipts() -> (InertKernelIrReceiptV3, InertAmdgpuLoweringReceiptV3) {
+        let fixture = include_str!("../tests/fixtures/production-kir-to-llvm-replay-v4.hex");
+        let (neutral, evidence) = fixture
+            .split_once("# Canonical production KIR-to-LLVM V4 evidence for that KIR.\n")
+            .unwrap();
+        let neutral = decode_hex(
+            &neutral
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .collect::<String>(),
+        );
+        let evidence = decode_hex(&evidence.lines().collect::<String>());
         (
-            InertKernelIrReceiptV3::from_canonical_preimage(neutral_bytes).unwrap(),
-            InertAmdgpuLoweringReceiptV3::from_canonical_preimage(evidence.canonical_bytes())
-                .unwrap(),
+            InertKernelIrReceiptV3::from_canonical_preimage(neutral).unwrap(),
+            InertAmdgpuLoweringReceiptV3::from_canonical_preimage(evidence).unwrap(),
         )
     }
 
     #[test]
     fn generic_receipts_independently_replay_exact_target_kir_and_llvm() {
-        let (kernel_ir, amdgpu) = receipts("independent");
+        let (kernel_ir, amdgpu) = receipts();
         let validated = validate_compiler_kir_to_llvm_replay_v1(&kernel_ir, &amdgpu).unwrap();
         assert_eq!(validated.kernel_ir_receipt_identity(), kernel_ir.identity());
         assert_eq!(
@@ -179,8 +177,10 @@ mod tests {
 
     #[test]
     fn valid_receipts_from_different_compilations_cannot_be_spliced() {
-        let (kernel_ir_a, _) = receipts("first");
-        let (_, amdgpu_b) = receipts("second");
+        let (_, amdgpu_b) = receipts();
+        let neutral_a = VerifiedCanonicalKernelIrV8::from_module(neutral_module("other")).unwrap();
+        let kernel_ir_a =
+            InertKernelIrReceiptV3::from_canonical_preimage(neutral_a.canonical_bytes()).unwrap();
         assert!(matches!(
             validate_compiler_kir_to_llvm_replay_v1(&kernel_ir_a, &amdgpu_b),
             Err(CompilerKirToLlvmReplayValidationErrorV1::Replay(
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn legacy_association_payload_is_not_misreported_as_replay_evidence() {
-        let (kernel_ir, _) = receipts("legacy");
+        let (kernel_ir, _) = receipts();
         let legacy = InertAmdgpuLoweringReceiptV3::from_canonical_preimage(
             b"association-only legacy transcript",
         )

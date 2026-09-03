@@ -5910,6 +5910,7 @@ fn normalize_ranked_address_space_v1(space: dialect_gpu::AddressSpaceAttr) -> u8
         dialect_gpu::AddressSpaceAttr::Workgroup => 1,
         dialect_gpu::AddressSpaceAttr::Global => 2,
         dialect_gpu::AddressSpaceAttr::Constant => 3,
+        dialect_gpu::AddressSpaceAttr::Generic => 4,
     }
 }
 

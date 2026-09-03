@@ -10,8 +10,9 @@ use crate::{
         AccessModeAttr, BFloat16Attr, BFloat16Type, BinaryKindAttr, BinaryOp, BranchOp, CallOp,
         CastKindAttr, CastOp, CompareOp, ComparePredicateAttr, CondBranchOp, ConstantOp,
         GetElementPointerOp, IndexAttr, IndexType, LoadOp, MemoryAlignmentAttr, PointerType,
-        ReturnOp, SelectOp, SliceDataOp, SliceLengthOp, SliceType, StoreOp, UnaryKindAttr, UnaryOp,
-        VolatileAttr,
+        PreservedOperationKindAttr, PreservedOperationOp, PreservedTerminatorKindAttr,
+        PreservedTerminatorOp, ReturnOp, SelectOp, SliceDataOp, SliceLengthOp, SliceType, StoreOp,
+        UnaryKindAttr, UnaryOp, VolatileAttr,
     },
 };
 
@@ -36,6 +37,8 @@ fn registration_hook(
     service.register_attribute::<BFloat16Attr>()?;
     service.register_attribute::<MemoryAlignmentAttr>()?;
     service.register_attribute::<VolatileAttr>()?;
+    service.register_attribute::<PreservedOperationKindAttr>()?;
+    service.register_attribute::<PreservedTerminatorKindAttr>()?;
     service.register_type::<HierarchyIndexType>()?;
     service.register_type::<MemorySpaceType>()?;
     service.register_type::<IndexType>()?;
@@ -62,6 +65,8 @@ fn registration_hook(
     service.register_operation::<GetElementPointerOp>()?;
     service.register_operation::<LoadOp>()?;
     service.register_operation::<StoreOp>()?;
+    service.register_operation::<PreservedOperationOp>()?;
+    service.register_operation::<PreservedTerminatorOp>()?;
     Ok(())
 }
 

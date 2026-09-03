@@ -10,10 +10,11 @@ general compiler:
 - `fe2o3-kernel-analysis` now owns an epoch-scoped analysis manager with
   cached control-flow, post-dominance, and SSA-liveness queries. Uniformity
   remains outside the manager until it has the same deterministic budgets.
-- `fe2o3-kernel-opt` owns a deterministic, transactional, resource-bounded KIR
-  pass pipeline. Its first closed roster removes unreachable blocks and dead
-  non-trapping pure operations, verifies the admitted input and every changed
-  checkpoint, and emits mutation epochs and per-pass accounting.
+- `fe2o3-kernel-opt` owns the deterministic, transactional, resource-bounded
+  Pliron V2 KIR pipeline used by production. Its versioned seven-pass roster
+  runs SCCP, CFG simplification, select canonicalization, conservative local
+  pure CSE, and DCE; it verifies the admitted input and every changed checkpoint
+  and emits mutation epochs, bridge identities, and per-pass accounting.
 - production MIR lowering now represents non-Boolean integer `SwitchInt`
   terminators as typed KIR integer switches for signed and unsigned 8-, 16-,
   32-, and 64-bit values plus pointer-sized indexes. Unsupported 128-bit

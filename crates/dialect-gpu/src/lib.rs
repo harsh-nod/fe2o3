@@ -90,6 +90,8 @@ pub enum AddressSpaceAttr {
     Workgroup,
     Global,
     Constant,
+    /// Pointer whose concrete address space remains unknown at this level.
+    Generic,
 }
 
 /// Visibility scope for synchronization.
@@ -890,6 +892,12 @@ pub fn register_dialect(
     <optimization_v1::VolatileAttr as Attribute>::register::<optimization_v1::VolatileAttr>(
         context,
     );
+    <optimization_v1::PreservedOperationKindAttr as Attribute>::register::<
+        optimization_v1::PreservedOperationKindAttr,
+    >(context);
+    <optimization_v1::PreservedTerminatorKindAttr as Attribute>::register::<
+        optimization_v1::PreservedTerminatorKindAttr,
+    >(context);
     <HierarchyIndexType as Type>::register(context);
     <MemorySpaceType as Type>::register(context);
     <optimization_v1::IndexType as Type>::register(context);
@@ -916,6 +924,8 @@ pub fn register_dialect(
     <optimization_v1::GetElementPointerOp as Op>::register(context);
     <optimization_v1::LoadOp as Op>::register(context);
     <optimization_v1::StoreOp as Op>::register(context);
+    <optimization_v1::PreservedOperationOp as Op>::register(context);
+    <optimization_v1::PreservedTerminatorOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context

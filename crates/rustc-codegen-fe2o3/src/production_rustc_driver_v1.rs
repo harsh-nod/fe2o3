@@ -232,13 +232,13 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s), bounded MIR-to-KIR u32 internal-helper/call-result status {}, and target-neutral Formal Compiler V3 composed status {} -> composed formal/ranked memory -> target-KIR optimizer ({} structurally verified pass(es), {} mutation(s), epoch {}..={}, semantic preservation not yet formally proved) -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), ordered workgroups {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s), bounded MIR-to-KIR u32 internal-helper/call-result status {}, and target-neutral Formal Compiler V3 composed status {} -> composed formal/ranked memory -> target-KIR optimizer ({} structurally verified pass(es), {} mutating pass(es), epoch {}..={}, semantic preservation not yet formally proved) -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), ordered workgroups {:?}, {} LLVM byte(s), artifact/launch authority {}",
         lowered.canonical_kernel_ir_version(),
         lowered.guarded_store_count(),
         lowered.mir_kir_cfg_refinement_status_name(),
         lowered.formal_compiler_v3_status_name(),
         lowered.target_optimization_pass_count(),
-        lowered.target_optimization_mutation_count(),
+        lowered.target_optimization_mutating_pass_count(),
         lowered.target_optimization_initial_epoch(),
         lowered.target_optimization_final_epoch(),
         lowered.target_name(),

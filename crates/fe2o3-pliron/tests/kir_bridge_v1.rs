@@ -1,10 +1,4 @@
-use std::collections::BTreeSet;
-
-use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, CastKind, CheckedBinaryOperator, ComparePredicate,
-    Constant, Function, MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, VerifiedCanonicalKernelIrV9,
-};
+use fe2o3_kernel_ir::*;
 use fe2o3_pliron::{
     KirBridgeCoordinateV1, KirBridgeErrorV1, PlironOptimizationPlanV1, PlironSession, ShellLimits,
 };
@@ -244,6 +238,434 @@ fn non_dominance_physical_order_module() -> Module {
     module
 }
 
+fn assert_exact_through_standard_optimization(module: Module) {
+    let input = VerifiedCanonicalKernelIrV9::from_module(module).expect("valid canonical KIR");
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
+    let (o0, report) = owner.extract_canonical_kir_v9_o0(&graph).unwrap();
+    assert_eq!(o0.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
+    owner
+        .execute_optimization_v1(graph.root(), &PlironOptimizationPlanV1::standard())
+        .unwrap();
+    let (optimized, _) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
+    assert_eq!(optimized.canonical_bytes(), input.canonical_bytes());
+}
+
+fn preserved_memory_and_synchronization_module() -> Module {
+    let u32_ty = Type::Scalar(ScalarType::U32);
+    let global_pointer = Type::pointer(u32_ty.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let private_pointer =
+        Type::pointer(u32_ty.clone(), AddressSpace::Private, AccessMode::ReadWrite);
+    let workgroup_pointer = Type::pointer(
+        u32_ty.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(4), private_pointer),
+            OperationKind::Alloca {
+                element: u32_ty.clone(),
+                count: Some(ValueId(3)),
+                address_space: AddressSpace::Private,
+                alignment: 4,
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(5), u32_ty.clone()),
+            OperationKind::GuardedLoad {
+                pointer: ValueId(0),
+                predicate: ValueId(1),
+                fallback: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(0),
+                predicate: ValueId(1),
+                value: ValueId(5),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Barrier(Barrier {
+                execution_scope: SynchronizationScope::Workgroup,
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+            }),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(6), workgroup_pointer),
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: u32_ty.clone(),
+                extent: WorkgroupMemoryExtent::Static(64),
+                alignment: 16,
+            }),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Fence(Fence {
+                memory_scope: SynchronizationScope::Device,
+                semantics: BarrierSemantics::new(MemoryOrdering::Release, [AddressSpace::Global]),
+            }),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(7), u32_ty.clone()),
+            OperationKind::Atomic(Atomic {
+                kind: AtomicKind::Add,
+                pointer: ValueId(0),
+                value: Some(ValueId(5)),
+                compare: None,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+                scope: SynchronizationScope::Device,
+                ordering: MemoryOrdering::AcquireRelease,
+                failure_ordering: None,
+            }),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::internal_helper(
+        "preserved_memory_and_sync",
+        Signature::new(
+            vec![global_pointer, Type::BOOL, u32_ty, Type::INDEX],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        vec![block],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let mut module = Module::new("tests::preserved_memory_and_sync");
+    module.functions.push(function);
+    module
+}
+
+fn preserved_matrix_module() -> Module {
+    let mut parameters = vec![Type::Scalar(ScalarType::Bf16); 8];
+    parameters.extend(vec![Type::F32; 4]);
+    let ids = (0..12).map(ValueId).collect::<Vec<_>>();
+    let matrix = MatrixOperation::multiply_accumulate(
+        [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        [ValueId(4), ValueId(5), ValueId(6), ValueId(7)],
+        [ValueId(8), ValueId(9), ValueId(10), ValueId(11)],
+    )
+    .with_declared_tensor_layout(TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64());
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(Operation::new(
+        (12..16)
+            .map(|id| ValueDef::new(ValueId(id), Type::F32))
+            .collect(),
+        OperationKind::Matrix(matrix),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::internal_helper(
+        "preserved_matrix",
+        Signature::new(parameters, vec![]),
+        ids,
+        vec![block],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let mut module = Module::new("tests::preserved_matrix");
+    module.functions.push(function);
+    module
+}
+
+fn preserved_wave_and_transpose_module() -> Module {
+    let storage_type = Type::pointer(
+        Type::Scalar(ScalarType::U8),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let parameters = vec![
+        Type::slice(
+            Type::Scalar(ScalarType::U8),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        ),
+        Type::INDEX,
+        Type::INDEX,
+        Type::INDEX,
+        Type::INDEX,
+        Type::INDEX,
+        Type::INDEX,
+        Type::F32,
+    ];
+    let format = Gfx950LdsTransposeFormatV1::Fp8E4M3;
+    let transpose = |result, kind| {
+        Operation::effect_free(
+            ValueDef::new(ValueId(result), storage_type.clone()),
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(kind)),
+        )
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        transpose(8, Gfx950LdsTransposeOperationKindV1::Current { format }),
+        transpose(
+            9,
+            Gfx950LdsTransposeOperationKindV1::Stage {
+                format,
+                storage: ValueId(8),
+                source_slice: ValueId(0),
+                offset: ValueId(1),
+                rows: ValueId(2),
+                columns: ValueId(3),
+                stride: ValueId(4),
+                token_base: ValueId(5),
+                reduction_base: ValueId(6),
+            },
+        ),
+        transpose(
+            10,
+            Gfx950LdsTransposeOperationKindV1::Publish {
+                format,
+                storage: ValueId(9),
+            },
+        ),
+        Operation::new(
+            (11..19)
+                .map(|id| ValueDef::new(ValueId(id), Type::Scalar(ScalarType::U32)))
+                .collect(),
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Read {
+                    format,
+                    storage: ValueId(10),
+                },
+            )),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(19), Type::F32),
+            OperationKind::Wave(WaveOperation::full(
+                WaveOperationKind::ReduceF32 {
+                    value: ValueId(7),
+                    tile_width: 16,
+                    kind: WaveF32ReductionKindV1::Maximum,
+                },
+                WaveWidth::Wave64,
+            )),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::kernel_entry(
+        "preserved_wave_and_transpose",
+        Signature::new(parameters.clone(), vec![]),
+        (0..parameters.len() as u32).map(ValueId).collect(),
+        vec![block],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let mut kernel = Kernel::new(
+        "preserved_wave_and_transpose_kernel",
+        "preserved_wave_and_transpose",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("tests::preserved_wave_and_transpose");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn preserved_inline_assembly_module() -> Module {
+    let assembly = InlineAssembly {
+        target: InlineAssemblyTarget::AmdGpuGfx942,
+        source: AssemblySourceIdentity::new([1; 32], [2; 32], [3; 32], [4; 32]),
+        mnemonic: "v_add_u32".to_owned(),
+        operands: vec![
+            AssemblyOperand::output(0, AssemblyConstraint::Vgpr32),
+            AssemblyOperand::input(ValueId(0), AssemblyConstraint::Vgpr32),
+            AssemblyOperand::input(ValueId(1), AssemblyConstraint::Vgpr32),
+        ],
+        options: [
+            AssemblyOption::NoMemory,
+            AssemblyOption::Pure,
+            AssemblyOption::NoStack,
+        ]
+        .into_iter()
+        .collect(),
+        declared_effects: Default::default(),
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(2), Type::Scalar(ScalarType::U32)),
+        OperationKind::InlineAssembly(assembly),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut module = Module::new("tests::preserved_inline_assembly");
+    module.functions.push(Function::internal_helper(
+        "preserved_inline_assembly",
+        Signature::new(
+            vec![Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U32)],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    ));
+    module
+}
+
+fn preserved_switch_module() -> Module {
+    let mut legacy_entry = BasicBlock::new(BlockId(0));
+    legacy_entry.terminator = Some(Terminator::Switch {
+        selector: ValueId(0),
+        cases: vec![SwitchCase {
+            value: 7,
+            target: BlockId(1),
+            arguments: vec![],
+        }],
+        default_target: BlockId(2),
+        default_arguments: vec![],
+    });
+    let mut legacy_case = BasicBlock::new(BlockId(1));
+    legacy_case.terminator = Some(Terminator::Return { values: vec![] });
+    let mut legacy_default = BasicBlock::new(BlockId(2));
+    legacy_default.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut integer_entry = BasicBlock::new(BlockId(10));
+    integer_entry.terminator = Some(Terminator::IntegerSwitch {
+        selector: ValueId(1),
+        cases: vec![IntegerSwitchCase {
+            value: Constant::I32(-7),
+            target: BlockId(11),
+            arguments: vec![],
+        }],
+        default_target: BlockId(12),
+        default_arguments: vec![],
+    });
+    let mut integer_case = BasicBlock::new(BlockId(11));
+    integer_case.terminator = Some(Terminator::Return { values: vec![] });
+    let mut integer_default = BasicBlock::new(BlockId(12));
+    integer_default.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut module = Module::new("tests::preserved_switches");
+    module.functions.push(Function::internal_helper(
+        "legacy_switch",
+        Signature::new(vec![Type::INDEX], vec![]),
+        vec![ValueId(0)],
+        vec![legacy_entry, legacy_case, legacy_default],
+    ));
+    module.functions.push(Function::internal_helper(
+        "integer_switch",
+        Signature::new(vec![Type::Scalar(ScalarType::I32)], vec![]),
+        vec![ValueId(1)],
+        vec![integer_entry, integer_case, integer_default],
+    ));
+    module
+}
+
+fn preserved_switch_cfg_rewrite_module() -> Module {
+    let u32_ty = Type::Scalar(ScalarType::U32);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(3), u32_ty.clone()),
+            OperationKind::Constant(Constant::U32(6)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(4), u32_ty.clone()),
+            OperationKind::Constant(Constant::U32(3)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(5), u32_ty.clone()),
+            OperationKind::Binary {
+                op: fe2o3_kernel_ir::BinaryOp::BitAnd,
+                lhs: ValueId(3),
+                rhs: ValueId(4),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::Switch {
+        selector: ValueId(0),
+        cases: vec![
+            SwitchCase {
+                value: 7,
+                target: BlockId(10),
+                arguments: vec![ValueId(5), ValueId(1)],
+            },
+            SwitchCase {
+                value: 8,
+                target: BlockId(10),
+                arguments: vec![ValueId(2), ValueId(1)],
+            },
+        ],
+        default_target: BlockId(20),
+        default_arguments: vec![ValueId(1), ValueId(2)],
+    });
+
+    let mut repeated_target = BasicBlock::new(BlockId(10));
+    repeated_target.parameters = vec![
+        ValueDef::new(ValueId(10), u32_ty.clone()),
+        ValueDef::new(ValueId(11), u32_ty.clone()),
+    ];
+    repeated_target.terminator = Some(Terminator::Return {
+        values: vec![ValueId(10)],
+    });
+
+    let mut merge_predecessor = BasicBlock::new(BlockId(20));
+    merge_predecessor.parameters = vec![
+        ValueDef::new(ValueId(20), u32_ty.clone()),
+        ValueDef::new(ValueId(21), u32_ty.clone()),
+    ];
+    merge_predecessor.terminator = Some(Terminator::Branch {
+        target: BlockId(30),
+        arguments: vec![ValueId(20), ValueId(21)],
+    });
+
+    let mut merge_successor = BasicBlock::new(BlockId(30));
+    merge_successor.parameters = vec![
+        ValueDef::new(ValueId(30), u32_ty.clone()),
+        ValueDef::new(ValueId(31), u32_ty.clone()),
+    ];
+    merge_successor.terminator = Some(Terminator::Return {
+        values: vec![ValueId(30)],
+    });
+
+    let mut unreachable = BasicBlock::new(BlockId(40));
+    unreachable.parameters = vec![
+        ValueDef::new(ValueId(40), u32_ty.clone()),
+        ValueDef::new(ValueId(41), u32_ty.clone()),
+    ];
+    unreachable.terminator = Some(Terminator::Return {
+        values: vec![ValueId(40)],
+    });
+
+    let mut module = Module::new("tests::preserved_switch_cfg_rewrite");
+    module.functions.push(Function::internal_helper(
+        "preserved_switch_cfg_rewrite",
+        Signature::new(
+            vec![Type::INDEX, u32_ty.clone(), u32_ty.clone()],
+            vec![u32_ty],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![
+            entry,
+            repeated_target,
+            merge_predecessor,
+            merge_successor,
+            unreachable,
+        ],
+    ));
+    module
+}
+
 #[test]
 fn typed_o0_round_trip_is_exact_and_has_stable_correspondence() {
     let input = VerifiedCanonicalKernelIrV9::from_module(rich_supported_module()).unwrap();
@@ -272,6 +694,176 @@ fn typed_o0_round_trip_is_exact_and_has_stable_correspondence() {
 }
 
 #[test]
+fn every_preserved_operation_family_round_trips_through_the_standard_pipeline() {
+    for module in [
+        preserved_memory_and_synchronization_module(),
+        preserved_matrix_module(),
+        preserved_wave_and_transpose_module(),
+        preserved_inline_assembly_module(),
+    ] {
+        assert_exact_through_standard_optimization(module);
+    }
+}
+
+#[test]
+fn both_switch_forms_round_trip_with_real_cfg_successors() {
+    assert_exact_through_standard_optimization(preserved_switch_module());
+}
+
+#[test]
+fn preserved_switch_export_tracks_dead_arguments_repeated_edges_and_block_merging() {
+    let input = VerifiedCanonicalKernelIrV9::from_module(preserved_switch_cfg_rewrite_module())
+        .expect("valid switch rewrite fixture");
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
+    owner
+        .execute_optimization_v1(graph.root(), &PlironOptimizationPlanV1::standard())
+        .unwrap();
+    let (optimized, receipt) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
+    assert!(receipt.changed());
+
+    let optimized = decode_module_v9(optimized.canonical_bytes()).unwrap();
+    verify_module(&optimized).expect("rewritten switch CFG remains verified Kernel IR");
+    let body = optimized.functions[0].body.as_ref().unwrap();
+    assert_eq!(
+        body.blocks.len(),
+        3,
+        "one block merged and one removed as unreachable"
+    );
+    assert!(body.blocks.iter().all(|block| block.id != BlockId(30)));
+    assert!(body.blocks.iter().all(|block| block.id != BlockId(40)));
+
+    let entry = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(0))
+        .unwrap();
+    let Terminator::Switch {
+        cases,
+        default_target,
+        default_arguments,
+        ..
+    } = entry.terminator.as_ref().unwrap()
+    else {
+        panic!("entry switch must remain a typed preserved terminator");
+    };
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].target, BlockId(10));
+    assert_eq!(cases[1].target, BlockId(10));
+    assert_eq!(cases[0].arguments.len(), 2);
+    assert_eq!(cases[1].arguments, vec![ValueId(2), ValueId(1)]);
+    assert_eq!(*default_target, BlockId(20));
+    assert_eq!(default_arguments.len(), 2);
+
+    let folded_value = cases[0].arguments[0];
+    assert_eq!(cases[0].arguments[1], ValueId(1));
+    assert_eq!(default_arguments, &[ValueId(1), ValueId(2)]);
+    assert!(entry.operations.iter().any(|operation| {
+        operation
+            .results
+            .iter()
+            .any(|result| result.id == folded_value)
+            && matches!(operation.kind, OperationKind::Constant(Constant::U32(2)))
+    }));
+
+    let repeated_target = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(10))
+        .unwrap();
+    // Builtin FuncOp retains non-entry arguments, so both repeated edges must
+    // keep the unused second slot aligned while other CFG nodes are rewritten.
+    assert_eq!(repeated_target.parameters.len(), 2);
+    let merge_predecessor = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(20))
+        .unwrap();
+    assert_eq!(merge_predecessor.parameters.len(), 2);
+    let merged_live_parameter = merge_predecessor.parameters[0].id;
+    assert!(
+        matches!(
+            merge_predecessor.terminator,
+            Some(Terminator::Return { ref values }) if values == &[merged_live_parameter]
+        ),
+        "unexpected merged block: {:?}",
+        merge_predecessor
+    );
+}
+
+#[test]
+fn optimized_export_remaps_rewritten_operands_inside_preserved_payloads() {
+    let u32_ty = Type::Scalar(ScalarType::U32);
+    let pointer_ty = Type::pointer(u32_ty.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), u32_ty.clone()),
+            OperationKind::Constant(Constant::U32(6)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), u32_ty.clone()),
+            OperationKind::Constant(Constant::U32(3)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(3), u32_ty.clone()),
+            OperationKind::Binary {
+                op: fe2o3_kernel_ir::BinaryOp::BitAnd,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(4), u32_ty.clone()),
+            OperationKind::Atomic(Atomic {
+                kind: AtomicKind::Add,
+                pointer: ValueId(0),
+                value: Some(ValueId(3)),
+                compare: None,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+                scope: SynchronizationScope::Device,
+                ordering: MemoryOrdering::Relaxed,
+                failure_ordering: None,
+            }),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::internal_helper(
+        "preserved_operand_remap",
+        Signature::new(vec![pointer_ty], vec![]),
+        vec![ValueId(0)],
+        vec![block],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let mut module = Module::new("tests::preserved_operand_remap");
+    module.functions.push(function);
+
+    let input = VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
+    owner
+        .execute_optimization_v1(graph.root(), &PlironOptimizationPlanV1::standard())
+        .unwrap();
+    let (optimized, receipt) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
+    assert!(receipt.changed());
+    let optimized = decode_module_v9(optimized.canonical_bytes()).unwrap();
+    verify_module(&optimized).unwrap();
+    let operations = &optimized.functions[0].body.as_ref().unwrap().blocks[0].operations;
+    let atomic = operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Atomic(atomic) => Some(atomic),
+            _ => None,
+        })
+        .expect("preserved atomic survives");
+    let value = atomic.value.expect("atomic add operand survives");
+    assert!(operations.iter().any(|operation| {
+        operation.results.iter().any(|result| result.id == value)
+            && matches!(operation.kind, OperationKind::Constant(Constant::U32(2)))
+    }));
+}
+
+#[test]
 fn typed_o0_round_trip_preserves_every_scalar_constant_bit_pattern() {
     let input = VerifiedCanonicalKernelIrV9::from_module(all_scalar_constants_module()).unwrap();
     let mut owner = session();
@@ -296,6 +888,14 @@ fn import_and_optimized_export_accept_non_dominance_physical_block_order() {
     let (optimized_output, receipt) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
     assert_eq!(optimized_output.canonical_bytes(), input.canonical_bytes());
     assert!(!receipt.changed());
+    assert_eq!(
+        receipt.correspondence_digest(),
+        report.correspondence_digest()
+    );
+    assert_eq!(
+        receipt.correspondence_digest().count(),
+        receipt.correspondence().len() as u64
+    );
 }
 
 #[test]
@@ -342,7 +942,7 @@ fn optimized_export_accepts_an_unreachable_block_removed_by_simplify_cfg() {
 }
 
 #[test]
-fn bridge_rejects_foreign_sessions_and_unsupported_semantics() {
+fn bridge_rejects_foreign_sessions_and_preserves_unreachable_and_generic_types() {
     let input = VerifiedCanonicalKernelIrV9::from_module(rich_supported_module()).unwrap();
     let mut owner = session();
     let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
@@ -354,83 +954,80 @@ fn bridge_rejects_foreign_sessions_and_unsupported_semantics() {
 
     let mut unreachable = BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
     unreachable.terminator = Some(Terminator::Unreachable);
-    let mut unsupported = Module::new("tests::unsupported_terminator");
-    unsupported.functions.push(Function::internal_helper(
-        "unsupported",
+    let mut unreachable_module = Module::new("tests::unreachable_terminator");
+    unreachable_module.functions.push(Function::internal_helper(
+        "unreachable",
         Signature::new(vec![], vec![]),
         vec![],
         vec![unreachable],
     ));
-    let unsupported = VerifiedCanonicalKernelIrV9::from_module(unsupported).unwrap();
-    let unsupported_error = match owner.import_canonical_kir_v9_o0(&unsupported) {
-        Err(error) => error,
-        Ok(_) => panic!("unsupported terminator was imported"),
-    };
+    let unreachable_input = VerifiedCanonicalKernelIrV9::from_module(unreachable_module).unwrap();
+    let unreachable_graph = owner
+        .import_canonical_kir_v9_o0(&unreachable_input)
+        .unwrap();
+    let (unreachable_output, report) = owner
+        .extract_canonical_kir_v9_o0(&unreachable_graph)
+        .unwrap();
     assert_eq!(
-        unsupported_error,
-        KirBridgeErrorV1::UnsupportedTerminator {
-            coordinate: KirBridgeCoordinateV1::Terminator {
-                function: 0,
-                block: 0,
-            },
-        }
+        unreachable_output.canonical_bytes(),
+        unreachable_input.canonical_bytes()
     );
+    assert!(report.is_exact());
 
-    let mut generic = Module::new("tests::unsupported_generic");
-    generic.functions.push(Function::external_import(
-        "generic",
-        Signature::new(
-            vec![Type::pointer(
-                Type::Scalar(ScalarType::U32),
-                AddressSpace::Generic,
-                AccessMode::ReadOnly,
-            )],
-            vec![],
-        ),
-    ));
-    let generic = VerifiedCanonicalKernelIrV9::from_module(generic).unwrap();
-    let generic_error = match owner.import_canonical_kir_v9_o0(&generic) {
-        Err(error) => error,
-        Ok(_) => panic!("generic address space was imported"),
-    };
-    assert_eq!(
-        generic_error,
-        KirBridgeErrorV1::UnsupportedGenericAddressSpace
+    let mut generic = Module::new("tests::generic_address_space");
+    let generic_pointer = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Generic,
+        AccessMode::ReadOnly,
     );
+    let generic_slice = Type::slice(
+        Type::Scalar(ScalarType::U16),
+        AddressSpace::Generic,
+        AccessMode::ReadWrite,
+    );
+    let mut generic_body = BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
+    generic_body.terminator = Some(Terminator::Return { values: vec![] });
+    generic.functions.push(Function::internal_helper(
+        "generic",
+        Signature::new(vec![generic_pointer, generic_slice], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![generic_body],
+    ));
+    let generic_input = VerifiedCanonicalKernelIrV9::from_module(generic).unwrap();
+    let generic_graph = owner.import_canonical_kir_v9_o0(&generic_input).unwrap();
+    let (generic_output, report) = owner.extract_canonical_kir_v9_o0(&generic_graph).unwrap();
+    assert_eq!(
+        generic_output.canonical_bytes(),
+        generic_input.canonical_bytes()
+    );
+    assert!(report.is_exact());
 }
 
 #[test]
-fn unsupported_operation_fails_before_allocating_a_graph() {
+fn intrinsic_carrier_is_exact_and_survives_optimization() {
     let mut block = BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
     block.operations.push(Operation::effect_free(
         ValueDef::new(ValueId(0), Type::INDEX),
         OperationKind::Intrinsic(fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()),
     ));
     block.terminator = Some(Terminator::Return { values: vec![] });
-    let mut module = Module::new("tests::unsupported_intrinsic");
+    let mut module = Module::new("tests::preserved_intrinsic");
     module.functions.push(Function::internal_helper(
-        "unsupported",
+        "intrinsic",
         Signature::new(vec![], vec![]),
         vec![],
         vec![block],
     ));
-    module.required_capabilities = BTreeSet::new();
     let input = VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
     let mut owner = session();
+    let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
+    let (o0, report) = owner.extract_canonical_kir_v9_o0(&graph).unwrap();
+    assert_eq!(o0.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
 
-    let error = match owner.import_canonical_kir_v9_o0(&input) {
-        Err(error) => error,
-        Ok(_) => panic!("unsupported intrinsic was imported"),
-    };
-    assert_eq!(
-        error,
-        KirBridgeErrorV1::UnsupportedOperation {
-            coordinate: KirBridgeCoordinateV1::Operation {
-                function: 0,
-                block: 0,
-                operation: 0,
-            },
-        }
-    );
-    assert!(!owner.is_poisoned());
+    owner
+        .execute_optimization_v1(graph.root(), &PlironOptimizationPlanV1::standard())
+        .unwrap();
+    let (optimized, _) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
+    assert_eq!(optimized.canonical_bytes(), input.canonical_bytes());
 }

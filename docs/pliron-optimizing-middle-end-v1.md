@@ -40,8 +40,10 @@ executor live on the Pliron side of that dependency boundary.
 - `tile.*` represents distributed tiles and layouts.
 - `gpu.*` represents executable target-neutral SSA, control flow, memory, and
   synchronization.
-- `amdgcn.*` represents AMD-specific legalized operations.
-- `llvm.*` is the final typed lowering dialect.
+- target-bound canonical KIR carries AMD-specific legalization; the
+  `fe2o3-amdgcn-model` implementation lowers it directly to deterministic LLVM
+  text. `dialect-amdgcn` is currently an API facade, not an `amdgcn.*` Pliron
+  dialect, and there is no `llvm.*` dialect.
 - canonical KIR snapshots bind stable identities and evidence between stages;
   they are not the mutable optimization data structure.
 
@@ -50,9 +52,10 @@ executor live on the Pliron side of that dependency boundary.
 The Pliron-backed V2 optimizer accepts only a closed, versioned pass plan. It never accepts a
 caller-provided `Pass`, callback, `Context`, or `Ptr<Operation>`. The executor
 authenticates the session and root handle, constructs audited pinned-Pliron
-passes internally, and returns no graph pointer or mutable context. A future
-production switch must consume the graph through a move-only typestate
-transition and a new replay evidence version.
+passes internally, and returns no graph pointer or mutable context. New
+production compilation invokes this exact pipeline through a fixed entry point
+with no optimizer selector or fallback. Production replay V4 independently
+reconstructs the same transaction.
 
 Every pass records its stable kind, input and output graph work, change status,
 and deterministic resource charge. A changed graph is recursively verified
@@ -72,9 +75,10 @@ dce
 simplify-cfg
 ```
 
-The existing Kernel IR optimizer V1 and its replay format remain frozen. The
-Pliron pipeline uses a new versioned report and replay contract; it must not
-reinterpret the V1 pass roster or receipts.
+The executable Kernel IR optimizer V1 has been removed. Historical V3 replay
+records retain self-contained inert wire types and cannot invoke or select the
+live optimizer. The Pliron pipeline uses its own versioned report and V4 replay
+contract; it does not reinterpret the historical pass roster or receipts.
 
 ## Dialect legality interfaces
 
@@ -104,34 +108,41 @@ canonical-byte caps are checked on typed export.
 
 ## Implemented scope
 
-The non-production V2 transaction supports scalar constants, unary and binary
-operations, compares, casts, selects, direct calls, slices, pointer arithmetic,
-loads, stores, branches, conditional branches, and returns. It executes SCCP,
-CFG simplification, select canonicalization, conservative same-block pure CSE,
-and DCE. The O0 bridge preserves exact canonical bytes; optimized export binds
-input and output identities in a receipt.
+The production V2 transaction gives scalar arithmetic, compares, casts,
+selects, direct calls, slices, pointer arithmetic, loads, stores, branches,
+conditional branches, and returns executable dialect operations. The remaining
+verified KIR V9 operation and terminator families cross the bridge through
+typed, effectful preservation carriers: their SSA operands, result types, and
+CFG successors remain first-class while their exact versioned payload remains
+owned by the private bridge transaction. This lets SCCP, CFG simplification,
+select canonicalization, conservative same-block pure CSE, and DCE rewrite the
+surrounding graph without treating opaque GPU effects as pure.
 
-Generic address spaces, switch/unreachable terminators, allocation,
-synchronization, atomics, guarded memory, matrix/wave operations, inline
-assembly, cross-block/global CSE, and production replay V4 remain fail-closed
-gates. The frozen production V1 optimizer is not silently replaced.
+The O0 bridge is byte-exact. Optimized export binds input/output identities and
+a deterministic digest of every surviving bridge coordinate. Unrecognized or
+malformed graph nodes fail closed. Cross-block/global CSE is not implemented,
+and the live transaction never falls back to a historical or unoptimized path.
 
 ## Admission tests
 
-The production switch requires all of the following:
+The production admission is maintained by the following regression gates:
 
-1. `KIR -> Pliron -> KIR` at `-O0` is byte-identical for every supported KIR
+1. `KIR -> Pliron -> KIR` at `-O0` is byte-identical across the verified KIR V9
    operation, terminator, type, attribute, function role, kernel descriptor,
    target capability, and source coordinate.
 2. Unsupported or malformed constructs fail closed before mutation.
-3. Pliron DCE and CFG simplification are differential-tested against the frozen
-   Kernel IR V1 passes over the shared supported corpus.
-4. Each mutating pass has negative tests for traps, overflow, memory effects,
-   synchronization, convergence, and target-specific operations.
-5. Replay reconstructs the exact pass plan and canonical output identity.
-6. Pre-to-post coordinate receipts explicitly represent retained, replaced,
-   merged, and eliminated operations.
-7. Production never falls back silently to a different optimizer.
+3. Conservative carrier tests cover allocation, guarded memory, atomics,
+   synchronization, matrix/MFMA, wave, inline assembly, and switch families.
+4. Mutating-pass tests retain potentially trapping and effectful operations and
+   exercise live SSA rewrites into preserved operations.
+5. Replay V4 reconstructs the fixed production plan and exact-compares the live
+   accounting, bridge identities, correspondence digest, optimized KIR, and
+   LLVM output.
+6. Production has one fixed optimizer-policy entry point and no legacy or
+   unoptimized fallback.
 
-After these gates pass, the custom V1 implementation remains only for frozen
-replay compatibility. New production compilation uses the Pliron pipeline.
+Historical V3 compatibility is implemented in the replay layer using inert
+wire records rather than retaining executable V1 optimizer authority.
+Semantic-refinement proofs and richer retained/replaced/merged/eliminated
+coordinate outcomes remain future work; the current receipt proves deterministic
+structural replay, not semantic equivalence.
