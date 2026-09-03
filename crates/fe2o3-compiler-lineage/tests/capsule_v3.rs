@@ -69,14 +69,29 @@ fn receipts_with_stage_seeds(
     kernel_ir_seed: u8,
     final_compiler_module_commitment_seed: u8,
 ) -> OrderedInertSemanticLineageReceiptsV3 {
+    receipts_with_stage_seeds_and_preflight(
+        base_seed,
+        semantic_mir_seed,
+        kernel_ir_seed,
+        final_compiler_module_commitment_seed,
+        payload("preflight", base_seed),
+    )
+}
+
+fn receipts_with_stage_seeds_and_preflight(
+    base_seed: u8,
+    semantic_mir_seed: u8,
+    kernel_ir_seed: u8,
+    final_compiler_module_commitment_seed: u8,
+    preflight: Vec<u8>,
+) -> OrderedInertSemanticLineageReceiptsV3 {
     OrderedInertSemanticLineageReceiptsV3::new(
         InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(payload(
             "inventory",
             base_seed,
         ))
         .unwrap(),
-        InertRustcPreflightPlanReceiptV3::from_canonical_preimage(payload("preflight", base_seed))
-            .unwrap(),
+        InertRustcPreflightPlanReceiptV3::from_canonical_preimage(preflight).unwrap(),
         InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(payload(
             "semantic-mir",
             semantic_mir_seed,
@@ -532,6 +547,52 @@ fn empty_and_max_plus_one_receipts_are_rejected_before_capsule_allocation() {
         InertProductionSemanticCapsuleV3::decode(&aggregate_too_large),
         Err(LineageDecodeErrorV3::TooLarge {
             max: MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3
+        })
+    );
+}
+
+#[test]
+fn rustc_preflight_receipt_and_capsule_decoder_enforce_the_field_specific_bound() {
+    let maximum = MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3;
+    assert_eq!(maximum, 8 * 1024 * 1024);
+
+    let receipt = InertRustcPreflightPlanReceiptV3::from_canonical_preimage(vec![0xa5; maximum])
+        .expect("exact maximum rustc preflight receipt");
+    assert_eq!(receipt.canonical_preimage().len(), maximum);
+    assert_eq!(
+        InertRustcPreflightPlanReceiptV3::from_canonical_preimage(vec![0xa5; maximum + 1]),
+        Err(LineageErrorV3::PreimageTooLarge {
+            field: "rustc preflight plan",
+            max: maximum,
+        })
+    );
+
+    let capsule = capsule_with_receipts(
+        0x82,
+        receipts_with_stage_seeds_and_preflight(0x82, 0x82, 0x82, 0x82, vec![0xa5; maximum]),
+    );
+    let encoded = capsule.canonical_bytes().to_vec();
+    let decoded = InertProductionSemanticCapsuleV3::decode(&encoded)
+        .expect("capsule with maximum rustc preflight receipt");
+    assert_eq!(
+        decoded
+            .receipts()
+            .rustc_preflight_plan()
+            .canonical_preimage()
+            .len(),
+        maximum
+    );
+
+    let layout = layout(&encoded);
+    let preflight_length_offset = layout.receipts[1].0.start - 4;
+    let mut declared_too_large = encoded;
+    declared_too_large[preflight_length_offset..preflight_length_offset + 4]
+        .copy_from_slice(&((maximum + 1) as u32).to_le_bytes());
+    assert_eq!(
+        InertProductionSemanticCapsuleV3::decode(&declared_too_large),
+        Err(LineageDecodeErrorV3::PreimageTooLarge {
+            field: "rustc preflight plan",
+            max: maximum,
         })
     );
 }
