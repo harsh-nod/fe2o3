@@ -744,7 +744,10 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Trap) => {
                 TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap)
             }
-            Self::Expand(ProductionTerminalExpansionV1::ColdPath) => {
+            Self::Expand(
+                ProductionTerminalExpansionV1::ColdPath
+                | ProductionTerminalExpansionV1::RustcFabsF32,
+            ) => {
                 panic!("core compiler intrinsics are not trusted device items")
             }
             Self::Reject(item) => item,
