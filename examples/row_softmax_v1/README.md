@@ -251,9 +251,11 @@ dispatch remain to be implemented for this kernel.
 ```text
 cargo fmt --manifest-path examples/row_softmax_v1/Cargo.toml \
   --package fe2o3-row-softmax-v1 -- --check
-cargo test --locked --manifest-path examples/row_softmax_v1/Cargo.toml
-cargo test --release --locked --manifest-path examples/row_softmax_v1/Cargo.toml
-cargo clippy --locked --manifest-path examples/row_softmax_v1/Cargo.toml \
+cargo fe2o3 test --locked --all-targets \
+  --manifest-path examples/row_softmax_v1/Cargo.toml
+cargo fe2o3 test --release --locked --all-targets \
+  --manifest-path examples/row_softmax_v1/Cargo.toml
+cargo fe2o3 clippy --locked --manifest-path examples/row_softmax_v1/Cargo.toml \
   --all-targets --all-features -- -D warnings
 VERUS=/absolute/path/to/pinned/verus examples/row_softmax_v1/run-verus.sh
 ```

@@ -683,9 +683,17 @@ STEP_COMMANDS=()
 run_workspace_tests
 assert_no_codegen_test_driver
 assert_equals \
-  "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE} --exclude fe2o3-artifact-transaction" \
+  "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE} --exclude fe2o3-artifact-transaction --exclude fe2o3-managed-a --exclude fe2o3-managed-b" \
   "$(step_command workspace-tests)" \
-  'full workspace test command must isolate the backend and bounded artifact suite'
+  'full workspace test command must isolate backend, artifact, and binding-managed packages'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b" \
+  "$(step_command workspace-binding-example-tests)" \
+  'full workspace tests did not route managed examples through cargo-fe2o3'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "$(step_command workspace-binding-example-revalidation)" \
+  'full workspace tests did not revalidate the binding projection'
 assert_equals \
   'env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 cargo test --locked -p fe2o3-artifact-transaction' \
   "$(step_command fe2o3-artifact-transaction-tests)" \

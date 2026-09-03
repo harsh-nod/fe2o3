@@ -23,7 +23,6 @@ macro_rules! kda_recurrent_step_baseline_v1 {
 #[cfg(feature = "kernel-kda-decode-baseline-v1")]
 #[kernel(
     typed,
-    namespace = "160b57240e4d405563c3dd402992eb50ac0b1192c795954e6853d2fe08b4dd09",
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_decode(
@@ -86,7 +85,6 @@ pub fn gfx950_kda_decode(
 #[cfg(feature = "kernel-kda-prefill-baseline-v1")]
 #[kernel(
     typed,
-    namespace = "083c8464c05f4af00df5503e2a5905f65e7b865610f441f9eca4a3c7e556efa6",
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_kda_chunkwise_prefill(

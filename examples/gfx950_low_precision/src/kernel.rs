@@ -37,7 +37,6 @@ fn decode_fp4_e2m1(bits: u8) -> f32 {
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp4-gemm"))]
 #[kernel(
     typed,
-    namespace = "ff22ff3610dda0a94803a8011ced229b78c77400ca63c9b929d6ecba78ed6f01",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_fp4_gemm_rust(
@@ -84,7 +83,6 @@ pub fn gfx950_fp4_gemm_rust(
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp8-gemm"))]
 #[kernel(
     typed,
-    namespace = "d67f1755b38fbdac67cec83da3ebc359f874e3fbf90fcc036471455ec117dfea",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_fp8_gemm_rust(
@@ -131,7 +129,6 @@ pub fn gfx950_fp8_gemm_rust(
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp4-attention"))]
 #[kernel(
     typed,
-    namespace = "a9a878f0e2fc3a42ad17edf0a326a89695398bb6d7460eaf278ea3e8c53f4cf5",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_fp4_attention_rust(
@@ -296,7 +293,6 @@ pub fn gfx950_fp4_attention_rust(
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp8-attention"))]
 #[kernel(
     typed,
-    namespace = "0c9610e86137831ce25b08b9ad87073ec16f459aa11aeea6806733f788bbeec1",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_fp8_attention_rust(

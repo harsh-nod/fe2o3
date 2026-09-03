@@ -20,7 +20,6 @@ const ROUTER_FLOOR: f32 = -1.0e30;
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
 #[kernel(
     typed,
-    namespace = "0739c8414cc87e4bd943b2d563152bbb25abc619847f75f405c6dadb154858d9",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(2880, 64, 16))
 )]

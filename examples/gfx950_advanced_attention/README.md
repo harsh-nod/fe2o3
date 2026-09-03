@@ -2,7 +2,8 @@
 
 The ordinary attributed Rust kernels in [`src/kernel.rs`](src/kernel.rs) are
 the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
-contains independent safe CPU references, and `cargo test --offline` checks
+contains independent safe CPU references, and
+`cargo fe2o3 test --offline --all-targets` checks
 their fixed-shape numerical and selection contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion for the
 older non-KDA profiles. The matrix-state KDA artifacts come from the production
@@ -78,7 +79,7 @@ Kimi Linear layer.
 Run the Rust source and independent CPU-reference checks:
 
 ```bash
-cargo test --offline
+cargo fe2o3 test --offline --all-targets
 ```
 
 Run the production Rust lowering and deprecated HSA qualification-oracle
@@ -161,7 +162,7 @@ release using physical GPU 6 (`ROCR_VISIBLE_DEVICES=6`,
 `HIP_VISIBLE_DEVICES` unset). The production-compiled kernel returned maximum
 absolute errors of `2.980232239e-8` for both the 16-channel output and softmax maximum,
 and `2.384185791e-7` for the softmax normalizer, against a `5e-3` finite-value
-tolerance. Its portable namespace is
+tolerance. Its measured compiler-derived binding is
 `62a1ee5804a9926ebb929061195f2229630ebdaf5a13a19d17ce7ddb4fcbbbe3`;
 the LLVM, COV6 HSACO, and symbol-scoped ISA SHA-256 values are respectively
 `0767554b7997f42b4e2fb85271779ca29182ec241b07cc162cb9185cac41362c`,
@@ -172,8 +173,8 @@ selected-only sparse arithmetic contract.
 
 The sparse and hybrid Rust HSACOs each contained exactly four
 `ds_read_b64_tr_b8` instructions before one
-`v_mfma_f32_16x16x128_f8f6f4` with E4M3 selectors. The per-kernel portable
-namespace and LLVM/HSACO SHA-256 values are printed by each wrapper and pinned
+`v_mfma_f32_16x16x128_f8f6f4` with E4M3 selectors. The per-kernel
+compiler-derived binding and LLVM/HSACO SHA-256 values are printed by each wrapper and pinned
 by the corresponding advanced tutorial evidence record.
 
 Build, inspect, and run the independent companion HIP validation:

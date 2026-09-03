@@ -78,7 +78,8 @@ axis and route to expert 127.
 Run source and CPU-oracle tests:
 
 ```bash
-cargo test --manifest-path examples/gfx950_gpt_oss_decode/Cargo.toml
+cargo fe2o3 test --all-targets \
+  --manifest-path examples/gfx950_gpt_oss_decode/Cargo.toml
 ```
 
 Build the ordinary Rust kernel through the production compiler extractor,
