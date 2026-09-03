@@ -79,6 +79,14 @@ source-bound observations.
   event-empty partial capture. Referenced wave files, decoded
   instructions, raw `.att`/`.out`, `code.json`, and snapshots are not opened or
   parsed by this manifest adapter.
+- `import_rocprofiler_sdk_decoded_att_v1` admits a separate canonical export of
+  the installed ROCprofiler SDK 7.2.4 experimental trace-decoder callback ABI.
+  It covers occupancy, wave lifetime/state, instruction PC/category/stall/
+  duration, performance-event, shaderdata, realtime/frequency, and INFO
+  records. Every callback stream names one exact manifest wave reference and
+  begins with its own GFXIP record. Multi-file omissions and any raw reference
+  without a content identity make the raw-to-decoded relation unavailable.
+  Decoder fields are `external_decoder_declared`, never hardware-observed.
 
 Every typed-library result includes the exact, domain-separated raw-source
 content identity plus imported and unavailable fact lists in `ImportedTraceV1`.
@@ -193,11 +201,14 @@ that the structured catalog is a complete load/unload lifetime. It proves an
 exact content-addressed declared-artifact structural relation within the
 captured evidence.
 
-The audited MI300X ROCm 7.2.4 installation advertised ATT collection but did
-not include `librocprofiler-trace-decoder`, so a live decoded ATT export could
-not be produced there. Decoder availability is a collection-host/toolchain
-property, not a universal ATT limitation. The existing adapter continues to
-admit only `filenames.json`; it does not guess decoder event semantics.
+The decoded interchange pins the exact installed 7.2.4
+`trace_decoder_types.h` and `trace_decoder.h` bytes, plus caller-supplied
+decoder-library and exporter identities. Those hashes identify bytes but do
+not authenticate the decoder process or its custody. fe2o3 does not implement
+or fork the raw decoder, execute the experimental decoder, or collect beta ATT
+in this path. The checked-in callback fixture is deterministic ABI vocabulary,
+not a hardware capture. Native addresses are redacted; decoder load IDs become
+export-scoped opaque selectors and never become durable identities.
 
 ## CLI
 

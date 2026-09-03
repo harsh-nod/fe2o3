@@ -10,6 +10,10 @@ fn main() {
 mod enabled {
     use std::env;
     use std::error::Error;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use fe2o3_runtime::qualification_gfx942_vecadd_v1::{
@@ -19,16 +23,29 @@ mod enabled {
         Gfx942VecaddQualificationArgumentsV1, admit_gfx942_vecadd_qualification_v1,
     };
     use fe2o3_runtime::{
-        KfdRuntimeBackendV1, KfdRuntimeLaunchPerformanceV1, RuntimeAllocationIdV1,
-        RuntimeContextV1, RuntimeMemoryKindV1, RuntimeModuleIdV1, RuntimePollV1, RuntimeStreamIdV1,
-        TypedRuntimeKernelV1,
+        KfdRuntimeBackendV1, KfdRuntimeLaunchPerformanceV1, KfdRuntimeProfilerConfigV1,
+        RuntimeAllocationIdV1, RuntimeContextV1, RuntimeMemoryKindV1, RuntimeModuleIdV1,
+        RuntimePollV1, RuntimeStreamIdV1, TypedRuntimeKernelV1,
     };
 
-    const USAGE: &str =
-        "usage: gfx942-runtime-vecadd-benchmark UNIQUE_ID WARMUPS SAMPLES LAUNCHES_PER_SAMPLE";
+    const USAGE: &str = "usage: gfx942-runtime-vecadd-benchmark UNIQUE_ID_OR_AUTO WARMUPS SAMPLES \
+        LAUNCHES_PER_SAMPLE [PROFILE_SCOPE_HEX PROFILE_OUTPUT]";
     const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 
     fn parse_unique_id(text: &str) -> Result<u64, String> {
+        if text == "auto" {
+            return fe2o3_kfd::topology::discover_default_topology()
+                .map_err(|error| format!("KFD topology discovery: {error}"))?
+                .topology()
+                .gpu_nodes()
+                .iter()
+                .filter(|node| node.target().name() == "gfx942")
+                .filter(|node| node.capacity().wavefront_size() == 64)
+                .map(|node| node.unique_id())
+                .filter(|unique_id| *unique_id != 0)
+                .min()
+                .ok_or_else(|| "no nonzero gfx942 Wave64 KFD device was observed".to_owned());
+        }
         let value = text
             .strip_prefix("0x")
             .map_or_else(|| text.parse::<u64>(), |hex| u64::from_str_radix(hex, 16));
@@ -49,6 +66,28 @@ mod enabled {
                     .then_some(value)
                     .ok_or_else(|| format!("{name} must be nonzero"))
             })
+    }
+
+    fn parse_profile_scope(text: &str) -> Result<[u8; 32], String> {
+        if text.len() != 64 {
+            return Err(
+                "PROFILE_SCOPE_HEX must contain exactly 64 lowercase hex characters".to_owned(),
+            );
+        }
+        let mut output = [0_u8; 32];
+        for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+            let digit = |byte| match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                _ => None,
+            };
+            output[index] = (digit(pair[0]).ok_or("PROFILE_SCOPE_HEX is not lowercase hex")? << 4)
+                | digit(pair[1]).ok_or("PROFILE_SCOPE_HEX is not lowercase hex")?;
+        }
+        if output == [0; 32] {
+            return Err("PROFILE_SCOPE_HEX must be nonzero".to_owned());
+        }
+        Ok(output)
     }
 
     fn backend_error(error: impl core::fmt::Debug) -> String {
@@ -163,14 +202,22 @@ mod enabled {
     }
 
     impl QualifiedRunV1 {
-        fn open(device_unique_id: u64) -> Result<Self, String> {
+        fn open(device_unique_id: u64, profile_scope: Option<[u8; 32]>) -> Result<Self, String> {
             let admitted =
                 admit_gfx942_vecadd_qualification_v1().map_err(|error| error.to_string())?;
             let host = admitted.host_buffers().map_err(|error| error.to_string())?;
             let (left, right, initial_output, expected_output) = host.into_parts();
-            let backend =
+            let mut backend =
                 KfdRuntimeBackendV1::open_gfx942_vecadd_qualification_v1(device_unique_id)
                     .map_err(|error| error.to_string())?;
+            if let Some(profile_scope) = profile_scope {
+                backend
+                    .enable_profiler_v1(
+                        KfdRuntimeProfilerConfigV1::new(profile_scope, 16_384)
+                            .map_err(|error| error.to_string())?,
+                    )
+                    .map_err(backend_error)?;
+            }
             let mut context = RuntimeContextV1::open(backend).map_err(backend_error)?;
             if context.devices().len() != 1 {
                 return Err(format!(
@@ -308,7 +355,10 @@ mod enabled {
             validate_output(&self.observed_output, &self.expected_output)
         }
 
-        fn shutdown(mut self) -> Result<(), String> {
+        fn shutdown(
+            mut self,
+            profiling_enabled: bool,
+        ) -> Result<Option<fe2o3_runtime::profiler::KfdRuntimeProfileV1>, String> {
             for allocation in self.allocations.into_iter().rev() {
                 self.context
                     .release_allocation(allocation)
@@ -321,7 +371,15 @@ mod enabled {
                 .destroy_stream(self.stream)
                 .map_err(backend_error)?;
             let mut backend = self.context.shutdown().map_err(backend_error)?;
-            backend.shutdown_native_v1().map_err(backend_error)
+            backend.shutdown_native_v1().map_err(backend_error)?;
+            if profiling_enabled {
+                backend
+                    .finish_profiler_v1()
+                    .map(Some)
+                    .map_err(backend_error)
+            } else {
+                Ok(None)
+            }
         }
     }
 
@@ -332,11 +390,17 @@ mod enabled {
         let samples = parse_positive("SAMPLES", &arguments.next().ok_or(USAGE)?)?;
         let launches_per_sample =
             parse_positive("LAUNCHES_PER_SAMPLE", &arguments.next().ok_or(USAGE)?)?;
+        let profile = match (arguments.next(), arguments.next()) {
+            (None, None) => None,
+            (Some(scope), Some(path)) => Some((parse_profile_scope(&scope)?, PathBuf::from(path))),
+            _ => return Err(USAGE.into()),
+        };
         if arguments.next().is_some() {
             return Err(USAGE.into());
         }
 
-        let mut run = QualifiedRunV1::open(device_unique_id)?;
+        let mut run =
+            QualifiedRunV1::open(device_unique_id, profile.as_ref().map(|value| value.0))?;
         run.iteration(true)?;
         run.validate()?;
         println!("backend=kfd event_lifecycle=record_wait_release status=passed");
@@ -417,9 +481,38 @@ mod enabled {
             "backend=kfd validation=exact status=passed n={}",
             GFX942_VECADD_QUALIFICATION_ELEMENTS_V1
         );
-        run.shutdown()?;
+        let capture = run.shutdown(profile.is_some())?;
         println!("backend=kfd teardown=explicit status=passed");
+        if let (Some(capture), Some((_, path))) = (capture, profile) {
+            let bytes = fe2o3_runtime::profiler::encode_kfd_runtime_profile_v1(&capture)?;
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)?;
+            output.write_all(&bytes)?;
+            output.sync_all()?;
+            let identity =
+                fe2o3_runtime::profiler::kfd_runtime_profile_content_identity_v1(&bytes)?;
+            println!(
+                "backend=kfd profile={} bytes={} events={} dropped={} status=published",
+                hex(identity.digest.as_bytes()),
+                identity.byte_len,
+                capture.events.len(),
+                capture.coverage.dropped_events,
+            );
+        }
         Ok(())
+    }
+
+    fn hex(bytes: [u8; 32]) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(64);
+        for byte in bytes {
+            output.push(DIGITS[(byte >> 4) as usize] as char);
+            output.push(DIGITS[(byte & 0x0f) as usize] as char);
+        }
+        output
     }
 }
 

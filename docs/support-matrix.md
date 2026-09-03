@@ -93,6 +93,7 @@ contract.
 | Hardware PC/register/wave state | Explicitly unavailable | Unavailable | Bounded by installed ROCgdb capabilities |
 | Structured failure diagnosis | Bounds/barrier classes implemented | Unavailable | Not inferred from a clean stop |
 | Agent-facing protocol | Versioned JSONL | Versioned JSONL | Bounded GDB/MI-to-JSONL adapter |
+| Simulator/direct-KFD differential | Prepared from exact Bundle V4 plus the admitted structural bridge | Sealed generated Worker V3 completion only; currently blocked on the unwired protected application verifier | Not applicable |
 
 Logical CPU observations are never relabeled as hardware observations. Native
 paths, descriptors, addresses, and unverified declarations are not agent
@@ -104,9 +105,10 @@ authority.
 | --- | --- | --- |
 | rocprofv3 dispatch JSON/CSV import | Experimental, bounded implementation | Strict reviewed dialects, KFD identity join, bounded collector custody |
 | Dry-run collection planning | Experimental | Produces no fabricated collection recipe when prerequisites are unavailable |
+| Direct-KFD runtime observation | Experimental, MI300X-qualified slice | Opt-in bounded lifecycle, host staging, queue, AQL publication/completion, and host-monotonic timing; no device-clock or rocprof correlation claim |
 | Real GPU-dispatch round trip | Unavailable as protected qualification | Current tests use deterministic/fake collector inputs plus real KFD observation where gated |
-| Runtime/copy attribution | Incomplete | Full semantic treatment lineage remains open |
-| ATT/thread trace import | Unavailable | Requires a mutation-proof sealed decoder route |
+| Runtime/copy attribution | Incomplete | Direct-KFD logical runtime and host staging are observed; device copy-engine events and full semantic treatment lineage remain unavailable |
+| ATT/thread trace import | Experimental, authority-free decoded interchange | Strictly admits a canonical external ROCprofiler SDK 7.2.4 callback export with exact manifest/raw/header/library/exporter identities, bounded paging, and loss/incomplete truth. A separate exact supplied decoded-ATT/HSACO/Characteristic binding maps ELF PCs through authenticated kernel symbols to every matching sparse source/MIR/KIR/LLVM/ISA occurrence without exposing symbol names or addresses; raw decoding, authenticated decoder custody, beta collection, and full-grid coverage remain unavailable |
 | Source/IR/ISA causal localization | Incomplete | Exact artifact and source-map associations remain open |
 | Performance prediction | Out of scope | CPU simulation and profiler import make no prediction claim |
 | Agent-native queries | Experimental | Read-only typed facts with explicit provenance and availability |

@@ -11,24 +11,27 @@ use std::process::ExitCode;
 
 use fe2o3_kernel_ir::{
     AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, MAX_SIMULATION_BUNDLE_BYTES_V2,
-    ScalarType, VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7,
-    VerifiedSimulationBundleV1, VerifiedSimulationBundleV2, WaveWidth,
+    MAX_SIMULATION_BUNDLE_BYTES_V3, MAX_SIMULATION_BUNDLE_BYTES_V4, ScalarType,
+    VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7, VerifiedSimulationBundleV1,
+    VerifiedSimulationBundleV2, VerifiedSimulationBundleV3, VerifiedSimulationBundleV4, WaveWidth,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
     MAX_EXPLORATION_RETAINED_DECISIONS_V1, MAX_EXPLORATION_SCHEDULES_V1,
-    MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,
-    PersistedSimulationScheduleArtifactV1, PersistedSimulationScheduleBindingV1,
-    PersistedSimulationScheduleDocumentV1, ScalarBitsV1, SharedBufferV1,
-    SimulationAdmissionErrorV1, SimulationArgumentV1, SimulationConflictAssessmentV1,
-    SimulationDataRaceV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionErrorV1, SimulationExecutionV1, SimulationExplorationFailureV1,
-    SimulationExplorationRequestV1, SimulationExplorationV1, SimulationExplorationWitnessV1,
-    SimulationHappensBeforeReasonV1, SimulationInvocationV1, SimulationLimitsV1,
-    SimulationMemoryConflictV1, SimulationOrderedMemoryConflictV1, SimulationPreflightErrorV1,
-    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleIdentityV1,
-    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1, UnsupportedFeatureV1,
-    UnsupportedSimulationSiteV1,
+    MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1, MAX_PERSISTED_SCHEDULE_BYTES_V1,
+    MAX_SCHEDULE_DECISIONS_V1, PersistedSimulationScheduleArtifactV1,
+    PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleDocumentV1, ScalarBitsV1,
+    SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
+    SimulationConflictAssessmentV1, SimulationDataRaceV1, SimulationErrorV1,
+    SimulationExecutionErrorKindV1, SimulationExecutionErrorV1, SimulationExecutionV1,
+    SimulationExplorationFailureV1, SimulationExplorationRequestV1, SimulationExplorationV1,
+    SimulationExplorationWitnessV1, SimulationFailureReductionErrorV1,
+    SimulationFailureReductionLimitsV1, SimulationFailureReductionReportV1,
+    SimulationFailureScheduleV1, SimulationHappensBeforeReasonV1, SimulationInvocationV1,
+    SimulationLimitsV1, SimulationMemoryConflictV1, SimulationOrderedMemoryConflictV1,
+    SimulationPreflightErrorV1, SimulationRaceAssessmentV1, SimulationRequestV1,
+    SimulationScheduleIdentityV1, SimulationScheduleRequestV1, SimulationSiteV1,
+    SimulationTargetV1, UnsupportedFeatureV1, UnsupportedSimulationSiteV1,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, PROC_SUPER_MAGIC, ResolveFlags, fchmod, fstat, fstatfs, fsync,
@@ -41,7 +44,7 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT]]";
+const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const EXPLORATION_SCHEMA: &str = "fe2o3-simulation-exploration-v1";
@@ -84,6 +87,8 @@ enum UnsupportedFeatureCode {
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
+    ExternalVolatileMemory,
+    MemoryIntrinsicTargetLayout,
     FloatConstant,
     FloatOperation,
     FloatSqrt,
@@ -107,6 +112,7 @@ enum UnsupportedFeatureCode {
     WorkgroupMemory,
     DynamicWorkgroupMemory,
     Matrix,
+    UnsupportedNumericalContract,
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
@@ -122,6 +128,7 @@ enum InputCode {
     Request,
     DebugSidecar,
     SemanticSchedule,
+    FailureReduction,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -482,6 +489,13 @@ enum ScheduleOption {
         max_schedules: usize,
         max_decisions: usize,
         max_retained_decisions: usize,
+    },
+    ReduceFailure {
+        schedule: SimulationFailureScheduleV1,
+        max_decisions: usize,
+    },
+    ReplayFailureReduction {
+        input: OsString,
     },
 }
 
@@ -1078,6 +1092,32 @@ pub(crate) fn load_debug_simulation_bundle_v2(
     })
 }
 
+pub(crate) fn load_debug_simulation_bundle_v3(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV3, crate::SimulationInputErrorV1> {
+    load_admitted_bundle_v3(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
+pub(crate) fn load_debug_simulation_bundle_v4(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV4, crate::SimulationInputErrorV1> {
+    load_admitted_bundle_v4(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
 pub(crate) fn load_debug_sidecar_v1(
     path: OsString,
     maximum: usize,
@@ -1196,6 +1236,16 @@ fn run_with_admitted_input(
             max_retained_decisions,
         );
     }
+    if let ScheduleOption::ReduceFailure {
+        schedule,
+        max_decisions,
+    } = schedule
+    {
+        return run_failure_reduction(input, output, schedule, max_decisions);
+    }
+    if let ScheduleOption::ReplayFailureReduction { input: report } = schedule {
+        return run_failure_reduction_replay(input, output, report);
+    }
     let binding = schedule_binding(&input);
     let replay = match &schedule {
         ScheduleOption::Replay { input: path } => {
@@ -1241,7 +1291,14 @@ fn run_with_admitted_input(
             input.simulation_limits,
             SimulationScheduleRequestV1::Replay(document.record()),
         ),
-        (ScheduleOption::ExploreSeeded { .. }, _) => unreachable!("exploration returned above"),
+        (
+            ScheduleOption::ExploreSeeded { .. }
+            | ScheduleOption::ReduceFailure { .. }
+            | ScheduleOption::ReplayFailureReduction { .. },
+            _,
+        ) => {
+            unreachable!("special schedule operation returned above")
+        }
         _ => unreachable!("schedule option and admitted replay document remain paired"),
     }
     .map_err(|error| match error {
@@ -1270,7 +1327,9 @@ fn run_with_admitted_input(
         }
         ScheduleOption::None
         | ScheduleOption::Replay { .. }
-        | ScheduleOption::ExploreSeeded { .. } => None,
+        | ScheduleOption::ExploreSeeded { .. }
+        | ScheduleOption::ReduceFailure { .. }
+        | ScheduleOption::ReplayFailureReduction { .. } => None,
     };
     drop(input);
     drop(replay);
@@ -1291,6 +1350,138 @@ fn run_with_admitted_input(
         result.map_err(Failure::after_schedule_published)
     } else {
         result
+    }
+}
+
+fn run_failure_reduction(
+    input: crate::AdmittedSimulationInputV1,
+    output: Option<OsString>,
+    schedule: SimulationFailureScheduleV1,
+    max_decisions: usize,
+) -> Result<(), Failure> {
+    let reduction_limits = SimulationFailureReductionLimitsV1::new(
+        max_decisions.checked_add(2).ok_or_else(|| {
+            Failure::new(
+                Stage::Arguments,
+                ErrorKind::InvalidCommandLine,
+                "failure-reduction attempt bound overflow",
+            )
+        })?,
+        max_decisions,
+        max_decisions.checked_mul(3).ok_or_else(|| {
+            Failure::new(
+                Stage::Arguments,
+                ErrorKind::InvalidCommandLine,
+                "failure-reduction retention bound overflow",
+            )
+        })?,
+    )
+    .map_err(|error| {
+        Failure::new(
+            Stage::Arguments,
+            ErrorKind::InvalidCommandLine,
+            bounded_display(&error),
+        )
+    })?;
+    let report = input
+        .module
+        .reduce_simulation_failure(
+            &input.request,
+            input.simulation_target,
+            input.simulation_limits,
+            schedule,
+            reduction_limits,
+        )
+        .map_err(|error| match error {
+            SimulationFailureReductionErrorV1::Simulation(error) => match *error {
+                SimulationErrorV1::Preflight(error) => Failure::preflight(error),
+                SimulationErrorV1::Execution(error) => Failure::execution(error),
+            },
+            error => Failure::new(
+                Stage::Execution,
+                ErrorKind::FailureReductionFailed,
+                bounded_display(&error),
+            ),
+        })?;
+    let bytes = report.to_canonical_bytes().map_err(|error| {
+        Failure::new(
+            Stage::Output,
+            ErrorKind::OutputSerializationFailed,
+            bounded_display(&error),
+        )
+    })?;
+    drop(input);
+    match output {
+        Some(path) => publish_payload(
+            Path::new(&path),
+            MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1,
+            |writer| writer.write_all(&bytes),
+        ),
+        None => {
+            let stdout = io::stdout();
+            let bounded =
+                BoundedWriter::new(stdout.lock(), MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1);
+            let mut writer = BufWriter::with_capacity(32 * 1024, bounded);
+            writer
+                .write_all(&bytes)
+                .and_then(|()| writer.flush())
+                .map_err(output_write_failure)
+        }
+    }
+}
+
+fn run_failure_reduction_replay(
+    input: crate::AdmittedSimulationInputV1,
+    output: Option<OsString>,
+    report_path: OsString,
+) -> Result<(), Failure> {
+    let bytes = secure_read(
+        Path::new(&report_path),
+        MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1,
+        InputCode::FailureReduction,
+        "failure-reduction report",
+    )?;
+    let report =
+        SimulationFailureReductionReportV1::from_canonical_bytes(&bytes).map_err(|error| {
+            Failure::new(
+                Stage::Input,
+                ErrorKind::ScheduleCodecRejected,
+                bounded_display(&error),
+            )
+        })?;
+    input
+        .module
+        .replay_simulation_failure_reduction(
+            &input.request,
+            input.simulation_target,
+            input.simulation_limits,
+            &report,
+        )
+        .map_err(|error| {
+            Failure::new(
+                Stage::Execution,
+                ErrorKind::FailureReductionFailed,
+                bounded_display(&error),
+            )
+        })?;
+    drop(report);
+    drop(input);
+    match output {
+        Some(path) => publish_payload(
+            Path::new(&path),
+            MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1,
+            |writer| writer.write_all(&bytes),
+        ),
+        None => {
+            let stdout = io::stdout();
+            let bounded =
+                BoundedWriter::new(stdout.lock(), MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1);
+            let mut writer = BufWriter::with_capacity(32 * 1024, bounded);
+            writer
+                .write_all(&bytes)
+                .and_then(|()| writer.flush())
+                .map_err(output_write_failure)
+        }
     }
 }
 
@@ -1519,6 +1710,112 @@ fn load_admitted_bundle_v2(
     Ok(crate::AdmittedSimulationBundleInputV2 { input, bundle })
 }
 
+fn load_admitted_bundle_v3(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV3, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V3,
+        InputCode::SimulationBundle,
+        "simulation bundle V3",
+    )?;
+    let bundle = VerifiedSimulationBundleV3::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V3 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V3 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let inner = bundle.inner_v2().inner_v1();
+    let target = simulation_target_for_bundle(inner.target())?;
+    let input = load_admitted_input(
+        inner.canonical_kir_v7(),
+        request,
+        None,
+        target,
+        Some((*inner.identity().as_bytes(), *inner.subject_identity())),
+        Some(bundle_evidence_v1(inner, 3, *bundle.identity().as_bytes())),
+    )?;
+    if input.kir_sha256 != *inner.canonical_kir_v7_identity().digest()
+        || u64::try_from(inner.canonical_kir_v7().len()).ok()
+            != Some(inner.canonical_kir_v7_identity().canonical_length())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle V3 KIR identity changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV3 { input, bundle })
+}
+
+fn load_admitted_bundle_v4(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV4, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V4,
+        InputCode::SimulationBundle,
+        "simulation bundle V4",
+    )?;
+    let bundle = VerifiedSimulationBundleV4::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V4 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V4 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let inner = bundle.inner_v3().inner_v2().inner_v1();
+    let target = simulation_target_for_bundle(inner.target())?;
+    let input = load_admitted_input(
+        inner.canonical_kir_v7(),
+        request,
+        None,
+        target,
+        Some((*inner.identity().as_bytes(), *inner.subject_identity())),
+        Some(bundle_evidence_v1(inner, 4, *bundle.identity().as_bytes())),
+    )?;
+    if input.kir_sha256 != *inner.canonical_kir_v7_identity().digest()
+        || u64::try_from(inner.canonical_kir_v7().len()).ok()
+            != Some(inner.canonical_kir_v7_identity().canonical_length())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle V4 KIR identity changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV4 { input, bundle })
+}
+
 fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {
     match target {
         "gfx942:xnack-" | "gfx950:xnack-" => Ok(SimulationTargetV1::amdgpu_64()),
@@ -1694,11 +1991,13 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
     let mut record_canonical_schedule = None;
     let mut record_seeded_schedule = None;
     let mut replay_schedule = None;
+    let mut replay_failure_reduction = None;
     let mut explore_seeded_schedules = None;
     let mut schedule_seed = None;
     let mut schedule_max_decisions = None;
     let mut exploration_max_retained_decisions = None;
     let mut race_evidence = false;
+    let mut reduce_failure = false;
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
         if argument == OsStr::new("--race-evidence") {
@@ -1710,6 +2009,17 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
                 ));
             }
             race_evidence = true;
+            continue;
+        }
+        if argument == OsStr::new("--reduce-failure") {
+            if reduce_failure {
+                return Err(Failure::new(
+                    Stage::Arguments,
+                    ErrorKind::InvalidCommandLine,
+                    format!("--reduce-failure may be supplied once; {USAGE}"),
+                ));
+            }
+            reduce_failure = true;
             continue;
         }
         let (slot, name) = if argument == OsStr::new("--kir-v7") {
@@ -1729,6 +2039,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             (&mut record_seeded_schedule, "--record-seeded-schedule")
         } else if argument == OsStr::new("--replay-schedule") {
             (&mut replay_schedule, "--replay-schedule")
+        } else if argument == OsStr::new("--replay-failure-reduction") {
+            (&mut replay_failure_reduction, "--replay-failure-reduction")
         } else if argument == OsStr::new("--explore-seeded-schedules") {
             (&mut explore_seeded_schedules, "--explore-seeded-schedules")
         } else if argument == OsStr::new("--schedule-seed") {
@@ -1840,66 +2152,116 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             )
         })
         .transpose()?;
-    let schedule = match (
-        record_canonical_schedule,
-        record_seeded_schedule,
-        replay_schedule,
-        exploration_schedules,
-    ) {
-        (None, None, None, None)
-            if seed.is_none()
-                && schedule_max_decisions.is_none()
-                && exploration_retained.is_none() =>
+    let schedule = if reduce_failure {
+        if record_canonical_schedule.is_some()
+            || record_seeded_schedule.is_some()
+            || replay_schedule.is_some()
+            || replay_failure_reduction.is_some()
+            || exploration_schedules.is_some()
+            || exploration_retained.is_some()
+            || race_evidence
         {
-            ScheduleOption::None
-        }
-        (Some(output), None, None, None) if seed.is_none() && exploration_retained.is_none() => {
-            ScheduleOption::RecordCanonical {
-                output,
-                max_decisions,
-            }
-        }
-        (None, Some(output), None, None) if exploration_retained.is_none() => {
-            ScheduleOption::RecordSeeded {
-                output,
-                seed: seed.ok_or_else(|| {
-                    Failure::new(
-                        Stage::Arguments,
-                        ErrorKind::InvalidCommandLine,
-                        format!("--record-seeded-schedule requires --schedule-seed; {USAGE}"),
-                    )
-                })?,
-                max_decisions,
-            }
-        }
-        (None, None, Some(input), None)
-            if seed.is_none()
-                && schedule_max_decisions.is_none()
-                && exploration_retained.is_none() =>
-        {
-            ScheduleOption::Replay { input }
-        }
-        (None, None, None, Some(max_schedules)) => ScheduleOption::ExploreSeeded {
-            first_seed: seed.ok_or_else(|| {
-                Failure::new(
-                    Stage::Arguments,
-                    ErrorKind::InvalidCommandLine,
-                    format!("--explore-seeded-schedules requires --schedule-seed; {USAGE}"),
-                )
-            })?,
-            max_schedules,
-            max_decisions,
-            max_retained_decisions: exploration_retained
-                .unwrap_or(DEFAULT_MAX_EXPLORATION_RETAINED_DECISIONS),
-        },
-        _ => {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
                 format!(
-                    "record-canonical, record-seeded, replay, and exploration schedule modes are mutually exclusive; seed/decision/retention bounds apply only to their documented modes; {USAGE}"
+                    "--reduce-failure is mutually exclusive with recording, replay, exploration, and --race-evidence; {USAGE}"
                 ),
             ));
+        }
+        ScheduleOption::ReduceFailure {
+            schedule: seed.map_or(SimulationFailureScheduleV1::Canonical, |seed| {
+                SimulationFailureScheduleV1::Seeded { seed }
+            }),
+            max_decisions,
+        }
+    } else {
+        if let Some(input) = replay_failure_reduction {
+            if record_canonical_schedule.is_some()
+                || record_seeded_schedule.is_some()
+                || replay_schedule.is_some()
+                || exploration_schedules.is_some()
+                || seed.is_some()
+                || schedule_max_decisions.is_some()
+                || exploration_retained.is_some()
+                || race_evidence
+            {
+                return Err(Failure::new(
+                    Stage::Arguments,
+                    ErrorKind::InvalidCommandLine,
+                    format!(
+                        "--replay-failure-reduction is mutually exclusive with other schedule modes and schedule controls; {USAGE}"
+                    ),
+                ));
+            }
+            ScheduleOption::ReplayFailureReduction { input }
+        } else {
+            match (
+                record_canonical_schedule,
+                record_seeded_schedule,
+                replay_schedule,
+                exploration_schedules,
+            ) {
+                (None, None, None, None)
+                    if seed.is_none()
+                        && schedule_max_decisions.is_none()
+                        && exploration_retained.is_none() =>
+                {
+                    ScheduleOption::None
+                }
+                (Some(output), None, None, None)
+                    if seed.is_none() && exploration_retained.is_none() =>
+                {
+                    ScheduleOption::RecordCanonical {
+                        output,
+                        max_decisions,
+                    }
+                }
+                (None, Some(output), None, None) if exploration_retained.is_none() => {
+                    ScheduleOption::RecordSeeded {
+                        output,
+                        seed: seed.ok_or_else(|| {
+                            Failure::new(
+                                Stage::Arguments,
+                                ErrorKind::InvalidCommandLine,
+                                format!(
+                                    "--record-seeded-schedule requires --schedule-seed; {USAGE}"
+                                ),
+                            )
+                        })?,
+                        max_decisions,
+                    }
+                }
+                (None, None, Some(input), None)
+                    if seed.is_none()
+                        && schedule_max_decisions.is_none()
+                        && exploration_retained.is_none() =>
+                {
+                    ScheduleOption::Replay { input }
+                }
+                (None, None, None, Some(max_schedules)) => ScheduleOption::ExploreSeeded {
+                    first_seed: seed.ok_or_else(|| {
+                        Failure::new(
+                            Stage::Arguments,
+                            ErrorKind::InvalidCommandLine,
+                            format!("--explore-seeded-schedules requires --schedule-seed; {USAGE}"),
+                        )
+                    })?,
+                    max_schedules,
+                    max_decisions,
+                    max_retained_decisions: exploration_retained
+                        .unwrap_or(DEFAULT_MAX_EXPLORATION_RETAINED_DECISIONS),
+                },
+                _ => {
+                    return Err(Failure::new(
+                        Stage::Arguments,
+                        ErrorKind::InvalidCommandLine,
+                        format!(
+                            "record-canonical, record-seeded, replay, exploration, and reduction schedule modes are mutually exclusive; seed/decision/retention bounds apply only to their documented modes; {USAGE}"
+                        ),
+                    ));
+                }
+            }
         }
     };
     Ok(Options {
@@ -2556,6 +2918,27 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::PointerOffsetOverflow => {
             ErrorKind::ExecutionPointerOffsetOverflow
         }
+        SimulationExecutionErrorKindV1::PointerDistanceDifferentAllocation { .. } => {
+            ErrorKind::ExecutionPointerDistanceDifferentAllocation
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceOutOfBounds => {
+            ErrorKind::ExecutionPointerDistanceOutOfBounds
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceNotDivisible { .. } => {
+            ErrorKind::ExecutionPointerDistanceNotDivisible
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceOverflow => {
+            ErrorKind::ExecutionPointerDistanceOverflow
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceNegativeUnsigned => {
+            ErrorKind::ExecutionPointerDistanceNegativeUnsigned
+        }
+        SimulationExecutionErrorKindV1::CopyRangesOverlap { .. } => {
+            ErrorKind::ExecutionCopyRangesOverlap
+        }
+        SimulationExecutionErrorKindV1::MemoryIntrinsicByteCountOverflow => {
+            ErrorKind::ExecutionMemoryIntrinsicByteCountOverflow
+        }
         SimulationExecutionErrorKindV1::DanglingPointer { .. } => {
             ErrorKind::ExecutionDanglingPointer
         }
@@ -2663,6 +3046,12 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,
+        UnsupportedFeatureV1::ExternalVolatileMemory => {
+            UnsupportedFeatureCode::ExternalVolatileMemory
+        }
+        UnsupportedFeatureV1::MemoryIntrinsicTargetLayout => {
+            UnsupportedFeatureCode::MemoryIntrinsicTargetLayout
+        }
         UnsupportedFeatureV1::FloatConstant => UnsupportedFeatureCode::FloatConstant,
         UnsupportedFeatureV1::FloatOperation => UnsupportedFeatureCode::FloatOperation,
         UnsupportedFeatureV1::FloatFunction(function) => match function {
@@ -2700,6 +3089,9 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
             UnsupportedFeatureCode::DynamicWorkgroupMemory
         }
         UnsupportedFeatureV1::Matrix => UnsupportedFeatureCode::Matrix,
+        UnsupportedFeatureV1::UnsupportedNumericalContract => {
+            UnsupportedFeatureCode::UnsupportedNumericalContract
+        }
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
         UnsupportedFeatureV1::Gfx950LdsTranspose => UnsupportedFeatureCode::Gfx950LdsTranspose,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
@@ -2870,6 +3262,12 @@ fn write_exploration_input<W: Write + ?Sized>(
     match binding.artifact() {
         PersistedSimulationScheduleArtifactV1::CanonicalKirV7 => {
             writer.write_all(b"{\"kind\":\"canonical_kir_v7\",\"kir_sha256\":\"")?;
+        }
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV9 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v9\",\"kir_sha256\":\"")?;
+        }
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV10 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v10\",\"kir_sha256\":\"")?;
         }
         PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
             bundle_sha256,
@@ -3989,6 +4387,70 @@ mod tests {
     }
 
     #[test]
+    fn failure_reduction_command_lines_are_closed_and_exact() {
+        let reduce = parse_options(
+            [
+                "--kir-v7",
+                "kernel.kir",
+                "--request",
+                "request.json",
+                "--reduce-failure",
+                "--schedule-seed",
+                "9",
+                "--schedule-max-decisions",
+                "17",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            reduce.schedule,
+            ScheduleOption::ReduceFailure {
+                schedule: SimulationFailureScheduleV1::Seeded { seed: 9 },
+                max_decisions: 17,
+            }
+        );
+
+        let replay = parse_options(
+            [
+                "--bundle",
+                "kernel.fe2sim",
+                "--request",
+                "request.json",
+                "--replay-failure-reduction",
+                "failure.json",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(
+            replay.schedule,
+            ScheduleOption::ReplayFailureReduction {
+                input: OsString::from("failure.json"),
+            }
+        );
+
+        assert!(
+            parse_options(
+                [
+                    "--kir-v7",
+                    "kernel.kir",
+                    "--request",
+                    "request.json",
+                    "--reduce-failure",
+                    "--replay-failure-reduction",
+                    "failure.json",
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn strict_json_rejects_duplicates_unknowns_and_null_initialization() {
         let duplicate = format!(
             "{{\"schema\":\"{REQUEST_SCHEMA}\",\"kernel\":\"a\",\"kernel\":\"b\",\"grid\":[1,1,1],\"workgroup\":[1,1,1],\"arguments\":[]}}"
@@ -4496,6 +4958,29 @@ mod tests {
             ))
             .unwrap(),
             "dynamic_workgroup_memory"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(
+                &UnsupportedFeatureV1::UnsupportedNumericalContract
+            ))
+            .unwrap(),
+            "unsupported_numerical_contract"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(
+                &UnsupportedFeatureV1::ExternalVolatileMemory
+            ))
+            .unwrap(),
+            "external_volatile_memory"
+        );
+        assert_eq!(
+            execution_kind(&SimulationExecutionErrorKindV1::CopyRangesOverlap {
+                allocation: 1,
+                source_offset: 0,
+                destination_offset: 4,
+                bytes: 8,
+            }),
+            ErrorKind::ExecutionCopyRangesOverlap
         );
         assert_eq!(
             execution_kind(&SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish {

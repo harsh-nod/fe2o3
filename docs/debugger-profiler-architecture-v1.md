@@ -85,7 +85,7 @@ claim about every installation.
 | ROCgdb | `rocm-rel-7.2-93`, GDB 16.3 | bounded MI launch/attach and process control | generic MI threads; no authenticated GPU wave identity |
 | rocprofv3 | 1.1.0, git `97f5574f`, ROCm 7.2.4 | dispatch/counter/PC/ATT collection substrate | strict structured import and artifact references; missing output is unavailable |
 | ROCm | 7.2.4 | installed collector/toolchain baseline | not runtime authority |
-| rocprof-compute-viewer / `rocprof-compute` | entrypoint present in ROCm 7.2.4, but its version probe exits unavailable because required Python dependencies are absent | external raw ATT drill-down | caller-bound installed-artifact/probe identities are recorded; no usable local viewer or fe2o3 decoded ATT acceptance |
+| ROCprofiler trace-decoder / Compute Viewer | ROCm 7.2.4 experimental callback headers are exactly pinned; no beta collection was run | external raw ATT decode and visualization | fe2o3 strictly admits and queries an external canonical callback export, but neither implements the decoder nor authenticates decoder custody; a usable local decoder/exporter and live decoded capture remain unqualified |
 | Mojo | not installed on the qualification host | comparison workflow only | no local parity measurement |
 
 Feature comparison must be task based. fe2o3's intended differentiator is an
@@ -125,6 +125,7 @@ unbounded state. Important current ceilings include:
 | profiler collection time | 900 seconds |
 | profiler artifacts | 4,096 entries, depth 8 |
 | qualification manifest | 256 KiB; exactly 7 component rows and 6 capture-mode rows |
+| qualification assessment response | 512 KiB including its terminating newline |
 
 These are safety ceilings, not recommended defaults or performance budgets.
 Every capture records its requested limits, truncation/loss state, and actual
@@ -199,6 +200,39 @@ clock normalization, and causal attribution remain typed unavailable. Exact
 comparison axes therefore do not imply a complete workload comparison. This
 foundation does not satisfy the T3 exit by itself.
 
+The additive KFD/Source-ISA V1 query service now admits exact canonical
+direct-KFD runtime profiles and Source/ISA Observation V1 collections, follows
+each observed dispatch through its resolved kernel and loaded module, and joins
+the loaded artifact content identity to every matching admitted compilation
+unit. It binds pagination to both exact inputs and rejects artifact, target,
+cursor, and encoding substitution. Collection incompleteness is retained. A
+target match requires the exact canonical `gfx942:xnack-` or `gfx950:xnack-`
+identity and Wave64. The admitted index retains each compilation frame once per
+artifact and compact metadata per dispatch; summaries and a single dispatch's
+compilation-unit expansion are produced on request. Malformed and noncanonical
+records consume the same 64-record session budget as parsed requests, and an
+oversize result becomes a typed terminal response before any partial record is
+written. A loaded-artifact join is not a stopped/sampled instruction
+observation, so the service explicitly leaves source, MIR, KIR-operation,
+schedule, LLVM, and ISA interval attribution unavailable without an
+independently admitted PC, ATT, or semantic event.
+
+The additive PC/Source-ISA V1 path now supplies the PC case without weakening
+that rule. It replays the exact rocprof source, PC Capture V3, address-redacted
+code-object relation, and HSACO admission, then requires a canonical
+Characteristic V1 archive with the same artifact digest/length and the exact
+HSACO-inspected `gfx942:xnack-` or `gfx950:xnack-` target. The join key is the
+capture-local code object plus relation-bound metadata-kernel/symbol identity
+and symbol-relative PC; names never participate. Bounded pages return every
+matching ISA interval occurrence and its available source, MIR, neutral-KIR,
+target-KIR, semantic-operation, compiler-handoff LLVM, and transformation
+coordinates. Duplicated intervals and overlapping correlations remain
+distinct, ambiguous overlaps never become singular attribution, and
+no-source, eliminated, partial-scan, stochastic-scope, and loss states remain
+visible. The archive is still a canonical self-claim without producer
+readmission, moved is not represented by Characteristic V1, and this one-run
+site join neither proves a schedule nor permits a cross-run delta claim.
+
 ## Closure matrix
 
 The issue can close only when every row is accepted on the current production
@@ -207,13 +241,13 @@ contract and an unavailable response are both tested here.
 
 | Track | Exit evidence | Current closure gap |
 | --- | --- | --- |
-| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | a caller-pinned, fixed-role evidence archive and isolated fresh-process reference acceptance cover open/query/diagnose/compare/plan without checkout paths; authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
-| T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | bounded collection inspection preserves a synthetic six-frame gfx942/gfx950 rendering fixture plus typed unavailable/error outcomes and rejects hostile bytes; the additive [characteristic V2 contract](source-isa-characteristic-acceptance-v2.md) now fixes lossless source/no-source/backend-eliminated/pre-KIR fact shapes, complete zero-result scans, duplicate occurrence preservation, exact producer versus Broker bindings, hostile resealing, and Broker V3 requirements, but its production adapter and protected 3x2 run remain unavailable; general schedule/LLVM/ISA semantic validation and optimization-shape round trips remain incomplete |
+| T0 baseline/ADR | archived capture queries without a source checkout; pinned feature/task matrix; ownership, threat, completeness, and budget policy | a caller-pinned, fixed-role evidence archive and isolated fresh-process reference acceptance cover open/query/diagnose/compare/plan without checkout paths; the bounded qualification assessment makes every component and capture-mode gap directly queryable, but authenticated overhead observations, approved policies, and usable local Compute Viewer/Mojo task runs are absent |
+| T1 semantic map | elementwise, collective, and tiled kernels round-trip source to ISA and ISA to source; optimization shapes and hostile substitution tested | bounded collection inspection preserves a synthetic six-frame gfx942/gfx950 rendering fixture plus typed unavailable/error outcomes and rejects hostile bytes; the additive [characteristic V2 contract](source-isa-characteristic-acceptance-v2.md) now implements the ordinary attributed-Rust production adapter, exact forward/reverse occurrence and interval queries, producer/Broker binding, and nineteen hostile substitutions, while separately identifying the canonical semantic-MIR finalizer fixture; the protected 3x2 run remains unrun because the qualified authority-service environment is unavailable; the real-Worker fixture observes coalesced and eliminated mappings, but no ordinary-source or real-Worker fixture has produced an observed duplicated round trip; and fused/inlined/moved/outlined shapes have exact typed producer gaps rather than fabricated observations, so T1 remains open |
 | T2 debugger | seeded OOB and barrier divergence identify dispatch, site, workgroup, wave/lane scope, region/phase contract, and origin without raw-log parsing | V4 exact KFD publication-to-structured-MI correlation is implemented and the installed ROCgdb path reports typed stopped-state unavailability; authenticated native registers/source/memory and general cooperative live-kernel acceptance remain incomplete |
-| T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; authenticated semantic/IR/ISA localization, decoded ATT/runtime/copy attribution, and causal end-to-end explanation are incomplete |
+| T3 profiler | seeded schedule/resource regression is attributed to semantic/IR/ISA change with exact comparable evidence | strict variant admission and schedule/resource co-observation exist; direct-KFD dispatches join through kernel/module to exact-artifact compilation units, and admitted rocprof PC samples join through exact HSACO/kernel-symbol PC to matching Characteristic V1 occurrences. An external ROCprofiler SDK 7.2.4 decoded callback export now admits occupancy, wave, instruction, perf, shaderdata, realtime, and INFO evidence with exact raw coverage and bounded agent paging; a separate exact supplied HSACO/Characteristic binding correlates decoded ELF PCs through authenticated kernel symbols while preserving per-item loss/completeness. Decoder custody/authentication, live PC/ATT capture, cross-run site comparability, schedule identity, runtime/copy attribution, and causal end-to-end explanation remain incomplete |
 | T4 agent protocol | fresh non-privileged client completes T2/T3 diagnoses, cites evidence, and plans the minimum next capture | process-isolated reference acceptance now covers seeded OOB, barrier divergence, Variant V1 schedule/resource co-observation, bounded paging, and the minimum ambiguous capture plan; operating-system sandbox deployment is external to the evidence protocol |
-| T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | awaits versioned #182 operation, transfer, collective, and clock-correlation inputs |
-| T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | all six overhead modes remain unmeasured or unsupported under candidate policies; broad target/reset/usability evidence is incomplete |
+| T5 distributed | eight-GPU overlap regression localizes to an admitted graph edge or interval while preserving clock/loss uncertainty | the versioned #182 operation, dependency-edge, transfer, collective, clock-correlation, loss, completeness, and evidence input contract plus its typed unavailable response are implemented and tested; the producer and eight-GPU acceptance run remain external and T5 is not claimed |
+| T6 qualification | overhead, target, pagination, loss, reset, optimized-out, partial-capture, and comparative usability gates pass | the assessment revalidates and evaluates all six caller-bound mode records without granting qualification authority; those modes remain unmeasured or unsupported under candidate policies, and broad target/reset/usability evidence is incomplete |
 
 ## Required acceptance records
 

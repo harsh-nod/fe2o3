@@ -394,6 +394,7 @@ pub enum TraceAdapterErrorV1 {
     ByteBudgetTooSmall,
     InsufficientClosureBudget,
     ZeroWorkgroupDimension { axis: usize },
+    UnsupportedKernelIrWireVersion { version: u16 },
     Preflight(fe2o3_kir_sim::SimulationPreflightErrorV1),
 }
 
@@ -419,6 +420,11 @@ pub fn simulate_with_semantic_trace_v1(
     limits: SimulationLimitsV1,
     profile: SimulationTraceProfileV1,
 ) -> Result<TracedSimulationOutcomeV1, TraceAdapterErrorV1> {
+    if module.identity().wire_version() != fe2o3_kernel_ir::KERNEL_IR_VERSION_V7 {
+        return Err(TraceAdapterErrorV1::UnsupportedKernelIrWireVersion {
+            version: module.identity().wire_version(),
+        });
+    }
     for (axis, extent) in request.workgroup.0.into_iter().enumerate() {
         if extent == 0 {
             return Err(TraceAdapterErrorV1::ZeroWorkgroupDimension { axis });

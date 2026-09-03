@@ -3,8 +3,10 @@ use std::fmt;
 
 use fe2o3_kernel_ir::{
     AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
-    VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrV7, decode_module_v7,
-    encode_module_v7,
+    VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
+    VerifiedCanonicalKernelIrIdentityV10, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV10, decode_module_v7, decode_module_v9, decode_module_v10,
+    encode_module_v7, encode_module_v9, encode_module_v10,
 };
 
 const HARD_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -696,10 +698,62 @@ pub struct SimulationSiteV1 {
     pub operation: Option<u32>,
 }
 
-/// Exact V7 owner admitted for simulation. This owner is intentionally not `Clone`.
+/// Versioned identity of exact canonical KIR admitted by the simulator.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SimulationKernelIrIdentityV1 {
+    wire_version: u16,
+    digest: [u8; 32],
+    canonical_length: u64,
+}
+
+impl SimulationKernelIrIdentityV1 {
+    pub const fn wire_version(self) -> u16 {
+        self.wire_version
+    }
+
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+
+    pub const fn canonical_length(self) -> u64 {
+        self.canonical_length
+    }
+}
+
+impl From<VerifiedCanonicalKernelIrIdentityV7> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV7) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V7,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
+impl From<VerifiedCanonicalKernelIrIdentityV9> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV9) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V9,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
+impl From<VerifiedCanonicalKernelIrIdentityV10> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV10) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V10,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
+/// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {
-    pub(crate) identity: VerifiedCanonicalKernelIrIdentityV7,
+    pub(crate) identity: SimulationKernelIrIdentityV1,
     pub(crate) module: Module,
     pub(crate) admitted_resident_bytes: usize,
 }
@@ -715,21 +769,67 @@ impl AdmittedSimulationModuleV1 {
         canonical: VerifiedCanonicalKernelIrV7,
         limits: SimulationLimitsV1,
     ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v7,
+            encode_module_v7,
+        )
+    }
+
+    /// Consumes exact verified V9 custody, including f32 wave collectives,
+    /// without projecting it through another KIR wire version.
+    pub fn admit_v9(
+        canonical: VerifiedCanonicalKernelIrV9,
+        limits: SimulationLimitsV1,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v9,
+            encode_module_v9,
+        )
+    }
+
+    /// Consumes exact verified V10 custody, including memory intrinsics, without
+    /// broadening the frozen V7 admission route.
+    pub fn admit_v10(
+        canonical: VerifiedCanonicalKernelIrV10,
+        limits: SimulationLimitsV1,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v10,
+            encode_module_v10,
+        )
+    }
+
+    fn admit_canonical(
+        identity: SimulationKernelIrIdentityV1,
+        bytes: Vec<u8>,
+        limits: SimulationLimitsV1,
+        decode: fn(&[u8]) -> Result<Module, KernelIrDecodeError>,
+        encode: fn(&Module) -> Result<Vec<u8>, KernelIrEncodeError>,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
         let limits = limits
             .validate()
             .map_err(SimulationAdmissionErrorV1::InvalidLimits)?;
-        if canonical.canonical_bytes().len() > limits.max_canonical_bytes {
+        if bytes.len() > limits.max_canonical_bytes {
             return Err(SimulationAdmissionErrorV1::CanonicalBytesLimit {
-                actual: canonical.canonical_bytes().len(),
+                actual: bytes.len(),
                 limit: limits.max_canonical_bytes,
             });
         }
-        let identity = *canonical.identity();
-        let bytes = canonical.into_canonical_bytes();
-        let module =
-            decode_module_v7(&bytes).map_err(SimulationAdmissionErrorV1::DecodeAfterAdmission)?;
+        let module = decode(&bytes).map_err(SimulationAdmissionErrorV1::DecodeAfterAdmission)?;
         let reencoded =
-            encode_module_v7(&module).map_err(SimulationAdmissionErrorV1::EncodeAfterAdmission)?;
+            encode(&module).map_err(SimulationAdmissionErrorV1::EncodeAfterAdmission)?;
         let admitted_resident_bytes = std::mem::size_of::<Self>()
             .checked_add(
                 crate::resident::module_retained_heap_bytes(&module)
@@ -756,7 +856,7 @@ impl AdmittedSimulationModuleV1 {
     }
 
     /// Returns the exact verified canonical KIR identity.
-    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
+    pub const fn identity(&self) -> &SimulationKernelIrIdentityV1 {
         &self.identity
     }
 

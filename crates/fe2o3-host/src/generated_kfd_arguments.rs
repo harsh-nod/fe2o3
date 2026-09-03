@@ -9,6 +9,7 @@ use fe2o3_runtime::{
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942RuntimeBufferAccessV1,
     Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
 };
+use sha2::{Digest, Sha256};
 
 use crate::KernelId;
 use crate::generated_argument_borrow::GeneratedArgumentBorrowV1;
@@ -22,6 +23,8 @@ use crate::{
     RecoveredWorkerV3AdmissionErrorV1,
 };
 use fe2o3_artifacts::RustDisjointIndexSpaceV1;
+
+const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-OBSERVATION/V1\0";
 
 /// Compiler-generated address-free argument bridge for one exact kernel signature.
 ///
@@ -369,15 +372,23 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
         self,
         plan: &GeneratedArgumentPackingPlanV1,
     ) -> Result<GeneratedKfdPackedArguments<'allocation>, GeneratedKfdArgumentError> {
-        let mut inputs = Vec::with_capacity(
-            self.scalar_inputs
-                .len()
-                .saturating_add(self.memory_arguments.len()),
-        );
+        let input_count = self
+            .scalar_inputs
+            .len()
+            .checked_add(self.memory_arguments.len())
+            .ok_or(GeneratedKfdArgumentError::AllocationFailure)?;
+        let mut inputs = Vec::new();
+        inputs
+            .try_reserve_exact(input_count)
+            .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?;
         inputs.extend(self.scalar_inputs);
         let mut buffers = Vec::new();
         let mut pointer_fixups = Vec::new();
         let mut completion = Vec::new();
+        let mut buffer_bindings = Vec::new();
+        buffer_bindings
+            .try_reserve_exact(self.memory_arguments.len())
+            .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?;
         for memory in self.memory_arguments {
             if !memory.input.is_address_free_slice_v1() {
                 return Err(GeneratedKfdArgumentError::AddressBearingInput {
@@ -391,6 +402,13 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
                         argument_index: memory.argument_index,
                     });
                 }
+                buffer_bindings.push(GeneratedKfdBufferBindingObservationV1 {
+                    argument_index: memory.argument_index,
+                    buffer_index: None,
+                    access: None,
+                    initial_bytes: 0,
+                    initial_sha256: [0; 32],
+                });
                 continue;
             };
             let component = plan
@@ -405,6 +423,7 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
             let buffer_index = buffers.len();
             let access = buffer.access();
             let byte_len = buffer.bytes().len();
+            let initial_sha256 = Sha256::digest(buffer.bytes()).into();
             pointer_fixups.push(Gfx942KfdDispatchPointerFixupV1::new(
                 kernarg_offset,
                 buffer_index,
@@ -416,15 +435,42 @@ impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
                 byte_len,
                 writeback: memory.writeback,
             });
+            buffer_bindings.push(GeneratedKfdBufferBindingObservationV1 {
+                argument_index: memory.argument_index,
+                buffer_index: Some(buffer_index),
+                access: Some(access),
+                initial_bytes: byte_len,
+                initial_sha256,
+            });
             buffers.push(buffer);
         }
         let packed = plan.pack(inputs).map_err(GeneratedKfdArgumentError::Pack)?;
+        let mut components = Vec::new();
+        components
+            .try_reserve_exact(plan.component_count())
+            .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?;
+        for index in 0..plan.component_count() {
+            components.push(
+                plan.component(index)
+                    .expect("component count was obtained from this plan"),
+            );
+        }
+        let mut packing_observation = GeneratedKfdPackingObservationV1 {
+            identity: [0; 32],
+            explicit_kernarg_bytes: packed.bytes().len(),
+            explicit_kernarg_sha256: Sha256::digest(packed.bytes()).into(),
+            kernarg_alignment: packed.alignment(),
+            components,
+            buffers: buffer_bindings,
+        };
+        packing_observation.identity = packing_observation_identity(&packing_observation)?;
         Ok(GeneratedKfdPackedArguments {
             kernel_id: packed.kernel_id(),
             alignment: packed.alignment(),
             explicit_kernarg: packed.bytes().to_vec(),
             buffers,
             pointer_fixups,
+            packing_observation,
             completion: GeneratedKfdCompletion {
                 buffers: completion,
             },
@@ -440,6 +486,7 @@ pub struct GeneratedKfdPackedArguments<'allocation> {
     explicit_kernarg: Vec<u8>,
     buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
     pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
+    packing_observation: GeneratedKfdPackingObservationV1,
     completion: GeneratedKfdCompletion<'allocation>,
 }
 
@@ -464,6 +511,10 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
         &self.pointer_fixups
     }
 
+    pub(crate) const fn packing_observation(&self) -> &GeneratedKfdPackingObservationV1 {
+        &self.packing_observation
+    }
+
     pub fn into_runtime_inputs(
         self,
         geometry: AqlDispatchGeometryV1,
@@ -484,6 +535,160 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
             ),
             self.completion,
         )
+    }
+}
+
+/// Address-free input identity retained from the compiler-generated packing plan.
+///
+/// This is descriptive evidence only. It cannot construct arguments or grant execution authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedKfdPackingObservationV1 {
+    identity: [u8; 32],
+    explicit_kernarg_bytes: usize,
+    explicit_kernarg_sha256: [u8; 32],
+    kernarg_alignment: u32,
+    components: Vec<crate::GeneratedPackingComponentV1>,
+    buffers: Vec<GeneratedKfdBufferBindingObservationV1>,
+}
+
+impl GeneratedKfdPackingObservationV1 {
+    pub const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+    pub const fn explicit_kernarg_bytes(&self) -> usize {
+        self.explicit_kernarg_bytes
+    }
+
+    pub const fn explicit_kernarg_sha256(&self) -> &[u8; 32] {
+        &self.explicit_kernarg_sha256
+    }
+
+    pub const fn kernarg_alignment(&self) -> u32 {
+        self.kernarg_alignment
+    }
+
+    pub fn components(&self) -> &[crate::GeneratedPackingComponentV1] {
+        &self.components
+    }
+
+    pub fn buffers(&self) -> &[GeneratedKfdBufferBindingObservationV1] {
+        &self.buffers
+    }
+
+    pub fn matches_explicit_kernarg(&self, bytes: &[u8]) -> bool {
+        bytes.len() == self.explicit_kernarg_bytes
+            && <[u8; 32]>::from(Sha256::digest(bytes)) == self.explicit_kernarg_sha256
+    }
+}
+
+fn packing_observation_identity(
+    observation: &GeneratedKfdPackingObservationV1,
+) -> Result<[u8; 32], GeneratedKfdArgumentError> {
+    let mut hash = Sha256::new();
+    hash.update(PACKING_OBSERVATION_DOMAIN_V1);
+    hash.update(
+        u64::try_from(observation.explicit_kernarg_bytes)
+            .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+            .to_le_bytes(),
+    );
+    hash.update(observation.explicit_kernarg_sha256);
+    hash.update(observation.kernarg_alignment.to_le_bytes());
+    hash.update(
+        u64::try_from(observation.components.len())
+            .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+            .to_le_bytes(),
+    );
+    for component in &observation.components {
+        hash.update(
+            u64::try_from(component.argument_index())
+                .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+                .to_le_bytes(),
+        );
+        hash.update([packing_component_tag(component.kind())]);
+        hash.update(component.offset().to_le_bytes());
+        hash.update(component.size().to_le_bytes());
+        hash.update(component.alignment().to_le_bytes());
+    }
+    hash.update(
+        u64::try_from(observation.buffers.len())
+            .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+            .to_le_bytes(),
+    );
+    for buffer in &observation.buffers {
+        hash.update(
+            u64::try_from(buffer.argument_index)
+                .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+                .to_le_bytes(),
+        );
+        match buffer.buffer_index {
+            Some(index) => {
+                hash.update([1]);
+                hash.update(
+                    u64::try_from(index)
+                        .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+                        .to_le_bytes(),
+                );
+            }
+            None => hash.update([0]),
+        }
+        hash.update([buffer.access.map(runtime_access_tag).unwrap_or(0)]);
+        hash.update(
+            u64::try_from(buffer.initial_bytes)
+                .map_err(|_| GeneratedKfdArgumentError::AllocationFailure)?
+                .to_le_bytes(),
+        );
+        hash.update(buffer.initial_sha256);
+    }
+    Ok(hash.finalize().into())
+}
+
+fn packing_component_tag(kind: crate::GeneratedPackingComponentKindV1) -> u8 {
+    match kind {
+        crate::GeneratedPackingComponentKindV1::Scalar => 1,
+        crate::GeneratedPackingComponentKindV1::Pointer => 2,
+        crate::GeneratedPackingComponentKindV1::SlicePointer => 3,
+        crate::GeneratedPackingComponentKindV1::SliceLength => 4,
+    }
+}
+
+fn runtime_access_tag(access: Gfx942RuntimeBufferAccessV1) -> u8 {
+    match access {
+        Gfx942RuntimeBufferAccessV1::ReadOnly => 1,
+        Gfx942RuntimeBufferAccessV1::WriteOnly => 2,
+        Gfx942RuntimeBufferAccessV1::ReadWrite => 3,
+        _ => 255,
+    }
+}
+
+/// One generated logical slice and its optional direct-KFD backing buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneratedKfdBufferBindingObservationV1 {
+    argument_index: usize,
+    buffer_index: Option<usize>,
+    access: Option<Gfx942RuntimeBufferAccessV1>,
+    initial_bytes: usize,
+    initial_sha256: [u8; 32],
+}
+
+impl GeneratedKfdBufferBindingObservationV1 {
+    pub const fn argument_index(self) -> usize {
+        self.argument_index
+    }
+
+    pub const fn buffer_index(self) -> Option<usize> {
+        self.buffer_index
+    }
+
+    pub const fn access(self) -> Option<Gfx942RuntimeBufferAccessV1> {
+        self.access
+    }
+
+    pub const fn initial_bytes(self) -> usize {
+        self.initial_bytes
+    }
+
+    pub const fn initial_sha256(self) -> [u8; 32] {
+        self.initial_sha256
     }
 }
 
@@ -620,6 +825,7 @@ pub enum GeneratedKfdArgumentError {
     AddressBearingInput { argument_index: usize },
     WritebackWithoutBuffer { argument_index: usize },
     PointerOffset { argument_index: usize, offset: u64 },
+    AllocationFailure,
 }
 
 impl fmt::Display for GeneratedKfdArgumentError {
@@ -646,6 +852,9 @@ impl fmt::Display for GeneratedKfdArgumentError {
                 formatter,
                 "generated KFD argument {argument_index} pointer offset {offset} is not representable"
             ),
+            Self::AllocationFailure => {
+                formatter.write_str("generated KFD observation allocation failed")
+            }
         }
     }
 }
@@ -918,6 +1127,78 @@ mod tests {
                 Gfx942KfdDispatchPointerFixupV1::new(16, 1, 0, 4),
             ]
         );
+        let observation = packed.packing_observation();
+        assert_ne!(observation.identity(), &[0; 32]);
+        assert!(observation.matches_explicit_kernarg(packed.explicit_kernarg()));
+        assert_eq!(observation.buffers()[0].argument_index(), 0);
+        assert_eq!(observation.buffers()[0].buffer_index(), Some(0));
+        assert_eq!(observation.buffers()[1].argument_index(), 1);
+        assert_eq!(observation.buffers()[1].buffer_index(), Some(1));
+
+        let mut substituted = observation.clone();
+        substituted.buffers[0].argument_index = 1;
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.buffers[0].initial_sha256[0] ^= 1;
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.explicit_kernarg_bytes += 1;
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.explicit_kernarg_sha256[0] ^= 1;
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.kernarg_alignment *= 2;
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.components.swap(0, 1);
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.buffers[0].buffer_index = Some(1);
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.buffers[0].access = Some(Gfx942RuntimeBufferAccessV1::ReadWrite);
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        substituted = observation.clone();
+        substituted.buffers[0].initial_bytes += 1;
+        assert_ne!(
+            packing_observation_identity(&substituted).unwrap(),
+            *observation.identity()
+        );
+        let debug = format!("{observation:?}");
+        for forbidden in [
+            "pointer_value",
+            "native_address",
+            "host_address",
+            "device_address",
+            "descriptor_path",
+        ] {
+            assert!(!debug.contains(forbidden), "leaked field {forbidden}");
+        }
         drop(packed);
         assert_eq!(output, [i32::MIN, i32::MIN]);
     }

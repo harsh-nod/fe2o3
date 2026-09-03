@@ -47,6 +47,7 @@ fe2o3-process-identity.workspace = true
 fe2o3-rustc-invocation.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-semantic-import.workspace = true
+fe2o3-semantic-query.workspace = true
 fe2o3-semantic-trace.workspace = true
 fe2o3-source-isa-observation.workspace = true
 libc.workspace = true

@@ -40,14 +40,14 @@ const AUTHORITY_ENVIRONMENT: [&str; 8] = [
 ];
 
 #[derive(Debug)]
-struct UnitCaseV1 {
-    label: &'static str,
-    command_directory: PathBuf,
-    working_directory: PathBuf,
-    crate_name: &'static str,
-    source: &'static str,
-    cargo_arguments: &'static [&'static str],
-    immutable_inputs: &'static [&'static str],
+pub(super) struct UnitCaseV1 {
+    pub(super) label: &'static str,
+    pub(super) command_directory: PathBuf,
+    pub(super) working_directory: PathBuf,
+    pub(super) crate_name: &'static str,
+    pub(super) source: &'static str,
+    pub(super) cargo_arguments: &'static [&'static str],
+    pub(super) immutable_inputs: &'static [&'static str],
 }
 
 #[derive(Debug)]
@@ -90,10 +90,10 @@ struct AdmittedCellV1 {
     correlation: [u8; 32],
 }
 
-struct ScratchDirectory(PathBuf);
+pub(super) struct ScratchDirectory(pub(super) PathBuf);
 
 impl ScratchDirectory {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "fe2o3-source-isa-unit-{label}-{}-{}",
@@ -401,14 +401,14 @@ fn ordinary_source_units_round_trip_through_the_production_observer_on_both_targ
     );
 }
 
-fn workspace() -> PathBuf {
+pub(super) fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .expect("canonical workspace")
 }
 
-fn unit_cases(workspace: &Path) -> [UnitCaseV1; 3] {
+pub(super) fn unit_cases(workspace: &Path) -> [UnitCaseV1; 3] {
     let reduction = "examples/workgroup_sync_v1";
     let tiled = "crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1";
     [
@@ -445,7 +445,7 @@ fn unit_cases(workspace: &Path) -> [UnitCaseV1; 3] {
     ]
 }
 
-fn measured_test_driver() -> crate::pinned_executable::PinnedExecutable {
+pub(super) fn measured_test_driver() -> crate::pinned_executable::PinnedExecutable {
     let declared = PathBuf::from(
         std::env::var_os(TEST_DRIVER_ENV)
             .unwrap_or_else(|| panic!("set {TEST_DRIVER_ENV} to the measured production CLI")),
@@ -492,7 +492,7 @@ fn parse_sha256(value: &OsStr) -> [u8; 32] {
     output
 }
 
-fn read_bounded_template(path: &Path) -> Value {
+pub(super) fn read_bounded_template(path: &Path) -> Value {
     assert!(
         path.is_absolute(),
         "production V2 template path must be absolute"
@@ -515,7 +515,7 @@ fn read_bounded_template(path: &Path) -> Value {
     value
 }
 
-fn write_case_config(
+pub(super) fn write_case_config(
     directory: &Path,
     template: &Value,
     unit: &UnitCaseV1,
@@ -542,7 +542,7 @@ fn write_case_config(
     path
 }
 
-fn snapshot_sources(unit: &UnitCaseV1) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn snapshot_sources(unit: &UnitCaseV1) -> BTreeMap<PathBuf, Vec<u8>> {
     unit.immutable_inputs
         .iter()
         .map(|relative| {
@@ -554,7 +554,7 @@ fn snapshot_sources(unit: &UnitCaseV1) -> BTreeMap<PathBuf, Vec<u8>> {
         .collect()
 }
 
-fn assert_sources_unchanged(snapshot: &BTreeMap<PathBuf, Vec<u8>>) {
+pub(super) fn assert_sources_unchanged(snapshot: &BTreeMap<PathBuf, Vec<u8>>) {
     for (path, expected) in snapshot {
         assert_eq!(
             fs::read(path).unwrap_or_else(|error| panic!("re-read {}: {error}", path.display())),
@@ -572,6 +572,22 @@ fn run_protected_cell(
     config: &Path,
     target_directory: &Path,
 ) -> CapturedCollectionV1 {
+    let stderr = run_protected_build_stderr(driver, unit, cpu, config, target_directory);
+    parse_collection_line(&stderr).unwrap_or_else(|error| {
+        panic!(
+            "protected {} {cpu} build omitted a valid observation: {error}\n{stderr}",
+            unit.label,
+        )
+    })
+}
+
+pub(super) fn run_protected_build_stderr(
+    driver: &crate::pinned_executable::PinnedExecutable,
+    unit: &UnitCaseV1,
+    cpu: &str,
+    config: &Path,
+    target_directory: &Path,
+) -> String {
     let mut pinned_command = driver
         .command()
         .unwrap_or_else(|error| panic!("prepare sealed cargo-fe2o3 CLI command: {error}"));
@@ -611,12 +627,7 @@ fn run_protected_cell(
         "protected {} {cpu} build failed:\n{stderr}",
         unit.label,
     );
-    parse_collection_line(&stderr).unwrap_or_else(|error| {
-        panic!(
-            "protected {} {cpu} build omitted a valid observation: {error}\n{stderr}",
-            unit.label,
-        )
-    })
+    stderr
 }
 
 fn run_bounded_command(command: &mut Command) -> Result<BoundedCommandOutputV1, String> {

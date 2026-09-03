@@ -49,6 +49,7 @@ pub(crate) enum ProductionPipelineError {
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
     SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
     SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
+    SimulationBundleV3(fe2o3_kernel_ir::SimulationBundleErrorV3),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
@@ -118,6 +119,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationBundleV2(error) => write!(
                 formatter,
                 "production compilation simulation bundle V2 failed: {error}"
+            ),
+            Self::SimulationBundleV3(error) => write!(
+                formatter,
+                "production compilation simulation bundle V3 failed: {error}"
             ),
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
@@ -223,6 +228,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
             Self::SimulationBundleV2(error) => Some(error),
+            Self::SimulationBundleV3(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
             Self::SemanticDebugMap(error) => Some(error),
             Self::SemanticDebugFragment(error) => Some(error),
@@ -584,6 +590,44 @@ impl TargetNeutralProductionCompilation {
             .map_err(ProductionPipelineError::SimulationBundle)?;
         fe2o3_kernel_ir::VerifiedSimulationBundleV2::new(inner, debug_map)
             .map_err(ProductionPipelineError::SimulationBundleV2)
+    }
+
+    fn into_simulation_bundle_v3(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV3, ProductionPipelineError> {
+        let (lowered, bindings, prepared) =
+            self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
+        let debug_map = compiler_debug_source_map_v2(
+            &lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            &prepared,
+        )?;
+        let inner_v1 = prepared
+            .finalize_without_source_map()
+            .map_err(ProductionPipelineError::SimulationBundle)?;
+        let inner_v2 = fe2o3_kernel_ir::VerifiedSimulationBundleV2::new(inner_v1, debug_map)
+            .map_err(ProductionPipelineError::SimulationBundleV2)?;
+        let semantic = lowered.semantic().semantic();
+        let mut semantic_mir = Vec::new();
+        semantic_mir
+            .try_reserve_exact(semantic.canonical_encoding().len())
+            .map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic MIR bundle allocation failed",
+                )
+            })?;
+        semantic_mir.extend_from_slice(semantic.canonical_encoding());
+        let storage_map = compiler_semantic_storage_map_v1(
+            &lowered,
+            &bindings.debug_source_variables,
+            &inner_v2,
+        )?;
+        fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner_v2, semantic_mir, storage_map)
+            .map_err(ProductionPipelineError::SimulationBundleV3)
     }
 
     fn admit_formal_memory(
@@ -1681,6 +1725,299 @@ fn compiler_debug_source_map_v2(
     .map_err(ProductionPipelineError::SimulationDebugMapV2)
 }
 
+fn compiler_semantic_storage_map_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
+    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV2,
+) -> Result<fe2o3_kernel_ir::SemanticStorageMapV1, ProductionPipelineError> {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiPassModeV1, SemanticLocalRoleV1, SemanticSourceArgumentOwnershipV1,
+    };
+
+    let semantic = lowered.semantic().semantic();
+    let selection = semantic.select_kernel_body_v1().ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map requires one exact semantic kernel body",
+        ),
+    )?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map semantic body is absent",
+        ))?;
+    let (kir_function_ordinal, kir_body) = sole_debug_map_body_v1(lowered.module())?;
+    let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map KIR function is absent",
+        ),
+    )?;
+    if kir_body.parameters.len() != kir_function.signature.parameters.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map KIR parameter identities and types differ in length",
+        ));
+    }
+
+    let parameter_bindings = lowered
+        .correspondence()
+        .parameter_bindings()
+        .iter()
+        .copied()
+        .filter(|binding| binding.semantic_function() == selection.body())
+        .collect::<Vec<_>>();
+    let source_types = function.abi().source_input_types();
+    let ownership = function.abi().source_argument_ownership();
+    if source_types.len() != ownership.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map source types and ownership differ in length",
+        ));
+    }
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve_exact(source_types.len())
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage argument allocation failed",
+            )
+        })?;
+    for (source_ordinal, (&semantic_type, &source_ownership)) in
+        source_types.iter().zip(ownership).enumerate()
+    {
+        let source_ordinal = u32::try_from(source_ordinal).map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage source ordinal does not fit the wire",
+            )
+        })?;
+        let semantic_local = function
+            .locals()
+            .iter()
+            .enumerate()
+            .find_map(|(index, local)| {
+                (local.role() == SemanticLocalRoleV1::Argument(source_ordinal)).then_some(index)
+            })
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage source argument has no exact semantic local",
+            ))?;
+        let semantic_local = u32::try_from(semantic_local).map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage semantic local does not fit the wire",
+            )
+        })?;
+        let abi_ignored = function
+            .abi()
+            .adjusted_arguments()
+            .get(source_ordinal as usize)
+            .is_some_and(|argument| matches!(argument.mode(), SemanticAbiPassModeV1::Ignore));
+        let storage = compiler_parameter_storage_v1(
+            semantic_local,
+            semantic_type.index(),
+            source_ownership,
+            abi_ignored,
+            &parameter_bindings,
+            kir_body,
+            &kir_function.signature.parameters,
+            semantic.types(),
+        )?;
+        arguments.push(fe2o3_kernel_ir::SemanticArgumentStorageV1::new(
+            source_ordinal,
+            semantic_local,
+            semantic_type.index(),
+            compiler_ownership_v1(source_ownership)?,
+            storage,
+        ));
+    }
+
+    let mut variables = Vec::new();
+    let selected_variable_count = captured_variables
+        .iter()
+        .filter(|variable| variable.function == selection.body())
+        .count();
+    variables
+        .try_reserve_exact(selected_variable_count)
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage variable allocation failed",
+            )
+        })?;
+    for variable in captured_variables
+        .iter()
+        .filter(|variable| variable.function == selection.body())
+    {
+        let (semantic_local, semantic_type, storage) = match variable.class {
+            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Local(local) => {
+                let declaration = function.locals().get(local.index() as usize).ok_or(
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        "typed source variable references an absent semantic local",
+                    ),
+                )?;
+                let variable_ownership = match declaration.role() {
+                    SemanticLocalRoleV1::Argument(source_ordinal) => ownership
+                        .get(source_ordinal as usize)
+                        .copied()
+                        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "typed source variable argument ownership is absent",
+                        ))?,
+                    SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => {
+                        SemanticSourceArgumentOwnershipV1::ByValue
+                    }
+                };
+                let storage = if variable.entry_value_preserved {
+                    compiler_parameter_storage_v1(
+                        local.index(),
+                        declaration.ty().index(),
+                        variable_ownership,
+                        false,
+                        &parameter_bindings,
+                        kir_body,
+                        &kir_function.signature.parameters,
+                        semantic.types(),
+                    )?
+                } else {
+                    fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+                        reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::OptimizedOut,
+                    }
+                };
+                (Some(local.index()), Some(declaration.ty().index()), storage)
+            }
+            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Unrepresented => (
+                None,
+                None,
+                fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+                    reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::UnrepresentedSourceVariable,
+                },
+            ),
+        };
+        variables.push(fe2o3_kernel_ir::SemanticVariableStorageV1::new(
+            variable.identity,
+            variable.function.index(),
+            semantic_local,
+            semantic_type,
+            storage,
+        ));
+    }
+
+    let inner = bundle.inner_v1();
+    fe2o3_kernel_ir::SemanticStorageMapV1::new(
+        *bundle.identity().as_bytes(),
+        *inner.subject_identity(),
+        semantic.wire_version().as_u16(),
+        *semantic.semantic_sha256().as_bytes(),
+        semantic.canonical_encoding().len() as u64,
+        *semantic.target_layout_identity().as_bytes(),
+        *inner.canonical_kir_v7_identity().digest(),
+        inner.canonical_kir_v7_identity().canonical_length(),
+        vec![fe2o3_kernel_ir::SemanticKernelStorageV1::new(
+            selection.root().index(),
+            selection.body().index(),
+            u32::try_from(kir_function_ordinal).map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "typed storage KIR function ordinal does not fit the wire",
+                )
+            })?,
+            arguments,
+        )],
+        variables,
+    )
+    .map_err(ProductionPipelineError::SimulationBundleV3)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compiler_parameter_storage_v1(
+    semantic_local: u32,
+    semantic_type: u32,
+    ownership: fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1,
+    abi_ignored: bool,
+    bindings: &[fe2o3_lower_mir_kernel::SemanticKirParameterBindingV1],
+    body: &fe2o3_kernel_ir::FunctionBody,
+    parameter_types: &[fe2o3_kernel_ir::Type],
+    semantic_types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+) -> Result<fe2o3_kernel_ir::SemanticStorageBindingV1, ProductionPipelineError> {
+    let matching = bindings
+        .iter()
+        .filter(|binding| binding.semantic_local().index() == semantic_local)
+        .collect::<Vec<_>>();
+    let [binding] = matching.as_slice() else {
+        return Ok(if matching.is_empty() {
+            fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+                reason: if abi_ignored {
+                    fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::AbiIgnored
+                } else {
+                    fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::NoRetainedKirStorage
+                },
+            }
+        } else {
+            fe2o3_kernel_ir::SemanticStorageBindingV1::Ambiguous
+        });
+    };
+    let Some(parameter_ordinal) = body
+        .parameters
+        .iter()
+        .position(|value| *value == binding.kernel_ir_value())
+    else {
+        return Ok(fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+            reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::NoRetainedKirStorage,
+        });
+    };
+    let kir_type = parameter_types.get(parameter_ordinal).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage parameter type is absent",
+        ),
+    )?;
+    let semantic = semantic_types.get(semantic_type as usize).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage semantic type is absent",
+        ),
+    )?;
+    let representation = match (semantic.shape(), kir_type, ownership) {
+        (
+            fe2o3_mir_model::semantic_mir_v1::SemanticTypeShapeV1::Scalar(_)
+            | fe2o3_mir_model::semantic_mir_v1::SemanticTypeShapeV1::ValidityScalar(_),
+            fe2o3_kernel_ir::Type::Scalar(_),
+            _,
+        ) => fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::Scalar,
+        (_, fe2o3_kernel_ir::Type::Slice(_), ownership)
+            if ownership
+                != fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue =>
+        {
+            fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::RegionSlice
+        }
+        (_, fe2o3_kernel_ir::Type::Pointer(_), ownership)
+            if ownership
+                != fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue =>
+        {
+            fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::RegionPointer
+        }
+        _ => fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::OpaqueFlattened,
+    };
+    Ok(
+        fe2o3_kernel_ir::SemanticStorageBindingV1::ExactKirParameter {
+            kir_parameter_ordinal: u32::try_from(parameter_ordinal).map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "typed storage KIR parameter ordinal does not fit the wire",
+                )
+            })?,
+            kir_value_ordinal: binding.kernel_ir_value().0,
+            representation,
+        },
+    )
+}
+
+fn compiler_ownership_v1(
+    ownership: fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1,
+) -> Result<fe2o3_kernel_ir::SemanticArgumentOwnershipV1, ProductionPipelineError> {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1 as Source;
+    match ownership {
+        Source::ByValue => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::ByValue),
+        Source::SharedBorrow => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::SharedBorrow),
+        Source::UniqueBorrow => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::UniqueBorrow),
+        Source::ExclusiveOwner => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::ExclusiveOwner),
+        Source::RawPointer => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::RawPointer),
+        Source::Unspecified => Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map rejects unspecified source ownership",
+        )),
+    }
+}
+
 fn debug_source_scope_span_v2(
     source: fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapSpanV1, ProductionPipelineError> {
@@ -2065,6 +2402,21 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v2(
+                fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+            )
+    }
+
+    /// Emits V3 with the exact admitted semantic MIR and its independently
+    /// versioned semantic-local to KIR-storage projection.
+    pub(crate) fn export_simulation_bundle_v3(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV3, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v3(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
     }

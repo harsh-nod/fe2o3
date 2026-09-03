@@ -1,0 +1,22 @@
+[package]
+name = "fe2o3-sim-differential"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Independent generated scalar differential qualification for the fe2o3 KIR simulator."
+
+[dependencies]
+fe2o3-differential.workspace = true
+fe2o3-kernel-ir.workspace = true
+fe2o3-kir-sim.workspace = true
+serde.workspace = true
+serde_json = "1"
+sha2.workspace = true
+
+[[bin]]
+name = "fe2o3-sim-differential"
+path = "src/main.rs"
+doc = false

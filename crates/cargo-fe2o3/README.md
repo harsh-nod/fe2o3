@@ -279,6 +279,70 @@ cargo fe2o3 profile --kind dispatch-json \
   --collect --authorize-collection <plan-sha256> -- /absolute/target argument
 ```
 
+PC sampling has two additional gates. The first ordinary dry run executes no
+external program: it measures the selected `rocprofv3-avail`, Python,
+bootstrap, environment, exact query, limits, and direct-KFD topology and prints
+`pc-capability-probe-authorization`. Rerunning with
+`--authorize-pc-capability-probe <probe-sha256>` explicitly permits the two
+bounded capability processes, `rocprofv3-avail list --agent` and
+`rocprofv3-avail info --pc-sampling`. This is not described as a read-only
+trust boundary: the selected tool has installed Python/shared-library
+dependencies whose transitive closure is not content-bound. The admitted
+outputs must form matching strict catalogs, map every reported GPU uniquely to
+the full direct-KFD hardware record, and validate the selected agent's method,
+unit, interval bounds, and `interval pow2` constraint. Neither the collector nor
+the target is executed by the capability-probe stage.
+
+```console
+cargo fe2o3 profile --kind pc-sampling \
+  --output-dir /absolute/new/pc-profile \
+  --pc-agent 0 --pc-method stochastic --pc-unit cycles \
+  --pc-interval 1048576 \
+  --kir-v7 /absolute/kernel.kir \
+  --artifact /absolute/kernel.hsaco \
+  --source-isa-characteristic /absolute/characteristics.bin \
+  -- /absolute/target argument
+
+cargo fe2o3 profile --kind pc-sampling \
+  --authorize-pc-capability-probe <probe-sha256> \
+  --output-dir /absolute/new/pc-profile \
+  --pc-agent 0 --pc-method stochastic --pc-unit cycles \
+  --pc-interval 1048576 \
+  --kir-v7 /absolute/kernel.kir \
+  --artifact /absolute/kernel.hsaco \
+  --source-isa-characteristic /absolute/characteristics.bin \
+  -- /absolute/target argument
+
+cargo fe2o3 profile --kind pc-sampling \
+  --authorize-pc-capability-probe <probe-sha256> \
+  --output-dir /absolute/new/pc-profile \
+  --pc-agent 0 --pc-method stochastic --pc-unit cycles \
+  --pc-interval 1048576 \
+  --kir-v7 /absolute/kernel.kir \
+  --artifact /absolute/kernel.hsaco \
+  --source-isa-characteristic /absolute/characteristics.bin \
+  --collect --authorize-collection <plan-sha256> \
+  --acknowledge-pc-sampling-beta-risk <risk-sha256> \
+  -- /absolute/target argument
+```
+
+The plan derives the separate risk acknowledgement from the collection
+authorization, exact capability observation, HSACO, and characteristic
+archive. Either digest changing prevents collection. rocprofiler's PC sampler
+is device-wide; `--pc-agent` fixes the only agent accepted for publication, not
+a collector-side device filter. A successful process is rejected unless
+exactly one strict PC JSON source carries a process-local dispatch-to-agent
+projection whose complete hardware record resolves to that selected KFD node.
+Publication writes canonical PC Capture V3, its code-object relation, and the
+`PcSourceIsaSessionV1` binding. The characteristic archive's exact embedded
+source-map identity is retained inside that archive, but the capture does not
+claim it: the supplied V7 KIR is only target-compatible and no admitted
+production V7 structural bridge was supplied. The V7-to-characteristic join is
+therefore typed unavailable rather than inferred. Sample/loss/completeness
+remain visible; runtime dispatch identity and cross-capture PC identity remain
+typed unavailable. The produced five-input artifact/characteristic tuple can
+be queried through `fe2o3-profiler-service pc-source-isa-jsonl`.
+
 The output directory must be new. The collector receives the target as an
 exact argument vector without a shell, under a fixed timeout and stdout,
 stderr, file-count, depth, and total-storage policy. The orchestrator creates
@@ -315,9 +379,11 @@ bounded and checked as arrays, but their opaque nested values are not promoted
 to profiler facts. A source identity always covers the complete raw bytes;
 the separately bound projection identity covers only admitted dispatch data.
 
-The collection authorization covers both KFD node and stable identity, and the
-complete mapping, raw target inputs, and typed target availability are
-re-observed around collection. Exact KFD values
+The collection authorization covers both KFD node and stable identity. The
+complete mapping, raw target inputs, typed target availability, and PC
+capability catalog are re-observed immediately before collector spawn and
+again around publication. Device-wide topology can still change after that
+non-atomic immediate observation; this residual is reported. Exact KFD values
 `90402` and `90500` map to `gfx942` and `gfx950` only for AMD vendor `4098`
 with wave width `64`. Unknown values and contradictory vendor or wave values
 remain explicit unavailable records: ordinary dispatch collection may proceed,
@@ -329,9 +395,13 @@ either dispatch check fails closed and the owned output is cleaned. The source
 manifest or dispatch file must also fit the importer's 8 MiB source limit;
 larger collected artifacts are retained but labeled non-importable. The
 profile target is not proof of an executed kernel code object. Artifact,
-source-map, kernel-symbol, characteristic/source-ISA, decoded ATT, runtime, and
-performance authority remain explicitly unavailable. The resulting Bundle V4
-is queried with `fe2o3-profiler-query`.
+source-map, kernel-symbol, characteristic/source-ISA, runtime, and performance
+authority remain explicitly unavailable for dispatch-only collection. The PC
+path accepts exact caller-supplied artifact and characteristic inputs as
+declared, self-claimed evidence; it does not authenticate the characteristic
+producer or infer that the runtime loaded those bytes. Decoded ATT remains
+unavailable. The resulting Bundle V4 is queried with
+`fe2o3-profiler-query`.
 
 The orchestrator itself has no HIP or HSA runtime dependency. `rocprofv3`
 injects ROCProfiler SDK into the target, however, and its installed option
@@ -340,17 +410,20 @@ KFD. The plan binds the original paths and content identities of the four
 direct collector objects, the stable adapter mode, and the sealed execution
 images used for the interpreter, target, SDK core, and SDK tool. It still labels
 their transitive dynamic-library closure unavailable and does not call that
-record an authenticated complete installation closure. Collector success
-and JSON/CSV/ATT-looking filenames remain explicitly unvalidated. Only
-successful Bundle V4 import establishes the corresponding profiler record
-shape; it does not grant compiler, runtime, or performance authority.
+record an authenticated complete installation closure. Collector success and
+JSON/CSV/ATT/PC-looking filenames remain explicitly unvalidated. Only
+successful strict Bundle V4 or PC Capture V3 import establishes the
+corresponding profiler record shape; it does not grant compiler, runtime, or
+performance authority.
 
 Generic CI runs the parser, planning, authorization, path-substitution,
 bounded-output, cleanup, and fake-collector tests without discovering or
-executing a host `rocprofv3`. Real GPU collection is intentionally excluded
-from pull-request CI. It requires an operator-selected target, a new private
-output path, and the plan-bound collection authorization on a protected GPU
-runner.
+executing a host `rocprofv3`. A separately ignored hardware qualification test
+executes only the read-only PC capability probe and asserts the beta collector
+was not run. Real GPU collection is intentionally excluded from pull-request
+CI. It requires an operator-selected target, a new private output path, the
+plan-bound collection authorization, and for PC sampling the separate exact
+beta/freeze-risk acknowledgement on a protected GPU runner.
 
 Deletion guards are structural accident and substitution defenses, not
 authentication. Their random tokens correlate an interrupted creation with

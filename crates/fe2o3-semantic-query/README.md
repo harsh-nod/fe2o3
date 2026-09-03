@@ -74,6 +74,39 @@ Site ordinals and Kernel-IR content identities remain producer claims. The query
 surface does not resolve them to names or source locations without a future
 authenticated catalog adapter.
 
+## Direct-KFD source/ISA correlation
+
+`fe2o3-profiler-service kfd-source-isa-jsonl` provides a separate bounded,
+stateful agent protocol for joining one canonical direct-KFD runtime profile to
+one canonical Source/ISA Observation V1 collection. `open_evidence` accepts the
+exact inputs as canonical lowercase hex; subsequent `inspect_binding`,
+`list_dispatches`, and `inspect_dispatch` requests use revision checks,
+duplicate-request rejection, and capture-bound pagination cursors.
+Every input record, including malformed or noncanonical JSON, consumes the
+64-record session budget; the next record receives a typed terminal
+`request_budget_exhausted` response. A response that cannot fit the 4 MiB wire
+bound is replaced, before any partial bytes are written, by a small typed
+terminal `response_too_large` response.
+
+The join follows observed dispatch to resolved kernel, loaded module, and exact
+artifact content identity. It returns every admitted compilation unit for that
+artifact rather than selecting one by name. Each unit retains its collection,
+frame, unit, correlation, structural-map, neutral-KIR, target-KIR, target, and
+coverage evidence. Artifact or target substitution returns a typed unavailable
+relation. Target admission requires the exact canonical target identity
+(`gfx942:xnack-` or `gfx950:xnack-`) and Wave64; feature suffixes are not prefix
+matched. An incomplete Source/ISA collection remains visibly incomplete. The
+session retains compact dispatch metadata and compilation frames once per
+artifact, builds summaries only for the requested page, and expands compilation
+units only for the inspected dispatch.
+
+Direct-KFD profiles do not contain an observed PC or semantic execution event,
+so the service never turns an artifact match into a source-site claim. Source,
+MIR, KIR-operation, schedule, LLVM, and ISA-interval attribution remain typed
+unavailable until independently admitted PC, ATT, or semantic-event evidence is
+joined. The service is read-only and grants no compiler, proof, load, dispatch,
+attach, or collection authority.
+
 ## Profiler capture queries
 
 The same crate provides the read-only `CaptureQuerySessionV1` protocol and
@@ -140,6 +173,32 @@ decoded ATT wave timelines unavailable. ATT decoder availability is a
 collection-host/toolchain property; PC Capture V3 neither invokes nor replaces
 the SDK decoder.
 
+## Decoded ATT V1
+
+`DecodedAttQuerySessionV1` opens the separately admitted Decoded ATT V1
+interchange. It pages raw-reference and code-object catalogs, occupancy,
+fixed-size wave summaries, wave states, instructions, performance events,
+shaderdata, realtime correlations, and INFO records. Wave states and
+instructions use raw-position cursors with per-wave offsets, so late pages do
+not rescan the flattened child stream from zero. Filters cover CU/WGP, SIMD,
+wave slot, export-scoped code object, instruction category, and wave state.
+
+`fe2o3-profiler-service decoded-att-jsonl` exposes the same read-only surface to
+agents. The strict canonical protocol is revisioned, rejects zero/replayed
+request IDs, charges malformed attempts, terminates on oversized records or
+responses with a small typed error, and grants no path, decoder, collection,
+attach, or execution authority. Empty callback classes are unavailable without
+claiming decoder absence or complete capture.
+
+`fe2o3-profiler-service decoded-att-source-isa-jsonl` admits that independent
+relation from exact supplied Decoded ATT V1, selected code-object identity,
+HSACO bytes, and Characteristic V1 bytes. It authenticates the artifact digest,
+load span, metadata, kernel descriptor, and ELF symbol before mapping an ELF PC
+to a symbol-relative PC and every matching source/MIR/KIR/LLVM/ISA interval.
+Items retain ATT loss/completeness and raw-decode truth. Symbol names and
+addresses remain redacted, native PCs remain typed unavailable, and the
+self-claimed decoder and Characteristic inputs gain no producer authenticity.
+
 `PcSampleCodeObjectQuerySessionV1` optionally opens Capture V3 together with
 its V1 code-object relation sidecar. Opening replays exact relation admission
 from the original bounded rocprof JSON and HSACO bytes and rejects a stale or
@@ -152,6 +211,36 @@ sample and dispatch identity, while reverse lookups leave those two fields
 unavailable. Outputs contain no native address or profiler handle and retain the
 stochastic/incomplete, no-authority, no-schedule, and no-source-attribution
 limits.
+
+`PcSourceIsaSessionV1` composes that admitted relation with one canonical
+Source/ISA Characteristic V1 archive. `fe2o3-profiler-service
+pc-source-isa-jsonl` exposes capability discovery, evidence opening, binding
+inspection, sampled-PC lookup, and capture-local code-object-PC lookup to
+agent clients. Opening replays the original rocprof/capture/HSACO relation,
+requires the archive's artifact digest and byte length to equal that exact
+HSACO, and requires the HSACO's inspected canonical target to equal the
+archive target. A sampled PC then joins only through its relation-bound code
+object, metadata-kernel ordinal, symbol identity, and symbol-relative PC.
+
+Results page every matching characteristic ISA interval occurrence. Each item
+retains the source span, MIR, neutral KIR, target KIR, compiler-handoff LLVM,
+semantic-operation, ISA, correlation, and transformation coordinates actually
+present in the archive. Duplicate interval occurrences and multiple
+correlations at one PC remain distinct; the latter disables singular
+attribution. Missing source provenance, optimized-out correlations, pre-KIR
+eliminations, incomplete characteristic scans, stochastic capture scope, and
+collector loss remain explicit. Characteristic V1 does not represent a moved
+shape, so that state remains typed unavailable rather than inferred.
+
+All five raw inputs, their admitted content identities, and the composed
+binding are response evidence. Cursors bind that complete evidence set and the
+resolved sample/symbol/PC query. Requests, pages, collection bytes, and encoded
+responses have independent hard limits; malformed and noncanonical JSONL
+records consume the same 64-record budget. No native address, profiler handle,
+collection authority, or execution capability is retained. The canonical
+archive is still a self-claim unless independently re-admitted against its
+producer, and one bound session does not authorize a semantic/IR/ISA
+cross-capture delta claim.
 
 ## Capture comparison
 

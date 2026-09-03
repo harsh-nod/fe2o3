@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-virtual-runtime"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Authority-free virtual GPU lifecycle over admitted fe2o3 Kernel IR."
+
+[dependencies]
+fe2o3-kernel-ir.workspace = true
+fe2o3-kir-sim.workspace = true
+fe2o3-runtime-model.workspace = true

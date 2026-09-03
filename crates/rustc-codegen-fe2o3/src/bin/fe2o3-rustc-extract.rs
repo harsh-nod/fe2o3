@@ -27,18 +27,21 @@ const EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1: &str =
     "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2";
+const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 
 fn main() {
     let simulation_v1 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1);
     let simulation_v2 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2);
-    let (simulation_output, use_v2) = match select_simulation_output(simulation_v1, simulation_v2) {
-        Ok(selected) => selected,
-        Err(error) => {
-            eprintln!("fe2o3 rustc extraction: {error}");
-            std::process::exit(1);
-        }
-    };
+    let simulation_v3 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3);
+    let (simulation_output, version) =
+        match select_simulation_output(simulation_v1, simulation_v2, simulation_v3) {
+            Ok(selected) => selected,
+            Err(error) => {
+                eprintln!("fe2o3 rustc extraction: {error}");
+                std::process::exit(1);
+            }
+        };
     let prepared = prepare(
         env::args_os().collect(),
         env::var_os(EXTRACT_CRATE_ENV_V1),
@@ -50,7 +53,7 @@ fn main() {
         env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1),
         None,
     )
-    .map(|prepared| select_simulation_mode_v2(prepared, use_v2));
+    .map(|prepared| select_simulation_mode(prepared, version));
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -101,34 +104,47 @@ enum ExtractionModeV1 {
     Gfx942CompilerHandoff(OsString),
     SimulationBundle(OsString),
     SimulationBundleV2(OsString),
+    SimulationBundleV3(OsString),
 }
 
 fn select_simulation_output(
     v1: Option<OsString>,
     v2: Option<OsString>,
-) -> Result<(Option<OsString>, bool), String> {
-    match (v1, v2) {
-        (Some(_), Some(_)) => Err(format!(
-            "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1} and {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2} are mutually exclusive"
-        )),
-        (Some(output), None) => Ok((Some(output), false)),
-        (None, Some(output)) if output.is_empty() => Err(format!(
+    v3: Option<OsString>,
+) -> Result<(Option<OsString>, u16), String> {
+    let count = usize::from(v1.is_some()) + usize::from(v2.is_some()) + usize::from(v3.is_some());
+    if count > 1 {
+        return Err(format!(
+            "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2}, and {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3} are mutually exclusive"
+        ));
+    }
+    match (v1, v2, v3) {
+        (Some(output), None, None) => Ok((Some(output), 1)),
+        (None, Some(output), None) if output.is_empty() => Err(format!(
             "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2} must not be empty"
         )),
-        (None, Some(output)) => Ok((Some(output), true)),
-        (None, None) => Ok((None, false)),
+        (None, Some(output), None) => Ok((Some(output), 2)),
+        (None, None, Some(output)) if output.is_empty() => Err(format!(
+            "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3} must not be empty"
+        )),
+        (None, None, Some(output)) => Ok((Some(output), 3)),
+        (None, None, None) => Ok((None, 1)),
+        _ => unreachable!("multiple simulation output variables were rejected"),
     }
 }
 
-fn select_simulation_mode_v2(
+fn select_simulation_mode(
     mut prepared: PreparedExtractionV1,
-    use_v2: bool,
+    version: u16,
 ) -> PreparedExtractionV1 {
-    if use_v2
-        && let PreparedExtractionV1::Selected(selected) = &mut prepared
+    if let PreparedExtractionV1::Selected(selected) = &mut prepared
         && let ExtractionModeV1::SimulationBundle(output) = &mut selected.mode
     {
-        selected.mode = ExtractionModeV1::SimulationBundleV2(std::mem::take(output));
+        selected.mode = match version {
+            3 => ExtractionModeV1::SimulationBundleV3(std::mem::take(output)),
+            2 => ExtractionModeV1::SimulationBundleV2(std::mem::take(output)),
+            _ => return prepared,
+        };
     }
     prepared
 }
@@ -456,6 +472,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::SimulationBundleV3(output) => {
+            rustc_codegen_fe2o3::run_production_simulation_bundle_extraction_driver_v3(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
     }
     if let Some(output) = selected.crate_binding_output {
         publish_selected_crate_binding_v1(&output, selected.crate_binding)?;
@@ -529,15 +551,18 @@ mod tests {
 
     #[test]
     fn simulation_bundle_v2_environment_is_explicit_and_mutually_exclusive() {
-        let (output, use_v2) =
-            select_simulation_output(None, Some(OsString::from("kernel-v2.fe2sim"))).unwrap();
+        let (output, version) =
+            select_simulation_output(None, Some(OsString::from("kernel-v2.fe2sim")), None).unwrap();
         assert_eq!(output, Some(OsString::from("kernel-v2.fe2sim")));
-        assert!(use_v2);
+        assert_eq!(version, 2);
         assert!(
-            select_simulation_output(Some(OsString::from("v1")), Some(OsString::from("v2")))
+            select_simulation_output(Some(OsString::from("v1")), Some(OsString::from("v2")), None,)
                 .is_err()
         );
-        assert!(select_simulation_output(None, Some(OsString::new())).is_err());
+        assert!(select_simulation_output(None, Some(OsString::new()), None).is_err());
+        let (_, version) =
+            select_simulation_output(None, None, Some(OsString::from("kernel-v3.fe2sim"))).unwrap();
+        assert_eq!(version, 3);
     }
 
     fn package_identity(version: &str, manifest_byte: u8) -> PortablePackageIdentityV1 {

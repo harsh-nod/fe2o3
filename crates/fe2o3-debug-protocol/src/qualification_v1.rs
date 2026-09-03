@@ -8,7 +8,9 @@ use sha2::{Digest, Sha256};
 use crate::OpaqueIdentityV1;
 
 pub const QUALIFICATION_MANIFEST_SCHEMA_V1: &str = "fe2o3-debug-qualification-manifest-v1";
+pub const QUALIFICATION_ASSESSMENT_SCHEMA_V1: &str = "fe2o3-debug-qualification-assessment-v1";
 pub const MAX_QUALIFICATION_MANIFEST_BYTES_V1: usize = 256 * 1024;
+pub const MAX_QUALIFICATION_ASSESSMENT_BYTES_V1: usize = 512 * 1024;
 pub const MAX_QUALIFICATION_TEXT_BYTES_V1: usize = 512;
 pub const MAX_QUALIFICATION_URL_BYTES_V1: usize = 2 * 1024;
 pub const MAX_QUALIFICATION_REPETITIONS_V1: u16 = 10_000;
@@ -142,6 +144,98 @@ impl QualificationManifestV1 {
     pub const fn grants_observation_authority(&self) -> bool {
         false
     }
+
+    /// Produces a bounded, agent-readable projection of this complete
+    /// caller-supplied manifest. Assessment revalidates the entire manifest
+    /// and never upgrades its evidence into an authenticated observation.
+    pub fn assessment(&self) -> Result<QualificationAssessmentV1, QualificationValidationErrorV1> {
+        self.validate()?;
+        let manifest_identity = self.identity()?;
+        let environment_identity = self.environment.identity()?;
+        let overhead_assessments = self
+            .overhead_budgets
+            .iter()
+            .map(|record| QualificationOverheadAssessmentV1 {
+                mode: record.mode,
+                assessment: record.assessment_after_manifest_validation(),
+            })
+            .collect::<Vec<_>>();
+        let disposition = if overhead_assessments
+            .iter()
+            .any(|record| record.assessment == OverheadAssessmentV1::Failed)
+        {
+            QualificationAssessmentDispositionV1::Failed
+        } else if overhead_assessments
+            .iter()
+            .all(|record| record.assessment == OverheadAssessmentV1::CallerBoundPolicySatisfied)
+        {
+            QualificationAssessmentDispositionV1::CallerBoundPoliciesSatisfied
+        } else {
+            QualificationAssessmentDispositionV1::Incomplete
+        };
+        Ok(QualificationAssessmentV1 {
+            schema: QualificationAssessmentSchemaV1::V1,
+            manifest_identity,
+            environment_identity,
+            disposition,
+            observation_authority: false,
+            qualification_authority: false,
+            manifest: self.clone(),
+            overhead_assessments,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum QualificationAssessmentSchemaV1 {
+    #[serde(rename = "fe2o3-debug-qualification-assessment-v1")]
+    V1,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualificationAssessmentDispositionV1 {
+    Incomplete,
+    Failed,
+    CallerBoundPoliciesSatisfied,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualificationOverheadAssessmentV1 {
+    pub mode: CaptureModeV1,
+    pub assessment: OverheadAssessmentV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualificationAssessmentV1 {
+    pub schema: QualificationAssessmentSchemaV1,
+    pub manifest_identity: OpaqueIdentityV1,
+    pub environment_identity: OpaqueIdentityV1,
+    pub disposition: QualificationAssessmentDispositionV1,
+    pub observation_authority: bool,
+    pub qualification_authority: bool,
+    pub manifest: QualificationManifestV1,
+    pub overhead_assessments: Vec<QualificationOverheadAssessmentV1>,
+}
+
+impl QualificationAssessmentV1 {
+    pub fn validate(&self) -> Result<(), QualificationValidationErrorV1> {
+        let expected = self.manifest.assessment()?;
+        if self != &expected {
+            return Err(QualificationValidationErrorV1::InvalidAssessment);
+        }
+        Ok(())
+    }
+
+    pub const fn grants_observation_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_qualification_authority(&self) -> bool {
+        false
+    }
 }
 
 pub fn decode_qualification_manifest_v1(
@@ -156,6 +250,20 @@ pub fn decode_qualification_manifest_v1(
         .validate()
         .map_err(QualificationDecodeErrorV1::InvalidManifest)?;
     Ok(manifest)
+}
+
+pub fn decode_qualification_assessment_v1(
+    bytes: &[u8],
+) -> Result<QualificationAssessmentV1, QualificationAssessmentDecodeErrorV1> {
+    if bytes.len() > MAX_QUALIFICATION_ASSESSMENT_BYTES_V1 {
+        return Err(QualificationAssessmentDecodeErrorV1::AssessmentTooLarge);
+    }
+    let assessment: QualificationAssessmentV1 = serde_json::from_slice(bytes)
+        .map_err(|_| QualificationAssessmentDecodeErrorV1::MalformedJson)?;
+    assessment
+        .validate()
+        .map_err(QualificationAssessmentDecodeErrorV1::InvalidAssessment)?;
+    Ok(assessment)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -917,7 +1025,8 @@ pub enum MeasuredOverheadMetricV1 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OverheadAssessmentV1 {
     CandidatePolicy,
     Unavailable,
@@ -1077,6 +1186,31 @@ impl fmt::Display for QualificationDecodeErrorV1 {
 impl std::error::Error for QualificationDecodeErrorV1 {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QualificationAssessmentDecodeErrorV1 {
+    AssessmentTooLarge,
+    MalformedJson,
+    InvalidAssessment(QualificationValidationErrorV1),
+}
+
+impl fmt::Display for QualificationAssessmentDecodeErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AssessmentTooLarge => {
+                formatter.write_str("qualification assessment is too large")
+            }
+            Self::MalformedJson => {
+                formatter.write_str("qualification assessment JSON is malformed")
+            }
+            Self::InvalidAssessment(error) => {
+                write!(formatter, "invalid qualification assessment: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for QualificationAssessmentDecodeErrorV1 {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QualificationValidationErrorV1 {
     InvalidQualificationDate,
     InvalidText(&'static str),
@@ -1098,6 +1232,7 @@ pub enum QualificationValidationErrorV1 {
     MeasurementBaselineMismatch,
     MeasurementOutOfRange,
     InvalidMeasurementMetric,
+    InvalidAssessment,
     ManifestTooLarge,
     EncodingFailed,
 }
@@ -1125,6 +1260,7 @@ impl fmt::Display for QualificationValidationErrorV1 {
             Self::MeasurementBaselineMismatch => formatter.write_str("measurement does not bind the canonical baseline comparator, axes, evidence, or configuration"),
             Self::MeasurementOutOfRange => formatter.write_str("overhead measurement is out of range"),
             Self::InvalidMeasurementMetric => formatter.write_str("measurement and budget metrics are incompatible or zero"),
+            Self::InvalidAssessment => formatter.write_str("qualification assessment does not match its embedded manifest"),
             Self::ManifestTooLarge => formatter.write_str("qualification manifest is too large"),
             Self::EncodingFailed => formatter.write_str("qualification manifest identity encoding failed"),
         }

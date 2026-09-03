@@ -16,8 +16,11 @@
 //! encodings. [`encode_module_v7`] adds the complete checked tensor-layout
 //! contract without changing the frozen V1-V6 encodings. [`encode_module_v8`]
 //! adds gfx950 FP8 scaled matrix operations and layouts without changing the
-//! frozen V1-V7 encodings. Decoding establishes wire well-formedness only;
-//! consumers must call [`verify_module`] before relying on semantic invariants. V1-V8
+//! frozen V1-V7 encodings.
+//! [`encode_module_v9`] adds gfx950 collectives and LDS transpose operations;
+//! [`encode_module_v10`] adds exact typed memory intrinsics without changing V1-V9.
+//! Decoding establishes wire well-formedness only.
+//! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V10
 //! reconstruct kernel-entry and import roles from their legacy records; they
 //! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
@@ -26,6 +29,9 @@
 //! source-variable/debugger formats. They do not reinterpret the frozen V1 map
 //! or bundle and confer no compiler-execution, proof, load, launch, or hardware
 //! authority.
+//! [`VerifiedSimulationBundleV4`] is an additive aggregate-materialization
+//! envelope. It retains the complete V3 bytes and binds a separately versioned
+//! one-to-many semantic-component storage map without changing any earlier wire.
 //!
 //! [`SemanticDebugMapDocumentV1`] is a separate, finalized-artifact-bound sidecar for exact
 //! bidirectional source/MIR/KIR/schedule/LLVM/ISA correlation. It represents optimization shape
@@ -35,6 +41,7 @@
 //! target-neutral operation families. Its separate schema and payload-bearing
 //! instance codecs do not alter or extend any frozen module wire format.
 
+mod canonical_kir_v10;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
@@ -59,6 +66,8 @@ mod semantic_debug_map_v1;
 mod semantic_operations;
 mod simulation_bundle_v1;
 mod simulation_bundle_v2;
+mod simulation_bundle_v3;
+mod simulation_bundle_v4;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -70,6 +79,7 @@ pub use canonical_kir_v6::*;
 pub use canonical_kir_v7::*;
 pub use canonical_kir_v8::*;
 pub use canonical_kir_v9::*;
+pub use canonical_kir_v10::*;
 pub use control_flow::*;
 pub use debug_source_map_v1::*;
 pub use debug_source_map_v2::*;
@@ -103,6 +113,8 @@ pub use semantic_debug_map_v1::*;
 pub use semantic_operations::*;
 pub use simulation_bundle_v1::*;
 pub use simulation_bundle_v2::*;
+pub use simulation_bundle_v3::*;
+pub use simulation_bundle_v4::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;

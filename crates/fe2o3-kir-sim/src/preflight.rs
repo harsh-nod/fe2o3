@@ -5,8 +5,9 @@ use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
-    F32MathFunction, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, Module, Operation,
-    OperationKind, ScalarType, Terminator, Type, UnaryOp, ValueId,
+    F32MathFunction, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, MemoryElementType,
+    MemoryIntrinsicOperation, Module, Operation, OperationKind, ScalarType, Terminator, Type,
+    UnaryOp, ValueId, VolatileProvenanceContract,
 };
 
 use crate::resident::{
@@ -38,6 +39,8 @@ pub enum UnsupportedFeatureV1 {
     FloatType(ScalarType),
     UnsupportedType,
     MemoryIntrinsic,
+    ExternalVolatileMemory,
+    MemoryIntrinsicTargetLayout,
     FloatConstant,
     FloatOperation,
     FloatFunction(F32MathFunction),
@@ -61,6 +64,7 @@ pub enum UnsupportedFeatureV1 {
     WorkgroupMemory,
     DynamicWorkgroupMemory,
     Matrix,
+    UnsupportedNumericalContract,
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
@@ -579,25 +583,36 @@ fn validate_workgroup_resources(
         else {
             continue;
         };
-        for memory in body
+        for (element, elements) in body
             .blocks
             .iter()
             .flat_map(|block| &block.operations)
             .filter_map(|operation| match &operation.kind {
-                OperationKind::WorkgroupMemory(memory) => Some(memory),
+                OperationKind::WorkgroupMemory(memory) => {
+                    let (Type::Scalar(element), fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements)) =
+                        (&memory.element, memory.extent)
+                    else {
+                        return None;
+                    };
+                    Some((*element, elements))
+                }
+                OperationKind::Gfx950LdsTranspose(
+                    fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1 {
+                        kind:
+                            fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current {
+                                format,
+                            },
+                        ..
+                    },
+                ) => Some((ScalarType::U8, format.lds_bytes())),
                 _ => None,
             })
         {
-            let (Type::Scalar(element), fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements)) =
-                (&memory.element, memory.extent)
-            else {
-                continue;
-            };
             let bytes = usize::try_from(elements)
                 .ok()
                 .and_then(|elements| {
                     target
-                        .scalar_bytes(*element)
+                        .scalar_bytes(element)
                         .and_then(|width| elements.checked_mul(width))
                 })
                 .ok_or(SimulationPreflightErrorV1::ResourceLimit {
@@ -1407,6 +1422,7 @@ fn scan_operation(
     findings: &mut UnsupportedCollectorV1,
     target: SimulationTargetV1,
 ) -> Result<(), SimulationPreflightErrorV1> {
+    let _surface = crate::capability::operation_surface_v1(&operation.kind);
     let identifier_bytes = function.id.retained_capacity_bytes();
     macro_rules! reject {
         ($feature:expr) => {
@@ -1434,7 +1450,9 @@ fn scan_operation(
             }
         }
         OperationKind::Intrinsic(_) => {}
-        OperationKind::MemoryIntrinsic(_) => reject!(UnsupportedFeatureV1::MemoryIntrinsic),
+        OperationKind::MemoryIntrinsic(intrinsic) => {
+            scan_memory_intrinsic(intrinsic, &mut |feature| reject!(feature), target)
+        }
         OperationKind::Unary { op, operand } => {
             if !matches!(value_types.get(operand), Some(Type::Scalar(ty)) if supports_unary(*op, *ty))
             {
@@ -1595,19 +1613,16 @@ fn scan_operation(
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
-        OperationKind::Matrix(_) => reject!(UnsupportedFeatureV1::Matrix),
-        OperationKind::Wave(wave) => {
-            if matches!(
-                wave.kind,
-                fe2o3_kernel_ir::WaveOperationKind::ReduceF32 { .. }
-                    | fe2o3_kernel_ir::WaveOperationKind::BroadcastF32 { .. }
-            ) {
-                reject!(UnsupportedFeatureV1::Wave);
+        OperationKind::Matrix(matrix) => match matrix.kind {
+            fe2o3_kernel_ir::MatrixOperationKind::LdsLoad { .. }
+            | fe2o3_kernel_ir::MatrixOperationKind::LdsStore { .. } => {}
+            fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
+            | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                reject!(UnsupportedFeatureV1::UnsupportedNumericalContract)
             }
-        }
-        OperationKind::Gfx950LdsTranspose(_) => {
-            reject!(UnsupportedFeatureV1::Gfx950LdsTranspose)
-        }
+        },
+        OperationKind::Wave(_) => {}
+        OperationKind::Gfx950LdsTranspose(_) => {}
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
     }
     Ok(())
@@ -1633,6 +1648,76 @@ fn scan_memory_type(
     }
 }
 
+fn scan_memory_intrinsic(
+    intrinsic: &MemoryIntrinsicOperation,
+    reject: &mut impl FnMut(UnsupportedFeatureV1),
+    target: SimulationTargetV1,
+) {
+    let (element, address_spaces) = match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance {
+            element,
+            address_space,
+            ..
+        }
+        | MemoryIntrinsicOperation::VolatileLoad {
+            element,
+            address_space,
+            ..
+        }
+        | MemoryIntrinsicOperation::VolatileStore {
+            element,
+            address_space,
+            ..
+        } => (*element, [Some(*address_space), None]),
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            element,
+            source_address_space,
+            destination_address_space,
+            ..
+        } => (
+            *element,
+            [
+                Some(*source_address_space),
+                Some(*destination_address_space),
+            ],
+        ),
+    };
+    let MemoryElementType::Scalar(element) = element else {
+        reject(UnsupportedFeatureV1::NonScalarMemory);
+        return;
+    };
+    if target.scalar_bytes(element).map(|bytes| bytes as u64)
+        != Some(intrinsic_layout(intrinsic).size_bytes)
+    {
+        reject(UnsupportedFeatureV1::MemoryIntrinsicTargetLayout);
+    }
+    for address_space in address_spaces.into_iter().flatten() {
+        if !matches!(
+            address_space,
+            AddressSpace::Global | AddressSpace::Private | AddressSpace::Workgroup
+        ) {
+            reject(UnsupportedFeatureV1::UnsupportedAddressSpace(address_space));
+        }
+    }
+    if matches!(
+        intrinsic,
+        MemoryIntrinsicOperation::VolatileLoad { contract, .. }
+            | MemoryIntrinsicOperation::VolatileStore { contract, .. }
+            if contract.provenance == VolatileProvenanceContract::ExternalMmioNotRustAllocation
+    ) {
+        reject(UnsupportedFeatureV1::ExternalVolatileMemory);
+    }
+}
+
+fn intrinsic_layout(intrinsic: &MemoryIntrinsicOperation) -> fe2o3_kernel_ir::MemoryLayout {
+    match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance { layout, .. }
+        | MemoryIntrinsicOperation::VolatileLoad { layout, .. }
+        | MemoryIntrinsicOperation::VolatileStore { layout, .. }
+        | MemoryIntrinsicOperation::CopyNonOverlapping { layout, .. } => *layout,
+    }
+}
+
 fn scan_terminator(
     function: &Function,
     block: BlockId,
@@ -1644,6 +1729,7 @@ fn scan_terminator(
     let Some(terminator) = terminator else {
         return;
     };
+    let _surface = crate::capability::terminator_surface_v1(terminator);
     let selector = match terminator {
         Terminator::IntegerSwitch {
             selector, cases, ..
@@ -2145,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn gfx950_lds_transpose_has_an_explicit_unsupported_classification() {
+    fn gfx950_lds_transpose_is_owned_by_the_exact_cooperative_profile() {
         let function = Function::kernel_entry(
             "gfx950_transpose",
             fe2o3_kernel_ir::Signature::new(vec![], vec![]),
@@ -2193,13 +2279,48 @@ mod tests {
         .unwrap();
 
         let report = findings.finish().unwrap();
+        assert_eq!(report.total_findings(), 0);
+        assert!(report.findings().is_empty());
+    }
+
+    #[test]
+    fn matrix_multiply_has_a_precise_numerical_contract_rejection() {
+        let function = Function::kernel_entry(
+            "matrix_multiply",
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+            vec![],
+            vec![],
+        );
+        let operation = Operation::new(
+            vec![],
+            OperationKind::Matrix(fe2o3_kernel_ir::MatrixOperation::multiply_accumulate(
+                [ValueId(0); 4],
+                [ValueId(1); 4],
+                [ValueId(2); 4],
+            )),
+        );
+        let mut findings = UnsupportedCollectorV1::new().unwrap();
+        scan_operation(
+            &function,
+            BlockId(0),
+            0,
+            &operation,
+            &HashMap::new(),
+            &Module::new("matrix_multiply"),
+            &HashMap::new(),
+            &mut Vec::new(),
+            &mut [true],
+            &mut 1,
+            1,
+            &mut findings,
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+        let report = findings.finish().unwrap();
         assert_eq!(report.total_findings(), 1);
-        assert_eq!(report.findings()[0].function.as_str(), "gfx950_transpose");
-        assert_eq!(report.findings()[0].block, Some(BlockId(0)));
-        assert_eq!(report.findings()[0].operation, Some(0));
         assert_eq!(
             report.findings()[0].feature,
-            UnsupportedFeatureV1::Gfx950LdsTranspose
+            UnsupportedFeatureV1::UnsupportedNumericalContract
         );
     }
 

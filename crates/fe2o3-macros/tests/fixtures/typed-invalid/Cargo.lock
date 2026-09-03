@@ -70,6 +70,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-amd-target"
 version = "0.1.0"
+dependencies = [
+ "fe2o3-target-spec",
+]
 
 [[package]]
 name = "fe2o3-artifact-transaction"
@@ -156,6 +159,10 @@ dependencies = [
  "libc",
  "sha2",
 ]
+
+[[package]]
+name = "fe2o3-target-spec"
+version = "0.1.0"
 
 [[package]]
 name = "hashbrown"

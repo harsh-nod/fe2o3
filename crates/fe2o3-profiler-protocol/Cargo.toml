@@ -1,0 +1,25 @@
+[package]
+name = "fe2o3-profiler-protocol"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded, authority-free direct-KFD runtime profiling records and agent queries."
+
+[dependencies]
+serde.workspace = true
+serde_json = "1"
+sha2.workspace = true
+rustix.workspace = true
+
+[lib]
+name = "fe2o3_profiler_protocol"
+
+[[bin]]
+name = "fe2o3-kfd-profiler-query"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"

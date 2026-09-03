@@ -143,9 +143,15 @@ pub struct SourceIsaBuildAttemptViewV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum SourceIsaFrameOutcomeViewV1 {
-    Admitted { evidence: SourceIsaAdmittedViewV1 },
-    Unavailable { reason: SourceIsaTypedCodeV1 },
-    Error { error: SourceIsaTypedCodeV1 },
+    Admitted {
+        evidence: Box<SourceIsaAdmittedViewV1>,
+    },
+    Unavailable {
+        reason: SourceIsaTypedCodeV1,
+    },
+    Error {
+        error: SourceIsaTypedCodeV1,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -232,7 +238,7 @@ pub struct SourceIsaPointViewV1 {
 #[serde(tag = "unit_state", rename_all = "snake_case")]
 pub enum SourceIsaUnitViewV1 {
     Observed {
-        frame: SourceIsaFrameViewV1,
+        frame: Box<SourceIsaFrameViewV1>,
     },
     Missing {
         missing_evidence_id: String,
@@ -381,8 +387,7 @@ impl SourceIsaInspectionV1 {
             )?,
         };
         let end = start
-            .checked_add(usize::from(request.limit))
-            .unwrap_or(usize::MAX)
+            .saturating_add(usize::from(request.limit))
             .min(unit_count);
         let page_len = end.saturating_sub(start);
         let mut items = Vec::new();
@@ -436,7 +441,7 @@ impl RawSourceIsaUnitV1<'_> {
     ) -> SourceIsaUnitViewV1 {
         match self {
             Self::Observed(frame) => SourceIsaUnitViewV1::Observed {
-                frame: project_frame(frame),
+                frame: Box::new(project_frame(frame)),
             },
             Self::Missing(unit) => {
                 let unit_identity = hex_bytes(unit);
@@ -474,7 +479,7 @@ fn project_frame(frame: &crate::wire_v1::SourceIsaObservationFrameV1) -> SourceI
         outcome: match frame.outcome() {
             SourceIsaObservationOutcomeV1::Admitted(admitted) => {
                 SourceIsaFrameOutcomeViewV1::Admitted {
-                    evidence: project_admitted(admitted),
+                    evidence: Box::new(project_admitted(admitted)),
                 }
             }
             SourceIsaObservationOutcomeV1::Unavailable(reason) => {
@@ -613,7 +618,7 @@ pub enum AgentSourceIsaResultV1 {
     },
     CollectionPage {
         authority: SourceIsaAuthorityViewV1,
-        collection: SourceIsaCollectionSummaryV1,
+        collection: Box<SourceIsaCollectionSummaryV1>,
         page: SourceIsaPageV1,
     },
 }
@@ -626,7 +631,7 @@ pub enum AgentSourceIsaResponseV1 {
         request_id: u64,
         response_revision: u64,
         operation: AgentSourceIsaOperationV1,
-        result: AgentSourceIsaResultV1,
+        result: Box<AgentSourceIsaResultV1>,
     },
     Error {
         schema: String,
@@ -952,7 +957,7 @@ fn execute_request(
                 request_id,
                 response_revision,
                 operation,
-                result: AgentSourceIsaResultV1::Capabilities {
+                result: Box::new(AgentSourceIsaResultV1::Capabilities {
                     authority: SourceIsaAuthorityViewV1::OBSERVATION_ONLY,
                     limits: limits(),
                     capabilities: vec![
@@ -965,7 +970,7 @@ fn execute_request(
                             state: AgentSourceIsaCapabilityStateV1::Available,
                         },
                     ],
-                },
+                }),
             }
         }
         AgentSourceIsaRequestV1::InspectSourceIsaCollection {
@@ -1037,11 +1042,11 @@ fn execute_inspection(
         request_id,
         response_revision,
         operation,
-        result: AgentSourceIsaResultV1::CollectionPage {
+        result: Box::new(AgentSourceIsaResultV1::CollectionPage {
             authority: inspection.authority,
-            collection: inspection.collection,
+            collection: Box::new(inspection.collection),
             page,
-        },
+        }),
     }
 }
 
@@ -1184,8 +1189,7 @@ impl SourceIsaCollectionSummaryV1 {
         let expected_len = SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
             .checked_add(
                 usize::from(self.frame_count)
-                    .checked_mul(crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
-                    .unwrap_or(usize::MAX),
+                    .saturating_mul(crate::wire_v1::SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1),
             )
             .and_then(|length| {
                 length.checked_add(usize::from(self.missing_unit_count).saturating_mul(32))
@@ -1593,7 +1597,7 @@ fn decode_lowercase_hex(value: &str) -> Result<Vec<u8>, AgentSourceIsaErrorCodeV
     if value.len() > MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 {
         return Err(AgentSourceIsaErrorCodeV1::CollectionHexTooLarge);
     }
-    if value.is_empty() || value.len() % 2 != 0 {
+    if value.is_empty() || !value.len().is_multiple_of(2) {
         return Err(AgentSourceIsaErrorCodeV1::InvalidLowercaseHex);
     }
     let mut decoded = Vec::new();
@@ -2076,7 +2080,7 @@ mod tests {
             request_id: 73,
             response_revision: 9,
             operation: AgentSourceIsaOperationV1::DiscoverCapabilities,
-            result: AgentSourceIsaResultV1::Capabilities {
+            result: Box::new(AgentSourceIsaResultV1::Capabilities {
                 authority: SourceIsaAuthorityViewV1::OBSERVATION_ONLY,
                 limits: limits(),
                 capabilities: vec![
@@ -2086,7 +2090,7 @@ mod tests {
                     };
                     64
                 ],
-            },
+            }),
         };
         let fallback = encode_response_with_limit(response, 256);
         let fallback: Value = serde_json::from_str(&fallback).unwrap();
@@ -2098,11 +2102,10 @@ mod tests {
         let page_response = inspect_source_isa_agent_json_v1(&collection(0x41, &[0x20], &[]));
         let mut page_response: AgentSourceIsaResponseV1 =
             serde_json::from_str(&page_response).unwrap();
-        let AgentSourceIsaResponseV1::Ok {
-            result: AgentSourceIsaResultV1::CollectionPage { page, .. },
-            ..
-        } = &mut page_response
-        else {
+        let AgentSourceIsaResponseV1::Ok { result, .. } = &mut page_response else {
+            panic!("expected collection page")
+        };
+        let AgentSourceIsaResultV1::CollectionPage { page, .. } = result.as_mut() else {
             panic!("expected collection page")
         };
         page.page_exhausted = false;
@@ -2147,7 +2150,7 @@ mod tests {
         let lines = output.split(|byte| *byte == b'\n').collect::<Vec<_>>();
         assert_eq!(lines.len(), 3);
         for (index, line) in lines[..2].iter().enumerate() {
-            assert!(line.len() + 1 <= MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1);
+            assert!(line.len() < MAX_AGENT_SOURCE_ISA_RESPONSE_BYTES_V1);
             let response: Value = serde_json::from_slice(line).unwrap();
             assert_eq!(response["response_revision"], (index + 1) as u64);
         }

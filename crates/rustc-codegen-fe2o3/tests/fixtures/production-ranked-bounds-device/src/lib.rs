@@ -76,13 +76,45 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "barrier_early_return",
     feature = "barrier_loop",
     feature = "barrier_helper",
-    feature = "device_math_sqrt"
+    feature = "device_math_sqrt",
+    feature = "typed_layout_corpus"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
     let selected = input[63];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[cfg(feature = "typed_layout_corpus")]
+#[allow(dead_code)]
+struct TypedLayoutRecord {
+    tag: u8,
+    payload: u32,
+}
+
+#[cfg(feature = "typed_layout_corpus")]
+#[allow(dead_code)]
+enum TypedLayoutChoice {
+    Empty,
+    Scalar(u16),
+    Record(TypedLayoutRecord),
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "typed_layout_corpus")]
+pub fn typed_layout_corpus(value: f32, input: &[f32], mut output: DisjointSlice<f32>) {
+    let _record: TypedLayoutRecord;
+    let _tuple: (u16, u64);
+    let _array: [u32; 3];
+    let _choice: TypedLayoutChoice;
+    let _input_extent = input.len();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = value;
     }
 }
 

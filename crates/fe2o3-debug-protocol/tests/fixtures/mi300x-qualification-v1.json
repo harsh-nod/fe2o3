@@ -1,6 +1,6 @@
 {
   "schema": "fe2o3-debug-qualification-manifest-v1",
-  "qualification_date_utc": "2026-08-30",
+  "qualification_date_utc": "2026-09-02",
   "environment": {
     "host_class": "mi300x",
     "kernel_release": "6.8.0-124-generic",
@@ -39,21 +39,21 @@
         "status": "caller_bound_observed_usable",
         "identity": {
           "kind": "workflow_driver",
-          "version": { "status": "exact", "value": "0.1.0@1795071e131d2aa832e329da4f1f30ee8edd193c+rocgdb-rocm-rel-7.2-93" },
-          "content_sha256": "176a76e2880c223c347988397e0942d53c5c572ee81dc7e9ed78526d39b57260",
+          "version": { "status": "exact", "value": "0.1.0@308d8fa00fa41e098b2a1a47bbfea1bc29735464+rocgdb-rocm-rel-7.2-93" },
+          "content_sha256": "bad1b907b3e2cbdf1deb504d63559552984e51dd92df3d4997a698752cf58f9a",
           "configuration_sha256": "daefb5d1b67882a3aa7f36c412dbd226de25bf935f2cc3517b7d2c9dc7a23169"
         },
-        "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3"
+        "evidence_id": "e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251"
       },
       "capabilities": {
-        "live_gpu_state": { "origin": "unavailable", "reason": "collector_output_not_admitted", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "KFD publication was admitted, but installed ROCgdb returned gpu_stopped_state_unavailable for the exact run." },
-        "source_break_and_step": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "No authenticated fe2o3 live source stop or step was returned." },
+        "live_gpu_state": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251", "limitations": "KFD declaration/publication were admitted, but ROCgdb 16.3 returned gpu_stopped_state_unavailable; raw MI reported a global#0 read failure with the KFD-only r_debug=0 runtime." },
+        "source_break_and_step": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251", "limitations": "No authenticated fe2o3 live source stop or step was returned." },
         "deterministic_cpu_diagnosis": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "Deterministic CPU diagnosis is a separate execution and backend." },
-        "semantic_identity_graph": { "origin": "unavailable", "reason": "collector_output_not_admitted", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "No stopped PC was available to join to source, KIR, LLVM, or ISA." },
+        "semantic_identity_graph": { "origin": "unavailable", "reason": "collector_output_not_admitted", "evidence_id": "e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251", "limitations": "No stopped PC was available to join to source, KIR, LLVM, or ISA." },
         "dispatch_counter_pc_att_collection": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "This workflow does not collect profiler counters, PC samples, or ATT." },
         "decoded_att_visualization": { "origin": "unavailable", "reason": "not_implemented", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "This workflow does not decode or visualize ATT." },
         "bounded_read_only_agent_queries": { "origin": "unavailable", "reason": "not_observed", "evidence_id": "4b5b997e26412b56f65f417d970b97591e5dc5ef032d055bea056d1208f37365", "limitations": "The qualified command launches and owns a debug target; it is not a read-only evidence service." },
-        "supported_hardware_path": { "origin": "caller_bound_observed", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3", "limitations": "The caller-bound exact gfx942 record reached cooperative KFD publication and structured ROCgdb probing; native stopped state remained unavailable." }
+        "supported_hardware_path": { "origin": "caller_bound_observed", "evidence_id": "e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251", "limitations": "The caller-bound exact gfx942 record reached cooperative KFD publication and structured ROCgdb probing; native stopped state remained unavailable." }
       }
     },
     {
@@ -211,7 +211,7 @@
       "collector": "fe2o3_rocgdb_kfd_debugger",
       "configuration_sha256": "2bb35f5354fa82377d8c5c1b8bfd1ac4fd614db90b800ef37e2cca84a6189328",
       "policy": { "status": "candidate", "metric": { "metric": "stop_resume_control_latency", "max_latency_nanoseconds": 500000000 }, "max_storage_bytes": 67108864, "max_collection_milliseconds": 900000, "min_warmups": 5, "min_repetitions": 30, "statistic": "p95" },
-      "observation": { "status": "unavailable", "reason": "capability_unsupported", "evidence_id": "5fc3881c71a0c13c878ca947f59c0ad5b8e3e5f46d4718d864f126721e8e3ce3" }
+      "observation": { "status": "unavailable", "reason": "capability_unsupported", "evidence_id": "e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251" }
     },
     {
       "mode": "instrumented",

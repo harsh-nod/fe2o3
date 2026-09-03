@@ -150,14 +150,28 @@ compiled oracle may use HIP/HSA. Normal and build edges are always included.
 Every reachable `links` package and every unapproved custom build target is
 rejected.
 
-The V1 configuration-script exceptions are exactly `libc@0.2.189` and
-`rustix@1.1.4` from the crates.io registry. Their reviewed build scripts select
-Rust `cfg` behavior and do not invoke a native compiler, generate a native
-object, or add a native library. Cargo metadata can retain rustix alternatives
-that are mutually exclusive in the selected `linux_raw_sys` feature closure;
-in particular, a conservative resolve graph can still reach libc. Allowing both
-exact identities prevents this Cargo representation detail from being confused
-with a native shim.
+The V1 configuration-script exceptions are exact package/version identities
+from the crates.io registry. The locked crate checksum content-binds the whole
+downloaded package selected by Cargo; the build-script digest below records the
+source reviewed for this policy revision.
+
+| Package | Locked crate checksum | Reviewed `build.rs` SHA-256 | Reviewed behavior |
+| --- | --- | --- | --- |
+| `libc@0.2.189` | `3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2` | `e47f4a6762799b6e69cefc7acdb3291df828010e4de20609f7378f9c94ea29e6` | Rust target/configuration selection |
+| `proc-macro2@1.0.107` | `985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9` | `baeb20b52f6b536be8657a566591a507bb2e34a45cf8baa42b135510a0c3c729` | Rust compiler version and feature probes through the configured `rustc` |
+| `quote@1.0.47` | `1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001` | `cd6808c02e476b09a520105e2c6f6d325cccb1ecd542cbbcc836a0ae6f6fb0f1` | Rust compiler version query and `cfg` selection |
+| `rustix@1.1.4` | `b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190` | `74cb32e64aa6fe99c2496a425b016e22f4e43c438a8237966b8acae04a98eaf9` | Rust target/configuration selection |
+| `serde@1.0.229` | `4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba` | `e2ea6a7a82f5404c3e28cb055883c737ee7903367a10206fbb47b75c009f0eb3` | Writes one generated Rust private-module source file and selects Rust `cfg` values |
+| `serde_core@1.0.229` | `67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48` | `7bc6b1eec8913ff4cd8e4b9b92cd04a82a4f38beb30a0b73a64c1e6e49f07b5f` | Writes one generated Rust private-module source file and selects Rust target `cfg` values |
+| `serde_json@1.0.151` | `c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14` | `a681e754be844c7dbef957f5d2d00b01f37c5dca160ef1055a8d8f975697a881` | Selects a Rust integer-arithmetic `cfg` from Cargo target variables |
+| `zmij@1.0.23` | `29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b` | `ad320bc635887879bdbbf1b9322da4a157ec2c5a4243bd7c2cf9b6884a3b2a41` | Rust compiler version query and Rust optimization `cfg` selection |
+
+None of these reviewed scripts invokes a C/C++/assembly compiler, bindgen,
+`pkg-config`, CMake, ROCm discovery, or native linking, and none emits a native
+object. `proc-macro2` does compile bounded Rust feature probes with the
+configured Rust compiler. Cargo metadata can retain rustix alternatives that
+are mutually exclusive in the selected `linux_raw_sys` feature closure; in
+particular, a conservative resolve graph can still reach libc.
 
 An allowlist entry is not proof authority. Each version/source change requires
 review and a policy update. Release evidence binds the exact package source,

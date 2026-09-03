@@ -128,6 +128,7 @@ fe2o3-mir-model = { path = "crates/fe2o3-mir-model" }
 fe2o3-pliron = { path = "crates/fe2o3-pliron" }
 fe2o3-pliron-owner-core = { path = "crates/fe2o3-pliron-owner-core" }
 fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
+fe2o3-profiler-protocol = { path = "crates/fe2o3-profiler-protocol" }
 fe2o3-protected-static-executable = { path = "crates/fe2o3-protected-static-executable" }
 fe2o3-protected-service-profile = { path = "crates/fe2o3-protected-service-profile" }
 fe2o3-protected-service-spawn = { path = "crates/fe2o3-protected-service-spawn" }
@@ -140,8 +141,13 @@ fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-runtime-model = { path = "crates/fe2o3-runtime-model" }
 fe2o3-runtime-protocol = { path = "crates/fe2o3-runtime-protocol" }
 fe2o3-runtime = { path = "crates/fe2o3-runtime" }
+fe2o3-virtual-runtime = { path = "crates/fe2o3-virtual-runtime" }
+fe2o3-virtual-runtime-cli = { path = "crates/fe2o3-virtual-runtime-cli" }
 fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
+fe2o3-sim-differential = { path = "crates/fe2o3-sim-differential" }
+fe2o3-sim-physical-differential = { path = "crates/fe2o3-sim-physical-differential" }
+fe2o3-sim-runtime = { path = "crates/fe2o3-sim-runtime" }
 fe2o3-static-preexec-manifest = { path = "crates/fe2o3-static-preexec-manifest" }
 fe2o3-source-isa-observation = { path = "crates/fe2o3-source-isa-observation" }
 fe2o3-target-spec = { path = "crates/fe2o3-target-spec" }

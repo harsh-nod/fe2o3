@@ -2,10 +2,12 @@ use fe2o3_debug_protocol::{
     BaselineComparatorAvailabilityV1, BudgetPolicyStatusV1, CallerBoundBaselineComparatorRecordV1,
     CallerBoundComponentIdentityV1, CapabilityEvidenceV1, CaptureModeV1,
     ComparisonCapabilityUnavailableReasonV1, ComponentInstallationV1, DurationStatisticV1,
-    MAX_QUALIFICATION_MANIFEST_BYTES_V1, MeasuredOverheadMetricV1, MeasuredOverheadV1,
-    OpaqueIdentityV1, OverheadAssessmentV1, OverheadComparisonAxesV1, OverheadObservationV1,
-    QualificationComponentV1, QualificationDecodeErrorV1, QualificationManifestV1,
-    QualificationValidationErrorV1, VersionEvidenceV1, VersionUnavailableReasonV1,
+    MAX_QUALIFICATION_ASSESSMENT_BYTES_V1, MAX_QUALIFICATION_MANIFEST_BYTES_V1,
+    MeasuredOverheadMetricV1, MeasuredOverheadV1, OpaqueIdentityV1, OverheadAssessmentV1,
+    OverheadComparisonAxesV1, OverheadObservationV1, QualificationAssessmentDecodeErrorV1,
+    QualificationAssessmentDispositionV1, QualificationComponentV1, QualificationDecodeErrorV1,
+    QualificationManifestV1, QualificationValidationErrorV1, VersionEvidenceV1,
+    VersionUnavailableReasonV1, decode_qualification_assessment_v1,
     decode_qualification_manifest_v1,
 };
 
@@ -174,6 +176,102 @@ fn mi300x_fixture_is_complete_bounded_and_non_authoritative() {
         }
     }
     reject_authority_keys(&serde_json::from_slice(FIXTURE).unwrap());
+}
+
+#[test]
+fn assessment_exposes_the_complete_matrix_without_upgrading_authority() {
+    let manifest = fixture();
+    let assessment = manifest.assessment().unwrap();
+    assert_eq!(
+        assessment.disposition,
+        QualificationAssessmentDispositionV1::Incomplete
+    );
+    assert_eq!(assessment.manifest, manifest);
+    assert_eq!(assessment.manifest_identity, manifest.identity().unwrap());
+    assert_eq!(
+        assessment.environment_identity,
+        manifest.environment.identity().unwrap()
+    );
+    assert_eq!(assessment.overhead_assessments.len(), 6);
+    assert!(
+        assessment
+            .overhead_assessments
+            .iter()
+            .all(|record| { record.assessment == OverheadAssessmentV1::CandidatePolicy })
+    );
+    assert!(!assessment.observation_authority);
+    assert!(!assessment.qualification_authority);
+    assert!(!assessment.grants_observation_authority());
+    assert!(!assessment.grants_qualification_authority());
+
+    let encoded = serde_json::to_value(&assessment).unwrap();
+    assert_eq!(encoded["schema"], "fe2o3-debug-qualification-assessment-v1");
+    assert_eq!(encoded["disposition"], "incomplete");
+    assert_eq!(
+        encoded["overhead_assessments"][4],
+        serde_json::json!({
+            "mode": "debugger_stop",
+            "assessment": "candidate_policy"
+        })
+    );
+}
+
+#[test]
+fn assessment_revalidates_and_surfaces_policy_failure() {
+    let mut invalid = fixture();
+    invalid.overhead_budgets.pop();
+    assert_eq!(
+        invalid.assessment(),
+        Err(QualificationValidationErrorV1::IncompleteOverheadMatrix)
+    );
+
+    let mut failed = fixture();
+    install_baseline_comparator(&mut failed);
+    failed.overhead_budgets[0].policy.status = BudgetPolicyStatusV1::Approved;
+    let OverheadObservationV1::Measured { measurement } =
+        &mut failed.overhead_budgets[0].observation
+    else {
+        unreachable!()
+    };
+    measurement.storage_bytes = 1;
+    let assessment = failed.assessment().unwrap();
+    assert_eq!(
+        assessment.disposition,
+        QualificationAssessmentDispositionV1::Failed
+    );
+    assert_eq!(
+        assessment.overhead_assessments[0].assessment,
+        OverheadAssessmentV1::Failed
+    );
+}
+
+#[test]
+fn strict_assessment_decoder_rejects_mutated_results_and_oversize() {
+    let assessment = fixture().assessment().unwrap();
+    let encoded = serde_json::to_vec(&assessment).unwrap();
+    assert_eq!(decode_qualification_assessment_v1(&encoded), Ok(assessment));
+
+    let mut mutated: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    mutated["observation_authority"] = serde_json::json!(true);
+    assert_eq!(
+        decode_qualification_assessment_v1(&serde_json::to_vec(&mutated).unwrap()),
+        Err(QualificationAssessmentDecodeErrorV1::InvalidAssessment(
+            QualificationValidationErrorV1::InvalidAssessment
+        ))
+    );
+
+    let mut mutated: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    mutated["disposition"] = serde_json::json!("failed");
+    assert_eq!(
+        decode_qualification_assessment_v1(&serde_json::to_vec(&mutated).unwrap()),
+        Err(QualificationAssessmentDecodeErrorV1::InvalidAssessment(
+            QualificationValidationErrorV1::InvalidAssessment
+        ))
+    );
+    assert_eq!(
+        decode_qualification_assessment_v1(&vec![b' '; MAX_QUALIFICATION_ASSESSMENT_BYTES_V1 + 1]),
+        Err(QualificationAssessmentDecodeErrorV1::AssessmentTooLarge)
+    );
 }
 
 #[test]

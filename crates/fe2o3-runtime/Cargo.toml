@@ -29,6 +29,7 @@ fe2o3-aql.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-host-api.workspace = true
 fe2o3-kfd.workspace = true
+fe2o3-profiler-protocol.workspace = true
 fe2o3-runtime-model.workspace = true
 sha2.workspace = true
 
