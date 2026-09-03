@@ -6,9 +6,9 @@ explicit subset of verified canonical Kernel IR. The frozen
 `admit_v9` consumes exact V9 custody for additive f32 wave collectives, and
 `admit_v10` consumes exact V10 custody for those collectives plus additive
 memory-intrinsic execution. Raw in-memory modules and other wire formats are
-not execution inputs. The
-production compiler and simulation-bundle exporter continue to emit V7; source
-export to V9 or V10 is not part of this simulator slice.
+not execution inputs. The production compiler's Bundle V4 exporter binds
+exact V7 KIR and its Bundle V5 exporter binds exact V10 KIR; neither bundle
+grants execution or hardware authority.
 
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
@@ -243,7 +243,11 @@ and packed BF16x2 fused multiply-add use the same software evaluator. Operations
 are never implemented with host `f32`/`f64` arithmetic and are never implicitly
 contracted.
 
-Float atomics, generic-address-space atomics, external calls, generic barriers,
+The exact canonical terminating AMDGPU `Trap` call is admitted as a dynamic
+failure equivalent to reaching its required `Unreachable` terminator. It is
+never ignored when executed; this only permits compiler-generated failure
+blocks to remain in otherwise executable KIR. Float atomics,
+generic-address-space atomics, all other external calls, generic barriers,
 legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
 non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
 operations, V7 memory intrinsics,

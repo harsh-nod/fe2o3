@@ -22,12 +22,13 @@ the simulator limits. Worker loss makes the backend terminal and retains
 outstanding resources.
 
 V3 materializes exact scalar, thin global pointer, and global slice storage
-correspondences. V4 content-binds an independently versioned one-to-many
+correspondences. V4 and V5 content-bind an independently versioned one-to-many
 semantic component map, including explicit physical kernarg size, alignment,
-and slots. The production exporter derives those components from rustc layout,
-ABI, and the sole semantic-MIR-to-KIR lowering correspondence. The consumer
-independently rederives canonical KIR packing and admits bounded, pointer-free
-by-value arrays, tuples, and structs as an exact recursive scalar-leaf roster.
+and slots; V5 binds that map directly to its exact KIR V10 body. The production
+exporter derives those components from rustc layout, ABI, and the sole
+semantic-MIR-to-KIR lowering correspondence. The consumer independently
+rederives canonical KIR packing and admits bounded, pointer-free by-value
+arrays, tuples, and structs as an exact recursive scalar-leaf roster.
 The retained source ABI must be zero-sized `Ignore`, scalar `Direct`, `Pair`,
 GPU `Unadjusted` `Direct(Memory)`, a simple Rust integer `Cast`, or sized,
 non-stack, non-metadata `Indirect` with exact carrier attributes. `Cast` and

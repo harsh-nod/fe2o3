@@ -1,14 +1,15 @@
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BinaryOp,
-    BlockId, CheckedBinaryOperator, ComparePredicate, Constant, Convergence, DiagnosticCode, Fence,
-    Function, IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
-    ScalarType, Signature, SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type,
-    UnaryOp, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
-    VerifiedCanonicalKernelIrV10, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
+    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CheckedBinaryOperator, ComparePredicate,
+    Constant, Convergence, DiagnosticCode, Fence, Function, IndexKind, IntegerSwitchCase,
+    IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess,
+    MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -1444,6 +1445,77 @@ fn reaching_unreachable_is_a_site_and_invocation_bound_dynamic_error() {
     assert_eq!(
         error.kind,
         SimulationExecutionErrorKindV1::ReachedUnreachable
+    );
+}
+
+#[test]
+fn canonical_amdgpu_trap_is_a_dynamic_error_instead_of_an_external_call_gap() {
+    let trap = AmdGpuDiagnosticOperation::Trap;
+    let mut block = BasicBlock::new(BlockId(7));
+    block.operations.push(trap.operation(None));
+    block.terminator = Some(Terminator::Unreachable);
+    let entry = Function::kernel_entry(
+        "trap_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::trap");
+    module.functions.extend([entry, trap.declaration()]);
+    module
+        .kernels
+        .push(Kernel::new("trap", "trap_impl", dynamic_domain_1d()));
+    let error = admitted(module)
+        .simulate(
+            &SimulationRequestV1::new("trap", [1, 1, 1], [1, 1, 1], vec![]),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .expect_err("reaching the canonical AMDGPU trap fails dynamically");
+    let SimulationErrorV1::Execution(error) = error else {
+        panic!("expected dynamic trap error")
+    };
+    assert_eq!(error.invocation.unwrap().global, [0, 0, 0]);
+    assert_eq!(error.site.unwrap().operation, Some(0));
+    assert_eq!(
+        error.kind,
+        SimulationExecutionErrorKindV1::ReachedUnreachable
+    );
+}
+
+#[test]
+fn other_amdgpu_diagnostics_remain_typed_unavailable() {
+    let debug_trap = AmdGpuDiagnosticOperation::DebugTrap;
+    let mut block = BasicBlock::new(BlockId(7));
+    block.operations.push(debug_trap.operation(None));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "debug_trap_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::debug-trap");
+    module.functions.extend([entry, debug_trap.declaration()]);
+    module.kernels.push(Kernel::new(
+        "debug_trap",
+        "debug_trap_impl",
+        dynamic_domain_1d(),
+    ));
+    let error = admitted(module)
+        .preflight(
+            &SimulationRequestV1::new("debug_trap", [1, 1, 1], [1, 1, 1], vec![]),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .expect_err("non-terminating diagnostics remain unavailable");
+    let SimulationPreflightErrorV1::Unsupported(report) = error else {
+        panic!("expected typed external-call finding")
+    };
+    assert_eq!(report.total_findings(), 1);
+    assert_eq!(
+        report.findings()[0].feature,
+        UnsupportedFeatureV1::ExternalCall(debug_trap.intrinsic_function_id())
     );
 }
 

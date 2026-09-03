@@ -9,14 +9,15 @@ use std::fmt;
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
-    CheckedBinaryOperator, ComparePredicate, Constant, Fence, Function, FunctionId, FunctionRole,
-    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
-    IndexKind, IntrinsicKind, MatrixElement, MatrixLdsProfile, MatrixOperation,
-    MatrixOperationKind, MemoryAccess, MemoryIntrinsicOperation, MemoryOrdering, Module, Operation,
-    OperationKind, PointerDistanceKind, PointerDistanceUnit, ScalarType, SynchronizationScope,
-    Terminator, Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation,
-    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis, BasicBlock,
+    BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Fence,
+    Function, FunctionId, FunctionRole, Gfx950LdsTransposeFormatV1,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
+    MatrixElement, MatrixLdsProfile, MatrixOperation, MatrixOperationKind, MemoryAccess,
+    MemoryIntrinsicOperation, MemoryOrdering, Module, Operation, OperationKind,
+    PointerDistanceKind, PointerDistanceUnit, ScalarType, SynchronizationScope, Terminator, Type,
+    UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -1857,6 +1858,7 @@ enum CallTarget {
     NotCall,
     Internal(usize),
     Float(SoftFloatOperationV1),
+    Trap,
 }
 
 fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
@@ -3221,6 +3223,11 @@ fn build_execution_indices<'a>(
                                 crate::soft_float::operation_for_call_v1(callee, arguments)
                             {
                                 CallTarget::Float(operation)
+                            } else if matches!(
+                                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                                Some(AmdGpuDiagnosticOperation::Trap)
+                            ) {
+                                CallTarget::Trap
                             } else {
                                 CallTarget::Internal(*functions.get(callee).ok_or_else(|| {
                                     top_level_error(
@@ -5637,7 +5644,7 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
             let target =
                 engine.call_targets[frame.function_index][frame.current_index][frame.operation];
             let callee_index = match target {
-                CallTarget::Float(_) => None,
+                CallTarget::Float(_) | CallTarget::Trap => None,
                 CallTarget::Internal(callee_index) => Some(callee_index),
                 CallTarget::NotCall => {
                     return Err(engine.at(
@@ -6424,17 +6431,20 @@ fn execute_operation(
                         ),
                     )
                 })?;
-            let CallTarget::Float(operation) =
-                engine.call_targets[function_index][block_index][ordinal]
-            else {
-                return Err(engine.at(
+            match engine.call_targets[function_index][block_index][ordinal] {
+                CallTarget::Float(operation) => {
+                    execute_float_call(engine, values, operation, arguments, site)
+                }
+                CallTarget::Trap => {
+                    Err(engine.at(site, SimulationExecutionErrorKindV1::ReachedUnreachable))
+                }
+                CallTarget::NotCall | CallTarget::Internal(_) => Err(engine.at(
                     site,
                     SimulationExecutionErrorKindV1::InternalInvariant(
-                        "non-float call reached non-recursive operation evaluator",
+                        "non-leaf call reached non-recursive operation evaluator",
                     ),
-                ));
-            };
-            execute_float_call(engine, values, operation, arguments, site)
+                )),
+            }
         }
         OperationKind::Alloca {
             element,

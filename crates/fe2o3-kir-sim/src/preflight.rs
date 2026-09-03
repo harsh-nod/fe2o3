@@ -4,10 +4,10 @@ use std::fmt;
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
-    F32MathFunction, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, MemoryElementType,
-    MemoryIntrinsicOperation, Module, Operation, OperationKind, ScalarType, Terminator, Type,
-    UnaryOp, ValueId, VolatileProvenanceContract,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, BinaryOp, BlockId, CastKind,
+    ComparePredicate, Constant, F32MathFunction, Function, FunctionId, FunctionRole, Kernel,
+    LaunchExtent, MemoryElementType, MemoryIntrinsicOperation, Module, Operation, OperationKind,
+    ScalarType, Terminator, Type, UnaryOp, ValueId, VolatileProvenanceContract,
 };
 
 use crate::resident::{
@@ -1665,6 +1665,11 @@ fn scan_operation(
                 reject!(UnsupportedFeatureV1::FloatFunction(function));
             }
         }
+        OperationKind::Call { callee, arguments }
+            if matches!(
+                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                Some(AmdGpuDiagnosticOperation::Trap)
+            ) => {}
         OperationKind::Call { callee, .. } => match functions.get(callee).copied() {
             Some(callee_index)
                 if module.functions[callee_index].role == FunctionRole::InternalHelper =>

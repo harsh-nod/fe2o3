@@ -1424,4 +1424,77 @@ mod tests {
             Err(SimulationBundleErrorV5::StorageMapBindingMismatch)
         ));
     }
+
+    #[test]
+    fn v5_aggregate_map_reuses_the_exact_v2_hostile_layout_boundary() {
+        use crate::SemanticStorageProjectionV2::Field;
+
+        let component = |field, ordinal, slot| {
+            SemanticKirComponentStorageV2::new(
+                vec![Field { index: field }],
+                ordinal,
+                ordinal,
+                SemanticKirComponentRepresentationV2::ScalarValue,
+                slot,
+                None,
+            )
+        };
+        let map = |components| {
+            SemanticAggregateStorageMapV5::new(
+                [0x31; 32],
+                [0x32; 32],
+                123,
+                vec![SemanticKernelStorageV2::new(
+                    0,
+                    0,
+                    0,
+                    16,
+                    8,
+                    vec![SemanticArgumentStorageV2::new(
+                        0,
+                        0,
+                        0,
+                        SemanticArgumentOwnershipV1::ByValue,
+                        SemanticComponentStorageBindingV2::exact(components),
+                    )],
+                )],
+            )
+        };
+        let first = component(0, 0, SemanticKernargSlotV2::new(0, 8, 8));
+        let second = component(1, 1, SemanticKernargSlotV2::new(8, 8, 8));
+        let exact = map(vec![first.clone(), second.clone()]).unwrap();
+        SemanticAggregateStorageMapV5::from_canonical_json_bytes(
+            &exact.to_canonical_json_bytes().unwrap(),
+        )
+        .unwrap();
+
+        let duplicate_path = component(0, 1, SemanticKernargSlotV2::new(8, 8, 8));
+        let overlapping_slot = component(1, 1, SemanticKernargSlotV2::new(4, 4, 4));
+        let unaligned_offset = component(1, 1, SemanticKernargSlotV2::new(4, 8, 8));
+        let out_of_range_slot = component(1, 1, SemanticKernargSlotV2::new(16, 8, 8));
+        for hostile in [
+            vec![first.clone(), duplicate_path],
+            vec![first.clone(), overlapping_slot],
+            vec![first.clone(), unaligned_offset],
+            vec![first.clone(), out_of_range_slot],
+            vec![second, first],
+        ] {
+            assert!(matches!(
+                map(hostile),
+                Err(SimulationBundleErrorV5::InvalidAggregateStorageMap)
+            ));
+        }
+        assert!(matches!(
+            SemanticAggregateStorageMapV5::new([0; 32], [0x32; 32], 123, exact.kernels().to_vec(),),
+            Err(SimulationBundleErrorV5::InvalidAggregateStorageMap)
+        ));
+        assert!(matches!(
+            SemanticAggregateStorageMapV5::new([0x31; 32], [0; 32], 123, exact.kernels().to_vec(),),
+            Err(SimulationBundleErrorV5::InvalidAggregateStorageMap)
+        ));
+        assert!(matches!(
+            SemanticAggregateStorageMapV5::new([0x31; 32], [0x32; 32], 0, exact.kernels().to_vec(),),
+            Err(SimulationBundleErrorV5::InvalidAggregateStorageMap)
+        ));
+    }
 }

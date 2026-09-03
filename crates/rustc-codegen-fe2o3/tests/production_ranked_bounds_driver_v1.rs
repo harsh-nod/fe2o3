@@ -2039,6 +2039,413 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     }
 }
 
+fn execute_aggregate_bundle_v5_through_sim_runtime(
+    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV5,
+    kernel_name: &str,
+    signature: [u8; 32],
+    explicit_kernarg: &[u8],
+    output_pointer_slot: u32,
+    expected: u64,
+) {
+    use fe2o3_runtime::RuntimeBackendV1 as _;
+
+    let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xc2; 32]).unwrap();
+    assert!(!backend.uses_gpu());
+    assert!(!backend.evidence().hardware);
+    assert!(!backend.evidence().performance_prediction);
+    let stream = backend.create_stream_v1(1).unwrap();
+    let allocation = backend
+        .allocate_v1(
+            1,
+            fe2o3_runtime::RuntimeMemoryKindV1::HostVisible,
+            64 * 8,
+            8,
+        )
+        .unwrap();
+    backend
+        .write_allocation_v1(allocation, 0, &[0; 64 * 8])
+        .unwrap();
+    let module = backend.load_module_v1(1, bundle.canonical_bytes()).unwrap();
+    let kernel = backend
+        .resolve_kernel_v1(module, kernel_name, signature)
+        .unwrap();
+    let bindings = [fe2o3_runtime::BackendBindingV1 {
+        region: fe2o3_runtime::BackendMemoryRegionV1 {
+            allocation,
+            access: fe2o3_runtime::RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 64 * 8,
+        },
+        kernarg_byte_offset: output_pointer_slot,
+    }];
+    let submission = backend
+        .submit_v1(fe2o3_runtime::BackendLaunchV1 {
+            stream,
+            kernel,
+            explicit_kernarg,
+            bindings: &bindings,
+            dependencies: &[],
+            geometry: fe2o3_runtime::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        backend
+            .wait_v1(
+                submission,
+                std::time::Instant::now() + std::time::Duration::from_secs(10),
+            )
+            .unwrap(),
+        fe2o3_runtime::BackendPollV1::Succeeded
+    );
+    let mut output = vec![0; 64 * 8];
+    backend
+        .read_allocation_v1(allocation, 0, &mut output)
+        .unwrap();
+    assert!(output.chunks_exact(8).all(|bytes| {
+        u64::from_le_bytes(bytes.try_into().expect("one complete u64 output")) == expected
+    }));
+    backend.release_submission_v1(submission).unwrap();
+    backend.destroy_stream_v1(stream).unwrap();
+    backend.unload_module_v1(module).unwrap();
+    backend.release_allocation_v1(allocation).unwrap();
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
+    use fe2o3_kernel_ir::SemanticStorageProjectionV2::{ArrayElement, Field};
+    use fe2o3_kernel_ir::{
+        ScalarType, SemanticKernargSlotV2, SemanticKirComponentRepresentationV2, Type,
+    };
+
+    let target = ScratchTarget::new();
+    let debug_target = target.path().join("aggregate-v5-debug-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production recursive V5 integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+
+    for feature in ["aggregate_pair_array", "aggregate_nested"] {
+        let bundle_path = target.path().join(format!("{feature}-v5.fe2sim"));
+        let result = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &bundle_path,
+                &target.path().join(format!("{feature}-v5-target")),
+                Some(5),
+                feature,
+            ),
+            "export ordinary attributed Rust recursive aggregate V5 bundle",
+        );
+        assert!(
+            result.status.success()
+                && result.stderr.contains("production KIR V8")
+                && result.stderr.contains("exact same-module KIR V10")
+                && result.stderr.contains("authority false"),
+            "{feature} V5 export failed or overclaimed authority:\n{}",
+            result.stderr
+        );
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV5::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bundle.production_kir_identity().version(), 8);
+        assert_eq!(bundle.target(), "gfx942:xnack-");
+        assert!(!bundle.authenticates_compiler_execution());
+        assert!(!bundle.grants_compiler_authority());
+        assert!(!bundle.grants_hardware_authority());
+        assert!(!bundle.grants_load_authority());
+        assert!(!bundle.grants_launch_authority());
+
+        let storage =
+            fe2o3_kernel_ir::SemanticStorageMapV5::from_canonical_json_bytes(bundle.storage_map())
+                .unwrap();
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV5::from_canonical_json_bytes(
+            bundle.aggregate_storage_map(),
+        )
+        .unwrap();
+        assert_eq!(storage.canonical_kir_version(), 10);
+        assert_eq!(aggregate.canonical_kir_version(), 10);
+        assert_eq!(storage.bundle_subject_identity(), bundle.subject_identity());
+        assert_eq!(
+            aggregate.bundle_subject_identity(),
+            bundle.subject_identity()
+        );
+        let kernel_map = &aggregate.kernels()[0];
+        let aggregate_components = kernel_map.arguments()[0].storage().components().unwrap();
+        let (expected_paths, expected_slots, expected_types, output_slot, mut explicit_kernarg) =
+            match feature {
+                "aggregate_pair_array" => {
+                    let mut bytes = vec![0xa5; 40];
+                    bytes[0..8].copy_from_slice(&0x1122_3344_5566_7788_u64.to_le_bytes());
+                    bytes[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+                    bytes[16..24].fill(0);
+                    bytes[24..32].copy_from_slice(&64_u64.to_le_bytes());
+                    bytes[32..40].copy_from_slice(&3_u64.to_le_bytes());
+                    (
+                        vec![
+                            vec![ArrayElement { index: 0 }],
+                            vec![ArrayElement { index: 1 }],
+                        ],
+                        vec![
+                            SemanticKernargSlotV2::new(0, 8, 8),
+                            SemanticKernargSlotV2::new(8, 8, 8),
+                        ],
+                        vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64)],
+                        16,
+                        bytes,
+                    )
+                }
+                "aggregate_nested" => {
+                    let mut bytes = vec![0xa5; 48];
+                    bytes[0..4].copy_from_slice(&0x1122_3344_u32.to_le_bytes());
+                    bytes[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+                    bytes[16..18].copy_from_slice(&0x1234_u16.to_le_bytes());
+                    bytes[18..20].copy_from_slice(&0x5678_u16.to_le_bytes());
+                    bytes[24..32].fill(0);
+                    bytes[32..40].copy_from_slice(&64_u64.to_le_bytes());
+                    bytes[40..48].copy_from_slice(&3_u64.to_le_bytes());
+                    (
+                        vec![
+                            vec![Field { index: 0 }, Field { index: 0 }],
+                            vec![Field { index: 0 }, Field { index: 1 }],
+                            vec![Field { index: 1 }, ArrayElement { index: 0 }],
+                            vec![Field { index: 1 }, ArrayElement { index: 1 }],
+                        ],
+                        vec![
+                            SemanticKernargSlotV2::new(0, 4, 4),
+                            SemanticKernargSlotV2::new(8, 8, 8),
+                            SemanticKernargSlotV2::new(16, 2, 2),
+                            SemanticKernargSlotV2::new(18, 2, 2),
+                        ],
+                        vec![
+                            Type::Scalar(ScalarType::U32),
+                            Type::Scalar(ScalarType::U64),
+                            Type::Scalar(ScalarType::U16),
+                            Type::Scalar(ScalarType::U16),
+                        ],
+                        24,
+                        bytes,
+                    )
+                }
+                _ => unreachable!(),
+            };
+        assert_eq!(
+            kernel_map.explicit_kernarg_bytes(),
+            explicit_kernarg.len() as u32
+        );
+        assert_eq!(kernel_map.explicit_kernarg_alignment(), 8);
+        assert_eq!(aggregate_components.len(), expected_paths.len());
+        assert_eq!(
+            aggregate_components
+                .iter()
+                .map(|component| component.path().to_vec())
+                .collect::<Vec<_>>(),
+            expected_paths
+        );
+        assert_eq!(
+            aggregate_components
+                .iter()
+                .map(|component| component.value_slot())
+                .collect::<Vec<_>>(),
+            expected_slots
+        );
+        assert!(aggregate_components.iter().all(|component| {
+            component.representation() == SemanticKirComponentRepresentationV2::ScalarValue
+                && component.metadata_slot().is_none()
+        }));
+
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let root = &semantic.functions()[kernel_map.semantic_root() as usize];
+        let abi = &semantic.functions()[kernel_map.semantic_body() as usize];
+        assert!(matches!(
+            abi.abi().adjusted_arguments()[0].mode(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticAbiPassModeV1::Indirect {
+                metadata_attributes: None,
+                on_stack: false,
+                ..
+            }
+        ));
+        let source_type = abi.abi().source_input_types()[0];
+        assert!(matches!(
+            semantic.types()[source_type.index() as usize]
+                .layout()
+                .backend_repr(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticBackendReprV1::Memory { sized: true }
+        ));
+
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
+                bundle.canonical_kir_v10().to_vec(),
+            )
+            .unwrap();
+        let function = &module.functions[kernel_map.kir_function_ordinal() as usize];
+        let body = function.body.as_ref().unwrap();
+        assert_eq!(
+            &function.signature.parameters[..expected_types.len()],
+            expected_types
+        );
+        assert_eq!(
+            function.signature.parameters.len(),
+            expected_types.len() + 2
+        );
+        for component in aggregate_components {
+            let ordinal = component.kir_parameter_ordinal() as usize;
+            assert_eq!(
+                body.parameters[ordinal].0,
+                component.kir_value_ordinal(),
+                "the V5 map must bind the exact V10 value, not only its scalar type"
+            );
+        }
+        let output_component = kernel_map.arguments()[1].storage().components().unwrap()[0].clone();
+        assert_eq!(output_component.value_slot().byte_offset(), output_slot);
+        assert_eq!(
+            output_component.representation(),
+            SemanticKirComponentRepresentationV2::RegionSlice
+        );
+        assert_eq!(
+            output_component.metadata_slot().unwrap().byte_offset(),
+            output_slot + 8
+        );
+        assert_eq!(
+            kernel_map.arguments()[2].storage().components().unwrap()[0]
+                .value_slot()
+                .byte_offset(),
+            output_slot + 16
+        );
+
+        let request_path = target.path().join(format!("{feature}-v5-request.json"));
+        let arguments = match feature {
+            "aggregate_pair_array" => json!([
+                {"kind": "scalar", "type": "u64", "bits": "0x1122334455667788"},
+                {"kind": "scalar", "type": "u64", "bits": "0x0102030405060708"},
+                {
+                    "kind": "buffer",
+                    "element": "u64",
+                    "access": "read_write",
+                    "alignment": 8,
+                    "bytes": format!("0x{}", "00".repeat(64 * 8)),
+                },
+                {"kind": "scalar", "type": "u64", "bits": "0x0000000000000003"},
+            ]),
+            "aggregate_nested" => json!([
+                {"kind": "scalar", "type": "u32", "bits": "0x11223344"},
+                {"kind": "scalar", "type": "u64", "bits": "0x0102030405060708"},
+                {"kind": "scalar", "type": "u16", "bits": "0x1234"},
+                {"kind": "scalar", "type": "u16", "bits": "0x5678"},
+                {
+                    "kind": "buffer",
+                    "element": "u64",
+                    "access": "read_write",
+                    "alignment": 8,
+                    "bytes": format!("0x{}", "00".repeat(64 * 8)),
+                },
+                {"kind": "scalar", "type": "u64", "bits": "0x0000000000000003"},
+            ]),
+            _ => unreachable!(),
+        };
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec(&json!({
+                "schema": "fe2o3-simulation-request-v1",
+                "kernel": feature,
+                "grid": [64, 1, 1],
+                "workgroup": [64, 1, 1],
+                "arguments": arguments,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut simulator = Command::new(debug_target.join("debug/fe2o3-debug"))
+            .args(["sim", "--bundle-v5"])
+            .arg(&bundle_path)
+            .arg("--request")
+            .arg(&request_path)
+            .args(["--protocol", "jsonl"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start debugger simulator on compiler-produced recursive V5 bundle");
+        simulator
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"{\"operation\":\"continue\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"max_events\":1000000}\n")
+            .unwrap();
+        let simulated = simulator.wait_with_output().unwrap();
+        assert!(
+            simulated.status.success(),
+            "{feature} V5 debugger simulation failed:\n{}",
+            String::from_utf8_lossy(&simulated.stderr)
+        );
+        let response: Value = serde_json::from_slice(&simulated.stdout).unwrap();
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["result"]["stop"]["reason"], "completed");
+        assert_eq!(response["session"]["simulated"], true);
+        assert_eq!(response["session"]["hardware_observed"], false);
+        assert_eq!(response["session"]["performance_prediction"], false);
+
+        // The only pointer bytes are the output binding. Aggregate leaves are
+        // separate scalars, and the 0xa5 physical padding remains unread.
+        explicit_kernarg[output_slot as usize..output_slot as usize + 8].fill(0);
+        execute_aggregate_bundle_v5_through_sim_runtime(
+            &bundle,
+            feature,
+            *root.abi().identity().as_bytes(),
+            &explicit_kernarg,
+            output_slot,
+            0x0102_0304_0506_0708,
+        );
+    }
+
+    for (feature, typed_reason) in [
+        ("aggregate_enum", "variant-aware packing evidence"),
+        ("aggregate_pointer", "contains a pointer or reference"),
+        ("aggregate_drop", "Drop requiring drop glue"),
+    ] {
+        let result = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &target.path().join(format!("{feature}-v5.fe2sim")),
+                &target.path().join(format!("{feature}-v5-target")),
+                Some(5),
+                feature,
+            ),
+            "reject unsupported ordinary attributed Rust aggregate ABI in Bundle V5",
+        );
+        assert!(
+            !result.status.success() && result.stderr.contains(typed_reason),
+            "{feature} did not fail at the V5 typed ABI boundary:\n{}",
+            result.stderr
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1() {
