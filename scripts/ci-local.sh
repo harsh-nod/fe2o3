@@ -1161,6 +1161,8 @@ run_rustc_trampoline_tests() {
 run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
+  run_step runtime-parity-report-tests \
+    python3 scripts/tests/test_runtime_parity_report.py
   run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
   run_step parity-snapshot-tests bash scripts/tests/run-parity-snapshot.sh
   run_step parity-oci-executor-tests \
