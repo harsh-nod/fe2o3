@@ -599,14 +599,16 @@ fn pc_relation_identity(
         .map_err(|_| PcSourceIsaErrorV1::RelationAdmission)
 }
 
-fn target_name(target: SourceIsaCharacteristicTargetProfileV1) -> &'static str {
+pub(crate) fn target_name(target: SourceIsaCharacteristicTargetProfileV1) -> &'static str {
     match target {
         SourceIsaCharacteristicTargetProfileV1::Gfx942 => "gfx942:xnack-",
         SourceIsaCharacteristicTargetProfileV1::Gfx950 => "gfx950:xnack-",
     }
 }
 
-fn scan_summary(collection: &SourceIsaCharacteristicCollectionV1) -> PcSourceIsaScanSummaryV1 {
+pub(crate) fn scan_summary(
+    collection: &SourceIsaCharacteristicCollectionV1,
+) -> PcSourceIsaScanSummaryV1 {
     let scan = collection.scan();
     let (availability, reason_code, reason) = match scan.state() {
         SourceIsaCharacteristicScanStateV1::Complete => {
@@ -690,7 +692,7 @@ fn scan_summary(collection: &SourceIsaCharacteristicCollectionV1) -> PcSourceIsa
     }
 }
 
-fn project_item(
+pub(crate) fn project_item(
     target: &SourceIsaCharacteristicTargetV1,
     correlation_occurrence_identity: CaptureIdentityV1,
     item_identity: CaptureIdentityV1,

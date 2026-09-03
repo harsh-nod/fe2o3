@@ -1191,7 +1191,8 @@ fn bind_code_objects(
             return Err(DecodedAttErrorV1::InvalidCodeObject);
         }
         let selector = derive_selector(export, value.load_id)?;
-        let identity = derive_code_object_identity(selector, value.artifact, value.load_size)?;
+        let identity =
+            decoded_att_code_object_identity_v1(selector, value.artifact, value.load_size)?;
         prior_load_id = Some(value.load_id);
         mapping.push((value.load_id, identity));
         output.push(DecodedAttCodeObjectV1 {
@@ -1874,7 +1875,11 @@ fn validate_output_code_objects(
         if value.origin != DecodedAttRecordOriginV1::ExternalDecoderDeclared
             || value.load_size == 0
             || value.identity
-                != derive_code_object_identity(value.selector, value.artifact, value.load_size)?
+                != decoded_att_code_object_identity_v1(
+                    value.selector,
+                    value.artifact,
+                    value.load_size,
+                )?
         {
             return Err(DecodedAttErrorV1::InvalidCodeObject);
         }
@@ -1990,7 +1995,8 @@ fn derive_selector(
     )
 }
 
-fn derive_code_object_identity(
+/// Recomputes the durable, export-scoped identity of one decoded ATT code object.
+pub fn decoded_att_code_object_identity_v1(
     selector: CaptureIdentityV1,
     artifact: ContentIdentityRecordV1,
     load_size: u64,

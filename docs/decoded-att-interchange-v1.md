@@ -73,13 +73,38 @@ nonzero request IDs, a request-attempt budget, content-bound cursors, and small
 typed terminal errors for oversized input or output. It exposes no filesystem,
 decoder, profiler, attach, launch, pause, or execution operation.
 
+An additive, separately bound correlation service is also available:
+
+```text
+fe2o3-profiler-service decoded-att-source-isa-jsonl
+```
+
+Its `open` request supplies canonical Decoded ATT V1 bytes, one exact
+export-scoped code-object identity, the exact HSACO bytes claimed by that code
+object, and one canonical Characteristic V1 archive. Admission recomputes the
+code-object and artifact identities, requires the decoded load size to equal
+the HSACO `PT_LOAD` memory span, and uses the production metadata/descriptor/
+ELF-symbol binder before treating metadata order as a kernel ordinal. A decoded
+ELF virtual PC must fall in exactly one authenticated kernel entry symbol. The
+response publishes only an opaque symbol identity and symbol-relative PC, never
+the symbol name or address.
+
+Every matching Characteristic interval occurrence is independently paged with
+an explicit exact-relation kind. Source, MIR, neutral KIR, target KIR, LLVM, and
+ISA coordinates are present only when the exact archive contains them. Each
+item retains the decoded ATT loss/completeness and raw-decode relation. Native
+PCs, unknown records, other code objects, PCs outside a symbol, and overlapping
+symbols remain typed unavailable. Cursors bind all three supplied inputs and
+cannot cross an artifact or Characteristic substitution.
+
 ## Remaining Boundaries
 
 - No raw ATT decoder or exporter is shipped in this slice.
 - No beta ATT collection or live decoded capture was run.
 - Library/exporter identities do not prove process custody or authenticity.
-- No exact artifact-to-Characteristic relation is admitted here, so source,
-  MIR, KIR, LLVM, and ISA correlation is typed unavailable.
+- Source/MIR/KIR/LLVM/ISA correlation requires the separate exact supplied
+  decoded-ATT/HSACO/Characteristic binding. The canonical archive is
+  self-claimed evidence; it does not authenticate its producer.
 - DEBUG callback payloads are unsupported because the pinned header defines no
   public payload ABI for them.
 - Realtime pairs are declarations from the decoder; they do not establish a

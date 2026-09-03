@@ -188,9 +188,16 @@ agents. The strict canonical protocol is revisioned, rejects zero/replayed
 request IDs, charges malformed attempts, terminates on oversized records or
 responses with a small typed error, and grants no path, decoder, collection,
 attach, or execution authority. Empty callback classes are unavailable without
-claiming decoder absence or complete capture. Source/MIR/KIR/LLVM/ISA joins
-remain unavailable until an independently admitted exact artifact-to-
-characteristic relation is supplied.
+claiming decoder absence or complete capture.
+
+`fe2o3-profiler-service decoded-att-source-isa-jsonl` admits that independent
+relation from exact supplied Decoded ATT V1, selected code-object identity,
+HSACO bytes, and Characteristic V1 bytes. It authenticates the artifact digest,
+load span, metadata, kernel descriptor, and ELF symbol before mapping an ELF PC
+to a symbol-relative PC and every matching source/MIR/KIR/LLVM/ISA interval.
+Items retain ATT loss/completeness and raw-decode truth. Symbol names and
+addresses remain redacted, native PCs remain typed unavailable, and the
+self-claimed decoder and Characteristic inputs gain no producer authenticity.
 
 `PcSampleCodeObjectQuerySessionV1` optionally opens Capture V3 together with
 its V1 code-object relation sidecar. Opening replays exact relation admission
