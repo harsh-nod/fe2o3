@@ -19,7 +19,8 @@ use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, UintTy};
+use rustc_middle::mir::{BinOp, Operand, Rvalue, StatementKind, TerminatorKind, UnwindAction};
+use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, TypingEnv, UintTy};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
 
@@ -2086,6 +2087,218 @@ pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
         && matches!(signature.output().kind(), TyKind::Float(FloatTy::F32))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedSafeCoreF32IsFiniteContractV1<'a> {
+    item_instance: bool,
+    core_lang_crate: bool,
+    crate_name: &'a str,
+    generic_arguments: usize,
+    mir_available: bool,
+    canonical_path: &'a str,
+    safe_signature: bool,
+    rust_abi: bool,
+    variadic: bool,
+    input_f32: bool,
+    output_bool: bool,
+    exact_reviewed_body: bool,
+}
+
+fn authenticate_reviewed_safe_core_f32_is_finite_contract_v1(
+    contract: ReviewedSafeCoreF32IsFiniteContractV1<'_>,
+) -> bool {
+    contract.item_instance
+        && contract.core_lang_crate
+        && contract.crate_name == "core"
+        && contract.generic_arguments == 0
+        && contract.mir_available
+        && contract.canonical_path == "core::f32::<impl f32>::is_finite"
+        && contract.safe_signature
+        && contract.rust_abi
+        && !contract.variadic
+        && contract.input_f32
+        && contract.output_bool
+        && contract.exact_reviewed_body
+}
+
+/// Recognizes only the reviewed pinned-core `f32::is_finite` implementation.
+/// Its exact two-block MIR remains in the call graph, so the nested `f32::abs`
+/// and `core::intrinsics::fabs::<f32>` chain is still independently checked.
+pub(crate) fn authenticate_reviewed_safe_core_f32_is_finite_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let Some(core_lang_item) = tcx.lang_items().sized_trait() else {
+        return false;
+    };
+    let crate_name = tcx.crate_name(instance.def_id().krate);
+    let canonical_path = tcx.def_path_str(instance.def_id());
+    let mir_available = tcx.is_mir_available(instance.def_id());
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let input_f32 = matches!(signature.inputs(), [input] if matches!(input.kind(), TyKind::Float(FloatTy::F32)));
+    let output_bool = matches!(signature.output().kind(), TyKind::Bool);
+    let exact_reviewed_body =
+        mir_available && reviewed_safe_core_f32_is_finite_body_v1(tcx, instance);
+    authenticate_reviewed_safe_core_f32_is_finite_contract_v1(
+        ReviewedSafeCoreF32IsFiniteContractV1 {
+            item_instance: matches!(instance.def, InstanceKind::Item(_)),
+            core_lang_crate: instance.def_id().krate == core_lang_item.krate,
+            crate_name: crate_name.as_str(),
+            generic_arguments: instance.args.len(),
+            mir_available,
+            canonical_path: &canonical_path,
+            safe_signature: signature.safety == Safety::Safe,
+            rust_abi: signature.abi == ExternAbi::Rust,
+            variadic: signature.c_variadic,
+            input_f32,
+            output_bool,
+            exact_reviewed_body,
+        },
+    )
+}
+
+fn reviewed_safe_core_f32_is_finite_body_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let body = tcx.instance_mir(instance.def);
+    if body.arg_count != 1 || body.local_decls.len() != 3 || body.basic_blocks.len() != 2 {
+        return false;
+    }
+    let mut locals = body.local_decls.iter();
+    let Some(result) = locals.next() else {
+        return false;
+    };
+    let Some(input) = locals.next() else {
+        return false;
+    };
+    let Some(absolute) = locals.next() else {
+        return false;
+    };
+    if !matches!(result.ty.kind(), TyKind::Bool)
+        || !matches!(input.ty.kind(), TyKind::Float(FloatTy::F32))
+        || !matches!(absolute.ty.kind(), TyKind::Float(FloatTy::F32))
+    {
+        return false;
+    }
+
+    let mut scopes = body.source_scopes.iter();
+    let Some(root_scope) = scopes.next() else {
+        return false;
+    };
+    let Some(abs_scope) = scopes.next() else {
+        return false;
+    };
+    if scopes.next().is_some() || root_scope.inlined.is_some() {
+        return false;
+    }
+    let Some((inlined_abs, _)) = abs_scope.inlined else {
+        return false;
+    };
+    if !authenticate_reviewed_safe_core_fabs_f32_helper_v1(tcx, inlined_abs) {
+        return false;
+    }
+
+    let mut blocks = body.basic_blocks.iter();
+    let Some(entry) = blocks.next() else {
+        return false;
+    };
+    if !matches!(
+        entry.statements.as_slice(),
+        [statement]
+            if matches!(statement.kind, StatementKind::StorageLive(local) if local.as_usize() == 2)
+    ) {
+        return false;
+    }
+    let Some(entry_terminator) = &entry.terminator else {
+        return false;
+    };
+    let TerminatorKind::Call {
+        func,
+        args,
+        destination,
+        target,
+        unwind,
+        ..
+    } = &entry_terminator.kind
+    else {
+        return false;
+    };
+    let Some(target) = target else {
+        return false;
+    };
+    if target.index() != 1
+        || !matches!(unwind, UnwindAction::Unreachable)
+        || args.len() != 1
+        || !matches!(&args[0].node, Operand::Move(place) if place.local.as_usize() == 1 && place.projection.is_empty())
+        || destination.local.as_usize() != 2
+        || !destination.projection.is_empty()
+    {
+        return false;
+    }
+    let Operand::Constant(function) = func else {
+        return false;
+    };
+    let TyKind::FnDef(def_id, arguments) = function.const_.ty().kind() else {
+        return false;
+    };
+    let Ok(Some(fabs)) =
+        Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, arguments)
+    else {
+        return false;
+    };
+    if !matches!(
+        crate::production_rustc_intrinsic_v1::classify(tcx, fabs),
+        Ok(Some(classification))
+            if classification.operation
+                == crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1::FabsF32
+    ) {
+        return false;
+    }
+
+    let Some(comparison) = blocks.next() else {
+        return false;
+    };
+    let [statement, storage_dead] = comparison.statements.as_slice() else {
+        return false;
+    };
+    if !matches!(storage_dead.kind, StatementKind::StorageDead(local) if local.as_usize() == 2) {
+        return false;
+    }
+    let StatementKind::Assign(assignment) = &statement.kind else {
+        return false;
+    };
+    let (destination, rvalue) = &**assignment;
+    if destination.local.as_usize() != 0 || !destination.projection.is_empty() {
+        return false;
+    }
+    let Rvalue::BinaryOp(BinOp::Lt, operands) = rvalue else {
+        return false;
+    };
+    let (absolute, infinity) = &**operands;
+    if !matches!(absolute, Operand::Move(place) if place.local.as_usize() == 2 && place.projection.is_empty())
+    {
+        return false;
+    }
+    let Operand::Constant(infinity) = infinity else {
+        return false;
+    };
+    if !matches!(infinity.const_.ty().kind(), TyKind::Float(FloatTy::F32))
+        || infinity
+            .const_
+            .try_eval_bits(tcx, TypingEnv::fully_monomorphized())
+            != Some(u128::from(f32::INFINITY.to_bits()))
+    {
+        return false;
+    }
+    matches!(
+        comparison.terminator.as_ref().map(|term| &term.kind),
+        Some(TerminatorKind::Return)
+    )
+}
+
 fn reviewed_provider_semantic_definition_from_source_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
@@ -2648,11 +2861,13 @@ mod tests {
 
     use super::{
         CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
-        ReviewedProviderSemanticDefinitionV1, TrustedAmdGpuDiagnosticOperation,
-        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedHalfOperation,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
-        exact_provider_compiler_definition_path_v1, pinned_core_semantic_terminal_identity_v1,
+        ReviewedProviderSemanticDefinitionV1, ReviewedSafeCoreF32IsFiniteContractV1,
+        TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+        TrustedHalfOperation, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+        authenticate_reviewed_safe_core_f32_is_finite_contract_v1,
+        canonical_compiler_definition_path, exact_provider_compiler_definition_path_v1,
+        pinned_core_semantic_terminal_identity_v1,
         reviewed_provider_source_closure_from_definition,
         reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
         safe_execution_compiler_definition_path, safe_execution_provider_bound_item,
@@ -2662,6 +2877,83 @@ mod tests {
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
     use rustc_span::{SourceFileHash, SourceFileHashAlgorithm};
+
+    #[test]
+    fn safe_core_f32_is_finite_contract_is_exact_and_closed() {
+        let reviewed = ReviewedSafeCoreF32IsFiniteContractV1 {
+            item_instance: true,
+            core_lang_crate: true,
+            crate_name: "core",
+            generic_arguments: 0,
+            mir_available: true,
+            canonical_path: "core::f32::<impl f32>::is_finite",
+            safe_signature: true,
+            rust_abi: true,
+            variadic: false,
+            input_f32: true,
+            output_bool: true,
+            exact_reviewed_body: true,
+        };
+        assert!(authenticate_reviewed_safe_core_f32_is_finite_contract_v1(
+            reviewed
+        ));
+
+        for hostile in [
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                canonical_path: "core::f32::<impl f32>::is_finite_near",
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                core_lang_crate: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                crate_name: "user_core",
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                item_instance: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                generic_arguments: 1,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                mir_available: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                safe_signature: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                rust_abi: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                variadic: true,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                input_f32: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                output_bool: false,
+                ..reviewed
+            },
+            ReviewedSafeCoreF32IsFiniteContractV1 {
+                exact_reviewed_body: false,
+                ..reviewed
+            },
+        ] {
+            assert!(
+                !authenticate_reviewed_safe_core_f32_is_finite_contract_v1(hostile),
+                "hostile near-name/provider/kind/generic/body/ABI/type mutation was admitted: {hostile:?}",
+            );
+        }
+    }
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 

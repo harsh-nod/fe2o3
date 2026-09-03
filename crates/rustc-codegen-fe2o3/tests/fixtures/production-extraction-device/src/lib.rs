@@ -40,6 +40,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-two-output-schedule",
     feature = "scalar-transmute",
     feature = "fabs-f32",
+    feature = "is-finite-fabs-f32",
 )))]
 #[kernel(typed)]
 pub fn fill(mut output: DisjointSlice<u32>) {
@@ -67,6 +68,18 @@ pub fn fabs_f32(value: f32, mut output: DisjointSlice<f32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = value.abs();
+    }
+}
+
+#[cfg(feature = "is-finite-fabs-f32")]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn is_finite_fabs_f32(value: f32, mut output: DisjointSlice<f32>) {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = if value.is_finite() { value.abs() } else { 0.0 };
     }
 }
 

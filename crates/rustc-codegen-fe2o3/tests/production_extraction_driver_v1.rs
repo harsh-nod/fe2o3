@@ -245,6 +245,39 @@ fn rustc_fabs_f32_reaches_exact_llvm_intrinsic() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn exact_core_f32_is_finite_wrapper_reaches_fabs_and_float_compare() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("is-finite-fabs-f32.ll");
+    let output = run_llvm_extraction_command(&target, "is-finite-fabs-f32", &llvm_output);
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "exact core f32::is_finite -> f32::abs -> fabs::<f32> extraction failed:\n{stderr}"
+    );
+    let llvm = std::fs::read_to_string(&llvm_output).expect("read is-finite/fabs LLVM observation");
+    assert!(
+        llvm.contains("define amdgpu_kernel void @is_finite_fabs_f32(")
+            && llvm.contains("declare float @llvm.fabs.f32(float)")
+            && llvm.contains("call float @llvm.fabs.f32(float")
+            && llvm.contains("fcmp olt float"),
+        "is-finite/fabs extraction omitted the exact reviewed chain:\n{llvm}",
+    );
+    assert!(!llvm.contains("@llvm.fabs.f64"));
+    for forbidden in [
+        "cannot authenticate the absence of user-provided unsafe blocks",
+        "unsupported rustc compiler intrinsic",
+        "semantic importer rejected complete semantic MIR",
+        "semantic importer rejected semantic body construction",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "exact core f32::is_finite chain entered forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn core_atomic_rmw_set_reaches_complete_semantic_import() {
     let target = ScratchTarget::new();
     let output = run_extraction_command(&target, Some("atomic-rmw"), true);
