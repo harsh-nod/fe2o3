@@ -300,6 +300,7 @@ fn hostile_stopped_queue_envelopes_fail_closed() {
     );
 
     for reason in [
+        LiveGpuStoppedQueueUnavailableReasonV3::TargetAddressNotRepresentable,
         LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied,
         LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial,
         LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted,

@@ -600,23 +600,32 @@ aligned zero event-reason word so a non-empty control-stack copy cannot
 overwrite event state. The same exact 40-byte header is read back from the
 executable-GTT BO and the first CPU shadow page for each XCC.
 No mapping address, pointer, fd, event handle, or MMIO capability is public.
+An armed unpublished custody guard zeroes and unmaps the separate payload page
+on every failure after installation and until immediately before the native
+`CREATE_QUEUE` call. The guard disarms at that exact boundary because an
+ambiguous native result may have published the header payload pointer and then
+requires process teardown.
 
 Explicit cleanup first requires every completion batch recycled, then confirms
 queue DESTROY and event DESTROY, immediately zeroes, protects, and unmaps the
 separate event-payload page, then performs runtime disable, doorbell unmap, and
 complete CWSR/queue-resource/completion-arena unmap and FREE. The process-global
-guard remains held through resource return. Drop performs none of those native
-operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
-live on the selected MI300X while publishing zero packets and performing zero
-MMIO stores. It also forks to confirm the doorbell, all 24 shadow VMAs, and the
-separate event-payload VMA are absent in the child. It accepts one unique ID or
+guard remains held through resource return. Published-owner `Drop` performs
+none of those native operations; only the armed, unpublished payload guard has
+the explicit zero/protect/unmap behavior above. The isolated
+`kfd-compute-aql-queue` example confirms this lifecycle live on the selected
+MI300X while publishing zero packets and performing zero MMIO stores. It also
+forks to confirm the doorbell, all 24 shadow VMAs, and the separate event-payload
+VMA are absent in the child. It accepts one unique ID or
 `--all`; the latter uses a
 separate process and queue lifecycle for every topology GPU.
 
 Unpublished install failure also explicitly zeroes and unmaps the payload page.
 Because published payload cleanup occurs at the event-destroy boundary, a later
 unrelated runtime, doorbell, BO, callback, or resource-release failure cannot
-strand that standalone writable mapping.
+strand that standalone writable mapping. Once event destruction succeeds, any
+payload zero, protection, or unmap failure aborts the process; the consuming
+transition never returns while its only mapping owner may remain live.
 
 A debugger-enabled target can consume `KfdTargetRuntimeDebugTokenV1` into the
 same native queue session. The token's admitted control descriptor remains

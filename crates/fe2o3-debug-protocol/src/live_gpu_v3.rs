@@ -1392,7 +1392,8 @@ impl LiveGpuStoppedQueueEnvelopeV3 {
                     } => reason == context_reason,
                     LiveGpuStoppedQueueContextSaveV3::Available { .. } => matches!(
                         reason,
-                        LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied
+                        LiveGpuStoppedQueueUnavailableReasonV3::TargetAddressNotRepresentable
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied
                             | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial
                             | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted
                             | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadDenied

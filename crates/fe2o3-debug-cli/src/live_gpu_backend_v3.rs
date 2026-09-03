@@ -1217,6 +1217,7 @@ mod tests {
             ordinal: 3,
         };
         for reason in [
+            KfdStoppedUnavailableReasonV1::TargetAddressNotRepresentable,
             KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied,
             KfdStoppedUnavailableReasonV1::TargetHeaderReadPartial,
             KfdStoppedUnavailableReasonV1::ContextHeaderBindingSubstituted,

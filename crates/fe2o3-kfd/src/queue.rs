@@ -84,7 +84,7 @@ pub use live::{
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r22-v1\n",
-    "compute_session_sha256=51d61a2f358440d4a1a5f4769d102372269f7915ee10937f3d09f0e6d5b4bf48\n",
+    "compute_session_sha256=2df22ab1f0bf49e270d4dc332e490a9ce760bec04fccc0676658dd455ec4e47a\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -106,7 +106,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "c5a5a0a2ee7b456d8166bba20c46c084933e6270db05df87442acb737c49ea53";
+    "6fffa5f63613e654e22cc0ef473f3fcd8035f79bd3f99c6555f649b420f2a6ee";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -327,6 +327,17 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
     }
 
     fn create(&mut self, key: QueueKeyV1) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.create_at_native_boundary(key, || {})
+    }
+
+    fn create_at_native_boundary<F>(
+        &mut self,
+        key: QueueKeyV1,
+        before_native_create: F,
+    ) -> Result<(), NativeQueueAdapterErrorV1>
+    where
+        F: FnOnce(),
+    {
         self.prepare_operation()?;
         let view = self.resource(key)?.view;
         let gpu_id = view.plan.current_device.correlation().kfd_gpu_id();
@@ -338,6 +349,7 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             view.priority,
         );
         self.begin(QueueTransitionV1::BeginCreate { queue: key })?;
+        before_native_create();
         let outcome = self.backend.create(args);
         let queue_id_field = queue_id_field(outcome.value.queue_id);
         let mut status = outcome.status;

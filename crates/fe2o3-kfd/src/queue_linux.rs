@@ -907,6 +907,10 @@ pub(crate) struct LinuxCwsrShadowPagesV1 {
     active: bool,
 }
 
+pub(crate) struct LinuxUnpublishedCwsrShadowPagesV1 {
+    shadows: Option<LinuxCwsrShadowPagesV1>,
+}
+
 pub(crate) struct LinuxCwsrShadowsAfterEventDestroyedV1 {
     shadows: LinuxCwsrShadowPagesV1,
 }
@@ -920,7 +924,7 @@ impl LinuxCwsrShadowPagesV1 {
     pub(crate) fn install(
         plan: CwsrShadowPlanV1,
         event: &LinuxQueueExceptionEventV1,
-    ) -> Result<Self, LinuxDoorbellErrorV1> {
+    ) -> Result<LinuxUnpublishedCwsrShadowPagesV1, LinuxDoorbellErrorV1> {
         use crate::queue::submit::{
             CWSR_HEADER_BYTES, GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_XCC_COUNT_V1,
             gfx942_cwsr_header_bytes,
@@ -1041,7 +1045,9 @@ impl LinuxCwsrShadowPagesV1 {
             payload_page_active: true,
             active: true,
         };
-        admit_installed_cwsr_shadows(owner)
+        admit_installed_cwsr_shadows(owner).map(|shadows| LinuxUnpublishedCwsrShadowPagesV1 {
+            shadows: Some(shadows),
+        })
     }
 
     /// Restores write access required by KFD's documented suspend operation.
@@ -1179,7 +1185,11 @@ impl LinuxCwsrShadowPagesV1 {
             return Err(LinuxDoorbellErrorV1::Shadow("destroyed event substitution"));
         }
         self.active = false;
-        self.release_payload_page()?;
+        if self.release_payload_page().is_err() {
+            // The event is already destroyed and `self` is consumed. Returning
+            // would discard the only owner of a possibly mapped payload page.
+            std::process::abort();
+        }
         Ok(LinuxCwsrShadowsAfterEventDestroyedV1 { shadows: self })
     }
 
@@ -1265,6 +1275,31 @@ impl LinuxCwsrShadowsAfterEventDestroyedV1 {
             shadows: self.shadows,
             runtime,
         })
+    }
+}
+
+impl LinuxUnpublishedCwsrShadowPagesV1 {
+    pub(crate) fn shadows(&self) -> &LinuxCwsrShadowPagesV1 {
+        self.shadows
+            .as_ref()
+            .expect("unpublished CWSR shadow custody is armed")
+    }
+
+    pub(crate) fn publish_for_native_queue_creation(mut self) -> LinuxCwsrShadowPagesV1 {
+        self.shadows
+            .take()
+            .expect("unpublished CWSR shadow custody is armed")
+    }
+}
+
+impl Drop for LinuxUnpublishedCwsrShadowPagesV1 {
+    fn drop(&mut self) {
+        let Some(mut shadows) = self.shadows.take() else {
+            return;
+        };
+        if shadows.release_payload_page().is_err() {
+            std::process::abort();
+        }
     }
 }
 
@@ -1897,6 +1932,64 @@ mod tests {
             })
             .unwrap();
         ready.complete().unwrap();
+    }
+
+    #[test]
+    fn unpublished_custody_unmaps_payload_on_early_return() {
+        let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+        let payload_page = shadows.payload_page;
+        drop(LinuxUnpublishedCwsrShadowPagesV1 {
+            shadows: Some(shadows),
+        });
+        assert_mapping_absent(payload_page);
+    }
+
+    #[test]
+    fn unpublished_custody_cleanup_failure_is_process_terminal() {
+        const CHILD_ENV: &str = "FE2O3_TEST_UNPUBLISHED_CWSR_PAYLOAD_RELEASE_ABORT";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let (mut shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+            shadows.page_bytes = 0;
+            drop(LinuxUnpublishedCwsrShadowPagesV1 {
+                shadows: Some(shadows),
+            });
+            panic!("unpublished payload cleanup failure returned instead of terminating");
+        }
+
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("queue_linux::tests::unpublished_custody_cleanup_failure_is_process_terminal")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGABRT));
+    }
+
+    #[test]
+    fn payload_release_failure_after_event_destroy_is_process_terminal() {
+        const CHILD_ENV: &str = "FE2O3_TEST_CWSR_PAYLOAD_RELEASE_ABORT";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let (mut shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+            let binding = shadows.binding;
+            // A zero-length mprotect/munmap request cannot complete release of
+            // the retained mapping. The production transition must abort
+            // rather than return after consuming its only owner.
+            shadows.page_bytes = 0;
+            let _ = shadows.after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding });
+            panic!("payload cleanup failure returned instead of terminating");
+        }
+
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("queue_linux::tests::payload_release_failure_after_event_destroy_is_process_terminal")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGABRT));
     }
 
     #[test]

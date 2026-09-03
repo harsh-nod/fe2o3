@@ -44,7 +44,7 @@ pub const KFD_STOPPED_STATE_MANIFEST_V1: &str = concat!(
     "capture=direct-kfd-queue-and-device-snapshot-before,8-bounded-40-byte-process-vm-header-reads,bounded-empty-range-cursors,header-bounded-control-stack-and-wave-state-adjacent-double-read,header-reread,direct-kfd-queue-and-device-snapshot-after,exact-queue-device-binding-substitution-check\n",
     "gfx942=target-version:90402,xcc-count:8,save-bytes-per-xcc:0x1621000,debug-bytes:0x5f000\n",
     "observed=queue-exception-mask,ring-shape,queue-to-save-area-size,gfx-target,xcc-count,kfd-copied-header-and-control-stack,header-ranged-wave-state-opaque-bytes\n",
-    "identity=caller-scoped-domain-separated-sha256,local-session-state-and-exact-queue-device-header-range-content-binding,opaque-correlation-not-authentication-or-secrecy\n",
+    "identity=caller-scoped-domain-separated-sha256,local-session-state-and-exact-queue-including-exception-status-device-header-range-content-binding,opaque-correlation-not-authentication-or-secrecy\n",
     "redaction=no-pid,gpu-id,queue-id,event-id,payload-address,save-address,ring-address,pointer,fd,handle,pc-or-register-value\n",
     "bounds=default-opaque-checkpoint:33554432,hard-opaque-checkpoint:185630720,segments:16,complete-or-explicit-truncated-no-partial-content-claim\n",
     "privacy=opaque-checkpoint-bytes-private-redacted-debug-zeroized-on-drop,agent-projection-content-identity-and-bounds-only\n",
@@ -56,7 +56,7 @@ pub const KFD_STOPPED_STATE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`KFD_STOPPED_STATE_MANIFEST_V1`].
 pub const KFD_STOPPED_STATE_MANIFEST_SHA256_V1: &str =
-    "1e378593f7be201411298787ee8e5de4b6af38449230d286b190292a753eab74";
+    "51b218b8a14f9d36b9a71c4e42a6e9499772abe6894697bc54a56d474b1aa07d";
 
 /// Caller-selected correlation scope for redacted stopped-state identities.
 ///
@@ -915,6 +915,7 @@ fn queue_identity(
     queue: NativeQueueBindingV1,
 ) -> KfdStoppedLogicalIdentityV1 {
     let mut hash = hash_start(b"queue", scope);
+    hash_u64(&mut hash, queue.exception_status.bits());
     hash_u32(&mut hash, queue.queue_id);
     hash_u32(&mut hash, queue.gpu_id);
     hash_u32(&mut hash, queue.ring_size);
@@ -1790,6 +1791,17 @@ mod tests {
             DEFAULT_KFD_OPAQUE_CHECKPOINT_BYTES_V1,
         );
 
+        let mut changed_exception = queue();
+        changed_exception.exception_status = KfdDebugExceptionMaskV1::ALL;
+        let mut exception_reader = reader();
+        set_checkpoint_ranges(&mut exception_reader);
+        let exception_changed = snapshot_with_bindings(
+            &mut exception_reader,
+            changed_exception,
+            device(),
+            DEFAULT_KFD_OPAQUE_CHECKPOINT_BYTES_V1,
+        );
+
         let mut changed_device = device();
         changed_device.identity_words[0] += 1;
         let mut device_reader = reader();
@@ -1810,10 +1822,14 @@ mod tests {
             };
         let (first_checkpoint, first_content) = checkpoint_identities(&first);
         let (queue_checkpoint, queue_content) = checkpoint_identities(&queue_changed);
+        let (exception_checkpoint, exception_content) = checkpoint_identities(&exception_changed);
         let (device_checkpoint, device_content) = checkpoint_identities(&device_changed);
         assert_eq!(first_content, queue_content,);
+        assert_eq!(first_content, exception_content,);
         assert_eq!(first_content, device_content,);
+        assert_ne!(first.queue_identity(), exception_changed.queue_identity());
         assert_ne!(first_checkpoint, queue_checkpoint);
+        assert_ne!(first_checkpoint, exception_checkpoint);
         assert_ne!(first_checkpoint, device_checkpoint);
     }
 
