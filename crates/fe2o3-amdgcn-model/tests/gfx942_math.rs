@@ -215,7 +215,10 @@ fn fabs_has_exact_llvm_intrinsic_observation() {
         [],
     );
     let llvm = lower_kernel_to_gfx942_llvm_ir(&module, &"math_kernel".into()).unwrap();
-    assert_eq!(llvm.matches("declare float @llvm.fabs.f32(float)").count(), 1);
+    assert_eq!(
+        llvm.matches("declare float @llvm.fabs.f32(float)").count(),
+        1
+    );
     assert_eq!(llvm.matches("call float @llvm.fabs.f32(float").count(), 1);
     assert!(!llvm.contains("llvm.fabs.f64"));
     assert!(!llvm.contains(" fast "));

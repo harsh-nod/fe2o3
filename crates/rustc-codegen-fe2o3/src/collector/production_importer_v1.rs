@@ -4208,9 +4208,7 @@ mod tests {
                 ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
                 ProductionTerminalExpansionV1::RustcFabsF32,
-                ProductionTerminalExpansionV1::MathF32(
-                    fe2o3_kernel_ir::F32MathFunction::Abs,
-                ),
+                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs,),
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
             [111, 112, 113, 114, 113, 114]
