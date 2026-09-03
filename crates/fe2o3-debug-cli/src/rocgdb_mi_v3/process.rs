@@ -256,6 +256,36 @@ impl RocgdbMiProcessV3 {
         Ok(true)
     }
 
+    pub(crate) fn native_v5_inspection_commands(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<fe2o3_debug_protocol::RocgdbMiNativeInspectionProbeV5, RocgdbMiAdapterErrorV3> {
+        let deadline = deadline(timeout)?;
+        let mut probe = fe2o3_debug_protocol::RocgdbMiNativeInspectionProbeV5::default();
+        for (command, slot) in [
+            ("-data-list-register-names", &mut probe.register_names),
+            ("-data-list-register-values", &mut probe.register_values),
+            ("-stack-list-variables", &mut probe.simple_locals),
+            ("-data-disassemble", &mut probe.disassembly),
+            ("-data-read-memory-bytes", &mut probe.memory_bytes),
+        ] {
+            let mut request = b"-info-gdb-mi-command ".to_vec();
+            request.extend_from_slice(command.as_bytes());
+            let (class, result) = self.send_command(&request, deadline)?;
+            require_exact_fields_v5(&result, &["command"], &["command"])?;
+            if let Some(command) = result.get("command").and_then(MiValueV3::as_tuple) {
+                require_exact_fields_v5(command, &["exists"], &["exists"])?;
+            }
+            *slot = class == "done"
+                && result
+                    .get("command")
+                    .and_then(MiValueV3::as_tuple)
+                    .and_then(|value| optional_const(value, "exists"))
+                    == Some(b"true");
+        }
+        Ok(probe)
+    }
+
     pub(crate) fn launch_native_v4(
         &mut self,
         target: &Path,
@@ -777,6 +807,9 @@ impl RocgdbMiProcessV3 {
             return Err(RocgdbMiAdapterErrorV3::CountOutOfRange("registers"));
         }
         let tuples = tuple_list(values.get("register-values"))?;
+        if tuples.len() > MAX_ROCGDB_MI_REGISTERS_V3 {
+            return Err(RocgdbMiAdapterErrorV3::CountOutOfRange("registers"));
+        }
         let mut truth_seed = names_command;
         truth_seed.extend_from_slice(&names_evidence);
         truth_seed.extend_from_slice(&values_command);
@@ -818,6 +851,95 @@ impl RocgdbMiProcessV3 {
         Ok(snapshot)
     }
 
+    pub(crate) fn inspect_native_registers_v5(
+        &mut self,
+        raw_thread: &[u8],
+        scope: RocgdbMiStoppedScopeV3,
+        timeout: Duration,
+    ) -> Result<(RocgdbMiRegisterSnapshotV3, OpaqueIdentityV1), RocgdbMiAdapterErrorV3> {
+        scope
+            .validate()
+            .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
+        let deadline = deadline(timeout)?;
+        let stop = native_stop_pin_v4(&self.adapter, self.native_stop_v4)?;
+        if scope.stop_identity != stop.identity {
+            return Err(RocgdbMiAdapterErrorV3::StaleRevision);
+        }
+        let names_command = command_with_thread(b"-data-list-register-names", raw_thread)?;
+        let mut values_command = command_with_thread(b"-data-list-register-values", raw_thread)?;
+        values_command.extend_from_slice(b" x");
+        let (names_class, names) = self.send_command(&names_command, deadline)?;
+        validate_native_stop_pin_v4(&self.adapter, self.native_stop_v4, stop)?;
+        let names_evidence = self.last_response_evidence.clone();
+        let (values_class, values) = self.send_command(&values_command, deadline)?;
+        validate_native_stop_pin_v4(&self.adapter, self.native_stop_v4, stop)?;
+        if names_class != "done" || values_class != "done" {
+            return Err(RocgdbMiAdapterErrorV3::BackendRejected);
+        }
+        require_exact_fields_v5(&names, &["register-names"], &["register-names"])?;
+        require_exact_fields_v5(&values, &["register-values"], &["register-values"])?;
+        let names = const_list(names.get("register-names"))?;
+        let tuples = tuple_list(values.get("register-values"))?;
+        if names.len() > MAX_ROCGDB_MI_REGISTERS_V3 || tuples.len() > MAX_ROCGDB_MI_REGISTERS_V3 {
+            return Err(RocgdbMiAdapterErrorV3::CountOutOfRange("registers"));
+        }
+        let mut truth_seed = names_command;
+        truth_seed.extend_from_slice(&names_evidence);
+        truth_seed.extend_from_slice(&values_command);
+        truth_seed.extend_from_slice(&self.last_response_evidence);
+        truth_seed.extend_from_slice(&scope.stop_identity.as_bytes());
+        truth_seed.extend_from_slice(&scope.wave.identity.as_bytes());
+        let evidence_identity = self
+            .adapter
+            .derive_identity(b"native-v5-registers", &truth_seed)?;
+        let truth = observed_truth(evidence_identity);
+        let mut registers = Vec::new();
+        registers
+            .try_reserve_exact(tuples.len())
+            .map_err(|_| RocgdbMiAdapterErrorV3::ResponseBudgetExhausted)?;
+        for tuple in tuples {
+            require_exact_fields_v5(tuple, &["number", "value"], &["number", "value"])?;
+            let number = required_const(tuple, "number")?;
+            let index = parse_decimal_u64(number)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(RocgdbMiAdapterErrorV3::InvalidField("register number"))?;
+            let name = names
+                .get(index)
+                .ok_or(RocgdbMiAdapterErrorV3::InvalidField("register number"))?;
+            if name.is_empty() {
+                continue;
+            }
+            let name = bounded_text(name, "register name")?;
+            let value = required_const(tuple, "value")?;
+            let mut identity_material = number.to_vec();
+            identity_material.extend_from_slice(name.as_bytes());
+            identity_material.extend_from_slice(&scope.stop_identity.as_bytes());
+            identity_material.extend_from_slice(&scope.wave.identity.as_bytes());
+            registers.push(LiveGpuRegisterValueV3 {
+                register_identity: self
+                    .adapter
+                    .derive_identity(b"native-v5-register", &identity_material)?,
+                name: name.clone(),
+                class: register_class(&name),
+                kind: LiveGpuValueKindV3::UnsignedInteger,
+                lane: None,
+                value: if matches!(name.as_str(), "pc" | "pc_all") {
+                    LiveGpuAvailabilityV3::Redacted {
+                        reason: LiveGpuRedactionReasonV3::AbsoluteTargetLocation,
+                        truth: truth.clone(),
+                    }
+                } else {
+                    map_scalar(value, &truth)
+                },
+            });
+        }
+        let snapshot = RocgdbMiRegisterSnapshotV3 { scope, registers };
+        snapshot
+            .validate()
+            .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
+        Ok((snapshot, evidence_identity))
+    }
+
     pub fn inspect_values(
         &mut self,
         scope: RocgdbMiStoppedScopeV3,
@@ -832,6 +954,7 @@ impl RocgdbMiProcessV3 {
         if class != "done" {
             return Err(RocgdbMiAdapterErrorV3::BackendRejected);
         }
+        require_exact_fields_v5(&results, &["variables"], &["variables"])?;
         let variables = tuple_list(results.get("variables"))?;
         if variables.len() > MAX_ROCGDB_MI_VALUES_V3 {
             return Err(RocgdbMiAdapterErrorV3::CountOutOfRange("values"));
@@ -841,6 +964,7 @@ impl RocgdbMiProcessV3 {
         let truth = observed_truth(self.adapter.derive_identity(b"values", &truth_seed)?);
         let mut values = Vec::new();
         for (ordinal, variable) in variables.iter().enumerate() {
+            require_exact_fields_v5(variable, &["name", "arg", "type", "value"], &["name"])?;
             let raw_name = required_const(variable, "name")?;
             let name = bounded_text(raw_name, "value name")?;
             let raw_value = optional_const(variable, "value").unwrap_or(b"<unavailable>");
@@ -861,6 +985,77 @@ impl RocgdbMiProcessV3 {
             .validate()
             .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
         Ok(snapshot)
+    }
+
+    pub(crate) fn inspect_native_locals_v5(
+        &mut self,
+        raw_thread: &[u8],
+        scope: RocgdbMiStoppedScopeV3,
+        timeout: Duration,
+    ) -> Result<(RocgdbMiValueSnapshotV3, OpaqueIdentityV1), RocgdbMiAdapterErrorV3> {
+        scope
+            .validate()
+            .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
+        let deadline = deadline(timeout)?;
+        let stop = native_stop_pin_v4(&self.adapter, self.native_stop_v4)?;
+        if scope.stop_identity != stop.identity {
+            return Err(RocgdbMiAdapterErrorV3::StaleRevision);
+        }
+        let mut command = command_with_thread(b"-stack-list-variables", raw_thread)?;
+        command.extend_from_slice(b" --simple-values");
+        let (class, results) = self.send_command(&command, deadline)?;
+        validate_native_stop_pin_v4(&self.adapter, self.native_stop_v4, stop)?;
+        if class != "done" {
+            return Err(RocgdbMiAdapterErrorV3::BackendRejected);
+        }
+        let variables = tuple_list(results.get("variables"))?;
+        if variables.len() > MAX_ROCGDB_MI_VALUES_V3 {
+            return Err(RocgdbMiAdapterErrorV3::CountOutOfRange("values"));
+        }
+        let mut truth_seed = command;
+        truth_seed.extend_from_slice(&self.last_response_evidence);
+        truth_seed.extend_from_slice(&scope.stop_identity.as_bytes());
+        truth_seed.extend_from_slice(&scope.wave.identity.as_bytes());
+        let evidence_identity = self
+            .adapter
+            .derive_identity(b"native-v5-locals", &truth_seed)?;
+        let truth = observed_truth(evidence_identity);
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(variables.len())
+            .map_err(|_| RocgdbMiAdapterErrorV3::ResponseBudgetExhausted)?;
+        for (ordinal, variable) in variables.iter().enumerate() {
+            let raw_name = required_const(variable, "name")?;
+            let name = bounded_text(raw_name, "value name")?;
+            let raw_value = optional_const(variable, "value").unwrap_or(b"<unavailable>");
+            let kind = optional_const(variable, "type")
+                .and_then(native_local_scalar_kind_v5)
+                .unwrap_or(LiveGpuValueKindV3::Bytes);
+            let mut material = u64::try_from(ordinal)
+                .unwrap_or(u64::MAX)
+                .to_le_bytes()
+                .to_vec();
+            material.extend_from_slice(raw_name);
+            material.extend_from_slice(&scope.stop_identity.as_bytes());
+            material.extend_from_slice(&scope.wave.identity.as_bytes());
+            values.push(LiveGpuSemanticValueV3 {
+                value_identity: self
+                    .adapter
+                    .derive_identity(b"native-v5-local", &material)?,
+                name,
+                kind,
+                value: if kind == LiveGpuValueKindV3::Bytes {
+                    unavailable(LiveGpuUnavailableReasonV3::Unsupported)
+                } else {
+                    map_native_local_scalar_v5(raw_value, kind, &truth)
+                },
+            });
+        }
+        let snapshot = RocgdbMiValueSnapshotV3 { scope, values };
+        snapshot
+            .validate()
+            .map_err(|_| RocgdbMiAdapterErrorV3::ProtocolRecordRejected)?;
+        Ok((snapshot, evidence_identity))
     }
 
     pub fn evaluate_expression(
@@ -1692,6 +1887,23 @@ fn tuple_list(value: Option<&MiValueV3>) -> Result<Vec<&MiResultsV3>, RocgdbMiAd
     }
 }
 
+fn require_exact_fields_v5(
+    results: &MiResultsV3,
+    allowed: &[&str],
+    required: &[&str],
+) -> Result<(), RocgdbMiAdapterErrorV3> {
+    if results
+        .keys()
+        .any(|field| !allowed.contains(&field.as_str()))
+        || required.iter().any(|field| !results.contains_key(*field))
+    {
+        return Err(RocgdbMiAdapterErrorV3::InvalidField(
+            "native V5 result fields",
+        ));
+    }
+    Ok(())
+}
+
 fn append_quoted(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), RocgdbMiAdapterErrorV3> {
     output.push(b'"');
     for byte in bytes {
@@ -1771,6 +1983,58 @@ fn map_scalar(raw: &[u8], truth: &LiveGpuTruthV3) -> LiveGpuAvailabilityV3<LiveG
         },
         truth: truth.clone(),
     }
+}
+
+fn native_local_scalar_kind_v5(raw: &[u8]) -> Option<LiveGpuValueKindV3> {
+    match raw {
+        b"bool" => Some(LiveGpuValueKindV3::Boolean),
+        b"i8" | b"i16" | b"i32" | b"i64" | b"isize" | b"signed char" | b"short" | b"short int"
+        | b"int" | b"long" | b"long int" | b"long long" | b"long long int" => {
+            Some(LiveGpuValueKindV3::SignedInteger)
+        }
+        b"u8"
+        | b"u16"
+        | b"u32"
+        | b"u64"
+        | b"usize"
+        | b"unsigned char"
+        | b"unsigned short"
+        | b"unsigned short int"
+        | b"unsigned"
+        | b"unsigned int"
+        | b"unsigned long"
+        | b"unsigned long int"
+        | b"unsigned long long"
+        | b"unsigned long long int" => Some(LiveGpuValueKindV3::UnsignedInteger),
+        _ => None,
+    }
+}
+
+fn map_native_local_scalar_v5(
+    raw: &[u8],
+    kind: LiveGpuValueKindV3,
+    truth: &LiveGpuTruthV3,
+) -> LiveGpuAvailabilityV3<LiveGpuValueEncodingV3> {
+    if kind == LiveGpuValueKindV3::Boolean {
+        return match raw {
+            b"true" => LiveGpuAvailabilityV3::Available {
+                value: LiveGpuValueEncodingV3::Bits {
+                    bit_width: 1,
+                    bits: "1".to_owned(),
+                },
+                truth: truth.clone(),
+            },
+            b"false" => LiveGpuAvailabilityV3::Available {
+                value: LiveGpuValueEncodingV3::Bits {
+                    bit_width: 1,
+                    bits: "0".to_owned(),
+                },
+                truth: truth.clone(),
+            },
+            _ => unavailable(LiveGpuUnavailableReasonV3::NotCaptured),
+        };
+    }
+    map_scalar(raw, truth)
 }
 
 fn control_operation(request: RocgdbMiControlRequestV3) -> RocgdbMiControlOperationV3 {
@@ -1935,5 +2199,151 @@ mod tests {
             validate_native_stop_pin_v4(&adapter, Some(replacement), original),
             Err(RocgdbMiAdapterErrorV3::StaleRevision)
         ));
+    }
+
+    #[test]
+    fn native_v5_machine_queries_are_thread_selected_and_stop_pinned() {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fake_rocgdb_mi_v3.py");
+        let mut process = RocgdbMiProcessV3::spawn(
+            &fixture,
+            identity(1),
+            identity(2),
+            64,
+            RocgdbMiAdapterLimitsV3::default(),
+        )
+        .unwrap();
+        let timeout = Duration::from_secs(5);
+        let probe = process.native_v5_inspection_commands(timeout).unwrap();
+        assert!(probe.register_names);
+        assert!(probe.register_values);
+        assert!(probe.simple_locals);
+        assert!(probe.disassembly);
+        assert!(probe.memory_bytes);
+
+        process
+            .adapter
+            .admit_threads_from_thread_info(b"1^done,threads=[{id=\"9\"}]\n", &[0])
+            .unwrap();
+        process
+            .adapter
+            .ingest_line(b"*stopped,reason=\"signal-received\",thread-id=\"9\"\n")
+            .unwrap();
+        let stop_identity = identity(9);
+        process.native_stop_v4 = Some(RocgdbMiNativeStopPinV4 {
+            revision: process.adapter.revision(),
+            identity: stop_identity,
+        });
+        let thread = RocgdbMiThreadIdentityV3 {
+            identity: identity(10),
+        };
+        let scope = RocgdbMiStoppedScopeV3 {
+            stop_identity,
+            thread,
+            wave: RocgdbMiWaveIdentityV3 {
+                identity: identity(11),
+                thread,
+            },
+            lane: None,
+        };
+        let (registers, _) = process
+            .inspect_native_registers_v5(b"9", scope, timeout)
+            .unwrap();
+        assert_eq!(registers.scope, scope);
+        assert_eq!(registers.scope.lane, None);
+        assert_eq!(registers.registers.len(), 2);
+        assert_eq!(registers.registers[0].name, "exec");
+        assert!(matches!(
+            registers.registers[1].value,
+            LiveGpuAvailabilityV3::Redacted {
+                reason: LiveGpuRedactionReasonV3::AbsoluteTargetLocation,
+                ..
+            }
+        ));
+        let (locals, _) = process
+            .inspect_native_locals_v5(b"9", scope, timeout)
+            .unwrap();
+        assert_eq!(locals.scope, scope);
+        assert_eq!(locals.scope.lane, None);
+        assert_eq!(locals.values.len(), 3);
+        assert_eq!(locals.values[1].name, "gone");
+        assert!(matches!(
+            locals.values[1].value,
+            LiveGpuAvailabilityV3::Unavailable {
+                reason: LiveGpuUnavailableReasonV3::OptimizedOut,
+                ..
+            }
+        ));
+        assert!(matches!(
+            locals.values[2].value,
+            LiveGpuAvailabilityV3::Unavailable {
+                reason: LiveGpuUnavailableReasonV3::Unsupported,
+                ..
+            }
+        ));
+        let public = serde_json::to_string(&(registers, locals)).unwrap();
+        assert!(!public.contains("1028"));
+        assert!(!public.contains("deadbeef"));
+        assert!(process.native_v4_stop_is_current());
+
+        let mut stale = scope;
+        stale.stop_identity = identity(12);
+        assert_eq!(
+            process.inspect_native_registers_v5(b"9", stale, timeout),
+            Err(RocgdbMiAdapterErrorV3::StaleRevision)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires installed ROCgdb"]
+    fn installed_rocgdb_reports_native_v5_machine_commands() {
+        let executable = std::env::var_os("FE2O3_ROCGDB")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/rocgdb"));
+        let mut process = RocgdbMiProcessV3::spawn(
+            &executable,
+            identity(1),
+            identity(2),
+            64,
+            RocgdbMiAdapterLimitsV3::default(),
+        )
+        .unwrap();
+        let probe = process
+            .native_v5_inspection_commands(Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(
+            probe,
+            fe2o3_debug_protocol::RocgdbMiNativeInspectionProbeV5 {
+                register_names: true,
+                register_values: true,
+                simple_locals: true,
+                disassembly: true,
+                memory_bytes: true,
+            }
+        );
+    }
+
+    #[test]
+    fn native_v5_result_fields_reject_unknown_and_missing_members() {
+        let MiRecordV3::Result { results, .. } = parse_mi_record_v3(
+            b"1^done,variables=[{name=\"x\",value=\"0x1\",secret=\"0xbeef\"}]\n",
+            MiParserLimitsV3::default(),
+        )
+        .unwrap() else {
+            unreachable!()
+        };
+        let variables = tuple_list(results.get("variables")).unwrap();
+        assert_eq!(
+            require_exact_fields_v5(variables[0], &["name", "arg", "type", "value"], &["name"]),
+            Err(RocgdbMiAdapterErrorV3::InvalidField(
+                "native V5 result fields"
+            ))
+        );
+        assert_eq!(
+            require_exact_fields_v5(&results, &["missing"], &["missing"]),
+            Err(RocgdbMiAdapterErrorV3::InvalidField(
+                "native V5 result fields"
+            ))
+        );
     }
 }

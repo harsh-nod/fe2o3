@@ -11,8 +11,9 @@ use std::fmt;
 use fe2o3_debug_protocol::{
     LiveGpuAvailabilityV3, LiveGpuContentIdentityV3, LiveGpuEvidenceKindV3, LiveGpuEvidenceRefV3,
     LiveGpuRelativePcV3, LiveGpuTruthOriginV3, LiveGpuTruthV3, LiveGpuUnavailableReasonV3,
-    OpaqueIdentityV1, RocgdbMiNativeLaneV4, RocgdbMiNativeStoppedStateV4,
-    RocgdbMiWorkgroupCoordinateV4, RocgdbMiWorkitemCoordinateV4,
+    OpaqueIdentityV1, RocgdbMiNativeLaneV4, RocgdbMiNativeStoppedStateV4, RocgdbMiStoppedScopeV3,
+    RocgdbMiThreadIdentityV3, RocgdbMiWaveIdentityV3, RocgdbMiWorkgroupCoordinateV4,
+    RocgdbMiWorkitemCoordinateV4,
 };
 use fe2o3_kfd::{KfdTargetDebugTelemetryDigestV1, KfdTargetDebugTelemetryPayloadV2};
 use sha2::{Digest, Sha256};
@@ -542,6 +543,45 @@ impl RocgdbMiNativeCorrelationAdapterV4 {
         reject_duplicate(parsed.iter().map(|item| item.lane.to_le_bytes()))?;
         self.lanes = parsed;
         Ok(())
+    }
+
+    /// Returns the native selector only to the in-process MI owner, paired
+    /// with redacted identities that are safe to publish. The caller must
+    /// keep the V4 stop pin current while issuing every subsequent command.
+    pub(crate) fn inspection_scope_v5(
+        &self,
+        stopped: &RocgdbMiNativeStoppedStateV4,
+    ) -> Result<(Vec<u8>, RocgdbMiStoppedScopeV3), RocgdbMiNativeCorrelationErrorV4> {
+        stopped
+            .validate()
+            .map_err(|_| RocgdbMiNativeCorrelationErrorV4::ProtocolRejected)?;
+        let stop = self
+            .stop
+            .ok_or(RocgdbMiNativeCorrelationErrorV4::StopSubstitution)?;
+        let thread = unique(self.threads.iter())
+            .map_err(|_| RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution)?;
+        let expected_wave = self.derive(b"wave", &[&thread.evidence.as_bytes()])?;
+        if stopped.wave_identity != expected_wave {
+            return Err(RocgdbMiNativeCorrelationErrorV4::ThreadSubstitution);
+        }
+        let thread_identity = RocgdbMiThreadIdentityV3 {
+            identity: self.derive(
+                b"inspection-thread-v5",
+                &[&thread.evidence.as_bytes(), &stop.as_bytes()],
+            )?,
+        };
+        Ok((
+            thread.raw_id.clone(),
+            RocgdbMiStoppedScopeV3 {
+                stop_identity: stop,
+                thread: thread_identity,
+                wave: RocgdbMiWaveIdentityV3 {
+                    identity: stopped.wave_identity,
+                    thread: thread_identity,
+                },
+                lane: None,
+            },
+        ))
     }
 
     /// Correlates exact V2 declaration/publication records with the admitted MI hierarchy.

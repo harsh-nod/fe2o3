@@ -10,6 +10,7 @@ mod qualification_v1;
 mod rocgdb_mi_cli_v3;
 mod rocgdb_mi_v3;
 mod rocgdb_mi_v4;
+mod rocgdb_mi_v5;
 mod source_variables_v2;
 
 pub use codec::{
@@ -24,4 +25,5 @@ pub use qualification_v1::*;
 pub use rocgdb_mi_cli_v3::*;
 pub use rocgdb_mi_v3::*;
 pub use rocgdb_mi_v4::*;
+pub use rocgdb_mi_v5::*;
 pub use source_variables_v2::*;

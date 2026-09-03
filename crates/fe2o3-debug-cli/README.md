@@ -544,3 +544,49 @@ requires compatible ROCm runtime metadata, whereas the production fe2o3
 direct-KFD runtime intentionally supplies `r_debug=0`. This result is
 therefore an installed bridge capability gap, not permission to infer stopped
 waves from KFD publication.
+
+## Authenticated native stopped-state inspection V5
+
+`fe2o3-debug live-rocgdb-kfd-v5` preserves the V4 launch, telemetry, artifact,
+hierarchy, stop, and relative-PC contract and adds machine-interface register
+and simple-local inspection. Registry discovery is reported separately and is
+never treated as an observation. Register names and values are obtained with
+`-data-list-register-names` and `-data-list-register-values`; locals use
+`-stack-list-variables --simple-values`. Every command selects the exact
+private current-thread token admitted by V4, and the stop generation is checked
+after every result. Published scopes and evidence identities bind the V4
+association, redacted stop, redacted thread, and authenticated wave. Counts,
+MI records, commands, strings, and values retain the V3 bounds. The scope is
+wave-level (`lane` is absent): V4 authenticates the current wave thread but has
+no independent selected-lane observation, so locals are not labeled as
+lane-specific.
+
+Register bit patterns are captured, except the absolute `pc`/`pc_all` register,
+which is redacted because V4 already supplies the authenticated artifact-relative
+PC. Local values are captured only for explicitly scalar integral or Boolean
+debug types. Pointers, aggregates, floating-point text, unknown types,
+optimized-out values, and values outside the MI capture are typed unavailable;
+the adapter does not reinterpret debugger text with host arithmetic. Source is
+unavailable until an authenticated artifact-relative source map is supplied,
+ISA until instruction boundaries and decoded bytes are bound to the artifact,
+and memory until the target publishes exact allocation-relative authority.
+Native selectors and MI address fields are not serialized or treated as
+identity. Register bit patterns remain opaque machine bits and can numerically
+resemble an address, but are never admitted as pointer or memory authority;
+the known absolute PC register is redacted. Pointer local values are not
+serialized.
+
+The installed MI300X ROCgdb reports all five V5 inspection command names. A
+2026-09-03 run of the public V5 command with the same SHA-pinned diagnostic,
+direct-KFD device, and target used for V4 returned:
+
+```json
+{"schema":"fe2o3-rocgdb-kfd-native-response-v5","result":{"status":"unavailable","probe":{"structured_mi_commands":true,"direct_kfd_device_admitted":true,"cooperative_v2_declaration":true,"cooperative_v2_publication":true},"inspection_probe":{"register_names":true,"register_values":true,"simple_locals":true,"disassembly":true,"memory_bytes":true},"reason":"gpu_stopped_state_unavailable"}}
+```
+
+The exact JSONL record has SHA-256
+`71ea391f489e0f068e524bef93fee1384b2dbf4956aeb33ef854db2b2a3dc5e1`.
+Thus the direct-KFD launch still reaches the V4 stopped-state boundary.
+This release validates V5 parsing, same-stop collection, redaction, and hostile
+substitution with deterministic MI fixtures; it does not claim a physical
+register or local capture on MI300X.

@@ -58,7 +58,7 @@ for raw in sys.stdin:
     elif command == '-data-list-register-values --thread "9" x':
         emit(prefix + 'done,register-values=[{number="0",value="0x5"},{number="1",value="0x1028"}]')
     elif command == '-stack-list-variables --thread "9" --simple-values':
-        emit(prefix + 'done,variables=[{name="kept",value="0x2a"},{name="gone",value="<optimized out>"}]')
+        emit(prefix + 'done,variables=[{name="kept",value="0x2a",type="u32"},{name="gone",value="<optimized out>",type="u32"},{name="ptr",value="0xdeadbeef",type="u32 *"}]')
     elif command.startswith('-data-evaluate-expression --thread "9" '):
         value = "0x22" if "second" in command else "0x11"
         emit(prefix + 'done,value="' + value + '"')

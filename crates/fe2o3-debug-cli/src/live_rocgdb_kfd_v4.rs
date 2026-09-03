@@ -9,9 +9,12 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use fe2o3_debug_protocol::{
-    LiveGpuContentIdentityV3, OpaqueIdentityV1, RocgdbMiExecutionEventV3,
-    RocgdbMiNativeCliResponseSchemaV4, RocgdbMiNativeCliResponseV4, RocgdbMiNativeCliResultV4,
-    RocgdbMiNativeProbeV4, RocgdbMiNativeUnavailableReasonV4,
+    LiveGpuContentIdentityV3, OpaqueIdentityV1, RocgdbMiExecutionEventV3, RocgdbMiNativeCapturedV5,
+    RocgdbMiNativeCliResponseSchemaV4, RocgdbMiNativeCliResponseSchemaV5,
+    RocgdbMiNativeCliResponseV4, RocgdbMiNativeCliResponseV5, RocgdbMiNativeCliResultV4,
+    RocgdbMiNativeCliResultV5, RocgdbMiNativeInspectionProbeV5,
+    RocgdbMiNativeInspectionUnavailableReasonV5, RocgdbMiNativeInspectionV5, RocgdbMiNativeProbeV4,
+    RocgdbMiNativeUnavailableFieldV5, RocgdbMiNativeUnavailableReasonV4,
 };
 use fe2o3_kfd::{
     DeviceSelector, KfdDebuggerTelemetryEndpointV2, KfdTargetDebugSessionNonceV1,
@@ -29,7 +32,7 @@ use crate::rocgdb_mi_v4::{
     RocgdbMiNativeCorrelationAdapterV4,
 };
 
-const USAGE: &str = "fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]";
+const USAGE: &str = "fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]";
 const MAX_PATH_BYTES_V4: usize = 4_096;
 const MAX_ARGUMENTS_V4: usize = 256;
 const MAX_ARGUMENT_BYTES_V4: usize = 32 * 1_024;
@@ -37,6 +40,7 @@ const MAX_HSACO_BYTES_V4: u64 = 1 << 31;
 
 #[derive(Debug)]
 struct OptionsV4 {
+    output: OutputVersion,
     rocgdb: PathBuf,
     authorization: OpaqueIdentityV1,
     hsaco: PathBuf,
@@ -49,6 +53,12 @@ struct OptionsV4 {
     arguments: Vec<OsString>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputVersion {
+    V4,
+    V5,
+}
+
 pub(crate) fn run(arguments: Vec<OsString>) -> ExitCode {
     let options = match parse_options(arguments) {
         Ok(options) => options,
@@ -57,9 +67,12 @@ pub(crate) fn run(arguments: Vec<OsString>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match run_inner(options) {
-        Ok(response) => write_response(response),
-        Err(reason) => write_response(unavailable(
+    let output = options.output;
+    let mut inspection_probe = RocgdbMiNativeInspectionProbeV5::default();
+    let mut inspection = None;
+    let response = match run_inner(options, &mut inspection_probe, &mut inspection) {
+        Ok(response) => response,
+        Err(reason) => unavailable(
             RocgdbMiNativeProbeV4 {
                 structured_mi_commands: false,
                 direct_kfd_device_admitted: false,
@@ -67,14 +80,24 @@ pub(crate) fn run(arguments: Vec<OsString>) -> ExitCode {
                 cooperative_v2_publication: false,
             },
             reason,
-        )),
+        ),
+    };
+    match output {
+        OutputVersion::V4 => write_response(response),
+        OutputVersion::V5 => write_response_v5(response_v5(response, inspection_probe, inspection)),
     }
 }
 
 fn run_inner(
     options: OptionsV4,
+    inspection_probe: &mut RocgdbMiNativeInspectionProbeV5,
+    inspection: &mut Option<RocgdbMiNativeInspectionV5>,
 ) -> Result<RocgdbMiNativeCliResponseV4, RocgdbMiNativeUnavailableReasonV4> {
-    let session = random_identity(b"fe2o3-live-rocgdb-kfd-v4\0", options.authorization)
+    let session_domain = match options.output {
+        OutputVersion::V4 => b"fe2o3-live-rocgdb-kfd-v4\0".as_slice(),
+        OutputVersion::V5 => b"fe2o3-live-rocgdb-kfd-v5\0".as_slice(),
+    };
+    let session = random_identity(session_domain, options.authorization)
         .ok_or(RocgdbMiNativeUnavailableReasonV4::RocgdbSpawnFailed)?;
     let nonce = random_nonce().ok_or(RocgdbMiNativeUnavailableReasonV4::RocgdbSpawnFailed)?;
     let debugger_process = KfdTargetDebugTelemetryProcessV1::capture(std::process::id())
@@ -115,6 +138,17 @@ fn run_inner(
             probe,
             RocgdbMiNativeUnavailableReasonV4::StructuredCommandsUnavailable,
         ));
+    }
+    if options.output == OutputVersion::V5 {
+        *inspection_probe = match process.native_v5_inspection_commands(options.timeout) {
+            Ok(probe) => probe,
+            Err(_) => {
+                return Ok(unavailable(
+                    probe,
+                    RocgdbMiNativeUnavailableReasonV4::StructuredCommandsUnavailable,
+                ));
+            }
+        };
     }
 
     let topology = match fe2o3_kfd::topology::discover_default_topology() {
@@ -388,6 +422,74 @@ fn run_inner(
             ));
         }
     };
+    if options.output == OutputVersion::V5 {
+        let (raw_thread, scope) = match correlation.inspection_scope_v5(&stopped_state) {
+            Ok(authority) => authority,
+            Err(_) => {
+                return Ok(unavailable(
+                    probe,
+                    RocgdbMiNativeUnavailableReasonV4::CorrelationRejected,
+                ));
+            }
+        };
+        let registers = if inspection_probe.register_names && inspection_probe.register_values {
+            match process.inspect_native_registers_v5(&raw_thread, scope, options.timeout) {
+                Ok((value, evidence_identity)) => RocgdbMiNativeCapturedV5::Captured {
+                    evidence_identity,
+                    value,
+                },
+                Err(_) => RocgdbMiNativeCapturedV5::Unavailable {
+                    reason: RocgdbMiNativeInspectionUnavailableReasonV5::BackendRejected,
+                },
+            }
+        } else {
+            RocgdbMiNativeCapturedV5::Unavailable {
+                reason: RocgdbMiNativeInspectionUnavailableReasonV5::MachineCommandUnavailable,
+            }
+        };
+        if !process.native_v4_stop_is_current() {
+            return Ok(unavailable(
+                probe,
+                RocgdbMiNativeUnavailableReasonV4::GpuStoppedStateUnavailable,
+            ));
+        }
+        let locals = if inspection_probe.simple_locals {
+            match process.inspect_native_locals_v5(&raw_thread, scope, options.timeout) {
+                Ok((value, evidence_identity)) => RocgdbMiNativeCapturedV5::Captured {
+                    evidence_identity,
+                    value,
+                },
+                Err(_) => RocgdbMiNativeCapturedV5::Unavailable {
+                    reason: RocgdbMiNativeInspectionUnavailableReasonV5::BackendRejected,
+                },
+            }
+        } else {
+            RocgdbMiNativeCapturedV5::Unavailable {
+                reason: RocgdbMiNativeInspectionUnavailableReasonV5::MachineCommandUnavailable,
+            }
+        };
+        if !process.native_v4_stop_is_current() {
+            return Ok(unavailable(
+                probe,
+                RocgdbMiNativeUnavailableReasonV4::GpuStoppedStateUnavailable,
+            ));
+        }
+        *inspection = Some(RocgdbMiNativeInspectionV5 {
+            association_identity: stopped_state.association_identity,
+            scope,
+            registers,
+            locals,
+            source: RocgdbMiNativeUnavailableFieldV5::Unavailable {
+                reason: RocgdbMiNativeInspectionUnavailableReasonV5::RequiresAuthenticatedSourceMap,
+            },
+            isa: RocgdbMiNativeUnavailableFieldV5::Unavailable {
+                reason: RocgdbMiNativeInspectionUnavailableReasonV5::RequiresArtifactRelativeInstructionBinding,
+            },
+            memory: RocgdbMiNativeUnavailableFieldV5::Unavailable {
+                reason: RocgdbMiNativeInspectionUnavailableReasonV5::RequiresAllocationRelativeAuthority,
+            },
+        });
+    }
     Ok(RocgdbMiNativeCliResponseV4 {
         schema: RocgdbMiNativeCliResponseSchemaV4::V4,
         result: RocgdbMiNativeCliResultV4::Available {
@@ -395,6 +497,42 @@ fn run_inner(
             stopped_state: Box::new(stopped_state),
         },
     })
+}
+
+fn response_v5(
+    response: RocgdbMiNativeCliResponseV4,
+    inspection_probe: RocgdbMiNativeInspectionProbeV5,
+    inspection: Option<RocgdbMiNativeInspectionV5>,
+) -> RocgdbMiNativeCliResponseV5 {
+    let result = match response.result {
+        RocgdbMiNativeCliResultV4::Available {
+            probe,
+            stopped_state,
+        } => match inspection {
+            Some(inspection) => RocgdbMiNativeCliResultV5::Available {
+                probe,
+                inspection_probe,
+                stopped_state,
+                inspection: Box::new(inspection),
+            },
+            None => RocgdbMiNativeCliResultV5::Unavailable {
+                probe,
+                inspection_probe,
+                reason: RocgdbMiNativeUnavailableReasonV4::CorrelationRejected,
+            },
+        },
+        RocgdbMiNativeCliResultV4::Unavailable { probe, reason } => {
+            RocgdbMiNativeCliResultV5::Unavailable {
+                probe,
+                inspection_probe,
+                reason,
+            }
+        }
+    };
+    RocgdbMiNativeCliResponseV5 {
+        schema: RocgdbMiNativeCliResponseSchemaV5::V5,
+        result,
+    }
 }
 
 fn observe_native_telemetry_v4(
@@ -459,6 +597,22 @@ fn write_response(response: RocgdbMiNativeCliResponseV4) -> ExitCode {
     }
 }
 
+fn write_response_v5(response: RocgdbMiNativeCliResponseV5) -> ExitCode {
+    if response.validate().is_err() {
+        return ExitCode::FAILURE;
+    }
+    let mut bytes = match serde_json::to_vec(&response) {
+        Ok(bytes) => bytes,
+        Err(_) => return ExitCode::FAILURE,
+    };
+    bytes.push(b'\n');
+    if std::io::stdout().lock().write_all(&bytes).is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn read_bounded(path: &PathBuf) -> Option<Vec<u8>> {
     let file = File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
@@ -496,9 +650,11 @@ fn random_identity(domain: &[u8], authorization: OpaqueIdentityV1) -> Option<Opa
 
 fn parse_options(arguments: Vec<OsString>) -> Result<OptionsV4, String> {
     let mut arguments = arguments.into_iter();
-    if arguments.next().as_deref() != Some(OsStr::new("live-rocgdb-kfd-v4")) {
-        return Err(USAGE.to_owned());
-    }
+    let output = match arguments.next().as_deref() {
+        Some(value) if value == OsStr::new("live-rocgdb-kfd-v4") => OutputVersion::V4,
+        Some(value) if value == OsStr::new("live-rocgdb-kfd-v5") => OutputVersion::V5,
+        _ => return Err(USAGE.to_owned()),
+    };
     let mut rocgdb = None;
     let mut authorization = None;
     let mut hsaco = None;
@@ -595,6 +751,7 @@ fn parse_options(arguments: Vec<OsString>) -> Result<OptionsV4, String> {
         return Err(format!("target arguments exceed bounds; {USAGE}"));
     }
     Ok(OptionsV4 {
+        output,
         rocgdb,
         authorization: authorization.ok_or_else(|| USAGE.to_owned())?,
         hsaco,
@@ -656,6 +813,14 @@ mod tests {
             "/bin/true",
         ];
         assert!(parse_options(base.into_iter().map(OsString::from).collect()).is_ok());
+        let mut v5 = base;
+        v5[0] = "live-rocgdb-kfd-v5";
+        assert_eq!(
+            parse_options(v5.into_iter().map(OsString::from).collect())
+                .unwrap()
+                .output,
+            OutputVersion::V5
+        );
         for changed in ["0x01000", "1000", "0xG"] {
             let mut args = base.map(OsString::from);
             args[8] = OsString::from(changed);
@@ -679,6 +844,35 @@ mod tests {
         assert!(encoded.contains("\"structured_mi_commands\":true"));
         assert!(encoded.contains("\"direct_kfd_device_admitted\":false"));
         assert!(encoded.contains("\"reason\":\"direct_kfd_device_unavailable\""));
+    }
+
+    #[test]
+    fn v5_unavailable_keeps_registry_discovery_separate_from_observation() {
+        let response = response_v5(
+            unavailable(
+                RocgdbMiNativeProbeV4 {
+                    structured_mi_commands: true,
+                    direct_kfd_device_admitted: true,
+                    cooperative_v2_declaration: true,
+                    cooperative_v2_publication: true,
+                },
+                RocgdbMiNativeUnavailableReasonV4::GpuStoppedStateUnavailable,
+            ),
+            RocgdbMiNativeInspectionProbeV5 {
+                register_names: true,
+                register_values: true,
+                simple_locals: true,
+                disassembly: true,
+                memory_bytes: true,
+            },
+            None,
+        );
+        response.validate().unwrap();
+        let encoded = serde_json::to_string(&response).unwrap();
+        assert!(encoded.contains("\"register_values\":true"));
+        assert!(encoded.contains("\"status\":\"unavailable\""));
+        assert!(encoded.contains("\"reason\":\"gpu_stopped_state_unavailable\""));
+        assert!(!encoded.contains("\"inspection\":"));
     }
 
     #[test]
