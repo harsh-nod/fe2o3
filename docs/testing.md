@@ -6,6 +6,7 @@ fork-safe preflight:
 
 ```text
 cargo fmt --all -- --check
+bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
 ```
@@ -15,6 +16,13 @@ applicable broader lanes. GitHub reports the bounded preflight first, then runs
 the full generic core and codegen shards before merge and again on protected
 push. The full matrix is intentionally hour-scale; the preflight provides the
 fast feedback path without weakening the required generic qualification.
+
+Raw `cargo check --workspace --all-targets` is intentionally not the supported
+workspace check for namespace-free `#[kernel(typed)]` packages. Those packages
+need the sealed `cargo-fe2o3` driver to supply the compiler-owned crate binding.
+Use `scripts/ci-local.sh check` for workspace check coverage, or
+`cargo fe2o3 check --locked --all-targets -p <wrapper-managed-package>` for one
+wrapper-managed package.
 
 ## Generic validation
 

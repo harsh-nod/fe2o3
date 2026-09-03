@@ -15,7 +15,7 @@ use fe2o3_kernel_ir::{
     AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind,
     CheckedBinaryOperator, ComparePredicate, Constant,
     DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
-    FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole,
+    FloatConversionKind, FloatOperation, Function, FunctionBody, FunctionId, FunctionRole,
     Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
     IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
     KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
@@ -643,18 +643,8 @@ fn lower_kernel_to_llvm_ir_for_target(
     )?;
 
     let workgroup_size = validate_launch(module, kernel, target)?;
-    let entry = module
-        .functions
-        .iter()
-        .find(|function| function.id == kernel.entry)
-        .expect("verify_module established the kernel entry");
-    entry.body.as_ref().ok_or_else(|| {
-        LoweringErrors::one(
-            LoweringLocation::function(module, kernel, entry),
-            LoweringDiagnosticCode::KernelEntryDeclaration,
-            "kernel entry must be a definition",
-        )
-    })?;
+    let entry = kernel_entry_function(module, kernel)?;
+    kernel_entry_body(module, kernel, entry)?;
 
     let function_wave = validate_capabilities(
         LoweringLocation::function(module, kernel, entry),
@@ -700,9 +690,55 @@ fn lower_kernel_to_llvm_ir_for_target(
         wave_width,
         target,
         semantic_anchor_emission,
-    );
+    )?;
     preflight_function(&mut lowerer)?;
     lowerer.emit(max_text_bytes)
+}
+
+fn kernel_entry_function<'a>(
+    module: &'a Module,
+    kernel: &Kernel,
+) -> Result<&'a Function, LoweringErrors> {
+    module.function(&kernel.entry).ok_or_else(|| {
+        LoweringErrors::one(
+            LoweringLocation::kernel(module, kernel),
+            LoweringDiagnosticCode::KernelEntryDeclaration,
+            format!("kernel entry function {} is missing", kernel.entry),
+        )
+    })
+}
+
+fn kernel_entry_body<'a>(
+    module: &Module,
+    kernel: &Kernel,
+    entry: &'a Function,
+) -> Result<&'a FunctionBody, LoweringErrors> {
+    required_function_body(
+        module,
+        Some(kernel),
+        entry,
+        "kernel entry must be a definition",
+    )
+}
+
+fn required_function_body<'a>(
+    module: &Module,
+    kernel: Option<&Kernel>,
+    function: &'a Function,
+    message: &'static str,
+) -> Result<&'a FunctionBody, LoweringErrors> {
+    function.body.as_ref().ok_or_else(|| {
+        let location = kernel.map_or_else(
+            || LoweringLocation::device_function(module, function),
+            |kernel| LoweringLocation::function(module, kernel, function),
+        );
+        let code = if kernel.is_some() {
+            LoweringDiagnosticCode::KernelEntryDeclaration
+        } else {
+            LoweringDiagnosticCode::UnsupportedOperation
+        };
+        LoweringErrors::one(location, code, message)
+    })
 }
 
 const fn semantic_anchor_manifest_counts_within_limit_v1(
@@ -721,9 +757,14 @@ fn prepare_semantic_anchor_emission_v1(
     identity: ProductionSemanticAnchorKirIdentityV1,
 ) -> Result<SemanticAnchorEmissionV1, LoweringErrors> {
     validate_semantic_anchor_identity_v1(module, identity)?;
-    let target = target
-        .exact_target_binding()
-        .expect("semantic anchors require an exact production target");
+    let location = LoweringLocation::function(module, kernel, entry);
+    let target = target.exact_target_binding().ok_or_else(|| {
+        LoweringErrors::one(
+            location.clone(),
+            LoweringDiagnosticCode::UnsupportedCapability,
+            "semantic anchors require an exact production target",
+        )
+    })?;
     let definition_count = module
         .functions
         .iter()
@@ -733,22 +774,25 @@ fn prepare_semantic_anchor_emission_v1(
     if definition_count != 1 {
         return Ok(SemanticAnchorEmissionV1::MultipleDefinedBodies(context));
     }
-    let location = LoweringLocation::function(module, kernel, entry);
-    let function_ordinal = u64::try_from(
-        module
-            .functions
-            .iter()
-            .position(|candidate| std::ptr::eq(candidate, entry))
-            .expect("the entry belongs to the verified module"),
-    )
-    .map_err(|_| {
+    let function_index = module
+        .functions
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, entry))
+        .ok_or_else(|| {
+            LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::KernelEntryDeclaration,
+                "semantic anchor entry is absent from the verified module",
+            )
+        })?;
+    let function_ordinal = u64::try_from(function_index).map_err(|_| {
         LoweringErrors::one(
             location.clone(),
             LoweringDiagnosticCode::ResourceLimit,
             "semantic anchor function ordinal exceeds u64",
         )
     })?;
-    let body = entry.body.as_ref().expect("entry definition checked above");
+    let body = kernel_entry_body(module, kernel, entry)?;
     let block_count = u64::try_from(body.blocks.len()).map_err(|_| {
         LoweringErrors::one(
             location.clone(),
@@ -1005,11 +1049,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
 
     if let Some(exact_target) = target.exact_target_binding() {
         for kernel in &module.kernels {
-            let entry = module
-                .functions
-                .iter()
-                .find(|function| function.id == kernel.entry)
-                .expect("verify_module established every kernel entry");
+            let entry = kernel_entry_function(module, kernel)?;
             require_exact_kernel_binding(module, kernel, entry, exact_target)?;
         }
     }
@@ -1033,18 +1073,14 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                     "semantic-anchor compiler-module lowering requires a kernel entry",
                 )
             })?;
-            let entry = module
-                .function(&kernel.entry)
-                .expect("verify_module established the semantic-anchor kernel entry");
+            let entry = kernel_entry_function(module, kernel)?;
             let emission =
                 prepare_semantic_anchor_emission_v1(module, kernel, entry, target, identity)?;
             Ok::<_, LoweringErrors>((kernel.id.clone(), emission))
         })
         .transpose()?;
     for kernel in &kernels {
-        let entry = module
-            .function(&kernel.entry)
-            .expect("verify_module established the kernel entry");
+        let entry = kernel_entry_function(module, kernel)?;
         validate_matrix_frontend_abi_binding(module, kernel, entry, target)?;
     }
 
@@ -1085,23 +1121,43 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         )?;
     }
     for kernel in &kernels {
-        let entry = module
-            .function(&kernel.entry)
-            .expect("verify_module established the kernel entry");
-        let body = entry.body.as_ref().expect("verified kernel entry body");
+        let entry = kernel_entry_function(module, kernel)?;
+        let body = kernel_entry_body(module, kernel, entry)?;
         for block in &body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
                 if !matches!(&operation.kind, OperationKind::WorkgroupMemory(_)) {
                     continue;
                 }
-                let result = operation
-                    .results
-                    .first()
-                    .expect("verify_module established the LDS result");
+                let Some(result) = operation.results.first() else {
+                    return Err(LoweringErrors::one(
+                        LoweringLocation::operation(
+                            module,
+                            kernel,
+                            entry,
+                            block.id,
+                            operation_index,
+                        ),
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        "workgroup memory operation did not define its LDS allocation result",
+                    ));
+                };
                 let emitted = lds_symbol(kernel, result.id);
+                let symbol = emitted.strip_prefix('@').ok_or_else(|| {
+                    LoweringErrors::one(
+                        LoweringLocation::operation(
+                            module,
+                            kernel,
+                            entry,
+                            block.id,
+                            operation_index,
+                        ),
+                        LoweringDiagnosticCode::ConflictingSymbol,
+                        "generated LDS symbol did not use global LLVM symbol syntax",
+                    )
+                })?;
                 reserve_emitted_symbol(
                     &mut emitted_symbols,
-                    emitted.strip_prefix('@').expect("LDS symbols start with @"),
+                    symbol,
                     format!("kernel {} LDS value {}", kernel.id, result.id),
                     LoweringLocation::operation(module, kernel, entry, block.id, operation_index),
                 )?;
@@ -1171,7 +1227,11 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                 declarations.push(*function);
             }
             FunctionRole::KernelEntry => {
-                unreachable!("verify_module rejects unreferenced KernelEntry definitions")
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::KernelEntryDeclaration,
+                    "kernel entry function is not referenced by an exported kernel",
+                ));
             }
         }
     }
@@ -1185,8 +1245,13 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         let launch_bounds = launch_policy_map
             .as_ref()
             .map(|policies| policies[&kernel.id]);
-        let flat_workgroup_size = checked_flat_workgroup_size(workgroup_size)
-            .expect("validate_launch established a bounded flat workgroup size");
+        let flat_workgroup_size = checked_flat_workgroup_size(workgroup_size).ok_or_else(|| {
+            LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::UnsupportedWorkgroupSize,
+                "workgroup dimensions overflow the flat workgroup size",
+            )
+        })?;
         if launch_bounds
             .is_some_and(|bounds| !bounds.admits_flat_workgroup_size(flat_workgroup_size))
         {
@@ -1199,9 +1264,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                 ),
             ));
         }
-        let entry = module
-            .function(&kernel.entry)
-            .expect("verify_module established the kernel entry");
+        let entry = kernel_entry_function(module, kernel)?;
         let wave_width = wave_plan.kernels[&kernel.id];
         let mut lowerer = FunctionLowerer::compiler_module_kernel(
             module,
@@ -1218,7 +1281,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                 .map_or(SemanticAnchorEmissionV1::Disabled, |(_, emission)| {
                     *emission
                 }),
-        );
+        )?;
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -1232,7 +1295,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
             wave_width,
             &call_symbols,
             target,
-        );
+        )?;
         preflight_function(&mut lowerer)?;
         helper_lowerers.push(lowerer);
     }
@@ -1446,9 +1509,7 @@ fn infer_effective_wave_widths(
     let mut kernel_reachable = vec![false; components.len()];
     let mut kernel_modes = BTreeMap::new();
     for kernel in kernels {
-        let entry = module
-            .function(&kernel.entry)
-            .expect("verified kernel entry");
+        let entry = kernel_entry_function(module, kernel)?;
         let kernel_wave = validate_capabilities(
             LoweringLocation::kernel(module, kernel),
             &kernel.required_capabilities,
@@ -1560,7 +1621,14 @@ fn infer_effective_wave_widths(
                 &modes,
             ));
         }
-        let mode = *modes.first().expect("root has an explicit wave mode");
+        let mode = *modes.first().ok_or_else(|| {
+            let function = helpers[components[root][0]];
+            LoweringErrors::one(
+                LoweringLocation::device_function(module, function),
+                LoweringDiagnosticCode::MissingWaveWidth,
+                "helper SCC lost its explicit exact wave mode during propagation",
+            )
+        })?;
         for component in reachable {
             assignments[component].insert(mode);
         }
@@ -1602,7 +1670,12 @@ fn helper_callees(
     edge_count: &mut usize,
 ) -> Result<Vec<usize>, LoweringErrors> {
     let mut callees = BTreeSet::new();
-    let body = function.body.as_ref().expect("definition required");
+    let body = required_function_body(
+        module,
+        None,
+        function,
+        "device helper body is missing during call-graph analysis",
+    )?;
     for operation in body.blocks.iter().flat_map(|block| &block.operations) {
         let OperationKind::Call { callee, .. } = &operation.kind else {
             continue;
@@ -1752,7 +1825,7 @@ fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringE
     validate_reducible_cfg(lowerer)?;
     validate_convergent_cfg(lowerer)?;
     lowerer.validate_parameters()?;
-    let body = lowerer.function.body.as_ref().expect("definition required");
+    let body = lowerer.body("function body is missing during preflight")?;
     for block in &body.blocks {
         lowerer.validate_block(block)?;
     }
@@ -1780,7 +1853,7 @@ fn validate_reducible_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringE
 }
 
 fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
-    let body = lowerer.function.body.as_ref().expect("definition required");
+    let body = lowerer.body("function body is missing during convergent CFG validation")?;
     let convergent_operations = body
         .blocks
         .iter()
@@ -1821,7 +1894,17 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         ));
     }
     for (block, operation) in convergent_operations {
-        let operation_value = &lowerer.block(block).operations[operation];
+        let operation_value = lowerer
+            .block(block)?
+            .operations
+            .get(operation)
+            .ok_or_else(|| {
+                LoweringErrors::one(
+                    lowerer.operation_location(block, operation),
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    "convergent operation inventory referenced a missing operation",
+                )
+            })?;
         let scope = match &operation_value.kind {
             OperationKind::WorkgroupBarrier(barrier) => barrier.convergence.scope(),
             OperationKind::Wave(wave) => wave.convergence.scope(),
@@ -1851,10 +1934,13 @@ struct DiagnosticRequirements {
 }
 
 impl DiagnosticRequirements {
-    fn collect<'a>(lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>) -> Self {
+    fn collect<'a>(
+        lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
+    ) -> Result<Self, LoweringErrors> {
         let mut requirements = Self::default();
         for lowerer in lowerers {
-            let body = lowerer.function.body.as_ref().expect("definition required");
+            let body =
+                lowerer.body("function body is missing during diagnostic requirement scan")?;
             for operation in body.blocks.iter().flat_map(|block| &block.operations) {
                 let OperationKind::Call { callee, arguments } = &operation.kind else {
                     continue;
@@ -1874,7 +1960,7 @@ impl DiagnosticRequirements {
                 }
             }
         }
-        requirements
+        Ok(requirements)
     }
 
     const fn is_empty(&self) -> bool {
@@ -1906,10 +1992,12 @@ struct FloatRequirements {
 }
 
 impl FloatRequirements {
-    fn collect<'a>(lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>) -> Self {
+    fn collect<'a>(
+        lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
+    ) -> Result<Self, LoweringErrors> {
         let mut requirements = Self::default();
         for lowerer in lowerers {
-            let body = lowerer.function.body.as_ref().expect("definition required");
+            let body = lowerer.body("function body is missing during float requirement scan")?;
             for operation in body.blocks.iter().flat_map(|block| &block.operations) {
                 let OperationKind::Call { callee, arguments } = &operation.kind else {
                     continue;
@@ -1952,7 +2040,7 @@ impl FloatRequirements {
                 }
             }
         }
-        requirements
+        Ok(requirements)
     }
 
     fn is_empty(&self) -> bool {
@@ -2430,10 +2518,10 @@ fn emit_compiler_module(
     declarations: &[&Function],
     target: LoweringTarget,
 ) -> Result<String, LoweringErrors> {
-    let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers));
-    let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers));
-    let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers));
-    let diagnostic_requirements = DiagnosticRequirements::collect(kernels.iter().chain(helpers));
+    let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers))?;
+    let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers))?;
+    let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers))?;
+    let diagnostic_requirements = DiagnosticRequirements::collect(kernels.iter().chain(helpers))?;
     let has_semantic_anchors = kernels.iter().any(|lowerer| {
         matches!(
             lowerer.semantic_anchor_emission,
@@ -2458,7 +2546,7 @@ fn emit_compiler_module(
 
     let mut has_lds = false;
     for lowerer in kernels {
-        has_lds |= lowerer.emit_workgroup_memory_declarations(&mut output);
+        has_lds |= lowerer.emit_workgroup_memory_declarations(&mut output)?;
     }
     if has_lds {
         writeln!(output).unwrap();
@@ -2469,8 +2557,20 @@ fn emit_compiler_module(
     }
     for (symbol, declaration) in &intrinsics {
         let attribute = match declaration.attribute {
-            IntrinsicAttribute::ReadNone => readnone_attribute.expect("readnone attribute"),
-            IntrinsicAttribute::Convergent => convergent_attribute.expect("convergent attribute"),
+            IntrinsicAttribute::ReadNone => readnone_attribute.ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::module(module),
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    format!("intrinsic {symbol} requires a readnone attribute slot"),
+                )
+            })?,
+            IntrinsicAttribute::Convergent => convergent_attribute.ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::module(module),
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    format!("intrinsic {symbol} requires a convergent attribute slot"),
+                )
+            })?,
         };
         writeln!(
             output,
@@ -2524,8 +2624,7 @@ fn emit_compiler_module(
             .wave_width
             .map_or("", |width| target.wave_target_feature(width));
         let flat_workgroup_size = lowerer
-            .flat_workgroup_size()
-            .expect("compiler-module kernel requires a workgroup size");
+            .required_flat_workgroup_size("compiler-module kernel requires a workgroup size")?;
         match lowerer.launch_bounds {
             Some(bounds) => {
                 writeln!(
@@ -2561,9 +2660,8 @@ fn emit_compiler_module(
     }
     writeln!(output).unwrap();
     for (index, lowerer) in kernels.iter().enumerate() {
-        let workgroup_size = lowerer
-            .workgroup_size
-            .expect("compiler-module kernel requires a workgroup size");
+        let workgroup_size =
+            lowerer.required_workgroup_size("compiler-module kernel requires a workgroup size")?;
         writeln!(
             output,
             "!{index} = !{{i32 {}, i32 {}, i32 {}}}",
@@ -2577,10 +2675,14 @@ fn emit_compiler_module(
             SemanticAnchorEmissionV1::Disabled
         )
     }) {
-        lowerer.emit_semantic_anchor_metadata_v1(
-            &mut output,
-            u64::try_from(kernels.len()).expect("kernel count is bounded"),
-        );
+        let metadata_index = u64::try_from(kernels.len()).map_err(|_| {
+            LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::ResourceLimit,
+                "kernel count exceeds semantic-anchor metadata index width",
+            )
+        })?;
+        lowerer.emit_semantic_anchor_metadata_v1(&mut output, metadata_index)?;
     }
     output.finish(module)
 }
@@ -2655,40 +2757,40 @@ impl fmt::Write for CapacityLimitedText {
 
 fn collect_memcpy_declarations<'a>(
     lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
-) -> BTreeSet<(KernelAddressSpace, KernelAddressSpace)> {
-    lowerers
-        .flat_map(|lowerer| {
-            lowerer
-                .function
-                .body
-                .as_ref()
-                .expect("definition required")
-                .blocks
+) -> Result<BTreeSet<(KernelAddressSpace, KernelAddressSpace)>, LoweringErrors> {
+    let mut declarations = BTreeSet::new();
+    for lowerer in lowerers {
+        let body = lowerer.body("function body is missing during memcpy declaration scan")?;
+        declarations.extend(
+            body.blocks
                 .iter()
                 .flat_map(|block| &block.operations)
-        })
-        .filter_map(|operation| {
-            let OperationKind::MemoryIntrinsic(MemoryIntrinsicOperation::CopyNonOverlapping {
-                element,
-                source_address_space,
-                destination_address_space,
-                ..
-            }) = operation.kind
-            else {
-                return None;
-            };
-            (element != MemoryElementType::Unit)
-                .then_some((destination_address_space, source_address_space))
-        })
-        .collect()
+                .filter_map(|operation| {
+                    let OperationKind::MemoryIntrinsic(
+                        MemoryIntrinsicOperation::CopyNonOverlapping {
+                            element,
+                            source_address_space,
+                            destination_address_space,
+                            ..
+                        },
+                    ) = operation.kind
+                    else {
+                        return None;
+                    };
+                    (element != MemoryElementType::Unit)
+                        .then_some((destination_address_space, source_address_space))
+                }),
+        );
+    }
+    Ok(declarations)
 }
 
 fn collect_intrinsic_declarations<'a>(
     lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>,
-) -> BTreeMap<String, IntrinsicDeclaration> {
+) -> Result<BTreeMap<String, IntrinsicDeclaration>, LoweringErrors> {
     let mut declarations = BTreeMap::new();
     for lowerer in lowerers {
-        let body = lowerer.function.body.as_ref().expect("definition required");
+        let body = lowerer.body("function body is missing during intrinsic declaration scan")?;
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
             if let OperationKind::Intrinsic(intrinsic) = &operation.kind
                 && let IntrinsicKind::InvocationIndex {
@@ -2922,7 +3024,7 @@ fn collect_intrinsic_declarations<'a>(
             }
         }
     }
-    declarations
+    Ok(declarations)
 }
 
 fn insert_intrinsic(
@@ -3287,41 +3389,92 @@ impl ValueBinding {
     }
 }
 
-fn control_flow_emission_plan(function: &Function) -> (IndexedControlFlow, Vec<bool>) {
-    let control_flow = analyze_control_flow(function)
-        .expect("verify_module established bounded structural control flow");
-    let body = function.body.as_ref().expect("definition required");
+fn control_flow_emission_plan(
+    module: &Module,
+    function: &Function,
+) -> Result<(IndexedControlFlow, Vec<bool>), LoweringErrors> {
+    let control_flow = analyze_control_flow(function).map_err(|error| {
+        LoweringErrors::one(
+            LoweringLocation::device_function(module, function),
+            LoweringDiagnosticCode::IrreducibleControlFlow,
+            format!("control-flow emission could not index the verified function: {error}"),
+        )
+    })?;
+    let body = function.body.as_ref().ok_or_else(|| {
+        LoweringErrors::one(
+            LoweringLocation::device_function(module, function),
+            LoweringDiagnosticCode::KernelEntryDeclaration,
+            "function emission requires a definition body",
+        )
+    })?;
     let mut split_edges = vec![false; control_flow.edge_count()];
     let mut target_counts = vec![0usize; control_flow.block_count()];
     let mut touched_targets = Vec::new();
     for block in &body.blocks {
-        let outgoing = control_flow
-            .outgoing_edges(block.id)
-            .expect("indexed source block");
+        let outgoing = control_flow.outgoing_edges(block.id).ok_or_else(|| {
+            LoweringErrors::one(
+                LoweringLocation::device_block(module, function, block.id),
+                LoweringDiagnosticCode::IrreducibleControlFlow,
+                "control-flow emission lost an indexed source block",
+            )
+        })?;
         touched_targets.clear();
         for edge_index in outgoing.clone() {
-            let target = control_flow.edge_target(edge_index).expect("indexed edge");
-            let target_position = control_flow
-                .block_position(target)
-                .expect("indexed target block");
+            let target = control_flow.edge_target(edge_index).ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::device_block(module, function, block.id),
+                    LoweringDiagnosticCode::IrreducibleControlFlow,
+                    "control-flow emission lost an indexed outgoing edge",
+                )
+            })?;
+            let target_position = control_flow.block_position(target).ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::device_block(module, function, target),
+                    LoweringDiagnosticCode::IrreducibleControlFlow,
+                    "control-flow emission lost an indexed target block",
+                )
+            })?;
             if target_counts[target_position] == 0 {
                 touched_targets.push(target_position);
             }
             target_counts[target_position] += 1;
         }
         for edge_index in outgoing.clone() {
-            let target = control_flow.edge_target(edge_index).expect("indexed edge");
-            let target_position = control_flow
-                .block_position(target)
-                .expect("indexed target block");
-            if body.blocks[target_position].parameters.is_empty() {
+            let target = control_flow.edge_target(edge_index).ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::device_block(module, function, block.id),
+                    LoweringDiagnosticCode::IrreducibleControlFlow,
+                    "control-flow emission lost an indexed outgoing edge",
+                )
+            })?;
+            let target_position = control_flow.block_position(target).ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::device_block(module, function, target),
+                    LoweringDiagnosticCode::IrreducibleControlFlow,
+                    "control-flow emission lost an indexed target block",
+                )
+            })?;
+            let target_block = body.blocks.get(target_position).ok_or_else(|| {
+                LoweringErrors::one(
+                    LoweringLocation::device_block(module, function, target),
+                    LoweringDiagnosticCode::IrreducibleControlFlow,
+                    "control-flow emission target block is outside the function body",
+                )
+            })?;
+            if target_block.parameters.is_empty() {
                 continue;
             }
             let duplicate_target = target_counts[target_position] > 1;
             let critical = outgoing.len() > 1
                 && control_flow
                     .incoming_edges(target)
-                    .expect("indexed target block")
+                    .ok_or_else(|| {
+                        LoweringErrors::one(
+                            LoweringLocation::device_block(module, function, target),
+                            LoweringDiagnosticCode::IrreducibleControlFlow,
+                            "control-flow emission lost indexed incoming edges",
+                        )
+                    })?
                     .len()
                     > 1;
             split_edges[edge_index] = duplicate_target || critical;
@@ -3330,7 +3483,7 @@ fn control_flow_emission_plan(function: &Function) -> (IndexedControlFlow, Vec<b
             target_counts[*target] = 0;
         }
     }
-    (control_flow, split_edges)
+    Ok((control_flow, split_edges))
 }
 
 struct FunctionLowerer<'a> {
@@ -3486,13 +3639,48 @@ impl<'a> FunctionLowerer<'a> {
         self.workgroup_size.and_then(checked_flat_workgroup_size)
     }
 
-    fn emit_logical_global_id(&self, output: &mut dyn fmt::Write, result: &str) {
-        let kernel = self
-            .kernel
-            .expect("global invocation index requires a kernel");
-        let workgroup = self
-            .workgroup_size
-            .expect("global invocation index requires a kernel workgroup size");
+    fn body(&self, message: &'static str) -> Result<&'a FunctionBody, LoweringErrors> {
+        required_function_body(self.module, self.kernel, self.function, message)
+    }
+
+    fn required_workgroup_size(
+        &self,
+        message: &'static str,
+    ) -> Result<WorkgroupSize, LoweringErrors> {
+        self.workgroup_size.ok_or_else(|| {
+            LoweringErrors::one(
+                self.function_location(),
+                LoweringDiagnosticCode::MissingWorkgroupSize,
+                message,
+            )
+        })
+    }
+
+    fn required_flat_workgroup_size(&self, message: &'static str) -> Result<u32, LoweringErrors> {
+        let size = self.required_workgroup_size(message)?;
+        checked_flat_workgroup_size(size).ok_or_else(|| {
+            LoweringErrors::one(
+                self.function_location(),
+                LoweringDiagnosticCode::UnsupportedWorkgroupSize,
+                message,
+            )
+        })
+    }
+
+    fn emit_logical_global_id(
+        &self,
+        output: &mut dyn fmt::Write,
+        result: &str,
+    ) -> Result<(), LoweringErrors> {
+        let kernel = self.kernel.ok_or_else(|| {
+            LoweringErrors::one(
+                self.function_location(),
+                LoweringDiagnosticCode::UnsupportedOperation,
+                "global invocation index requires a kernel entry",
+            )
+        })?;
+        let workgroup =
+            self.required_workgroup_size("global invocation index requires a workgroup size")?;
         if kernel.domain.rank() == 1 {
             writeln!(
                 output,
@@ -3523,7 +3711,7 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
             writeln!(output, "  {result} = add i64 {result}.base, {result}.local").unwrap();
-            return;
+            return Ok(());
         }
 
         for (dim, extent) in [
@@ -3596,7 +3784,7 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
             writeln!(output, "  {result} = add i64 {result}.row, {result}.x").unwrap();
-            return;
+            return Ok(());
         }
         writeln!(
             output,
@@ -3633,6 +3821,7 @@ impl<'a> FunctionLowerer<'a> {
             "  {result} = add i64 {result}.plane_row_scaled, {result}.x"
         )
         .unwrap();
+        Ok(())
     }
 
     fn new(
@@ -3643,9 +3832,9 @@ impl<'a> FunctionLowerer<'a> {
         wave_width: Option<WaveWidth>,
         target: LoweringTarget,
         semantic_anchor_emission: SemanticAnchorEmissionV1,
-    ) -> Self {
-        let (control_flow, split_edges) = control_flow_emission_plan(function);
-        Self {
+    ) -> Result<Self, LoweringErrors> {
+        let (control_flow, split_edges) = control_flow_emission_plan(module, function)?;
+        Ok(Self {
             module,
             kernel: Some(kernel),
             function,
@@ -3659,7 +3848,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
-        }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3673,9 +3862,9 @@ impl<'a> FunctionLowerer<'a> {
         target: LoweringTarget,
         launch_bounds: Option<Gfx942LaunchBoundsV1>,
         semantic_anchor_emission: SemanticAnchorEmissionV1,
-    ) -> Self {
-        let (control_flow, split_edges) = control_flow_emission_plan(function);
-        Self {
+    ) -> Result<Self, LoweringErrors> {
+        let (control_flow, split_edges) = control_flow_emission_plan(module, function)?;
+        Ok(Self {
             module,
             kernel: Some(kernel),
             function,
@@ -3689,7 +3878,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
-        }
+        })
     }
 
     fn compiler_module_device_function(
@@ -3698,9 +3887,9 @@ impl<'a> FunctionLowerer<'a> {
         wave_width: Option<WaveWidth>,
         call_symbols: &'a BTreeMap<FunctionId, String>,
         target: LoweringTarget,
-    ) -> Self {
-        let (control_flow, split_edges) = control_flow_emission_plan(function);
-        Self {
+    ) -> Result<Self, LoweringErrors> {
+        let (control_flow, split_edges) = control_flow_emission_plan(module, function)?;
+        Ok(Self {
             module,
             kernel: None,
             function,
@@ -3714,20 +3903,27 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
-        }
+        })
     }
 
-    fn block(&self, block: BlockId) -> &BasicBlock {
-        let position = self
-            .control_flow
-            .block_position(block)
-            .expect("verified block has an index");
-        &self
-            .function
-            .body
-            .as_ref()
-            .expect("definition required")
-            .blocks[position]
+    fn block(&self, block: BlockId) -> Result<&BasicBlock, LoweringErrors> {
+        let position = self.control_flow.block_position(block).ok_or_else(|| {
+            LoweringErrors::one(
+                self.block_location(block),
+                LoweringDiagnosticCode::IrreducibleControlFlow,
+                "requested block is not present in the verified control-flow index",
+            )
+        })?;
+        self.body("function body is missing during block lookup")?
+            .blocks
+            .get(position)
+            .ok_or_else(|| {
+                LoweringErrors::one(
+                    self.block_location(block),
+                    LoweringDiagnosticCode::IrreducibleControlFlow,
+                    "requested block is outside the function body",
+                )
+            })
     }
 
     fn function_location(&self) -> LoweringLocation {
@@ -5158,8 +5354,8 @@ impl<'a> FunctionLowerer<'a> {
             emit_matrix_projected_kernarg_policy(&mut output, &binding.projected_kernarg);
         }
         writeln!(output).unwrap();
-        let float_requirements = FloatRequirements::collect(std::iter::once(self));
-        let diagnostic_requirements = DiagnosticRequirements::collect(std::iter::once(self));
+        let float_requirements = FloatRequirements::collect(std::iter::once(self))?;
+        let diagnostic_requirements = DiagnosticRequirements::collect(std::iter::once(self))?;
         let has_workgroup_barrier = self.has_workgroup_barrier();
         let has_matrix_lds = self.has_matrix_kind(|kind| {
             matches!(
@@ -5231,10 +5427,10 @@ impl<'a> FunctionLowerer<'a> {
             || has_scaled_matrix_mfma
             || self.has_wave_kind(|_| true)
             || self.has_gfx950_transpose_kind(|_| true);
-        if self.emit_workgroup_memory_declarations(&mut output) {
+        if self.emit_workgroup_memory_declarations(&mut output)? {
             writeln!(output).unwrap();
         }
-        let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self));
+        let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self))?;
         if matches!(
             self.semantic_anchor_emission,
             SemanticAnchorEmissionV1::Active(_)
@@ -5373,8 +5569,7 @@ impl<'a> FunctionLowerer<'a> {
         writeln!(
             output,
             "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute}{target_attributes} }}",
-            self.flat_workgroup_size()
-                .expect("single-kernel emission requires a workgroup size"),
+            self.required_flat_workgroup_size("single-kernel emission requires a workgroup size")?,
             target_attributes = self.target.llvm_function_attributes()
         )
         .unwrap();
@@ -5387,16 +5582,15 @@ impl<'a> FunctionLowerer<'a> {
             writeln!(output, "attributes #2 = {{ convergent nounwind }}").unwrap();
         }
         writeln!(output).unwrap();
-        let workgroup_size = self
-            .workgroup_size
-            .expect("single-kernel emission requires a workgroup size");
+        let workgroup_size =
+            self.required_workgroup_size("single-kernel emission requires a workgroup size")?;
         writeln!(
             output,
             "!0 = !{{i32 {}, i32 {}, i32 {}}}",
             workgroup_size.x, workgroup_size.y, workgroup_size.z
         )
         .unwrap();
-        self.emit_semantic_anchor_metadata_v1(&mut output, 1);
+        self.emit_semantic_anchor_metadata_v1(&mut output, 1)?;
         output.finish(self.module)
     }
 
@@ -5408,12 +5602,24 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         let parameters = self.llvm_parameters()?.join(", ");
         if self.kernel.is_some() {
+            let kernel_attribute = kernel_attribute.ok_or_else(|| {
+                LoweringErrors::one(
+                    self.function_location(),
+                    LoweringDiagnosticCode::KernelEntryDeclaration,
+                    "compiler-module kernel definition is missing its attribute index",
+                )
+            })?;
+            let kernel_metadata = kernel_metadata.ok_or_else(|| {
+                LoweringErrors::one(
+                    self.function_location(),
+                    LoweringDiagnosticCode::KernelEntryDeclaration,
+                    "compiler-module kernel definition is missing its metadata index",
+                )
+            })?;
             writeln!(
                 output,
                 "define amdgpu_kernel void @{}({parameters}) #{} !reqd_work_group_size !{} {{",
-                self.symbol,
-                kernel_attribute.expect("kernel attribute index"),
-                kernel_metadata.expect("kernel metadata index"),
+                self.symbol, kernel_attribute, kernel_metadata,
             )
             .unwrap();
         } else {
@@ -5425,7 +5631,11 @@ impl<'a> FunctionLowerer<'a> {
                 FunctionRole::InternalHelper => "internal ",
                 FunctionRole::DeviceFfiExport => "",
                 FunctionRole::KernelEntry | FunctionRole::ExternalImport => {
-                    unreachable!("helper definition has a definition role")
+                    return Err(LoweringErrors::one(
+                        self.function_location(),
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "compiler-module helper definition has a non-definition role",
+                    ));
                 }
             };
             writeln!(
@@ -5442,7 +5652,7 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn emit_body(&self, output: &mut dyn fmt::Write) -> Result<(), LoweringErrors> {
-        let body = self.function.body.as_ref().expect("definition required");
+        let body = self.body("function body is missing during LLVM body emission")?;
         let mut next_probe_index = 1_u64;
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
@@ -5453,11 +5663,18 @@ impl<'a> FunctionLowerer<'a> {
                     self.semantic_anchor_emission,
                     SemanticAnchorEmissionV1::Active(_)
                 ) {
+                    let kernel = self.kernel.ok_or_else(|| {
+                        LoweringErrors::one(
+                            self.operation_location(block.id, operation_index),
+                            LoweringDiagnosticCode::KernelEntryDeclaration,
+                            "semantic anchor emission requires a kernel entry",
+                        )
+                    })?;
                     next_probe_index = next_probe_index.checked_add(1).ok_or_else(|| {
                         LoweringErrors::one(
                             LoweringLocation::operation(
                                 self.module,
-                                self.kernel.expect("semantic anchors are kernel-only"),
+                                kernel,
                                 self.function,
                                 block.id,
                                 operation_index,
@@ -5469,11 +5686,14 @@ impl<'a> FunctionLowerer<'a> {
                 }
                 self.emit_operation(output, block.id, operation_index, operation)?;
             }
-            self.emit_terminator(
-                output,
-                block.id,
-                block.terminator.as_ref().expect("verified terminator"),
-            );
+            let terminator = block.terminator.as_ref().ok_or_else(|| {
+                LoweringErrors::one(
+                    self.block_location(block.id),
+                    LoweringDiagnosticCode::UnsupportedTerminator,
+                    "basic block terminator is missing during LLVM body emission",
+                )
+            })?;
+            self.emit_terminator(output, block.id, terminator);
             self.emit_split_edges(output, block);
         }
         if let SemanticAnchorEmissionV1::Active(plan) = self.semantic_anchor_emission {
@@ -5498,9 +5718,9 @@ impl<'a> FunctionLowerer<'a> {
         &self,
         output: &mut dyn fmt::Write,
         first_metadata_index: u64,
-    ) {
+    ) -> Result<(), LoweringErrors> {
         let plan = match self.semantic_anchor_emission {
-            SemanticAnchorEmissionV1::Disabled => return,
+            SemanticAnchorEmissionV1::Disabled => return Ok(()),
             SemanticAnchorEmissionV1::NoOperations(context) => {
                 emit_semantic_anchor_absence_v1(
                     output,
@@ -5508,7 +5728,7 @@ impl<'a> FunctionLowerer<'a> {
                     "no_operations",
                     context,
                 );
-                return;
+                return Ok(());
             }
             SemanticAnchorEmissionV1::MultipleDefinedBodies(context) => {
                 emit_semantic_anchor_absence_v1(
@@ -5517,11 +5737,12 @@ impl<'a> FunctionLowerer<'a> {
                     "multiple_defined_bodies",
                     context,
                 );
-                return;
+                return Ok(());
             }
             SemanticAnchorEmissionV1::Active(plan) => plan,
         };
-        let body = self.function.body.as_ref().expect("definition required");
+        let body =
+            self.body("function body is missing during semantic-anchor metadata emission")?;
         writeln!(
             output,
             "!llvm.pseudo_probe_desc = !{{!{first_metadata_index}}}"
@@ -5565,17 +5786,30 @@ impl<'a> FunctionLowerer<'a> {
                     plan.function_ordinal,
                 )
                 .unwrap();
-                probe_index = probe_index
-                    .checked_add(1)
-                    .expect("the precomputed operation count is bounded");
-                operation_ordinal = operation_ordinal
-                    .checked_add(1)
-                    .expect("the precomputed operation count is bounded");
+                probe_index = probe_index.checked_add(1).ok_or_else(|| {
+                    LoweringErrors::one(
+                        self.function_location(),
+                        LoweringDiagnosticCode::ResourceLimit,
+                        "semantic-anchor probe index exceeds u64 during metadata emission",
+                    )
+                })?;
+                operation_ordinal = operation_ordinal.checked_add(1).ok_or_else(|| {
+                    LoweringErrors::one(
+                        self.function_location(),
+                        LoweringDiagnosticCode::ResourceLimit,
+                        "semantic-anchor operation ordinal exceeds u64 during metadata emission",
+                    )
+                })?;
             }
-            block_ordinal = block_ordinal
-                .checked_add(1)
-                .expect("the precomputed block count is bounded");
+            block_ordinal = block_ordinal.checked_add(1).ok_or_else(|| {
+                LoweringErrors::one(
+                    self.function_location(),
+                    LoweringDiagnosticCode::ResourceLimit,
+                    "semantic-anchor block ordinal exceeds u64 during metadata emission",
+                )
+            })?;
         }
+        Ok(())
     }
 
     fn has_workgroup_barrier(&self) -> bool {
@@ -5627,61 +5861,82 @@ impl<'a> FunctionLowerer<'a> {
             })
     }
 
-    fn emit_workgroup_memory_declarations(&self, output: &mut dyn fmt::Write) -> bool {
+    fn emit_workgroup_memory_declarations(
+        &self,
+        output: &mut dyn fmt::Write,
+    ) -> Result<bool, LoweringErrors> {
         let mut emitted = false;
-        let body = self.function.body.as_ref().expect("definition required");
-        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-            if !matches!(
-                operation.kind,
-                OperationKind::WorkgroupMemory(_)
-                    | OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
-                        kind: Gfx950LdsTransposeOperationKindV1::Current { .. },
-                        ..
-                    })
-            ) {
-                continue;
-            }
-            emitted = true;
-            let result = operation.results.first().expect("verified LDS result");
-            let symbol = lds_symbol(
-                self.kernel
-                    .expect("workgroup memory declarations require a kernel"),
-                result.id,
-            );
-            match &operation.kind {
-                OperationKind::WorkgroupMemory(memory) => {
-                    let element = llvm_type(&memory.element);
-                    match memory.extent {
-                        WorkgroupMemoryExtent::Static(elements) => writeln!(
+        let body =
+            self.body("function body is missing during workgroup memory declaration scan")?;
+        let kernel = self.kernel.ok_or_else(|| {
+            LoweringErrors::one(
+                self.function_location(),
+                LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                "workgroup memory declarations require a kernel",
+            )
+        })?;
+        for block in &body.blocks {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
+                if !matches!(
+                    operation.kind,
+                    OperationKind::WorkgroupMemory(_)
+                        | OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                            kind: Gfx950LdsTransposeOperationKindV1::Current { .. },
+                            ..
+                        })
+                ) {
+                    continue;
+                }
+                emitted = true;
+                let result = operation.results.first().ok_or_else(|| {
+                    LoweringErrors::one(
+                        self.operation_location(block.id, operation_index),
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        "workgroup memory operation did not define its LDS allocation result",
+                    )
+                })?;
+                let symbol = lds_symbol(kernel, result.id);
+                match &operation.kind {
+                    OperationKind::WorkgroupMemory(memory) => {
+                        let element = llvm_type(&memory.element);
+                        match memory.extent {
+                            WorkgroupMemoryExtent::Static(elements) => writeln!(
+                                output,
+                                "{symbol} = internal addrspace(3) global [{elements} x {element}] undef, align {}",
+                                memory.alignment
+                            )
+                            .unwrap(),
+                            WorkgroupMemoryExtent::Dynamic
+                            | WorkgroupMemoryExtent::DynamicAtLeast(_) => writeln!(
+                                output,
+                                "{symbol} = external addrspace(3) global [0 x {element}], align {}",
+                                memory.alignment
+                            )
+                            .unwrap(),
+                        }
+                    }
+                    OperationKind::Gfx950LdsTranspose(transpose)
+                        if let Gfx950LdsTransposeOperationKindV1::Current { format } =
+                            transpose.kind =>
+                    {
+                        let bytes = format.lds_bytes();
+                        writeln!(
                             output,
-                            "{symbol} = internal addrspace(3) global [{elements} x {element}] undef, align {}",
-                            memory.alignment
+                            "{symbol} = internal addrspace(3) global [{bytes} x i8] undef, align 64"
                         )
-                        .unwrap(),
-                        WorkgroupMemoryExtent::Dynamic
-                        | WorkgroupMemoryExtent::DynamicAtLeast(_) => writeln!(
-                            output,
-                            "{symbol} = external addrspace(3) global [0 x {element}], align {}",
-                            memory.alignment
-                        )
-                        .unwrap(),
+                        .unwrap();
+                    }
+                    _ => {
+                        return Err(LoweringErrors::one(
+                            self.operation_location(block.id, operation_index),
+                            LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                            "workgroup memory declaration inventory included a non-declaration operation",
+                        ));
                     }
                 }
-                OperationKind::Gfx950LdsTranspose(transpose)
-                    if let Gfx950LdsTransposeOperationKindV1::Current { format } =
-                        transpose.kind =>
-                {
-                    let bytes = format.lds_bytes();
-                    writeln!(
-                        output,
-                        "{symbol} = internal addrspace(3) global [{bytes} x i8] undef, align 64"
-                    )
-                    .unwrap();
-                }
-                _ => unreachable!("declaration inventory is exact"),
             }
         }
-        emitted
+        Ok(emitted)
     }
 
     fn emit_block_parameters(&self, output: &mut dyn fmt::Write, block: &BasicBlock) {
@@ -5851,7 +6106,7 @@ impl<'a> FunctionLowerer<'a> {
                         axis: Axis::X,
                     }
                 ) {
-                    self.emit_logical_global_id(output, &result);
+                    self.emit_logical_global_id(output, &result)?;
                     return Ok(());
                 }
                 match intrinsic.kind {
@@ -6295,21 +6550,36 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             OperationKind::WorkgroupMemory(memory) => {
-                let result = operation.results.first().expect("verified LDS result");
-                let result_name = result_name.expect("verified LDS result name");
+                let result = operation.results.first().ok_or_else(|| {
+                    LoweringErrors::one(
+                        self.operation_location(block, operation_index),
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        "workgroup memory operation did not define its LDS allocation result",
+                    )
+                })?;
+                let result_name = result_name.ok_or_else(|| {
+                    LoweringErrors::one(
+                        self.operation_location(block, operation_index),
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        "workgroup memory operation did not bind its LDS result name",
+                    )
+                })?;
                 let elements = match memory.extent {
                     WorkgroupMemoryExtent::Static(elements) => elements,
                     WorkgroupMemoryExtent::Dynamic | WorkgroupMemoryExtent::DynamicAtLeast(_) => 0,
                 };
                 let element = llvm_type(&memory.element);
+                let kernel = self.kernel.ok_or_else(|| {
+                    LoweringErrors::one(
+                        self.operation_location(block, operation_index),
+                        LoweringDiagnosticCode::UnsupportedWorkgroupMemory,
+                        "workgroup memory emission requires a kernel",
+                    )
+                })?;
                 writeln!(
                     output,
                     "  {result_name} = getelementptr [{elements} x {element}], ptr addrspace(3) {}, i32 0, i32 0",
-                    lds_symbol(
-                        self.kernel
-                            .expect("workgroup memory emission requires a kernel"),
-                        result.id,
-                    )
+                    lds_symbol(kernel, result.id)
                 )
                 .unwrap();
             }

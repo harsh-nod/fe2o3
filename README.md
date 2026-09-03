@@ -78,6 +78,10 @@ pub fn fill(mut out: DisjointSlice<f32>) {
 typed logical index, and the bounds check remains part of the admitted kernel
 semantics.
 
+Namespace-free `#[kernel(typed)]` packages are wrapper-managed. Raw Cargo does
+not synthesize their compiler-owned crate binding, so use `cargo fe2o3` or the
+repository scripts when checking kernel examples.
+
 ## Why Write Kernels In fe2o3
 
 The unique bet in `fe2o3` is that a kernel should ship with its intended
@@ -260,14 +264,18 @@ Run the bounded contributor preflight before opening a pull request:
 
 ```console
 cargo fmt --all -- --check
+bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
 ```
 
 Compiler, runtime, proof, and trust-policy changes must also run their
-applicable broader lanes, including `bash scripts/ci-local.sh generic-core`
-where required. The full validation matrix adds codegen shards, policy checks,
-Verus, compile-only AMDGPU checks, and hardware lanes. See
+applicable broader lanes, including `bash scripts/ci-local.sh check` for
+workspace/package check coverage and `bash scripts/ci-local.sh generic-core`
+where required. Do not replace those lanes with raw
+`cargo check --workspace --all-targets`: wrapper-managed typed kernels require
+the sealed `cargo-fe2o3` driver. The full validation matrix adds codegen
+shards, policy checks, Verus, compile-only AMDGPU checks, and hardware lanes. See
 [testing](docs/testing.md) for trust boundaries and required environments.
 
 External contributions are welcome once they satisfy the repository's
