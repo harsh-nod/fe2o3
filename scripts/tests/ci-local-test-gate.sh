@@ -365,19 +365,7 @@ assert_no_codegen_test_driver() {
 
 assert_source_isa_unit_matrix_gate() {
   local omitted name
-  local -a required_environment=(
-    FE2O3_TEST_CARGO_FE2O3_BIN
-    FE2O3_TEST_CARGO_FE2O3_SHA256
-    FE2O3_PRODUCTION_BUILD_CONFIG_V2
-    FE2O3_AUTHORITY_BACKEND_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_PATH_V1
-    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_SHA256_V1
-    FE2O3_BACKEND
-  )
+  local -a required_environment=("${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}")
 
   if (unset FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX; run_source_isa_unit_matrix) \
     >/dev/null 2>&1; then
@@ -485,6 +473,69 @@ assert_source_isa_characteristic_contract_v2_gate() {
   STEP_COMMANDS=()
 }
 
+assert_source_isa_characteristic_matrix_v2_gate() {
+  local omitted name
+  local -a required_environment=("${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}")
+  if (
+    unset FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2
+    run_source_isa_characteristic_matrix_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 matrix ran without its explicit opt-in' >&2
+    exit 1
+  fi
+  export FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2=1
+  for name in "${required_environment[@]}"; do
+    printf -v "${name}" '%s' fixture
+    export "${name}"
+  done
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Darwin ;;
+        -m) printf '%s\n' x86_64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_characteristic_matrix_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 matrix ran on a non-Linux host' >&2
+    exit 1
+  fi
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Linux ;;
+        -m) printf '%s\n' aarch64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_characteristic_matrix_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 matrix ran on a non-x86_64 host' >&2
+    exit 1
+  fi
+  for omitted in "${required_environment[@]}"; do
+    if (unset "${omitted}"; run_source_isa_characteristic_matrix_v2) >/dev/null 2>&1; then
+      printf 'source/ISA characteristic V2 matrix ran without %s\n' "${omitted}" >&2
+      exit 1
+    fi
+  done
+
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+  run_source_isa_characteristic_matrix_v2
+  assert_equals \
+    'cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 production_source_isa_characteristic_matrix_v2::production_adapter_v2::ordinary_source_units_preserve_characteristic_facts_on_both_targets_v2 -- --ignored --exact --test-threads=1 --nocapture' \
+    "$(step_command source-isa-characteristic-matrix-v2)" \
+    'protected source/ISA characteristic V2 matrix did not retain its exact serial ignored-test command'
+  unset FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2
+  for name in "${required_environment[@]}"; do
+    unset "${name}"
+  done
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+}
+
 codegen_target_prefix() {
   printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}"
@@ -521,6 +572,7 @@ assert_all_codegen_targets_once() {
 
 assert_source_isa_unit_matrix_gate
 assert_source_isa_characteristic_contract_v2_gate
+assert_source_isa_characteristic_matrix_v2_gate
 run_tests
 assert_no_codegen_test_driver
 assert_equals \
@@ -673,6 +725,8 @@ assert_step_count source-isa-unit-matrix 0 \
   'generic core unexpectedly ran the protected source/ISA unit matrix'
 assert_step_count source-isa-characteristic-contract-v2 0 \
   'generic core unexpectedly ran the protected source/ISA characteristic V2 contract'
+assert_step_count source-isa-characteristic-matrix-v2 0 \
+  'generic core unexpectedly ran the protected source/ISA characteristic V2 matrix'
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \

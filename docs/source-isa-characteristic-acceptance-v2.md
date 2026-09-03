@@ -1,7 +1,8 @@
 # Source/ISA characteristic acceptance V2
 
-Status: lossless producer/observer release and exact readmission implemented;
-protected build/capture adapter unavailable; protected 3x2 matrix not run.
+Status: lossless producer/observer release, exact readmission, and the protected
+ordinary-Rust build/capture adapter are implemented; the protected 3x2 matrix
+has not run because the qualified authority-service environment is unavailable.
 
 This is the next protected T1 acceptance for GitHub issue #215. It does not
 replace the V1 ordinary-unit observation matrix and does not turn an inert
@@ -10,7 +11,7 @@ or hardware-observation authority.
 
 ## Matrix
 
-The production adapter must build these unmodified ordinary-source units on
+The production adapter builds these unmodified ordinary-source units on
 both `gfx942` and `gfx950` through the sealed production V2 authority boundary:
 
 | Family | Source unit | Exact target-KIR classification |
@@ -34,6 +35,18 @@ call site. They have no neutral or target KIR, semantic-operation, LLVM, ISA, or
 transformation field. Exact duplicate catalog facts and exact duplicate ISA
 intervals retain distinct occurrence ordinals; set projection must not erase
 their multiplicity.
+
+The current producer can represent `Duplicated` and `Eliminated` records.
+`Fused`, `Inlined`, and `Moved` are typed
+`UnavailableNoProductionEmitter`; `Outlined` is typed
+`UnavailableNoSchemaRepresentation`. These capabilities describe producer
+expressiveness, not an assertion that a particular compilation observed a
+shape. The existing coalesced and duplicated-and-coalesced records remain exact
+backend observations rather than aliases for those unavailable classes.
+Independent producer and parser tests preserve duplicate and
+duplicated-and-coalesced cardinality. No current ordinary-source or canonical
+semantic-MIR real-Worker fixture has produced an observed duplicated round
+trip, so representability does not close that T1 acceptance gap.
 
 The compiler-handoff LLVM coordinate is the producer's function, block, and
 instruction ordinal tuple. V2 does not invent a function identity or LLVM
@@ -187,14 +200,24 @@ grant authority.
 The executable contract is
 `production_source_isa_characteristic_matrix_v2.rs`. Supported-target tests
 exercise the complete lossless reference model and Broker V3 hostile framing.
-The authority-free finalizer-to-observer release and independent exact
-readmission adapter are implemented and tested separately. The protected
-ordinary-source build and Broker V3 capture adapter remains compile-gated
-outside supported targets. The manual `source-isa-unit-matrix.yml` workflow
-validates this unexecuted contract on the `fe2o3-source-isa-protected-v1`
-runner label. A green contract validation job is not a protected 3x2 result.
+The authority-free finalizer-to-observer release, independent exact
+readmission, protected ordinary-source build, and Broker V3 capture adapter are
+implemented. The adapter maps the complete producer projection, compares exact
+forward and reverse query occurrence sets and interval multiplicity, and
+performs canonical hostile reseals. The manual `source-isa-unit-matrix.yml`
+workflow keeps contract validation separate from the protected matrix. The
+matrix runs only with both explicit dispatch confirmations, the protected
+runner label, and all eleven sealed authority/build environment bindings. A
+green contract validation job is not a protected 3x2 result.
 
-Enabling the protected test requires an adapter that:
+On that provisioned runner the exact lane is:
+
+```console
+FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2=1 \
+  scripts/ci-local.sh source-isa-characteristic-matrix-v2
+```
+
+The protected adapter:
 
 1. invokes all six sealed production builds without modifying source;
 2. obtains one config/unit/target-bound Broker V3 body per cell and
@@ -210,6 +233,11 @@ Enabling the protected test requires an adapter that:
 6. canonically reseals all nineteen hostile substitutions and rejects each at
    independent exact projection.
 
-Until that protected build/capture adapter and the protected authority service
-exist, this document and its matrix test are a closure contract, not protected
-acceptance evidence.
+Until the protected authority service supplies its exact production
+configuration, measured driver, compiler/backend/trampoline bindings, and
+Worker custody, the six-cell test remains unrun. The reference contract and
+canonical semantic-MIR finalizer matrix are not substitutes for this ordinary
+attributed-Rust protected acceptance evidence. T1 also remains open until a
+production fixture produces an observed duplicated round trip; the exact
+producer capability and independent cardinality tests do not relabel that
+missing observation as accepted evidence.

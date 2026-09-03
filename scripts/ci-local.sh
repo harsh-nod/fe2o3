@@ -40,6 +40,19 @@ readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 readonly TEST_DRIVER_BINARY_ENV="FE2O3_TEST_CARGO_FE2O3_BIN"
 readonly TEST_DRIVER_SHA256_ENV="FE2O3_TEST_CARGO_FE2O3_SHA256"
+readonly -a SOURCE_ISA_PROTECTED_ENVIRONMENT=(
+  FE2O3_TEST_CARGO_FE2O3_BIN
+  FE2O3_TEST_CARGO_FE2O3_SHA256
+  FE2O3_PRODUCTION_BUILD_CONFIG_V2
+  FE2O3_AUTHORITY_BACKEND_SHA256_V1
+  FE2O3_AUTHORITY_CARGO_SHA256_V1
+  FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
+  FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
+  FE2O3_AUTHORITY_RUSTC_PATH_V1
+  FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
+  FE2O3_AUTHORITY_RUSTC_SHA256_V1
+  FE2O3_BACKEND
+)
 CARGO_FE2O3_BINARY=
 CARGO_FE2O3_SHA256=
 CARGO_FE2O3_DRIVER_ROOT=
@@ -145,7 +158,8 @@ Commands:
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
   source-isa-unit-matrix  Run the opt-in protected source/ISA ordinary-unit matrix
-  source-isa-characteristic-contract-v2  Validate the opt-in, unexecuted characteristic matrix contract
+  source-isa-characteristic-contract-v2  Validate the opt-in characteristic matrix contract
+  source-isa-characteristic-matrix-v2  Run the opt-in protected ordinary-source 3x2 characteristic matrix
   rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
@@ -985,13 +999,24 @@ run_authority_launcher_tests() {
     bash scripts/tests/cargo-fe2o3-authority-launcher.sh
 }
 
+require_source_isa_protected_environment() {
+  local label="$1"
+  local name
+  for name in "${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}"; do
+    if [[ -z "${!name:-}" ]]; then
+      printf '%s requires %s\n' "${label}" "${name}" >&2
+      return 2
+    fi
+  done
+}
+
 run_source_isa_unit_matrix() {
   if [[ "${FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX:-}" != "1" ]]; then
     printf '%s\n' \
       'protected source/ISA unit matrix requires FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX=1' >&2
     return 2
   fi
-  local name platform_architecture platform_kernel
+  local platform_architecture platform_kernel
   platform_kernel="$(uname -s)" || {
     printf '%s\n' 'protected source/ISA unit matrix could not identify the host kernel' >&2
     return 2
@@ -1005,25 +1030,7 @@ run_source_isa_unit_matrix() {
       "${platform_kernel}" "${platform_architecture}" >&2
     return 2
   fi
-  local -a required_environment=(
-    FE2O3_TEST_CARGO_FE2O3_BIN
-    FE2O3_TEST_CARGO_FE2O3_SHA256
-    FE2O3_PRODUCTION_BUILD_CONFIG_V2
-    FE2O3_AUTHORITY_BACKEND_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_PATH_V1
-    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_SHA256_V1
-    FE2O3_BACKEND
-  )
-  for name in "${required_environment[@]}"; do
-    if [[ -z "${!name:-}" ]]; then
-      printf 'protected source/ISA unit matrix requires %s\n' "${name}" >&2
-      return 2
-    fi
-  done
+  require_source_isa_protected_environment 'protected source/ISA unit matrix' || return $?
   run_step source-isa-unit-matrix \
     cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
       production_source_isa_unit_matrix_v1::ordinary_source_units_round_trip_through_the_production_observer_on_both_targets -- \
@@ -1054,6 +1061,34 @@ run_source_isa_characteristic_contract_v2() {
     cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
       production_source_isa_characteristic_matrix_v2:: -- \
       --test-threads=1
+}
+
+run_source_isa_characteristic_matrix_v2() {
+  if [[ "${FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2:-}" != "1" ]]; then
+    printf '%s\n' \
+      'protected source/ISA characteristic V2 matrix requires FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2=1' >&2
+    return 2
+  fi
+  local platform_architecture platform_kernel
+  platform_kernel="$(uname -s)" || {
+    printf '%s\n' 'protected source/ISA characteristic V2 matrix could not identify the host kernel' >&2
+    return 2
+  }
+  platform_architecture="$(uname -m)" || {
+    printf '%s\n' 'protected source/ISA characteristic V2 matrix could not identify the host architecture' >&2
+    return 2
+  }
+  if [[ "${platform_kernel}" != "Linux" || "${platform_architecture}" != "x86_64" ]]; then
+    printf 'protected source/ISA characteristic V2 matrix requires Linux x86_64, found %s %s\n' \
+      "${platform_kernel}" "${platform_architecture}" >&2
+    return 2
+  fi
+  require_source_isa_protected_environment \
+    'protected source/ISA characteristic V2 matrix' || return $?
+  run_step source-isa-characteristic-matrix-v2 \
+    cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+      production_source_isa_characteristic_matrix_v2::production_adapter_v2::ordinary_source_units_preserve_characteristic_facts_on_both_targets_v2 -- \
+      --ignored --exact --test-threads=1 --nocapture
 }
 
 run_rustc_trampoline_tests() {
@@ -1325,6 +1360,7 @@ main() {
     authority-launcher) run_authority_launcher_tests ;;
     source-isa-unit-matrix) run_source_isa_unit_matrix ;;
     source-isa-characteristic-contract-v2) run_source_isa_characteristic_contract_v2 ;;
+    source-isa-characteristic-matrix-v2) run_source_isa_characteristic_matrix_v2 ;;
     rustc-trampoline) run_rustc_trampoline_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;

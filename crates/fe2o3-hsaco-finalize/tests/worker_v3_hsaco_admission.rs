@@ -61,14 +61,14 @@ use fe2o3_hsaco_finalize::{
     ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeSiteV1, ProductionSemanticAnchorAdmissionV1,
     ProductionSemanticAnchorErrorV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
     ProductionSourceIsaCatalogAdmissionV1, ProductionSourceIsaCatalogErrorV1,
-    ProductionSourceIsaCatalogPointV1,
-    ProductionSourceIsaCatalogRecordKindV1, ProductionSourceIsaCatalogTargetV1,
-    ProductionSourceIsaCatalogTransformationV1, ProductionSourceIsaCorrelationAdmissionV1,
-    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
-    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
-    WorkerV3HsacoPublicationErrorV1, admit_production_kir_v7_structural_bridge_v1,
+    ProductionSourceIsaCatalogPointV1, ProductionSourceIsaCatalogRecordKindV1,
+    ProductionSourceIsaCatalogTargetV1, ProductionSourceIsaCatalogTransformationV1,
+    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
+    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaRecordKindV1,
+    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
+    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    admit_production_kir_v7_structural_bridge_v1,
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
@@ -89,15 +89,16 @@ use fe2o3_kernel_descriptor::{
 use fe2o3_kernel_ir::{
     BinaryOp, CheckedBinaryOperator, DebugSourceMapBindingV1, DebugSourceMapDocumentV2,
     OperationKind, ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
-    ProductionSemanticDebugFragmentErrorV1,
-    ProductionSemanticDebugFragmentV1, ProductionSemanticDebugProducerCapabilityV1,
-    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
-    SemanticDebugBoundaryDirectionV1, SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1,
-    SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
-    SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
-    SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
-    SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugFragmentV1,
+    ProductionSemanticDebugProducerCapabilityV1, ProductionSemanticDebugProducerGapV1,
+    ProductionSemanticDebugReceiptExtensionV1, ProductionSemanticDebugTransformationAvailabilityV1,
+    ProductionSemanticDebugTransformationClassV1, SemanticDebugBoundaryDirectionV1,
+    SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1,
+    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapBindingV1,
+    SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1, SemanticDebugMappingOutputV1,
+    SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugTransformationV1,
+    SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV9, production_semantic_debug_transformation_capabilities_v1,
 };
 use fe2o3_verifier::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
@@ -2293,10 +2294,13 @@ fn production_source_isa_catalog_admits_real_worker_kernel_family_matrix() {
         ProductionAmdTargetProfileV1::Gfx942,
         ProductionAmdTargetProfileV1::Gfx950,
     ];
-    let mut prior_catalogs = Vec::new();
+    let mut prior_catalogs: Vec<(
+        ProductionAmdTargetProfileV1,
+        ProductionSourceIsaKernelFamilyV1,
+        Vec<u8>,
+    )> = Vec::new();
     let mut saw_map_family_substitution = false;
     let mut saw_target_substitution = false;
-    let mut saw_duplicated = false;
     let mut saw_coalesced = false;
     let mut saw_eliminated = false;
 
@@ -2354,14 +2358,11 @@ fn production_source_isa_catalog_admits_real_worker_kernel_family_matrix() {
             let mut exact_round_trips = 0_usize;
             for record in catalog.records() {
                 match record.transformation() {
-                    Some(ProductionSourceIsaCatalogTransformationV1::Duplicated) => {
-                        saw_duplicated = true;
-                    }
+                    Some(ProductionSourceIsaCatalogTransformationV1::Duplicated) => {}
                     Some(ProductionSourceIsaCatalogTransformationV1::Coalesced) => {
                         saw_coalesced = true;
                     }
                     Some(ProductionSourceIsaCatalogTransformationV1::DuplicatedAndCoalesced) => {
-                        saw_duplicated = true;
                         saw_coalesced = true;
                     }
                     Some(ProductionSourceIsaCatalogTransformationV1::Eliminated) => {
@@ -2486,9 +2487,17 @@ fn production_source_isa_catalog_admits_real_worker_kernel_family_matrix() {
     }
     assert!(saw_map_family_substitution);
     assert!(saw_target_substitution);
-    assert!(saw_duplicated);
     assert!(saw_coalesced);
     assert!(saw_eliminated);
+    assert_eq!(
+        production_semantic_debug_transformation_capabilities_v1()
+            .into_iter()
+            .find(|capability| {
+                capability.class() == ProductionSemanticDebugTransformationClassV1::Duplicated
+            })
+            .map(|capability| capability.availability()),
+        Some(ProductionSemanticDebugTransformationAvailabilityV1::Representable)
+    );
 }
 
 #[test]

@@ -54,7 +54,9 @@ mod platform {
     };
     use sha2::{Digest, Sha256};
 
-    use crate::build_config::ProductionSourceIsaObserverPolicyV1;
+    use crate::build_config::{
+        ProductionSourceIsaObservationKindV1, ProductionSourceIsaObserverPolicyV1,
+    };
     use crate::cargo_invocation_boundary::{InvocationAuthorizationRegistryV1, ProcessIdentityV1};
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
@@ -62,9 +64,15 @@ mod platform {
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
     };
+    use fe2o3_source_isa_observation::characteristic_v1::{
+        InertSourceIsaCharacteristicCollectionV1,
+        MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1, SourceIsaCharacteristicCollectionV1,
+        SourceIsaCharacteristicTargetProfileV1,
+    };
     use fe2o3_source_isa_observation::wire_v1::{
         SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1, SourceIsaObservationCollectionV1,
-        SourceIsaObservationFrameV1, SourceIsaObservationTransportFailureV1,
+        SourceIsaObservationFrameV1, SourceIsaObservationOutcomeV1,
+        SourceIsaObservationTargetProfileV1, SourceIsaObservationTransportFailureV1,
     };
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
@@ -141,6 +149,7 @@ mod platform {
         config_identity: [u8; 32],
         session: BuildSession,
         selected_units: Vec<[u8; 32]>,
+        kind: ProductionSourceIsaObservationKindV1,
         collector: Arc<Mutex<SourceIsaObservationCollectorStateV1>>,
     }
 
@@ -157,6 +166,13 @@ mod platform {
                 return Err(format!(
                     "source/ISA observer requires 1..={MAX_SOURCE_ISA_OBSERVATION_UNITS_V1} exact units"
                 ));
+            }
+            if policy.kind() == ProductionSourceIsaObservationKindV1::Characteristic
+                && unit_count != 1
+            {
+                return Err(
+                    "source/ISA characteristic observer requires exactly one unit".to_owned(),
+                );
             }
             let mut selected_units = Vec::new();
             selected_units.try_reserve_exact(unit_count).map_err(|_| {
@@ -178,11 +194,13 @@ mod platform {
                 config_identity,
                 session,
                 &selected_units,
+                policy.kind(),
             )?;
             Ok(Self {
                 config_identity,
                 session,
                 selected_units,
+                kind: policy.kind(),
                 collector: Arc::new(Mutex::new(collector)),
             })
         }
@@ -195,7 +213,11 @@ mod platform {
                     .is_ok()
         }
 
-        fn collect(&self, frame: SourceIsaObservationFrameV1) -> io::Result<()> {
+        fn collect(
+            &self,
+            frame: SourceIsaObservationFrameV1,
+            characteristic: Option<Vec<u8>>,
+        ) -> io::Result<()> {
             let context = frame.context();
             if context.config() != self.config_identity
                 || context.attempt().session()
@@ -210,7 +232,7 @@ mod platform {
             self.collector
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(frame)
+                .insert(frame, characteristic)
                 .map_err(io::Error::other)
         }
 
@@ -229,6 +251,8 @@ mod platform {
         expected_units: Vec<[u8; 32]>,
         aggregate_bytes: usize,
         failure: Option<SourceIsaObservationTransportFailureV1>,
+        kind: ProductionSourceIsaObservationKindV1,
+        characteristic: Option<([u8; 32], Vec<u8>)>,
     }
 
     impl SourceIsaObservationCollectorStateV1 {
@@ -236,6 +260,7 @@ mod platform {
             config_identity: [u8; 32],
             session: BuildSession,
             expected: &[[u8; 32]],
+            kind: ProductionSourceIsaObservationKindV1,
         ) -> Result<Self, String> {
             if config_identity == [0; 32] || session == BuildSession::DIRECT {
                 return Err("source/ISA collector requires exact nonzero context".to_owned());
@@ -258,12 +283,15 @@ mod platform {
                 expected_units,
                 aggregate_bytes: 0,
                 failure: None,
+                kind,
+                characteristic: None,
             })
         }
 
         fn insert(
             &mut self,
             frame: SourceIsaObservationFrameV1,
+            characteristic: Option<Vec<u8>>,
         ) -> Result<(), SourceIsaObservationTransportFailureV1> {
             if frame.context().config() != self.config_identity
                 || frame.context().attempt().session()
@@ -273,9 +301,34 @@ mod platform {
                 return Err(SourceIsaObservationTransportFailureV1::RejectedFrame);
             }
             let unit = frame.context().unit();
+            match (self.kind, characteristic.as_ref()) {
+                (ProductionSourceIsaObservationKindV1::Summary, None) => {}
+                (ProductionSourceIsaObservationKindV1::Characteristic, Some(bytes))
+                    if !bytes.is_empty()
+                        && bytes.len() <= MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1 => {}
+                _ => {
+                    self.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
+                    return Err(SourceIsaObservationTransportFailureV1::RejectedFrame);
+                }
+            }
             let insertion = match self.frames.binary_search_by_key(&unit, |(unit, _)| *unit) {
-                Ok(index) if self.frames[index].1 == frame => return Ok(()),
-                Ok(_) => {
+                Ok(index) => {
+                    let characteristic_matches = match (
+                        self.kind,
+                        self.characteristic.as_ref(),
+                        characteristic.as_ref(),
+                    ) {
+                        (ProductionSourceIsaObservationKindV1::Summary, None, None) => true,
+                        (
+                            ProductionSourceIsaObservationKindV1::Characteristic,
+                            Some((observed_unit, observed)),
+                            Some(candidate),
+                        ) => *observed_unit == unit && observed == candidate,
+                        _ => false,
+                    };
+                    if self.frames[index].1 == frame && characteristic_matches {
+                        return Ok(());
+                    }
                     self.fail(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
                     return Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
                 }
@@ -285,15 +338,35 @@ mod platform {
                 self.fail(SourceIsaObservationTransportFailureV1::UnitBound);
                 return Err(SourceIsaObservationTransportFailureV1::UnitBound);
             }
+            let payload_bytes = SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1
+                .checked_add(characteristic.as_ref().map_or(0, |bytes| bytes.len() + 8))
+                .ok_or(SourceIsaObservationTransportFailureV1::AggregateByteBound)?;
+            let aggregate_limit = match self.kind {
+                ProductionSourceIsaObservationKindV1::Summary => {
+                    MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1
+                }
+                ProductionSourceIsaObservationKindV1::Characteristic => {
+                    MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+                        + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1
+                        + 8
+                }
+            };
             let Some(aggregate_bytes) = self
                 .aggregate_bytes
-                .checked_add(SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1)
-                .filter(|bytes| *bytes <= MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1)
+                .checked_add(payload_bytes)
+                .filter(|bytes| *bytes <= aggregate_limit)
             else {
                 self.fail(SourceIsaObservationTransportFailureV1::AggregateByteBound);
                 return Err(SourceIsaObservationTransportFailureV1::AggregateByteBound);
             };
             self.frames.insert(insertion, (unit, frame));
+            if let Some(bytes) = characteristic {
+                if self.characteristic.is_some() {
+                    self.fail(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
+                    return Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
+                }
+                self.characteristic = Some((unit, bytes));
+            }
             self.aggregate_bytes = aggregate_bytes;
             Ok(())
         }
@@ -302,7 +375,7 @@ mod platform {
             self.failure.get_or_insert(reason);
         }
 
-        fn finish(mut self) -> SourceIsaObservationCollectionV1 {
+        fn finish(mut self) -> CompletedSourceIsaObservationsV1 {
             self.expected_units.retain(|unit| {
                 self.frames
                     .binary_search_by_key(unit, |(observed, _)| *observed)
@@ -311,14 +384,25 @@ mod platform {
             if !self.expected_units.is_empty() && self.failure.is_none() {
                 self.failure = Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits);
             }
-            SourceIsaObservationCollectionV1::from_collected(
+            let summary = SourceIsaObservationCollectionV1::from_collected(
                 self.config_identity,
                 crate::source_isa_observation::inert_source_isa_session_v1(self.session),
                 self.frames,
                 self.expected_units,
                 self.failure,
-            )
+            );
+            CompletedSourceIsaObservationsV1 {
+                config: self.config_identity,
+                summary,
+                characteristic: self.characteristic,
+            }
         }
+    }
+
+    pub(crate) struct CompletedSourceIsaObservationsV1 {
+        pub(crate) config: [u8; 32],
+        pub(crate) summary: SourceIsaObservationCollectionV1,
+        pub(crate) characteristic: Option<([u8; 32], Vec<u8>)>,
     }
 
     impl<'profile> BrokerCompilerCapabilities<'profile> {
@@ -1136,7 +1220,7 @@ mod platform {
 
         pub(crate) fn finish_source_isa_observations(
             mut self,
-        ) -> Result<SourceIsaObservationCollectionV1, String> {
+        ) -> Result<CompletedSourceIsaObservationsV1, String> {
             let collector = self.source_isa_observer.take().ok_or_else(|| {
                 "capability broker has no source/ISA observer collector".to_owned()
             })?;
@@ -1259,6 +1343,25 @@ mod platform {
 
     impl SourceIsaObservationSinkV1 {
         pub(crate) fn submit(mut self, frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
+            self.submit_inner(frame, None)
+        }
+
+        pub(crate) fn submit_characteristic(
+            mut self,
+            frame: &SourceIsaObservationFrameV1,
+            characteristic: &SourceIsaCharacteristicCollectionV1,
+        ) -> Result<(), String> {
+            let encoded = characteristic
+                .encode_canonical()
+                .map_err(|error| format!("failed to encode Source/ISA characteristics: {error}"))?;
+            self.submit_inner(frame, Some(&encoded))
+        }
+
+        fn submit_inner(
+            &mut self,
+            frame: &SourceIsaObservationFrameV1,
+            characteristic: Option<&[u8]>,
+        ) -> Result<(), String> {
             let context = frame.context();
             let observation_attempt =
                 crate::source_isa_observation::inert_source_isa_attempt_v1(self.attempt)
@@ -1274,6 +1377,18 @@ mod platform {
             self.stream.write_all(&frame.encode()).map_err(|error| {
                 format!("failed to write source/ISA observation frame: {error}")
             })?;
+            if let Some(characteristic) = characteristic {
+                let length = u64::try_from(characteristic.len())
+                    .map_err(|_| "Source/ISA characteristic length exceeds u64".to_owned())?;
+                self.stream
+                    .write_all(&length.to_le_bytes())
+                    .map_err(|error| {
+                        format!("failed to write Source/ISA characteristic length: {error}")
+                    })?;
+                self.stream.write_all(characteristic).map_err(|error| {
+                    format!("failed to write Source/ISA characteristics: {error}")
+                })?;
+            }
             self.stream
                 .shutdown(Shutdown::Write)
                 .map_err(|error| format!("failed to close source/ISA observation frame: {error}"))
@@ -1620,11 +1735,43 @@ mod platform {
                 prepare_source_isa_observer_request(observer, self.session, stream, request)?;
                 let mut encoded = [0; SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1];
                 liveness.read_frame(stream, &mut encoded)?;
+                let characteristic = match observer.kind {
+                    ProductionSourceIsaObservationKindV1::Summary => None,
+                    ProductionSourceIsaObservationKindV1::Characteristic => {
+                        let mut encoded_length = [0; 8];
+                        liveness.read_frame(stream, &mut encoded_length)?;
+                        let length = usize::try_from(u64::from_le_bytes(encoded_length))
+                            .ok()
+                            .filter(|length| {
+                                *length != 0
+                                    && *length <= MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+                            })
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "Source/ISA characteristic length exceeds its bound",
+                                )
+                            })?;
+                        let mut body = Vec::new();
+                        body.try_reserve_exact(length).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::OutOfMemory,
+                                "cannot allocate bounded Source/ISA characteristic body",
+                            )
+                        })?;
+                        body.resize(length, 0);
+                        liveness.read_frame(stream, &mut body)?;
+                        Some(body)
+                    }
+                };
                 liveness.require_eof(stream)?;
                 let frame = SourceIsaObservationFrameV1::decode(&encoded)
                     .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
                 validate_source_isa_observer_frame_binding(self.session, request, &frame)?;
-                observer.collect(frame)
+                if let Some(body) = characteristic.as_ref() {
+                    validate_source_isa_characteristic_binding(&frame, body)?;
+                }
+                observer.collect(frame, characteristic)
             })();
             if result.is_err() {
                 observer.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
@@ -1674,6 +1821,50 @@ mod platform {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "source/ISA observation frame differs from its exact authenticated request",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_source_isa_characteristic_binding(
+        frame: &SourceIsaObservationFrameV1,
+        encoded: &[u8],
+    ) -> io::Result<()> {
+        let inert = InertSourceIsaCharacteristicCollectionV1::decode_canonical(encoded)
+            .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+        let binding = inert.claimed_binding();
+        let SourceIsaObservationOutcomeV1::Admitted(summary) = frame.outcome() else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Source/ISA characteristic body requires an admitted summary",
+            ));
+        };
+        let structural = summary.structural();
+        let target_matches = matches!(
+            (structural.target_profile(), binding.target_profile()),
+            (
+                SourceIsaObservationTargetProfileV1::Gfx942,
+                SourceIsaCharacteristicTargetProfileV1::Gfx942
+            ) | (
+                SourceIsaObservationTargetProfileV1::Gfx950,
+                SourceIsaCharacteristicTargetProfileV1::Gfx950
+            )
+        );
+        let summary_artifact = summary.artifact();
+        let characteristic_artifact = binding.artifact();
+        let summary_target_kir = structural.target_kir();
+        let characteristic_target_kir = binding.target_kir();
+        if !target_matches
+            || structural.identity() != binding.structural_identity()
+            || summary.correlation() != binding.correlation_identity()
+            || summary_artifact.sha256() != characteristic_artifact.sha256()
+            || summary_artifact.byte_len() != characteristic_artifact.byte_len()
+            || summary_target_kir.sha256() != characteristic_target_kir.sha256()
+            || summary_target_kir.byte_len() != characteristic_target_kir.byte_len()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Source/ISA characteristic body differs from its authenticated summary",
             ));
         }
         Ok(())
@@ -2142,6 +2333,17 @@ mod platform {
                 [0x30; 32],
                 BuildSession::from_bytes([0x31; 16]),
                 units,
+                ProductionSourceIsaObservationKindV1::Summary,
+            )
+            .unwrap()
+        }
+
+        fn characteristic_collector(unit: [u8; 32]) -> SourceIsaObservationCollectorStateV1 {
+            SourceIsaObservationCollectorStateV1::with_expected_context(
+                [0x30; 32],
+                BuildSession::from_bytes([0x31; 16]),
+                &[unit],
+                ProductionSourceIsaObservationKindV1::Characteristic,
             )
             .unwrap()
         }
@@ -2151,6 +2353,7 @@ mod platform {
                 config_identity: [0x30; 32],
                 session: BuildSession::from_bytes([0x31; 16]),
                 selected_units: units.to_vec(),
+                kind: ProductionSourceIsaObservationKindV1::Summary,
                 collector: Arc::new(Mutex::new(collector(units))),
             }
         }
@@ -2457,8 +2660,8 @@ mod platform {
                     SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
                 ),
             );
-            assert!(collector.insert(accepted.clone()).is_ok());
-            assert!(collector.insert(accepted).is_ok());
+            assert!(collector.insert(accepted.clone(), None).is_ok());
+            assert!(collector.insert(accepted, None).is_ok());
             collector.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
             let conflicting = frame(
                 units[0],
@@ -2467,19 +2670,22 @@ mod platform {
                 ),
             );
             assert_eq!(
-                collector.insert(conflicting),
+                collector.insert(conflicting, None),
                 Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
             );
             collector
-                .insert(frame(
-                    units[1],
-                    SourceIsaObservationOutcomeV1::Unavailable(
-                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                .insert(
+                    frame(
+                        units[1],
+                        SourceIsaObservationOutcomeV1::Unavailable(
+                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                        ),
                     ),
-                ))
+                    None,
+                )
                 .unwrap();
             collector.fail(SourceIsaObservationTransportFailureV1::AggregateByteBound);
-            let collection = collector.finish();
+            let collection = collector.finish().summary;
             assert_eq!(collection.frames().len(), 2);
             assert!(collection.missing_units().is_empty());
             assert_eq!(
@@ -2505,6 +2711,39 @@ mod platform {
         }
 
         #[test]
+        fn characteristic_collector_requires_byte_identical_duplicate_recovery() {
+            let unit = [0x40; 32];
+            let accepted = frame(
+                unit,
+                SourceIsaObservationOutcomeV1::Unavailable(
+                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
+                ),
+            );
+            let mut collector = characteristic_collector(unit);
+            assert!(
+                collector
+                    .insert(accepted.clone(), Some(vec![0x51, 0x52]))
+                    .is_ok()
+            );
+            assert!(
+                collector
+                    .insert(accepted.clone(), Some(vec![0x51, 0x52]))
+                    .is_ok()
+            );
+            assert_eq!(
+                collector.insert(accepted, Some(vec![0x51, 0x53])),
+                Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+            );
+            let completed = collector.finish();
+            assert_eq!(completed.summary.frames().len(), 1);
+            assert_eq!(completed.characteristic, Some((unit, vec![0x51, 0x52])));
+            assert_eq!(
+                completed.summary.failure(),
+                Some(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+            );
+        }
+
+        #[test]
         fn collector_deduplicates_exact_recovery_at_the_unit_bound() {
             let units = (0..MAX_SOURCE_ISA_OBSERVATION_UNITS_V1)
                 .map(|index| {
@@ -2516,26 +2755,32 @@ mod platform {
             let mut collector = collector(&units);
             for &unit in &units {
                 collector
-                    .insert(frame(
-                        unit,
-                        SourceIsaObservationOutcomeV1::Unavailable(
-                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    .insert(
+                        frame(
+                            unit,
+                            SourceIsaObservationOutcomeV1::Unavailable(
+                                SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                            ),
                         ),
-                    ))
+                        None,
+                    )
                     .unwrap();
             }
 
             assert!(
                 collector
-                    .insert(frame(
-                        units[MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 - 1],
-                        SourceIsaObservationOutcomeV1::Unavailable(
-                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                    .insert(
+                        frame(
+                            units[MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 - 1],
+                            SourceIsaObservationOutcomeV1::Unavailable(
+                                SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                            ),
                         ),
-                    ))
+                        None
+                    )
                     .is_ok()
             );
-            let collection = collector.finish();
+            let collection = collector.finish().summary;
             assert_eq!(
                 collection.frames().len(),
                 MAX_SOURCE_ISA_OBSERVATION_UNITS_V1
@@ -2549,14 +2794,17 @@ mod platform {
             let units = [[0x40; 32], [0x41; 32]];
             let mut collector = collector(&units);
             collector
-                .insert(frame(
-                    units[1],
-                    SourceIsaObservationOutcomeV1::Unavailable(
-                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                .insert(
+                    frame(
+                        units[1],
+                        SourceIsaObservationOutcomeV1::Unavailable(
+                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                        ),
                     ),
-                ))
+                    None,
+                )
                 .unwrap();
-            let collection = collector.finish();
+            let collection = collector.finish().summary;
             assert_eq!(collection.frames().len(), 1);
             assert_eq!(collection.missing_units(), &[units[0]]);
             assert_eq!(
@@ -2567,7 +2815,7 @@ mod platform {
 
         #[test]
         fn all_missing_collection_retains_exact_config_and_session() {
-            let collection = collector(&[[0x40; 32], [0x41; 32]]).finish();
+            let collection = collector(&[[0x40; 32], [0x41; 32]]).finish().summary;
             assert_eq!(collection.config_identity(), [0x30; 32]);
             assert_eq!(
                 collection.session(),
@@ -2624,14 +2872,17 @@ mod platform {
             let units = [[0x40; 32], [0x41; 32]];
             let mut collector = collector(&units);
             collector
-                .insert(frame(
-                    units[0],
-                    SourceIsaObservationOutcomeV1::Unavailable(
-                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                .insert(
+                    frame(
+                        units[0],
+                        SourceIsaObservationOutcomeV1::Unavailable(
+                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
+                        ),
                     ),
-                ))
+                    None,
+                )
                 .unwrap();
-            let encoded = collector.finish().encode_canonical().unwrap();
+            let encoded = collector.finish().summary.encode_canonical().unwrap();
 
             let mut truncated = encoded.clone();
             truncated.pop();
@@ -2719,6 +2970,7 @@ mod unsupported {
     use fe2o3_compiler_closure_capability::{
         CompilerClosureCapabilityV1, CompilerExecutionClientProfileCapabilityV1,
     };
+    use fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicCollectionV1;
     use fe2o3_source_isa_observation::wire_v1::{
         SourceIsaObservationCollectionV1, SourceIsaObservationFrameV1,
     };
@@ -2779,6 +3031,12 @@ mod unsupported {
 
     pub(crate) struct CapabilityBroker;
 
+    pub(crate) struct CompletedSourceIsaObservationsV1 {
+        pub(crate) config: [u8; 32],
+        pub(crate) summary: SourceIsaObservationCollectionV1,
+        pub(crate) characteristic: Option<([u8; 32], Vec<u8>)>,
+    }
+
     impl CapabilityBroker {
         pub(crate) fn start(
             _session: BuildSession,
@@ -2825,7 +3083,7 @@ mod unsupported {
 
         pub(crate) fn finish_source_isa_observations(
             self,
-        ) -> Result<SourceIsaObservationCollectionV1, String> {
+        ) -> Result<CompletedSourceIsaObservationsV1, String> {
             Err("Cargo capability transport requires Linux".to_string())
         }
     }
@@ -2858,6 +3116,14 @@ mod unsupported {
 
     impl SourceIsaObservationSinkV1 {
         pub(crate) fn submit(self, _frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+
+        pub(crate) fn submit_characteristic(
+            self,
+            _frame: &SourceIsaObservationFrameV1,
+            _characteristic: &SourceIsaCharacteristicCollectionV1,
+        ) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
         }
     }

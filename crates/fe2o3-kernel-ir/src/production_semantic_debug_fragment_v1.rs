@@ -199,6 +199,81 @@ pub enum ProductionSemanticDebugProducerCapabilityV1 {
     ExactCanonicalKirV7DebugProjection,
 }
 
+/// Transformation classes tracked by the debugger acceptance contract.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ProductionSemanticDebugTransformationClassV1 {
+    Duplicated,
+    Fused,
+    Outlined,
+    Inlined,
+    Moved,
+    Eliminated,
+}
+
+/// Exact producer capability for one transformation class.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionSemanticDebugTransformationAvailabilityV1 {
+    Representable,
+    UnavailableNoProductionEmitter,
+    UnavailableNoSchemaRepresentation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionSemanticDebugTransformationCapabilityV1 {
+    class: ProductionSemanticDebugTransformationClassV1,
+    availability: ProductionSemanticDebugTransformationAvailabilityV1,
+}
+
+impl ProductionSemanticDebugTransformationCapabilityV1 {
+    pub const fn class(self) -> ProductionSemanticDebugTransformationClassV1 {
+        self.class
+    }
+
+    pub const fn availability(self) -> ProductionSemanticDebugTransformationAvailabilityV1 {
+        self.availability
+    }
+}
+
+/// Reports the transformation vocabulary of the current production semantic-debug producer.
+///
+/// `Representable` means the schema and producer can retain an observation when that shape occurs;
+/// it does not claim that any particular compilation observed the shape.
+pub const fn production_semantic_debug_transformation_capabilities_v1()
+-> [ProductionSemanticDebugTransformationCapabilityV1; 6] {
+    use ProductionSemanticDebugTransformationAvailabilityV1::{
+        Representable, UnavailableNoProductionEmitter, UnavailableNoSchemaRepresentation,
+    };
+    use ProductionSemanticDebugTransformationClassV1::{
+        Duplicated, Eliminated, Fused, Inlined, Moved, Outlined,
+    };
+    [
+        ProductionSemanticDebugTransformationCapabilityV1 {
+            class: Duplicated,
+            availability: Representable,
+        },
+        ProductionSemanticDebugTransformationCapabilityV1 {
+            class: Fused,
+            availability: UnavailableNoProductionEmitter,
+        },
+        ProductionSemanticDebugTransformationCapabilityV1 {
+            class: Outlined,
+            availability: UnavailableNoSchemaRepresentation,
+        },
+        ProductionSemanticDebugTransformationCapabilityV1 {
+            class: Inlined,
+            availability: UnavailableNoProductionEmitter,
+        },
+        ProductionSemanticDebugTransformationCapabilityV1 {
+            class: Moved,
+            availability: UnavailableNoProductionEmitter,
+        },
+        ProductionSemanticDebugTransformationCapabilityV1 {
+            class: Eliminated,
+            availability: Representable,
+        },
+    ]
+}
+
 impl ProductionScheduleStatusV1 {
     pub fn canonical_bytes(self) -> [u8; SCHEDULE_BYTES_V1] {
         let mut bytes = [0_u8; SCHEDULE_BYTES_V1];
@@ -281,6 +356,13 @@ impl ProductionSemanticDebugFragmentV1 {
             ProductionSemanticDebugProducerCapabilityV1::InstructionLlvmUnavailableNoCorrespondence,
             ProductionSemanticDebugProducerCapabilityV1::ExactCanonicalKirV7DebugProjection,
         ]
+    }
+
+    /// Reports transformation expressiveness without fabricating observations for this fragment.
+    pub const fn transformation_capabilities(
+        &self,
+    ) -> [ProductionSemanticDebugTransformationCapabilityV1; 6] {
+        production_semantic_debug_transformation_capabilities_v1()
     }
 
     fn validate(&self) -> Result<(), ProductionSemanticDebugFragmentErrorV1> {
@@ -746,6 +828,35 @@ mod tests {
         else {
             panic!("available fragment changed availability")
         };
+        assert_eq!(
+            fragment.transformation_capabilities(),
+            [
+                ProductionSemanticDebugTransformationCapabilityV1 {
+                    class: ProductionSemanticDebugTransformationClassV1::Duplicated,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::Representable,
+                },
+                ProductionSemanticDebugTransformationCapabilityV1 {
+                    class: ProductionSemanticDebugTransformationClassV1::Fused,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+                },
+                ProductionSemanticDebugTransformationCapabilityV1 {
+                    class: ProductionSemanticDebugTransformationClassV1::Outlined,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoSchemaRepresentation,
+                },
+                ProductionSemanticDebugTransformationCapabilityV1 {
+                    class: ProductionSemanticDebugTransformationClassV1::Inlined,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+                },
+                ProductionSemanticDebugTransformationCapabilityV1 {
+                    class: ProductionSemanticDebugTransformationClassV1::Moved,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+                },
+                ProductionSemanticDebugTransformationCapabilityV1 {
+                    class: ProductionSemanticDebugTransformationClassV1::Eliminated,
+                    availability: ProductionSemanticDebugTransformationAvailabilityV1::Representable,
+                },
+            ]
+        );
         let map =
             SemanticDebugMapDocumentV1::from_canonical_json_bytes(fragment.pre_finalization_map())
                 .unwrap();

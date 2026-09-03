@@ -260,13 +260,23 @@ scheduling, execution, or performance.
 
 The ignored real-Worker acceptance
 `production_source_isa_catalog_admits_real_worker_kernel_family_matrix` rebuilds this catalog for
-sourceful scalar-elementwise, uniform workgroup-collective, and tiled-coordinate kernels on both
-gfx942 and gfx950. The fixtures enter through canonical semantic MIR, lossless MIR-to-KIR evidence,
+scalar-elementwise, uniform workgroup-collective, and tiled-coordinate canonical semantic-MIR
+fixtures on both gfx942 and gfx950. These are not ordinary attributed-Rust source inputs. The
+fixtures enter through canonical semantic MIR, lossless MIR-to-KIR evidence,
 target binding, semantic-anchor LLVM lowering, the pinned LLVM Worker, and final HSACO admission;
 the test never constructs catalog records directly. For every family it exercises exact queries in
 both directions across source, MIR, neutral KIR, target KIR, compiler-handoff LLVM, and sparse ISA,
 re-admits the canonical catalog, rejects cross-family and cross-target catalog substitution, and
-requires observed duplicated/coalesced and eliminated mappings across the matrix. Existing hostile
-artifact and semantic-map cases in the same suite retain their typed fail-closed checks. This is a
-kernel-family acceptance matrix, not evidence of complete ISA coverage, optimized/final LLVM
-custody, a production schedule, live-PC ownership, or debugger/profiler/runtime authority.
+requires observed coalesced and eliminated mappings across the matrix. The schema and producer
+declare `Duplicated` representable, and independent producer/parser tests preserve duplicate and
+duplicated-and-coalesced cardinality, but no current ordinary-source or canonical semantic-MIR
+real-Worker fixture has produced an observed duplicated round trip. Existing hostile artifact and
+semantic-map cases in the same suite retain their typed fail-closed checks. This is a kernel-family
+acceptance matrix, not evidence of complete ISA coverage, optimized/final LLVM custody, a
+production schedule, live-PC ownership, or debugger/profiler/runtime authority.
+
+The separate protected `cargo-fe2o3` characteristic V2 matrix uses unmodified ordinary attributed
+Rust for elementwise fill, workgroup reduction, and tiled BF16 GEMM, then consumes the same
+producer projection through the sealed build observer and Broker V3 envelope. That adapter is
+implemented; its six `gfx942`/`gfx950` cells remain unrun until a qualified authority service
+provides the exact measured environment bindings.
