@@ -2,7 +2,6 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, Write};
 
-use fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV7;
 use serde::de::{self, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -12,7 +11,7 @@ use super::{
     SimulationScheduleIdentityV1, SimulationScheduleRecordV1, record_integrity,
     transcript_identity,
 };
-use crate::{IndexWidthV1, SimulationLimitsV1, SimulationTargetV1};
+use crate::{IndexWidthV1, SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationTargetV1};
 
 /// Maximum canonical bytes accepted for one persisted semantic CPU schedule.
 pub const MAX_PERSISTED_SCHEDULE_BYTES_V1: usize = 256 * 1024 * 1024;
@@ -28,6 +27,8 @@ const UNSUPPORTED_SCHEMA_MARKER: &str = "fe2o3:schedule_schema_unsupported";
 pub enum PersistedSimulationScheduleArtifactV1 {
     /// Exact canonical Kernel IR V7 was supplied directly.
     CanonicalKirV7,
+    /// Exact canonical Kernel IR V10 was supplied directly.
+    CanonicalKirV10,
     /// An authority-free simulation bundle supplied the exact canonical KIR.
     SimulationBundleV1 {
         bundle_sha256: [u8; 32],
@@ -49,14 +50,15 @@ pub struct PersistedSimulationScheduleBindingV1 {
 
 impl PersistedSimulationScheduleBindingV1 {
     /// Constructs an exact persisted binding from already admitted simulator inputs.
-    pub const fn new(
+    pub fn new(
         artifact: PersistedSimulationScheduleArtifactV1,
-        kir: VerifiedCanonicalKernelIrIdentityV7,
+        kir: impl Into<SimulationKernelIrIdentityV1>,
         request_sha256: [u8; 32],
         request_bytes: u64,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
     ) -> Self {
+        let kir = kir.into();
         Self {
             artifact,
             kir_sha256: *kir.digest(),
@@ -319,6 +321,10 @@ enum ArtifactWireV1 {
         kir_sha256: HexIdentityV1,
         kir_canonical_bytes: u64,
     },
+    CanonicalKirV10 {
+        kir_sha256: HexIdentityV1,
+        kir_canonical_bytes: u64,
+    },
     SimulationBundleV1 {
         bundle_sha256: HexIdentityV1,
         subject_sha256: HexIdentityV1,
@@ -524,6 +530,14 @@ impl TryFrom<ScheduleDocumentWireV1> for PersistedSimulationScheduleDocumentV1 {
                 kir_sha256.0,
                 kir_canonical_bytes,
             ),
+            ArtifactWireV1::CanonicalKirV10 {
+                kir_sha256,
+                kir_canonical_bytes,
+            } => (
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV10,
+                kir_sha256.0,
+                kir_canonical_bytes,
+            ),
             ArtifactWireV1::SimulationBundleV1 {
                 bundle_sha256,
                 subject_sha256,
@@ -636,6 +650,10 @@ fn wire_from_parts<'a>(
 ) -> Result<ScheduleDocumentEncodeWireV1<'a>, PersistedSimulationScheduleCodecErrorV1> {
     let artifact = match binding.artifact {
         PersistedSimulationScheduleArtifactV1::CanonicalKirV7 => ArtifactWireV1::CanonicalKirV7 {
+            kir_sha256: HexIdentityV1(binding.kir_sha256),
+            kir_canonical_bytes: binding.kir_canonical_bytes,
+        },
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV10 => ArtifactWireV1::CanonicalKirV10 {
             kir_sha256: HexIdentityV1(binding.kir_sha256),
             kir_canonical_bytes: binding.kir_canonical_bytes,
         },

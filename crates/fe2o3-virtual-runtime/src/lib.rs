@@ -12,13 +12,13 @@ use std::error::Error;
 use std::fmt;
 use std::mem::size_of;
 
-use fe2o3_kernel_ir::{AccessMode, KernelId, ScalarType, VerifiedCanonicalKernelIrIdentityV7};
+use fe2o3_kernel_ir::{AccessMode, KernelId, ScalarType};
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
     EventPolicyV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
-    SimulationConflictAssessmentV1, SimulationErrorV1, SimulationLimitsV1,
-    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleIdentityV1,
-    SimulationScheduleRequestV1, SimulationTargetV1,
+    SimulationConflictAssessmentV1, SimulationErrorV1, SimulationKernelIrIdentityV1,
+    SimulationLimitsV1, SimulationRaceAssessmentV1, SimulationRequestV1,
+    SimulationScheduleIdentityV1, SimulationScheduleRequestV1, SimulationTargetV1,
 };
 use fe2o3_runtime_model::{
     AQL_PACKET_BYTES_V1, AllocationIdV1, AllocationKeyV1, CodeLoadPlanIdV1, CompletionIdV1,
@@ -272,7 +272,7 @@ pub enum VirtualCompletionAmbiguityV1 {
 /// Compact successful observation from one deterministic CPU execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VirtualSimulationSummaryV1 {
-    pub kir_identity: VerifiedCanonicalKernelIrIdentityV7,
+    pub kir_identity: SimulationKernelIrIdentityV1,
     pub target: VirtualTargetProfileV1,
     pub invocations_executed: u64,
     pub workgroups_visited: u64,

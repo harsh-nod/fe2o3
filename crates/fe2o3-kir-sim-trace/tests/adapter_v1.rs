@@ -3,14 +3,16 @@ use fe2o3_kernel_ir::{
     Constant, Convergence, Fence, Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
     LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
     ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueDef,
-    ValueId, VerifiedCanonicalKernelIrV7, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, IndexWidthV1, ScalarBitsV1, SimulationArgumentV1,
     SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 use fe2o3_kir_sim_trace::{
-    KirSiteCatalogV1, SimulationTraceProfileV1, simulate_with_semantic_trace_v1,
+    KirSiteCatalogV1, SimulationTraceProfileV1, TraceAdapterErrorV1,
+    simulate_with_semantic_trace_v1,
 };
 use fe2o3_semantic_trace::{
     AddressSpaceV1, AllocationEventV1, BarrierActionV1, CaptureEndBoundaryV1, DiagnosticKindV1,
@@ -280,6 +282,26 @@ fn zero_count_alloca_module() -> Module {
 fn admitted(module: Module) -> AdmittedSimulationModuleV1 {
     let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
     AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default()).unwrap()
+}
+
+#[test]
+fn v1_trace_adapter_rejects_v10_instead_of_mislabeling_it_as_v7() {
+    let canonical = VerifiedCanonicalKernelIrV10::from_module(simple_module(1)).unwrap();
+    let admitted =
+        AdmittedSimulationModuleV1::admit_v10(canonical, SimulationLimitsV1::default()).unwrap();
+    let request = SimulationRequestV1::new("kernel", [1, 1, 1], [1, 1, 1], vec![]);
+    let error = simulate_with_semantic_trace_v1(
+        &admitted,
+        &request,
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        profile(WaveWidthV1::Wave64, 128),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        TraceAdapterErrorV1::UnsupportedKernelIrWireVersion { version: 10 }
+    ));
 }
 
 fn profile(wave_width: WaveWidthV1, max_events: u64) -> SimulationTraceProfileV1 {

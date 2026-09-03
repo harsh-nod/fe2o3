@@ -10,14 +10,17 @@ use crate::{
     FunctionRole, Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1,
     Gfx950LdsTransposeOperationV1, IndexKind, InlineAssembly, InlineAssemblyTarget,
     IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel, KernelId, LaunchDomain,
-    LaunchExtent, MatrixElement, MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile,
-    MatrixOperation, MatrixOperationKind, MemoryAccess, MemoryOrdering, Module, ModuleId,
-    Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
-    SynchronizationScope, TargetCapability, TensorCoordinateExprV1, TensorElementPackingV1,
-    TensorFragmentLayoutV1, TensorInstructionProfileV1, TensorLayoutContractV1, TensorLdsSwizzleV1,
-    TensorMultiplicityV1, TensorOperandRoleV1, TensorSymbolicMapV1, TensorTailMaskV1, Terminator,
-    Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
-    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    LaunchExtent, MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1, MatrixElement, MatrixLayout,
+    MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MemoryAccess,
+    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
+    PointerType, ScalarType, SemanticOperation, SemanticOperationInstancePayloadV1, Signature,
+    SliceType, SwitchCase, SynchronizationScope, TargetCapability, TensorCoordinateExprV1,
+    TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
+    TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
+    TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, decode_semantic_operation_instance_id,
+    encode_semantic_operation_instance_id,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -40,6 +43,8 @@ pub const KERNEL_IR_VERSION_V7: u16 = 7;
 pub const KERNEL_IR_VERSION_V8: u16 = 8;
 /// Kernel IR V9 adds typed gfx950 collectives and LDS transpose operations.
 pub const KERNEL_IR_VERSION_V9: u16 = 9;
+/// Kernel IR V10 adds exact typed semantic memory-intrinsic operations.
+pub const KERNEL_IR_VERSION_V10: u16 = 10;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
@@ -50,6 +55,8 @@ pub const KERNEL_IR_DOMAIN_V7: &[u8] = b"FE2O3/KERNEL-IR/V7\0";
 pub const KERNEL_IR_DOMAIN_V8: &[u8] = b"FE2O3/KERNEL-IR/V8\0";
 /// Domain separator for identities derived from canonical Kernel IR V9 bytes.
 pub const KERNEL_IR_DOMAIN_V9: &[u8] = b"FE2O3/KERNEL-IR/V9\0";
+/// Domain separator for identities derived from canonical Kernel IR V10 bytes.
+pub const KERNEL_IR_DOMAIN_V10: &[u8] = b"FE2O3/KERNEL-IR/V10\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -174,6 +181,7 @@ pub enum KernelIrDecodeError {
         max: usize,
     },
     NonCanonical,
+    InvalidSemanticOperationInstance,
     Encode(KernelIrEncodeError),
 }
 
@@ -206,6 +214,9 @@ impl fmt::Display for KernelIrDecodeError {
                 write!(formatter, "kernel IR type nesting exceeds {max}")
             }
             Self::NonCanonical => formatter.write_str("noncanonical kernel IR encoding"),
+            Self::InvalidSemanticOperationInstance => {
+                formatter.write_str("invalid semantic operation instance")
+            }
             Self::Encode(error) => write!(formatter, "decoded kernel IR cannot re-encode: {error}"),
         }
     }
@@ -266,6 +277,11 @@ pub fn encode_module_v8(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
 /// Encodes a module in the bounded canonical kernel IR V9 wire format.
 pub fn encode_module_v9(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
     encode_module(module, KERNEL_IR_VERSION_V9)
+}
+
+/// Encodes a module in the bounded canonical kernel IR V10 wire format.
+pub fn encode_module_v10(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V10)
 }
 
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
@@ -347,6 +363,11 @@ pub fn decode_module_v8(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V9 bytes using the latest bounded reader.
 pub fn decode_module_v9(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V9, true)
+}
+
+/// Decodes canonical V1 through V10 bytes using the latest bounded reader.
+pub fn decode_module_v10(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V10, true)
 }
 
 fn decode_module(
@@ -685,11 +706,10 @@ fn encode_operation_kind(
             writer.u8(2)?;
             encode_intrinsic(writer, intrinsic)?;
         }
-        OperationKind::MemoryIntrinsic(_) => {
-            return Err(KernelIrEncodeError::UnsupportedInVersion {
-                version: writer.version,
-                feature: "semantic memory intrinsic",
-            });
+        OperationKind::MemoryIntrinsic(intrinsic) => {
+            require_v10(writer, "semantic memory intrinsic")?;
+            writer.u8(26)?;
+            encode_memory_intrinsic(writer, intrinsic)?;
         }
         OperationKind::Unary { op, operand } => {
             writer.u8(3)?;
@@ -939,11 +959,108 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
             value: ValueId(reader.u32()?),
             access: decode_memory_access(reader)?,
         },
+        26 if reader.version >= KERNEL_IR_VERSION_V10 => {
+            OperationKind::MemoryIntrinsic(decode_memory_intrinsic(reader)?)
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "operation",
                 tag,
             });
+        }
+    })
+}
+
+fn encode_memory_intrinsic(
+    writer: &mut Writer,
+    intrinsic: &MemoryIntrinsicOperation,
+) -> Result<(), KernelIrEncodeError> {
+    let instance = encode_semantic_operation_instance_id(intrinsic.contract().instance_id());
+    writer.count(
+        "semantic operation instance",
+        instance.len(),
+        crate::SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1
+            + MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1,
+    )?;
+    writer.bytes(&instance)?;
+    for operand in intrinsic.operands() {
+        writer.u32(operand.0)?;
+    }
+    Ok(())
+}
+
+fn decode_memory_intrinsic(
+    reader: &mut Reader<'_>,
+) -> Result<MemoryIntrinsicOperation, KernelIrDecodeError> {
+    let instance_len = reader.count(
+        "semantic operation instance",
+        crate::SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1
+            + MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1,
+    )?;
+    let instance = decode_semantic_operation_instance_id(reader.take(instance_len)?)
+        .map_err(|_| KernelIrDecodeError::InvalidSemanticOperationInstance)?;
+    Ok(match instance.payload() {
+        SemanticOperationInstancePayloadV1::PointerDistance {
+            kind,
+            unit,
+            element,
+            address_space,
+            layout,
+            contract,
+        } => MemoryIntrinsicOperation::PointerDistance {
+            pointer: ValueId(reader.u32()?),
+            origin: ValueId(reader.u32()?),
+            kind,
+            unit,
+            element,
+            address_space,
+            layout,
+            contract,
+        },
+        SemanticOperationInstancePayloadV1::VolatileLoad {
+            element,
+            address_space,
+            layout,
+            contract,
+        } => MemoryIntrinsicOperation::VolatileLoad {
+            pointer: ValueId(reader.u32()?),
+            element,
+            address_space,
+            layout,
+            contract,
+        },
+        SemanticOperationInstancePayloadV1::VolatileStore {
+            element,
+            address_space,
+            layout,
+            contract,
+        } => MemoryIntrinsicOperation::VolatileStore {
+            pointer: ValueId(reader.u32()?),
+            value: ValueId(reader.u32()?),
+            element,
+            address_space,
+            layout,
+            contract,
+        },
+        SemanticOperationInstancePayloadV1::CopyNonOverlapping {
+            element,
+            source_address_space,
+            destination_address_space,
+            layout,
+            contract,
+        } => MemoryIntrinsicOperation::CopyNonOverlapping {
+            source: ValueId(reader.u32()?),
+            destination: ValueId(reader.u32()?),
+            count: ValueId(reader.u32()?),
+            element,
+            source_address_space,
+            destination_address_space,
+            layout,
+            contract,
+        },
+        SemanticOperationInstancePayloadV1::LaunchInvocationIndex { .. }
+        | SemanticOperationInstancePayloadV1::LaunchExtent { .. } => {
+            return Err(KernelIrDecodeError::InvalidSemanticOperationInstance);
         }
     })
 }
@@ -2938,6 +3055,17 @@ fn require_v8(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v9(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V9 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v10(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V10 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

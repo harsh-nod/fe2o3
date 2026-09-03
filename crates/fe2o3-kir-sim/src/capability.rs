@@ -12,9 +12,10 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_698_338;
-pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize =
-    SimulationOperationSurfaceV1::COUNT * SimulationCapabilityProfileV1::COUNT;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_724_072;
+pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
+    * SimulationCapabilityProfileV1::COUNT
+    * SimulationKirWireVersionV1::COUNT;
 pub const SCALAR_CAPABILITY_ROWS_V1: usize = SimulationCapabilityProfileV1::COUNT
     * (UNARY_OPERATIONS.len() * SCALAR_TYPES.len()
         + BINARY_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len()
@@ -101,6 +102,18 @@ impl SimulationCapabilityProfileV1 {
             }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimulationKirWireVersionV1 {
+    V7,
+    V10,
+}
+
+impl SimulationKirWireVersionV1 {
+    const ALL: [Self; 2] = [Self::V7, Self::V10];
+    const COUNT: usize = Self::ALL.len();
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -200,6 +213,8 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
+    ExternalVolatileMemory,
+    MemoryIntrinsicTargetLayout,
     FloatConstant,
     FloatOperation,
     FloatFunction,
@@ -229,6 +244,12 @@ impl UnsupportedFeatureV1 {
             Self::FloatType(_) => SimulationUnsupportedReasonCodeV1::FloatType,
             Self::UnsupportedType => SimulationUnsupportedReasonCodeV1::UnsupportedType,
             Self::MemoryIntrinsic => SimulationUnsupportedReasonCodeV1::MemoryIntrinsic,
+            Self::ExternalVolatileMemory => {
+                SimulationUnsupportedReasonCodeV1::ExternalVolatileMemory
+            }
+            Self::MemoryIntrinsicTargetLayout => {
+                SimulationUnsupportedReasonCodeV1::MemoryIntrinsicTargetLayout
+            }
             Self::FloatConstant => SimulationUnsupportedReasonCodeV1::FloatConstant,
             Self::FloatOperation => SimulationUnsupportedReasonCodeV1::FloatOperation,
             Self::FloatFunction(_) => SimulationUnsupportedReasonCodeV1::FloatFunction,
@@ -279,6 +300,7 @@ pub enum SimulationCapabilityDispositionV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SimulationOperationCapabilityRowV1 {
     pub profile: SimulationCapabilityProfileV1,
+    pub kir_wire_version: SimulationKirWireVersionV1,
     pub operation: SimulationOperationSurfaceV1,
     #[serde(flatten)]
     pub capability: SimulationCapabilityDispositionV1,
@@ -320,12 +342,15 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
     let mut top_level_rows = Vec::with_capacity(TOP_LEVEL_CAPABILITY_ROWS_V1);
     let mut scalar_rows = Vec::with_capacity(SCALAR_CAPABILITY_ROWS_V1);
     for profile in SimulationCapabilityProfileV1::ALL {
-        for operation in SimulationOperationSurfaceV1::ALL {
-            top_level_rows.push(SimulationOperationCapabilityRowV1 {
-                profile,
-                operation,
-                capability: top_level_capability(operation, profile),
-            });
+        for kir_wire_version in SimulationKirWireVersionV1::ALL {
+            for operation in SimulationOperationSurfaceV1::ALL {
+                top_level_rows.push(SimulationOperationCapabilityRowV1 {
+                    profile,
+                    kir_wire_version,
+                    operation,
+                    capability: top_level_capability(operation, profile, kir_wire_version),
+                });
+            }
         }
         append_scalar_rows(&mut scalar_rows, profile);
     }
@@ -442,6 +467,7 @@ fn scalar_row(
 fn top_level_capability(
     operation: SimulationOperationSurfaceV1,
     profile: SimulationCapabilityProfileV1,
+    kir_wire_version: SimulationKirWireVersionV1,
 ) -> SimulationCapabilityDispositionV1 {
     use SimulationOperationSurfaceV1 as Surface;
     use SimulationSemanticOwnerV1 as Owner;
@@ -461,7 +487,18 @@ fn top_level_capability(
             },
         ),
         Surface::Intrinsic => owned(Owner::LaunchGeometry, &[]),
-        Surface::MemoryIntrinsic => unsupported(Reason::MemoryIntrinsic),
+        Surface::MemoryIntrinsic if kir_wire_version == SimulationKirWireVersionV1::V7 => {
+            unsupported(Reason::MemoryIntrinsic)
+        }
+        Surface::MemoryIntrinsic => owned(
+            Owner::TypedMemory,
+            &[
+                Reason::NonScalarMemory,
+                Reason::UnsupportedAddressSpace,
+                Reason::ExternalVolatileMemory,
+                Reason::MemoryIntrinsicTargetLayout,
+            ],
+        ),
         Surface::Unary | Surface::Binary | Surface::Compare => {
             owned(Owner::ScalarBits, &[Reason::UnsupportedScalarOperation])
         }

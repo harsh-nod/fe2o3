@@ -1,12 +1,13 @@
 use std::mem::size_of;
 
-use fe2o3_kernel_ir::{AccessMode, ScalarType, VerifiedCanonicalKernelIrIdentityV7};
+use fe2o3_kernel_ir::{AccessMode, ScalarType};
 use sha2::{Digest, Sha256};
 
 use crate::resident::reserved_vec_bytes;
 use crate::{
     BufferArgumentV1, EventPolicyV1, IndexWidthV1, SimulationArgumentV1, SimulationInvocationV1,
-    SimulationLimitsV1, SimulationPlanV1, SimulationRequestV1, SimulationTargetV1,
+    SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationPlanV1, SimulationRequestV1,
+    SimulationTargetV1,
 };
 
 mod persisted;
@@ -22,6 +23,8 @@ pub const MAX_SCHEDULE_DECISIONS_V1: usize = 4 * 1024 * 1024;
 
 const CONTEXT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V1\0";
 const CONTEXT_DOMAIN_V2: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V2\0";
+const CONTEXT_DOMAIN_V3: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V3\0";
+const CONTEXT_DOMAIN_V4: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V4\0";
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-TRANSCRIPT/V1\0";
 const RECORD_INTEGRITY_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-RECORD/V1\0";
 
@@ -201,7 +204,7 @@ impl<'a> PreparedScheduleV1<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare(
         request: Option<SimulationScheduleRequestV1<'a>>,
-        identity: VerifiedCanonicalKernelIrIdentityV7,
+        identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
@@ -482,7 +485,7 @@ impl<'a> PreparedScheduleV1<'a> {
     pub(crate) fn finish(
         self,
         expected_workgroups: u64,
-        identity: VerifiedCanonicalKernelIrIdentityV7,
+        identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
@@ -640,7 +643,7 @@ fn validate_record(
 }
 
 fn schedule_context_identity(
-    identity: VerifiedCanonicalKernelIrIdentityV7,
+    identity: SimulationKernelIrIdentityV1,
     request: &SimulationRequestV1,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
@@ -654,11 +657,16 @@ fn schedule_context_identity(
         .shared_buffers
         .iter()
         .any(|shared| shared.buffer.access() == AccessMode::WriteOnly);
-    hash.update(if write_only {
-        CONTEXT_DOMAIN_V2
-    } else {
-        CONTEXT_DOMAIN_V1
+    let versioned_context = identity.wire_version() != 7;
+    hash.update(match (versioned_context, write_only) {
+        (false, false) => CONTEXT_DOMAIN_V1,
+        (false, true) => CONTEXT_DOMAIN_V2,
+        (true, false) => CONTEXT_DOMAIN_V3,
+        (true, true) => CONTEXT_DOMAIN_V4,
     });
+    if versioned_context {
+        hash.update(identity.wire_version().to_le_bytes());
+    }
     hash.update(identity.digest());
     hash.update(identity.canonical_length().to_le_bytes());
     hash_bytes(&mut hash, request.kernel.as_str().as_bytes());

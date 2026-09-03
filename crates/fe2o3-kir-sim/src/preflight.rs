@@ -5,8 +5,9 @@ use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
-    F32MathFunction, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, Module, Operation,
-    OperationKind, ScalarType, Terminator, Type, UnaryOp, ValueId,
+    F32MathFunction, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, MemoryElementType,
+    MemoryIntrinsicOperation, Module, Operation, OperationKind, ScalarType, Terminator, Type,
+    UnaryOp, ValueId, VolatileProvenanceContract,
 };
 
 use crate::resident::{
@@ -38,6 +39,8 @@ pub enum UnsupportedFeatureV1 {
     FloatType(ScalarType),
     UnsupportedType,
     MemoryIntrinsic,
+    ExternalVolatileMemory,
+    MemoryIntrinsicTargetLayout,
     FloatConstant,
     FloatOperation,
     FloatFunction(F32MathFunction),
@@ -1435,7 +1438,9 @@ fn scan_operation(
             }
         }
         OperationKind::Intrinsic(_) => {}
-        OperationKind::MemoryIntrinsic(_) => reject!(UnsupportedFeatureV1::MemoryIntrinsic),
+        OperationKind::MemoryIntrinsic(intrinsic) => {
+            scan_memory_intrinsic(intrinsic, &mut |feature| reject!(feature), target)
+        }
         OperationKind::Unary { op, operand } => {
             if !matches!(value_types.get(operand), Some(Type::Scalar(ty)) if supports_unary(*op, *ty))
             {
@@ -1631,6 +1636,76 @@ fn scan_memory_type(
     }
     if !matches!(pointee, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some()) {
         reject(UnsupportedFeatureV1::NonScalarMemory);
+    }
+}
+
+fn scan_memory_intrinsic(
+    intrinsic: &MemoryIntrinsicOperation,
+    reject: &mut impl FnMut(UnsupportedFeatureV1),
+    target: SimulationTargetV1,
+) {
+    let (element, address_spaces) = match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance {
+            element,
+            address_space,
+            ..
+        }
+        | MemoryIntrinsicOperation::VolatileLoad {
+            element,
+            address_space,
+            ..
+        }
+        | MemoryIntrinsicOperation::VolatileStore {
+            element,
+            address_space,
+            ..
+        } => (*element, [Some(*address_space), None]),
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            element,
+            source_address_space,
+            destination_address_space,
+            ..
+        } => (
+            *element,
+            [
+                Some(*source_address_space),
+                Some(*destination_address_space),
+            ],
+        ),
+    };
+    let MemoryElementType::Scalar(element) = element else {
+        reject(UnsupportedFeatureV1::NonScalarMemory);
+        return;
+    };
+    if target.scalar_bytes(element).map(|bytes| bytes as u64)
+        != Some(intrinsic_layout(intrinsic).size_bytes)
+    {
+        reject(UnsupportedFeatureV1::MemoryIntrinsicTargetLayout);
+    }
+    for address_space in address_spaces.into_iter().flatten() {
+        if !matches!(
+            address_space,
+            AddressSpace::Global | AddressSpace::Private | AddressSpace::Workgroup
+        ) {
+            reject(UnsupportedFeatureV1::UnsupportedAddressSpace(address_space));
+        }
+    }
+    if matches!(
+        intrinsic,
+        MemoryIntrinsicOperation::VolatileLoad { contract, .. }
+            | MemoryIntrinsicOperation::VolatileStore { contract, .. }
+            if contract.provenance == VolatileProvenanceContract::ExternalMmioNotRustAllocation
+    ) {
+        reject(UnsupportedFeatureV1::ExternalVolatileMemory);
+    }
+}
+
+fn intrinsic_layout(intrinsic: &MemoryIntrinsicOperation) -> fe2o3_kernel_ir::MemoryLayout {
+    match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance { layout, .. }
+        | MemoryIntrinsicOperation::VolatileLoad { layout, .. }
+        | MemoryIntrinsicOperation::VolatileStore { layout, .. }
+        | MemoryIntrinsicOperation::CopyNonOverlapping { layout, .. } => *layout,
     }
 }
 

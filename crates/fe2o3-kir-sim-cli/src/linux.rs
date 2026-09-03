@@ -85,6 +85,8 @@ enum UnsupportedFeatureCode {
     FloatType,
     UnsupportedType,
     MemoryIntrinsic,
+    ExternalVolatileMemory,
+    MemoryIntrinsicTargetLayout,
     FloatConstant,
     FloatOperation,
     FloatSqrt,
@@ -2623,6 +2625,27 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::PointerOffsetOverflow => {
             ErrorKind::ExecutionPointerOffsetOverflow
         }
+        SimulationExecutionErrorKindV1::PointerDistanceDifferentAllocation { .. } => {
+            ErrorKind::ExecutionPointerDistanceDifferentAllocation
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceOutOfBounds => {
+            ErrorKind::ExecutionPointerDistanceOutOfBounds
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceNotDivisible { .. } => {
+            ErrorKind::ExecutionPointerDistanceNotDivisible
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceOverflow => {
+            ErrorKind::ExecutionPointerDistanceOverflow
+        }
+        SimulationExecutionErrorKindV1::PointerDistanceNegativeUnsigned => {
+            ErrorKind::ExecutionPointerDistanceNegativeUnsigned
+        }
+        SimulationExecutionErrorKindV1::CopyRangesOverlap { .. } => {
+            ErrorKind::ExecutionCopyRangesOverlap
+        }
+        SimulationExecutionErrorKindV1::MemoryIntrinsicByteCountOverflow => {
+            ErrorKind::ExecutionMemoryIntrinsicByteCountOverflow
+        }
         SimulationExecutionErrorKindV1::DanglingPointer { .. } => {
             ErrorKind::ExecutionDanglingPointer
         }
@@ -2730,6 +2753,12 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
         UnsupportedFeatureV1::UnsupportedType => UnsupportedFeatureCode::UnsupportedType,
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,
+        UnsupportedFeatureV1::ExternalVolatileMemory => {
+            UnsupportedFeatureCode::ExternalVolatileMemory
+        }
+        UnsupportedFeatureV1::MemoryIntrinsicTargetLayout => {
+            UnsupportedFeatureCode::MemoryIntrinsicTargetLayout
+        }
         UnsupportedFeatureV1::FloatConstant => UnsupportedFeatureCode::FloatConstant,
         UnsupportedFeatureV1::FloatOperation => UnsupportedFeatureCode::FloatOperation,
         UnsupportedFeatureV1::FloatFunction(function) => match function {
@@ -2938,6 +2967,9 @@ fn write_exploration_input<W: Write + ?Sized>(
     match binding.artifact() {
         PersistedSimulationScheduleArtifactV1::CanonicalKirV7 => {
             writer.write_all(b"{\"kind\":\"canonical_kir_v7\",\"kir_sha256\":\"")?;
+        }
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV10 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v10\",\"kir_sha256\":\"")?;
         }
         PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
             bundle_sha256,
@@ -4564,6 +4596,22 @@ mod tests {
             ))
             .unwrap(),
             "dynamic_workgroup_memory"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(
+                &UnsupportedFeatureV1::ExternalVolatileMemory
+            ))
+            .unwrap(),
+            "external_volatile_memory"
+        );
+        assert_eq!(
+            execution_kind(&SimulationExecutionErrorKindV1::CopyRangesOverlap {
+                allocation: 1,
+                source_offset: 0,
+                destination_offset: 4,
+                bytes: 8,
+            }),
+            ErrorKind::ExecutionCopyRangesOverlap
         );
         assert_eq!(
             execution_kind(&SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish {

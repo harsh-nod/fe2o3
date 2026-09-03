@@ -4,6 +4,7 @@ use std::process::Command;
 use fe2o3_kir_sim::{
     SCALAR_CAPABILITY_ROWS_V1, SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
     SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1, SimulationCapabilityDispositionV1,
+    SimulationKirWireVersionV1, SimulationOperationSurfaceV1, SimulationUnsupportedReasonCodeV1,
     TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
 };
 
@@ -21,7 +22,7 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
     let top_keys = matrix
         .top_level_rows
         .iter()
-        .map(|row| (row.profile, row.operation))
+        .map(|row| (row.profile, row.kir_wire_version, row.operation))
         .collect::<BTreeSet<_>>();
     assert_eq!(top_keys.len(), matrix.top_level_rows.len());
     let scalar_keys = matrix
@@ -41,6 +42,40 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
             SimulationCapabilityDispositionV1::Owned { .. }
             | SimulationCapabilityDispositionV1::Unsupported { .. } => {}
         }
+    }
+}
+
+#[test]
+fn memory_intrinsic_ownership_is_explicitly_additive_v10() {
+    let matrix = semantic_capability_matrix_v1();
+    for profile in matrix
+        .top_level_rows
+        .iter()
+        .map(|row| row.profile)
+        .collect::<BTreeSet<_>>()
+    {
+        let capability = |version| {
+            &matrix
+                .top_level_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == version
+                        && row.operation == SimulationOperationSurfaceV1::MemoryIntrinsic
+                })
+                .unwrap()
+                .capability
+        };
+        assert_eq!(
+            capability(SimulationKirWireVersionV1::V7),
+            &SimulationCapabilityDispositionV1::Unsupported {
+                reason: SimulationUnsupportedReasonCodeV1::MemoryIntrinsic,
+            }
+        );
+        assert!(matches!(
+            capability(SimulationKirWireVersionV1::V10),
+            SimulationCapabilityDispositionV1::Owned { .. }
+        ));
     }
 }
 

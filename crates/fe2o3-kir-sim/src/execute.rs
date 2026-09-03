@@ -11,10 +11,10 @@ use std::mem::size_of;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
     CheckedBinaryOperator, ComparePredicate, Constant, Fence, Function, FunctionId, FunctionRole,
-    IndexKind, IntrinsicKind, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
-    ScalarType, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrIdentityV7, WaveOperation, WaveOperationKind, WaveWidth,
-    WorkgroupBarrier, WorkgroupMemoryExtent,
+    IndexKind, IntrinsicKind, MemoryAccess, MemoryIntrinsicOperation, MemoryOrdering, Module,
+    Operation, OperationKind, PointerDistanceKind, PointerDistanceUnit, ScalarType,
+    SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId, WaveOperation,
+    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -27,17 +27,18 @@ use crate::resident::{
 use crate::schedule::{PreparedScheduleV1, SchedulePrepareErrorV1};
 use crate::soft_float::{SoftFloatErrorV1, SoftFloatOperationV1};
 use crate::{
-    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1,
+    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1, IndexWidthV1,
     NoopSimulationDebugSinkV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
     SimulationDebugAllocationV1, SimulationDebugBarrierActionV1, SimulationDebugBindingV1,
     SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1,
     SimulationDebugFrameV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
     SimulationDebugRecordV1, SimulationDebugScheduleV1, SimulationDebugSinkControlV1,
     SimulationDebugSinkV1, SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1,
-    SimulationDebugValueV1, SimulationInvocationV1, SimulationLimitsV1, SimulationPlanV1,
-    SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleCoverageV1,
-    SimulationScheduleIdentityV1, SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1,
-    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
+    SimulationDebugValueV1, SimulationInvocationV1, SimulationKernelIrIdentityV1,
+    SimulationLimitsV1, SimulationPlanV1, SimulationPreflightErrorV1, SimulationRequestV1,
+    SimulationScheduleCoverageV1, SimulationScheduleIdentityV1, SimulationScheduleRecordV1,
+    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationSiteV1,
+    SimulationTargetV1,
 };
 
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
@@ -283,7 +284,7 @@ impl SimulationEventSinkV1 for NoopSimulationEventSinkV1 {
 /// Completed deterministic execution and copied-back arguments.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationExecutionV1 {
-    identity: VerifiedCanonicalKernelIrIdentityV7,
+    identity: SimulationKernelIrIdentityV1,
     arguments: Vec<SimulationArgumentV1>,
     shared_buffers: Vec<SharedBufferV1>,
     invocations_executed: u64,
@@ -306,7 +307,7 @@ struct SimulationSupplementalV1 {
 
 impl SimulationExecutionV1 {
     /// Returns the exact canonical KIR identity that was simulated.
-    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
+    pub const fn identity(&self) -> &SimulationKernelIrIdentityV1 {
         &self.identity
     }
 
@@ -555,6 +556,24 @@ pub enum SimulationExecutionErrorKindV1 {
     UndefinedIntegerOperation(&'static str),
     IntegerOutOfRange,
     PointerOffsetOverflow,
+    PointerDistanceDifferentAllocation {
+        pointer_allocation: u64,
+        origin_allocation: u64,
+    },
+    PointerDistanceOutOfBounds,
+    PointerDistanceNotDivisible {
+        byte_difference: u64,
+        unit_bytes: u64,
+    },
+    PointerDistanceOverflow,
+    PointerDistanceNegativeUnsigned,
+    CopyRangesOverlap {
+        allocation: u64,
+        source_offset: usize,
+        destination_offset: usize,
+        bytes: usize,
+    },
+    MemoryIntrinsicByteCountOverflow,
     DanglingPointer {
         allocation: u64,
     },
@@ -631,6 +650,13 @@ impl SimulationExecutionErrorKindV1 {
             | Self::UndefinedIntegerOperation(_)
             | Self::IntegerOutOfRange
             | Self::PointerOffsetOverflow
+            | Self::PointerDistanceDifferentAllocation { .. }
+            | Self::PointerDistanceOutOfBounds
+            | Self::PointerDistanceNotDivisible { .. }
+            | Self::PointerDistanceOverflow
+            | Self::PointerDistanceNegativeUnsigned
+            | Self::CopyRangesOverlap { .. }
+            | Self::MemoryIntrinsicByteCountOverflow
             | Self::DanglingPointer { .. }
             | Self::AddressSpaceMismatch
             | Self::ReadOnlyWrite
@@ -1193,6 +1219,121 @@ impl Memory {
         let allocation = self.allocation(pointer)?;
         validate_access(allocation, pointer, access, width, true)?;
         Ok(width)
+    }
+
+    fn validate_range_read(
+        &self,
+        pointer: &PointerValue,
+        alignment: u32,
+        width: usize,
+        invocation: SimulationInvocationV1,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        let allocation = self.allocation(pointer)?;
+        validate_access(
+            allocation,
+            pointer,
+            MemoryAccess::new(pointer.address_space, alignment),
+            width,
+            false,
+        )?;
+        let end = pointer
+            .byte_offset
+            .checked_add(width)
+            .ok_or(SimulationExecutionErrorKindV1::PointerOffsetOverflow)?;
+        if allocation.initialized[pointer.byte_offset..end]
+            .iter()
+            .any(|initialized| !initialized)
+        {
+            return Err(SimulationExecutionErrorKindV1::UninitializedRead {
+                allocation: pointer.allocation,
+                offset: pointer.byte_offset,
+                bytes: width,
+            });
+        }
+        if pointer.address_space == AddressSpace::Workgroup {
+            let writer = invocation_local_ordinal(invocation)
+                .and_then(|ordinal| ordinal.checked_add(1))
+                .ok_or(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "workgroup invocation ordinal",
+                ))?;
+            if allocation.workgroup_published[pointer.byte_offset..end]
+                .iter()
+                .zip(&allocation.workgroup_writer[pointer.byte_offset..end])
+                .any(|(published, owner)| !published && *owner != writer)
+            {
+                return Err(SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish {
+                    allocation: pointer.allocation,
+                    offset: pointer.byte_offset,
+                    bytes: width,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_range_write(
+        &self,
+        pointer: &PointerValue,
+        alignment: u32,
+        width: usize,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        let allocation = self.allocation(pointer)?;
+        validate_access(
+            allocation,
+            pointer,
+            MemoryAccess::new(pointer.address_space, alignment),
+            width,
+            true,
+        )
+    }
+
+    fn validate_zero_byte_pointer(
+        &self,
+        pointer: &PointerValue,
+        alignment: u32,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        let allocation = self.allocation(pointer)?;
+        if alignment == 0
+            || allocation.alignment < alignment
+            || !pointer.byte_offset.is_multiple_of(alignment as usize)
+        {
+            return Err(SimulationExecutionErrorKindV1::MisalignedAccess {
+                required: alignment,
+                offset: pointer.byte_offset,
+            });
+        }
+        Ok(())
+    }
+
+    fn commit_copy(
+        &mut self,
+        source: &PointerValue,
+        destination: &PointerValue,
+        width: usize,
+        workgroup_writer: Option<u64>,
+    ) {
+        for relative in 0..width {
+            let source_offset = source.byte_offset + relative;
+            let destination_offset = destination.byte_offset + relative;
+            let byte = self.allocations[&source.allocation].bytes[source_offset];
+            let destination_allocation = self
+                .allocations
+                .get_mut(&destination.allocation)
+                .expect("validated copy destination remains live");
+            destination_allocation.bytes[destination_offset] = byte;
+            destination_allocation.initialized[destination_offset] = true;
+        }
+        if let Some(writer) = workgroup_writer {
+            let destination_end = destination.byte_offset + width;
+            let destination_allocation = self
+                .allocations
+                .get_mut(&destination.allocation)
+                .expect("validated workgroup copy destination remains live");
+            destination_allocation.workgroup_published[destination.byte_offset..destination_end]
+                .fill(false);
+            destination_allocation.workgroup_writer[destination.byte_offset..destination_end]
+                .fill(writer);
+        }
     }
 
     fn prepare_store(
@@ -5718,8 +5859,10 @@ fn execute_operation(
             engine.debug_fence(site, fence);
             Ok(SmallResults::None)
         }
-        OperationKind::MemoryIntrinsic(_)
-        | OperationKind::Barrier(_)
+        OperationKind::MemoryIntrinsic(intrinsic) => {
+            execute_memory_intrinsic(engine, values, intrinsic, &site)
+        }
+        OperationKind::Barrier(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
@@ -5729,6 +5872,292 @@ fn execute_operation(
             SimulationExecutionErrorKindV1::InternalInvariant(
                 "unsupported operation passed preflight",
             ),
+        )),
+    }
+}
+
+fn execute_memory_intrinsic(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    intrinsic: &MemoryIntrinsicOperation,
+    site: &CompactSite,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance {
+            pointer,
+            origin,
+            kind,
+            unit,
+            layout,
+            ..
+        } => {
+            let pointer_runtime = pointer_value(engine, values, *pointer, site)?.clone();
+            let origin_value = pointer_value(engine, values, *origin, site)?.clone();
+            if pointer_runtime.allocation != origin_value.allocation {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceDifferentAllocation {
+                        pointer_allocation: pointer_runtime.allocation,
+                        origin_allocation: origin_value.allocation,
+                    },
+                ));
+            }
+            let allocation_bytes = match engine.memory.allocation(&pointer_runtime) {
+                Ok(allocation) => allocation.bytes.len(),
+                Err(error) => {
+                    return Err(engine.memory_error_at(*site, &pointer_runtime, error));
+                }
+            };
+            let in_bounds_or_one_past = |value: &PointerValue| {
+                value.byte_offset >= value.lower_bound
+                    && value.byte_offset <= value.upper_bound
+                    && value.byte_offset <= allocation_bytes
+            };
+            if !in_bounds_or_one_past(&pointer_runtime) || !in_bounds_or_one_past(&origin_value) {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceOutOfBounds,
+                ));
+            }
+            let difference =
+                (pointer_runtime.byte_offset as i128) - (origin_value.byte_offset as i128);
+            let unit_bytes = match unit {
+                PointerDistanceUnit::Bytes => 1_i128,
+                PointerDistanceUnit::Elements => i128::from(layout.size_bytes),
+            };
+            if difference % unit_bytes != 0 {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceNotDivisible {
+                        byte_difference: difference.unsigned_abs() as u64,
+                        unit_bytes: unit_bytes as u64,
+                    },
+                ));
+            }
+            let distance = difference / unit_bytes;
+            let (isize_min, isize_max) = match engine.target.index_width() {
+                IndexWidthV1::Bits32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+                IndexWidthV1::Bits64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+            };
+            if distance < isize_min || distance > isize_max {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceOverflow,
+                ));
+            }
+            let result = match kind {
+                PointerDistanceKind::Signed => ScalarBitsV1::new(
+                    ScalarType::I64,
+                    u128::from(distance as i64 as u64),
+                    engine.target,
+                ),
+                PointerDistanceKind::Unsigned if distance < 0 => {
+                    return Err(engine.at(
+                        *site,
+                        SimulationExecutionErrorKindV1::PointerDistanceNegativeUnsigned,
+                    ));
+                }
+                PointerDistanceKind::Unsigned => {
+                    ScalarBitsV1::index(distance as u64, engine.target)
+                }
+            }
+            .map_err(|_| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceOverflow,
+                )
+            })?;
+            Ok(SmallResults::One(RuntimeValue::Scalar(result)))
+        }
+        MemoryIntrinsicOperation::VolatileLoad {
+            pointer,
+            address_space,
+            layout,
+            ..
+        } => Ok(SmallResults::One(RuntimeValue::Scalar(
+            execute_scalar_load(
+                engine,
+                values,
+                *pointer,
+                MemoryAccess::new(*address_space, layout.alignment_bytes),
+                site,
+            )?,
+        ))),
+        MemoryIntrinsicOperation::VolatileStore {
+            pointer,
+            value,
+            address_space,
+            layout,
+            ..
+        } => {
+            let pointer_value = pointer_value(engine, values, *pointer, site)?.clone();
+            let stored = scalar_value(engine, values, *value, site)?;
+            let access = MemoryAccess::new(*address_space, layout.alignment_bytes);
+            let bytes = engine
+                .memory
+                .validate_store(&pointer_value, access, stored, engine.target)
+                .map_err(|kind| engine.memory_error_at(*site, &pointer_value, kind))?;
+            if pointer_value.address_space == AddressSpace::Global {
+                engine.record_access(
+                    site,
+                    pointer_value.allocation,
+                    pointer_value.byte_offset,
+                    bytes,
+                    true,
+                    false,
+                )?;
+            }
+            engine.observe_and_commit_store(site, &pointer_value, stored, bytes)?;
+            Ok(SmallResults::None)
+        }
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            source,
+            destination,
+            count,
+            layout,
+            ..
+        } => {
+            let source = pointer_value(engine, values, *source, site)?.clone();
+            let destination = pointer_value(engine, values, *destination, site)?.clone();
+            let count = scalar_nonnegative_usize(
+                scalar_value(engine, values, *count, site)?,
+                engine.target,
+            )
+            .map_err(|kind| engine.at(*site, kind))?;
+            let element_bytes = usize::try_from(layout.size_bytes).map_err(|_| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::MemoryIntrinsicByteCountOverflow,
+                )
+            })?;
+            let bytes = count
+                .checked_mul(element_bytes)
+                .filter(|bytes| match engine.target.index_width() {
+                    IndexWidthV1::Bits32 => *bytes <= u32::MAX as usize,
+                    IndexWidthV1::Bits64 => true,
+                })
+                .ok_or_else(|| {
+                    engine.at(
+                        *site,
+                        SimulationExecutionErrorKindV1::MemoryIntrinsicByteCountOverflow,
+                    )
+                })?;
+            if bytes == 0 {
+                engine
+                    .memory
+                    .validate_zero_byte_pointer(&source, layout.alignment_bytes)
+                    .map_err(|kind| engine.memory_error_at(*site, &source, kind))?;
+                engine
+                    .memory
+                    .validate_zero_byte_pointer(&destination, layout.alignment_bytes)
+                    .map_err(|kind| engine.memory_error_at(*site, &destination, kind))?;
+                return Ok(SmallResults::None);
+            }
+            let invocation = engine.invocation.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("copy invocation"),
+                )
+            })?;
+            engine
+                .memory
+                .validate_range_read(&source, layout.alignment_bytes, bytes, invocation)
+                .map_err(|kind| engine.memory_error_at(*site, &source, kind))?;
+            engine
+                .memory
+                .validate_range_write(&destination, layout.alignment_bytes, bytes)
+                .map_err(|kind| engine.memory_error_at(*site, &destination, kind))?;
+            let source_end = source.byte_offset + bytes;
+            let destination_end = destination.byte_offset + bytes;
+            if source.allocation == destination.allocation
+                && source.byte_offset < destination_end
+                && destination.byte_offset < source_end
+            {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::CopyRangesOverlap {
+                        allocation: source.allocation,
+                        source_offset: source.byte_offset,
+                        destination_offset: destination.byte_offset,
+                        bytes,
+                    },
+                ));
+            }
+            let workgroup_writer = if destination.address_space == AddressSpace::Workgroup {
+                Some(
+                    invocation_local_ordinal(invocation)
+                        .and_then(|ordinal| ordinal.checked_add(1))
+                        .ok_or_else(|| {
+                            engine.at(
+                                *site,
+                                SimulationExecutionErrorKindV1::InternalInvariant(
+                                    "workgroup invocation ordinal",
+                                ),
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
+            engine.charge_steps(site, bytes)?;
+            if source.address_space == AddressSpace::Global {
+                engine.record_access(
+                    site,
+                    source.allocation,
+                    source.byte_offset,
+                    bytes,
+                    false,
+                    false,
+                )?;
+            }
+            engine.event(
+                site,
+                SimulationEventKindV1::MemoryRead {
+                    allocation: source.allocation,
+                    offset: source.byte_offset,
+                    bytes,
+                },
+            )?;
+            if destination.address_space == AddressSpace::Global {
+                engine.record_access(
+                    site,
+                    destination.allocation,
+                    destination.byte_offset,
+                    bytes,
+                    true,
+                    false,
+                )?;
+            }
+            engine.event(
+                site,
+                SimulationEventKindV1::MemoryWrite {
+                    allocation: destination.allocation,
+                    offset: destination.byte_offset,
+                    bytes,
+                },
+            )?;
+            engine
+                .memory
+                .commit_copy(&source, &destination, bytes, workgroup_writer);
+            Ok(SmallResults::None)
+        }
+    }
+}
+
+fn pointer_value<'a>(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &'a HashMap<ValueId, RuntimeValue>,
+    id: ValueId,
+    site: &CompactSite,
+) -> Result<&'a PointerValue, SimulationExecutionErrorV1> {
+    match runtime_value(engine, values, id, site)? {
+        RuntimeValue::Pointer(pointer) => Ok(pointer),
+        _ => Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(id),
+                expected: "pointer",
+            },
         )),
     }
 }

@@ -1,18 +1,21 @@
 # fe2o3-kir-sim
 
 `fe2o3-kir-sim` is a bounded, deterministic CPU execution engine for an
-explicit subset of verified canonical Kernel IR V7. Admission consumes a
-`VerifiedCanonicalKernelIrV7`; raw in-memory modules and older wire formats are
-not execution inputs.
+explicit subset of verified canonical Kernel IR. The frozen
+`AdmittedSimulationModuleV1::admit` route consumes exact V7 custody;
+`admit_v10` consumes exact V10 custody for additive memory-intrinsic execution.
+Raw in-memory modules and older wire formats are not execution inputs. The
+production compiler and simulation-bundle exporter continue to emit V7; source
+export to V10 is not part of this simulator slice.
 
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies those rows as declared tool-contract facts with no authority and
+identifies V7 and V10 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,698,338 bytes and its regression test rejects
+compact V1 document is fixed at 4,724,072 bytes and its regression test rejects
 any unreviewed schema-size change.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
@@ -33,7 +36,10 @@ The execution profile supports integer, boolean, and F16/BF16/F32/F64 scalar
 operations, structured control flow, internal helper calls, private
 allocations, global buffer arguments, ordinary and guarded scalar loads, static scalar
 workgroup-memory declarations, convergent workgroup barriers, and one-, two-,
-or three-dimensional launch hierarchy intrinsics. A false guarded load
+or three-dimensional launch hierarchy intrinsics. V10 additionally executes
+scalar pointer distance, Rust-allocation volatile load/store, and
+non-overlapping copy with exact declared layouts over global, private, and
+workgroup memory. A false guarded load
 evaluates only its predicate and fallback; it does not validate the pointer,
 record a memory access, or emit a memory-read event. Workgroups and local slots
 are created in canonical Z/Y/X
@@ -169,8 +175,11 @@ contracted.
 
 Float atomics, generic-address-space atomics, external calls, generic barriers,
 dynamic or non-scalar workgroup memory, V9 F32 wave reductions and broadcasts,
-matrix operations, gfx950 LDS transpose operations, memory
-intrinsics, and inline assembly remain typed unsupported states. F32 square root
+matrix operations, gfx950 LDS transpose operations, V7 memory intrinsics,
+V10 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
+volatile access, target-layout mismatches, and inline assembly remain typed
+unsupported states. Pointer distance additionally rejects distinct logical
+allocations because the CPU model has no physical-address equality claim. F32 square root
 and the canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a
 distinct typed unsupported state because the pinned software evaluator does not
 provide their declared exact semantics. The sequential
@@ -178,7 +187,8 @@ CPU mutation and fence order model does not simulate physical waves, caches,
 GPU floating-point modes, GPU timing, GPU performance, or prove memory-model
 race freedom.
 
-Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
+Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, or
+an exact V10 owner with `AdmittedSimulationModuleV1::admit_v10`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
 byte-addressed buffer arguments in `SimulationRequestV1`. Index scalars,
 buffers, and views are bound to the 32- or 64-bit layout used to construct them;
@@ -209,8 +219,10 @@ Lifecycle begins reserve their matching end capacity, including private
 allocation releases on normal return and failure unwind. If a sink rejects a
 failure-closing event, the primary dynamic failure retains the first bounded
 secondary observation failure rather than discarding either fact.
-Every fallible store preparation step occurs before its memory-write event, and
-the accepted event is followed only by an infallible byte commit. These events
+Every fallible store or copy validation step occurs before its memory-write
+event, and the accepted event is followed only by an infallible byte commit.
+Positive-byte copies reserve one simulator step per copied byte before access
+observations, so a single intrinsic cannot bypass `max_steps`. These events
 are an adapter, not a stable serialization contract; storage retained by a sink
 is owned and budgeted by the sink. Sink-retained event copies and a sink's own
 error-detail allocation are external to `max_resident_bytes`; production
