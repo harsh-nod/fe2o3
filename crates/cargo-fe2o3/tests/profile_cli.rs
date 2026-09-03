@@ -368,10 +368,25 @@ raise SystemExit(subprocess.run(target, check=False).returncode)
         profile_options: &[&str],
         target_args: &[&str],
     ) -> Output {
+        self.plan_program_with_options(output, profile_options, Path::new("/bin/true"), target_args)
+    }
+
+    fn plan_program_with_options(
+        &self,
+        output: &Path,
+        profile_options: &[&str],
+        program: &Path,
+        target_args: &[&str],
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
         command.args(["profile", "--tool", self.tool.to_str().unwrap()]);
         command.args(profile_options);
-        command.args(["--output-dir", output.to_str().unwrap(), "--", "/bin/true"]);
+        command.args([
+            "--output-dir",
+            output.to_str().unwrap(),
+            "--",
+            program.to_str().unwrap(),
+        ]);
         command.args(target_args).output().unwrap()
     }
 
@@ -606,6 +621,24 @@ fn collect_with_options(
     profile_options: &[&str],
     target_args: &[&str],
 ) -> Output {
+    collect_program_with_options(
+        fixture,
+        output,
+        auth,
+        profile_options,
+        Path::new("/bin/true"),
+        target_args,
+    )
+}
+
+fn collect_program_with_options(
+    fixture: &Fixture,
+    output: &Path,
+    auth: &str,
+    profile_options: &[&str],
+    program: &Path,
+    target_args: &[&str],
+) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command.args([
         "profile",
@@ -616,7 +649,12 @@ fn collect_with_options(
         fixture.tool.to_str().unwrap(),
     ]);
     command.args(profile_options);
-    command.args(["--output-dir", output.to_str().unwrap(), "--", "/bin/true"]);
+    command.args([
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--",
+        program.to_str().unwrap(),
+    ]);
     command.args(target_args).output().unwrap()
 }
 
@@ -676,6 +714,105 @@ fn exact_authorization_collects_without_a_shell_and_writes_a_bounded_manifest() 
             & 0o777,
         0o700
     );
+}
+
+#[test]
+fn live_qualification_archives_exact_runtime_bytes_and_rejects_stale_input() {
+    let runtime_source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/evidence/mi300x-direct-kfd-runtime-profile-v1.json")
+        .canonicalize()
+        .unwrap();
+    let fixture = Fixture::new(false);
+    fixture.replace_behavior(
+        "target = args[args.index(\"--\") + 1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)",
+    );
+    let output_directory = fixture.output("live-capture");
+    let runtime = fixture.output("runtime.json");
+    let options = ["--direct-kfd-runtime-capture", runtime.to_str().unwrap()];
+    let arguments = [runtime_source.to_str().unwrap(), runtime.to_str().unwrap()];
+    let plan = fixture.plan_program_with_options(
+        &output_directory,
+        &options,
+        Path::new("/bin/cp"),
+        &arguments,
+    );
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    assert!(!runtime.exists());
+    assert!(!output_directory.exists());
+
+    let output = collect_program_with_options(
+        &fixture,
+        &output_directory,
+        &authorization(&plan),
+        &options,
+        Path::new("/bin/cp"),
+        &arguments,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let durable_runtime =
+        fs::read(output_directory.join("fe2o3-direct-kfd-runtime-profile-v1.json")).unwrap();
+    assert_eq!(durable_runtime, fs::read(&runtime_source).unwrap());
+    assert_eq!(durable_runtime, fs::read(&runtime).unwrap());
+    let qualification: serde_json::Value = serde_json::from_slice(
+        &fs::read(output_directory.join("fe2o3-direct-kfd-rocprof-qualification-v1.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        qualification["outcome"],
+        "runtime_dispatch_observed_collector_completed_no_artifacts"
+    );
+    assert_eq!(qualification["runtime"]["dispatches_published"], 3);
+    assert_eq!(qualification["runtime"]["dropped_events"], 0);
+    assert_eq!(qualification["collector_inventory_complete"], true);
+    assert_eq!(qualification["collector_artifacts"], serde_json::json!([]));
+    assert_eq!(qualification["grants_collection_authority"], false);
+    assert_eq!(qualification["grants_dispatch_authority"], false);
+    assert_eq!(qualification["proves_universal_collector_inability"], false);
+    let manifest =
+        fs::read_to_string(output_directory.join("fe2o3-profile-manifest-v1.txt")).unwrap();
+    assert!(manifest.contains("direct-kfd-rocprof-qualification: published"));
+    assert!(
+        manifest
+            .contains("direct-kfd-runtime-capture-copy: fe2o3-direct-kfd-runtime-profile-v1.json")
+    );
+
+    let stale_fixture = Fixture::new(false);
+    let stale_output = stale_fixture.output("stale-output");
+    let stale_runtime = stale_fixture.output("stale-runtime.json");
+    let stale_options = [
+        "--direct-kfd-runtime-capture",
+        stale_runtime.to_str().unwrap(),
+    ];
+    let stale_arguments = [
+        runtime_source.to_str().unwrap(),
+        stale_runtime.to_str().unwrap(),
+    ];
+    let stale_plan = stale_fixture.plan_program_with_options(
+        &stale_output,
+        &stale_options,
+        Path::new("/bin/cp"),
+        &stale_arguments,
+    );
+    assert!(stale_plan.status.success());
+    fs::write(&stale_runtime, b"stale").unwrap();
+    let stale_collection = collect_program_with_options(
+        &stale_fixture,
+        &stale_output,
+        &authorization(&stale_plan),
+        &stale_options,
+        Path::new("/bin/cp"),
+        &stale_arguments,
+    );
+    assert!(!stale_collection.status.success());
+    assert!(!stale_output.exists());
 }
 
 #[test]
@@ -934,6 +1071,12 @@ fn reserved_generated_names_are_rejected_and_cleaned() {
         ".fe2o3-profile-dispatch-import-receipt-v1.redo",
         "fe2o3-profile-manifest-v1.txt",
         ".fe2o3-profile-manifest-v1.redo",
+        "fe2o3-direct-kfd-rocprof-qualification-v1.json",
+        ".fe2o3-direct-kfd-rocprof-qualification-v1.redo",
+        "fe2o3-direct-kfd-runtime-profile-v1.json",
+        ".fe2o3-direct-kfd-runtime-profile-v1.redo",
+        "fe2o3-rocprof-wrapper-host-wall-comparison-v1.json",
+        ".fe2o3-rocprof-wrapper-host-wall-comparison-v1.redo",
     ] {
         let fixture = Fixture::new(false);
         fixture.replace_behavior(&format!(
@@ -946,6 +1089,90 @@ fn reserved_generated_names_are_rejected_and_cleaned() {
         assert!(!output.status.success());
         assert!(!output_directory.exists());
     }
+}
+
+#[test]
+fn wrapper_host_wall_comparison_requires_separate_acknowledgement_and_is_non_authoritative() {
+    let fixture = Fixture::new(false);
+    fixture.replace_behavior(
+        r#"
+target = args[args.index("--") + 1:]
+raise SystemExit(subprocess.run(target, check=False).returncode)
+"#,
+    );
+    let output_directory = fixture.output("wrapper-overhead");
+    let options = [
+        "--measure-direct-kfd-wrapper-overhead",
+        "--overhead-warmup-pairs",
+        "1",
+        "--overhead-measured-pairs",
+        "3",
+        "--overhead-candidate-budget-bps",
+        "1000000",
+    ];
+    let plan = fixture.plan_with_options(&output_directory, &options, &[]);
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let acknowledgement = field(&plan, "repeated-target-execution-acknowledgement");
+
+    let without_ack = collect_with_options(
+        &fixture,
+        &output_directory,
+        &authorization(&plan),
+        &options,
+        &[],
+    );
+    assert!(!without_ack.status.success());
+    assert!(!output_directory.exists());
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command.args([
+        "profile",
+        "--collect",
+        "--authorize-collection",
+        &authorization(&plan),
+        "--acknowledge-repeated-target-execution",
+        &acknowledgement,
+        "--tool",
+        fixture.tool.to_str().unwrap(),
+    ]);
+    command.args(options).args([
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+        "--",
+        "/bin/true",
+    ]);
+    let collected = command.output().unwrap();
+    assert!(
+        collected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&collected.stderr)
+    );
+    let evidence: serde_json::Value = serde_json::from_slice(
+        &fs::read(output_directory.join("fe2o3-rocprof-wrapper-host-wall-comparison-v1.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        evidence["schema"],
+        "fe2o3-rocprof-wrapper-host-wall-comparison-v1"
+    );
+    assert_eq!(evidence["invocations"].as_array().unwrap().len(), 8);
+    assert!(!evidence["summary"].is_null());
+    assert_eq!(
+        evidence["kernel_trace_capture_overhead"],
+        "unavailable_no_admitted_capture"
+    );
+    assert_eq!(evidence["grants_collection_authority"], false);
+    assert_eq!(evidence["grants_production_qualification"], false);
+    assert!(
+        output_directory
+            .join("fe2o3-profile-manifest-v1.txt")
+            .is_file()
+    );
 }
 
 #[test]

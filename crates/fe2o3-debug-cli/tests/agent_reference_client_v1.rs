@@ -401,6 +401,78 @@ fn fresh_process_client_completes_three_diagnoses_and_minimum_plan() {
         report["variant"]["claim_truth"],
         "conservative_co_observation_not_causal_attribution"
     );
+    let variant_v2 = &report["variant_v2"];
+    assert_eq!(
+        variant_v2["claim_truth"],
+        "exact_variant_v2_comparison_with_typed_unavailable_correlation"
+    );
+    assert_eq!(
+        variant_v2["authority"],
+        "read_only_no_execution_replay_file_network_patch_attach_scheduling_collection_decoder_or_launch_authority"
+    );
+    assert_eq!(
+        variant_v2["comparison_schema"],
+        AGENT_PROFILER_VARIANT_COMPARISON_SCHEMA_V2
+    );
+    assert_eq!(variant_v2["comparison"]["schema_version"], 2);
+    assert_eq!(
+        variant_v2["comparison"]["comparison_v1"]["schema_version"],
+        1
+    );
+    assert_eq!(
+        variant_v2["comparison"]["comparison_v1"]["baseline_treatment"]["manifest"],
+        report["variant"]["baseline_manifest"]
+    );
+    assert_eq!(
+        variant_v2["comparison"]["comparison_v1"]["candidate_treatment"]["manifest"],
+        report["variant"]["candidate_manifest"]
+    );
+    assert!(
+        variant_v2["comparison"]["baseline_evidence"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        variant_v2["comparison"]["candidate_evidence"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        variant_v2["comparison"]["changed_occurrences"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    for kind in [
+        "baseline_correlation_evidence_missing",
+        "candidate_correlation_evidence_missing",
+        "profiler_kir_to_characteristic_kir_bridge_unavailable",
+        "causal_attribution",
+    ] {
+        assert!(
+            variant_v2["comparison"]["unavailable"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|fact| fact["kind"] == kind)
+        );
+    }
+    for identity in [
+        &variant_v2["service_contract"],
+        &variant_v2["capability_response_identity"],
+        &variant_v2["comparison"]["request_identity"],
+        &variant_v2["comparison"]["baseline_schedule"]["semantic_schedule_identity"],
+        &variant_v2["comparison"]["candidate_schedule"]["semantic_schedule_identity"],
+        &variant_v2["response_identity"],
+    ] {
+        assert_eq!(identity["digest"].as_str().unwrap().len(), 64);
+    }
+    assert_ne!(
+        variant_v2["comparison"]["baseline_schedule"]["semantic_schedule_identity"],
+        variant_v2["comparison"]["candidate_schedule"]["semantic_schedule_identity"]
+    );
     assert_eq!(report["next_capture"]["first_page_returned"], 1);
     assert_eq!(report["next_capture"]["second_page_returned"], 1);
     assert_eq!(
@@ -446,6 +518,16 @@ fn fresh_process_client_completes_three_diagnoses_and_minimum_plan() {
     for forbidden in ["/dev/kfd", "pid", "native_address", "attach_process"] {
         assert!(!text.contains(forbidden));
     }
+
+    write(&temp.join("candidate.schedule"), b"substituted-schedule");
+    let hostile = run();
+    assert!(!hostile.status.success());
+    assert!(hostile.stdout.is_empty());
+    assert!(
+        String::from_utf8(hostile.stderr)
+            .unwrap()
+            .contains("retained Variant V2 inputs failed production comparison")
+    );
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -669,6 +751,18 @@ fn installed_fresh_process_uses_only_pinned_archive_and_production_binaries() {
             .as_array()
             .unwrap()
             .is_empty()
+    );
+    assert_eq!(
+        report["workflow"]["variant_v2"]["comparison"]["schema_version"],
+        2
+    );
+    assert_eq!(
+        report["workflow"]["variant_v2"]["comparison"]["comparison_v1"]["baseline_treatment"]["manifest"],
+        report["workflow"]["variant"]["baseline_manifest"]
+    );
+    assert_eq!(
+        report["workflow"]["variant_v2"]["comparison"]["causal_attribution"],
+        "positive_co_observations_do_not_prove_causation"
     );
     assert_eq!(
         report["workflow"]["next_capture"]["minimum_additional_captures"],

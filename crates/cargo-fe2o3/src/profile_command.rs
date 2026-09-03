@@ -13,6 +13,20 @@ use crate::profile_dispatch_import_v1::{
     DispatchImportTargetBindingV1, ObservedTargetFamilyV1, PROFILE_DISPATCH_BUNDLE_FILE_V1,
     PROFILE_DISPATCH_RECEIPT_FILE_V1, import_dispatch_v1, readmit_dispatch_import_tuple_v1,
 };
+use crate::profile_live_qualification_v1::{
+    CollectorArtifactV1, CollectorReleaseV1, LIVE_QUALIFICATION_FILE_V1,
+    LIVE_QUALIFICATION_REDO_FILE_V1, LIVE_RUNTIME_CAPTURE_FILE_V1,
+    LIVE_RUNTIME_CAPTURE_REDO_FILE_V1, MAX_LIVE_QUALIFICATION_BYTES_V1, QualificationInputsV1,
+    RawContentIdentityV1, build_live_qualification_v1, decode_live_qualification_v1,
+    encode_live_qualification_v1,
+};
+use crate::profile_wrapper_overhead_v1::{
+    ArtifactStateV1, BuildInputsV1 as WrapperOverheadBuildInputsV1, CaptureLossStateV1,
+    HostClockV1, InvocationEvidenceV1, InvocationKindV1, InvocationOutcomeV1,
+    MAX_WRAPPER_OVERHEAD_BYTES_V1, OrderPolicyV1, OverheadPolicyV1, PairOrderV1, TimingBoundaryV1,
+    TrialPhaseV1, WRAPPER_OVERHEAD_FILE_V1, WRAPPER_OVERHEAD_REDO_FILE_V1,
+    build_wrapper_overhead_v1, decode_wrapper_overhead_v1, encode_wrapper_overhead_v1,
+};
 use fe2o3_artifact_transaction::{NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1};
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
@@ -48,6 +62,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,6 +92,9 @@ const MAX_CAPABILITY_OUTPUT_BYTES_V1: usize = 1024 * 1024;
 const CAPABILITY_TIMEOUT_V1: Duration = Duration::from_secs(30);
 const MAX_ARGUMENTS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 4096;
+const MAX_OVERHEAD_WARMUP_PAIRS_V1: u64 = 20;
+const MAX_OVERHEAD_MEASURED_PAIRS_V1: u64 = 100;
+const MAX_OVERHEAD_HARNESS_MS_V1: u64 = 3_600_000;
 const MAX_OBSERVED_GPU_TARGET_PROFILE_RECORD_BYTES_V1: usize = 512;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 const CAPTURE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
@@ -121,6 +139,16 @@ const INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1: [u8; 32] = [
     0x8f, 0xe7, 0x1f, 0xa9, 0xff, 0x69, 0x5b, 0xa2, 0x55, 0x6d, 0x65, 0xaf, 0x63, 0x6f, 0xdc, 0x48,
 ];
 const INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1: u64 = 62_506;
+const INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1: [u8; 32] = [
+    0x47, 0x8d, 0xf9, 0xaf, 0x09, 0xb7, 0x47, 0x07, 0x65, 0x2d, 0x9d, 0x55, 0x74, 0xef, 0x37, 0x15,
+    0x1f, 0xf1, 0x23, 0x4d, 0x09, 0xc6, 0x88, 0x43, 0x97, 0x2c, 0x14, 0x09, 0xa5, 0x05, 0xcd, 0xd0,
+];
+const INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1: u64 = 5_435_848;
+const INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1: [u8; 32] = [
+    0x40, 0xcf, 0x6f, 0xef, 0xff, 0xa5, 0xe9, 0xe8, 0xda, 0x24, 0x9d, 0xbc, 0x1c, 0xe6, 0xfe, 0xab,
+    0x0b, 0xb2, 0x61, 0x34, 0x38, 0xca, 0xf3, 0x7b, 0x02, 0x24, 0xd7, 0xfc, 0xe0, 0x92, 0x41, 0xe1,
+];
+const INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1: u64 = 8_314_944;
 
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "GPU_DEVICE_ORDINAL",
@@ -227,12 +255,20 @@ struct KirBinding {
     wave_width: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WrapperOverheadRequestV1 {
+    warmup_pairs: u16,
+    measured_pairs: u16,
+    candidate_budget_bps: u64,
+}
+
 #[derive(Debug)]
 struct Options {
     action: Action,
     authorization: Option<[u8; 32]>,
     pc_probe_authorization: Option<[u8; 32]>,
     pc_risk_acknowledgement: Option<[u8; 32]>,
+    repeated_execution_acknowledgement: Option<[u8; 32]>,
     tool: Option<PathBuf>,
     interpreter: Option<PathBuf>,
     pc_avail: Option<PathBuf>,
@@ -250,6 +286,8 @@ struct Options {
     pc_sampling: Option<PcSamplingRequestV1>,
     artifact_path: Option<PathBuf>,
     source_isa_characteristic_path: Option<PathBuf>,
+    direct_kfd_runtime_capture_path: Option<PathBuf>,
+    wrapper_overhead: Option<WrapperOverheadRequestV1>,
 }
 
 #[derive(Debug)]
@@ -609,6 +647,251 @@ impl FilePin {
     }
 }
 
+struct PendingRuntimeCaptureV1 {
+    canonical_path: PathBuf,
+    canonical_parent: PathBuf,
+    parent: rustix::fd::OwnedFd,
+    parent_identity: ObjectIdentity,
+    leaf: OsString,
+}
+
+struct RetainedRuntimeCaptureV1 {
+    canonical_path: PathBuf,
+    parent: rustix::fd::OwnedFd,
+    parent_identity: ObjectIdentity,
+    leaf: OsString,
+    file: File,
+    identity: ObjectIdentity,
+    bytes: Vec<u8>,
+}
+
+impl PendingRuntimeCaptureV1 {
+    fn prepare(path: &Path, target_arguments: &[String]) -> Result<Self, String> {
+        if !path.is_absolute() {
+            return Err("--direct-kfd-runtime-capture must be absolute".to_owned());
+        }
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(
+                    "--direct-kfd-runtime-capture must name a new file for each collection"
+                        .to_owned(),
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect --direct-kfd-runtime-capture: {error}"
+                ));
+            }
+        }
+        let parent = path
+            .parent()
+            .ok_or("--direct-kfd-runtime-capture has no parent directory")?;
+        let leaf = path
+            .file_name()
+            .filter(|leaf| !leaf.is_empty())
+            .ok_or("--direct-kfd-runtime-capture has no file name")?
+            .to_owned();
+        let canonical_parent = fs::canonicalize(parent).map_err(|error| {
+            format!("failed to canonicalize direct-KFD runtime capture parent: {error}")
+        })?;
+        let canonical_path = canonical_parent.join(&leaf);
+        if canonical_path != path {
+            return Err(
+                "--direct-kfd-runtime-capture must use its canonical parent path".to_owned(),
+            );
+        }
+        let path_text = canonical_path
+            .to_str()
+            .ok_or("--direct-kfd-runtime-capture must be UTF-8")?;
+        if path_text.len() > MAX_ARGUMENT_BYTES
+            || target_arguments
+                .iter()
+                .filter(|argument| argument.as_str() == path_text)
+                .count()
+                != 1
+        {
+            return Err(
+                "--direct-kfd-runtime-capture must occur exactly once in the target argv"
+                    .to_owned(),
+            );
+        }
+        let parent = rustix::fs::open(
+            &canonical_parent,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| format!("failed to retain runtime capture parent: {error}"))?;
+        let metadata = fs::metadata(&canonical_parent)
+            .map_err(|error| format!("failed to inspect runtime capture parent: {error}"))?;
+        Ok(Self {
+            canonical_path,
+            canonical_parent,
+            parent,
+            parent_identity: ObjectIdentity::from_metadata(&metadata),
+            leaf,
+        })
+    }
+
+    fn validate_parent(&self) -> Result<(), String> {
+        let descriptor = rustix::fs::fstat(&self.parent)
+            .map_err(|error| format!("failed to re-inspect runtime capture parent: {error}"))?;
+        let current = fs::metadata(&self.canonical_parent)
+            .map_err(|error| format!("runtime capture parent disappeared: {error}"))?;
+        if descriptor.st_dev != self.parent_identity.device
+            || descriptor.st_ino != self.parent_identity.inode
+            || !current.is_dir()
+            || current.dev() != self.parent_identity.device
+            || current.ino() != self.parent_identity.inode
+            || current.mode() != self.parent_identity.mode
+        {
+            return Err("direct-KFD runtime capture parent changed after planning".to_owned());
+        }
+        Ok(())
+    }
+
+    fn validate_absent(&self) -> Result<(), String> {
+        self.validate_parent()?;
+        match fs::symlink_metadata(&self.canonical_path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => {
+                Err("direct-KFD runtime capture path became occupied before collection".to_owned())
+            }
+            Err(error) => Err(format!(
+                "failed to re-inspect direct-KFD runtime capture path: {error}"
+            )),
+        }
+    }
+
+    fn admit(&self) -> Result<RetainedRuntimeCaptureV1, String> {
+        self.validate_parent()?;
+        let descriptor = rustix::fs::openat2(
+            &self.parent,
+            &self.leaf,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+            rustix::fs::ResolveFlags::BENEATH
+                | rustix::fs::ResolveFlags::NO_SYMLINKS
+                | rustix::fs::ResolveFlags::NO_MAGICLINKS
+                | rustix::fs::ResolveFlags::NO_XDEV,
+        )
+        .map(File::from)
+        .map_err(|error| format!("failed to open direct-KFD runtime capture: {error}"))?;
+        let identity =
+            ObjectIdentity::from_metadata(&descriptor.metadata().map_err(|error| {
+                format!("failed to inspect direct-KFD runtime capture: {error}")
+            })?);
+        let metadata = descriptor
+            .metadata()
+            .map_err(|error| format!("failed to inspect direct-KFD runtime capture: {error}"))?;
+        if !is_private_regular_file(&metadata)
+            || metadata.len() == 0
+            || metadata.len() > fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1
+        {
+            return Err(
+                "direct-KFD runtime capture is not a private single-link bounded regular file"
+                    .to_owned(),
+            );
+        }
+        let bytes = read_bounded_leaf(
+            descriptor
+                .try_clone()
+                .map_err(|error| format!("failed to retain direct-KFD runtime capture: {error}"))?,
+            identity,
+            fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            "direct-KFD runtime capture",
+        )?;
+        let retained = RetainedRuntimeCaptureV1 {
+            canonical_path: self.canonical_path.clone(),
+            parent: rustix::io::fcntl_dupfd_cloexec(&self.parent, 0)
+                .map_err(|error| format!("failed to retain runtime capture parent: {error}"))?,
+            parent_identity: self.parent_identity,
+            leaf: self.leaf.clone(),
+            file: descriptor,
+            identity,
+            bytes,
+        };
+        retained.revalidate()?;
+        Ok(retained)
+    }
+}
+
+impl RetainedRuntimeCaptureV1 {
+    fn revalidate(&self) -> Result<(), String> {
+        let metadata = self
+            .file
+            .metadata()
+            .map_err(|error| format!("failed to re-inspect direct-KFD runtime capture: {error}"))?;
+        if ObjectIdentity::from_metadata(&metadata) != self.identity {
+            return Err("direct-KFD runtime capture changed after admission".to_owned());
+        }
+        let (reopened, reopened_identity) = open_retained_leaf_at_v1(
+            &self.parent,
+            &self.leaf,
+            self.parent_identity,
+            self.identity,
+        )?;
+        let bytes = read_bounded_leaf(
+            reopened,
+            reopened_identity,
+            fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            "direct-KFD runtime capture",
+        )?;
+        if bytes != self.bytes
+            || fs::canonicalize(&self.canonical_path).ok().as_ref() != Some(&self.canonical_path)
+        {
+            return Err(
+                "direct-KFD runtime capture path or bytes changed after admission".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn open_retained_leaf_at_v1(
+    parent: &rustix::fd::OwnedFd,
+    leaf: &OsStr,
+    parent_identity: ObjectIdentity,
+    expected: ObjectIdentity,
+) -> Result<(File, ObjectIdentity), String> {
+    let observed_parent = rustix::fs::fstat(parent)
+        .map_err(|error| format!("failed to inspect retained runtime capture parent: {error}"))?;
+    if observed_parent.st_dev != parent_identity.device
+        || observed_parent.st_ino != parent_identity.inode
+    {
+        return Err("retained runtime capture parent changed".to_owned());
+    }
+    let file = rustix::fs::openat2(
+        parent,
+        leaf,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+        rustix::fs::ResolveFlags::BENEATH
+            | rustix::fs::ResolveFlags::NO_SYMLINKS
+            | rustix::fs::ResolveFlags::NO_MAGICLINKS
+            | rustix::fs::ResolveFlags::NO_XDEV,
+    )
+    .map(File::from)
+    .map_err(|error| format!("failed to reopen direct-KFD runtime capture: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect direct-KFD runtime capture: {error}"))?;
+    let identity = ObjectIdentity::from_metadata(&metadata);
+    if !is_private_regular_file(&metadata) || identity != expected {
+        return Err("direct-KFD runtime capture object was substituted".to_owned());
+    }
+    Ok((file, identity))
+}
+
 #[derive(Clone, Debug)]
 struct EnvironmentEntry {
     name: &'static str,
@@ -888,6 +1171,7 @@ impl ObservedGpuTargetProfileUnavailableReasonV1 {
 struct Plan {
     options: Options,
     working_directory: PathBuf,
+    working_directory_identity: ObjectIdentity,
     output_directory: PathBuf,
     tool: FilePin,
     interpreter: FilePin,
@@ -896,6 +1180,7 @@ struct Plan {
     collector_tool_bytes: Vec<u8>,
     collector_tool_digest: [u8; 32],
     target: FilePin,
+    measurement_harness: Option<FilePin>,
     environment: Vec<EnvironmentEntry>,
     environment_bytes: Vec<u8>,
     environment_digest: [u8; 32],
@@ -906,6 +1191,7 @@ struct Plan {
     authorization: [u8; 32],
     verified_kir_v7: Option<VerifiedKirInputV1>,
     pc_sampling: Option<PcSamplingPlanV1>,
+    pending_runtime_capture: Option<PendingRuntimeCaptureV1>,
 }
 
 struct CollectorLibraries {
@@ -1190,6 +1476,7 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
     let supplied_authorization = options.authorization;
     let supplied_pc_probe_authorization = options.pc_probe_authorization;
     let supplied_pc_risk_acknowledgement = options.pc_risk_acknowledgement;
+    let supplied_repeated_execution_acknowledgement = options.repeated_execution_acknowledgement;
     let action = options.action;
     let pc_probe = match options.pc_sampling {
         Some(request) => {
@@ -1243,11 +1530,20 @@ pub(crate) fn command(args: &[String]) -> Result<CommandReport, String> {
             hex(&pc.risk_acknowledgement)
         ));
     }
+    if plan.options.wrapper_overhead.is_some() {
+        let expected = repeated_execution_acknowledgement_v1(&plan);
+        if supplied_repeated_execution_acknowledgement != Some(expected) {
+            return Err(format!(
+                "wrapper overhead collection requires the separate exact repeated-target-execution acknowledgement; rerun with --acknowledge-repeated-target-execution {}",
+                hex(&expected)
+            ));
+        }
+    }
     collect(plan)
 }
 
 fn usage() -> &'static str {
-    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att|pc-sampling] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [PC: --pc-avail /absolute/path/to/rocprofv3-avail --authorize-pc-capability-probe HEX --pc-agent N --pc-method stochastic --pc-unit cycles --pc-interval N --artifact /absolute/path/to/kernel.hsaco --source-isa-characteristic /absolute/path/to/archive] [--collect --authorize-collection HEX [--acknowledge-pc-sampling-beta-risk HEX]] -- <program> [arguments...]"
+    "usage: cargo fe2o3 profile [--kind dispatch-json|dispatch-csv|att|pc-sampling] [--tool /absolute/path/to/rocprofv3] [--python /absolute/path/to/python3] --output-dir /absolute/new/directory [--cwd /absolute/directory] [--timeout-ms N] [--stdout-limit N] [--stderr-limit N] [--storage-limit N] [--kir-v7 /absolute/path/to/canonical.kir] [--direct-kfd-runtime-capture /absolute/new/capture.json] [--measure-direct-kfd-wrapper-overhead --overhead-warmup-pairs N --overhead-measured-pairs N --overhead-candidate-budget-bps N] [PC: --pc-avail /absolute/path/to/rocprofv3-avail --authorize-pc-capability-probe HEX --pc-agent N --pc-method stochastic --pc-unit cycles --pc-interval N --artifact /absolute/path/to/kernel.hsaco --source-isa-characteristic /absolute/path/to/archive] [--collect --authorize-collection HEX [--acknowledge-pc-sampling-beta-risk HEX] [--acknowledge-repeated-target-execution HEX]] -- <program> [arguments...]"
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
@@ -1272,6 +1568,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut authorization = None;
     let mut pc_probe_authorization = None;
     let mut pc_risk_acknowledgement = None;
+    let mut repeated_execution_acknowledgement = None;
     let mut tool = None;
     let mut interpreter = None;
     let mut pc_avail = None;
@@ -1293,6 +1590,11 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut pc_interval = None;
     let mut artifact_path = None;
     let mut source_isa_characteristic_path = None;
+    let mut direct_kfd_runtime_capture_path = None;
+    let mut measure_wrapper_overhead = false;
+    let mut overhead_warmup_pairs = None;
+    let mut overhead_measured_pairs = None;
+    let mut overhead_candidate_budget_bps = None;
     let mut scalar_options = BTreeSet::new();
 
     let mut index = 0;
@@ -1309,6 +1611,13 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             }
             action = requested;
             action_explicit = true;
+        } else if argument == "--measure-direct-kfd-wrapper-overhead" {
+            if measure_wrapper_overhead {
+                return Err(
+                    "--measure-direct-kfd-wrapper-overhead was specified more than once".to_owned(),
+                );
+            }
+            measure_wrapper_overhead = true;
         } else if let Some(value) =
             option_value(args, &mut index, separator, "--authorize-collection")?
         {
@@ -1339,6 +1648,17 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 parse_hex(value, "--acknowledge-pc-sampling-beta-risk")?,
                 "--acknowledge-pc-sampling-beta-risk",
             )?;
+        } else if let Some(value) = option_value(
+            args,
+            &mut index,
+            separator,
+            "--acknowledge-repeated-target-execution",
+        )? {
+            set_once(
+                &mut repeated_execution_acknowledgement,
+                parse_hex(value, "--acknowledge-repeated-target-execution")?,
+                "--acknowledge-repeated-target-execution",
+            )?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--tool")? {
             set_once(&mut tool, PathBuf::from(value), "--tool")?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--python")? {
@@ -1347,6 +1667,14 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             set_once(&mut pc_avail, PathBuf::from(value), "--pc-avail")?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--output-dir")? {
             set_once(&mut output_directory, PathBuf::from(value), "--output-dir")?;
+        } else if let Some(value) =
+            option_value(args, &mut index, separator, "--direct-kfd-runtime-capture")?
+        {
+            set_once(
+                &mut direct_kfd_runtime_capture_path,
+                PathBuf::from(value),
+                "--direct-kfd-runtime-capture",
+            )?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--cwd")? {
             set_once(&mut working_directory, PathBuf::from(value), "--cwd")?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--kind")? {
@@ -1423,6 +1751,45 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         } else if let Some(value) = option_value(args, &mut index, separator, "--storage-limit")? {
             require_first(&mut scalar_options, "--storage-limit")?;
             storage_limit = parse_u64(value, "--storage-limit", 1, MAX_STORAGE_LIMIT)?;
+        } else if let Some(value) =
+            option_value(args, &mut index, separator, "--overhead-warmup-pairs")?
+        {
+            set_once(
+                &mut overhead_warmup_pairs,
+                u16::try_from(parse_u64(
+                    value,
+                    "--overhead-warmup-pairs",
+                    1,
+                    MAX_OVERHEAD_WARMUP_PAIRS_V1,
+                )?)
+                .map_err(|_| "--overhead-warmup-pairs is out of range".to_owned())?,
+                "--overhead-warmup-pairs",
+            )?;
+        } else if let Some(value) =
+            option_value(args, &mut index, separator, "--overhead-measured-pairs")?
+        {
+            set_once(
+                &mut overhead_measured_pairs,
+                u16::try_from(parse_u64(
+                    value,
+                    "--overhead-measured-pairs",
+                    1,
+                    MAX_OVERHEAD_MEASURED_PAIRS_V1,
+                )?)
+                .map_err(|_| "--overhead-measured-pairs is out of range".to_owned())?,
+                "--overhead-measured-pairs",
+            )?;
+        } else if let Some(value) = option_value(
+            args,
+            &mut index,
+            separator,
+            "--overhead-candidate-budget-bps",
+        )? {
+            set_once(
+                &mut overhead_candidate_budget_bps,
+                parse_u64(value, "--overhead-candidate-budget-bps", 0, 1_000_000)?,
+                "--overhead-candidate-budget-bps",
+            )?;
         } else if let Some(value) = option_value(args, &mut index, separator, "--kir-sha256")? {
             set_once(
                 &mut kir_digest,
@@ -1454,6 +1821,11 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
     }
     if action == Action::Plan && pc_risk_acknowledgement.is_some() {
         return Err("--acknowledge-pc-sampling-beta-risk is valid only with --collect".to_owned());
+    }
+    if action == Action::Plan && repeated_execution_acknowledgement.is_some() {
+        return Err(
+            "--acknowledge-repeated-target-execution is valid only with --collect".to_owned(),
+        );
     }
     if action == Action::Collect && authorization.is_none() {
         return Err(
@@ -1527,11 +1899,62 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
                 .to_owned(),
         );
     }
+    let any_overhead_option = overhead_warmup_pairs.is_some()
+        || overhead_measured_pairs.is_some()
+        || overhead_candidate_budget_bps.is_some();
+    let wrapper_overhead = if measure_wrapper_overhead {
+        if kind != ProfileKind::DispatchJson {
+            return Err(
+                "direct-KFD wrapper overhead measurement requires --kind dispatch-json".to_owned(),
+            );
+        }
+        if direct_kfd_runtime_capture_path.is_some()
+            || kir_v7_path.is_some()
+            || kir_binding.is_some()
+            || pc_sampling.is_some()
+        {
+            return Err("direct-KFD wrapper overhead measurement cannot be combined with capture/import binding options".to_owned());
+        }
+        Some(WrapperOverheadRequestV1 {
+            warmup_pairs: overhead_warmup_pairs
+                .ok_or("overhead measurement requires --overhead-warmup-pairs")?,
+            measured_pairs: overhead_measured_pairs
+                .ok_or("overhead measurement requires --overhead-measured-pairs")?,
+            candidate_budget_bps: overhead_candidate_budget_bps
+                .ok_or("overhead measurement requires --overhead-candidate-budget-bps")?,
+        })
+    } else {
+        if repeated_execution_acknowledgement.is_some() {
+            return Err("--acknowledge-repeated-target-execution requires --measure-direct-kfd-wrapper-overhead".to_owned());
+        }
+        if any_overhead_option {
+            return Err(
+                "overhead policy options require --measure-direct-kfd-wrapper-overhead".to_owned(),
+            );
+        }
+        None
+    };
+    if let Some(overhead) = wrapper_overhead {
+        let processes = u64::from(overhead.warmup_pairs + overhead.measured_pairs) * 2;
+        let requested = processes
+            .checked_mul(
+                u64::try_from(timeout.as_millis())
+                    .map_err(|_| "profile timeout is out of range".to_owned())?,
+            )
+            .ok_or("overhead measurement timeout product overflow")?;
+        if requested > MAX_OVERHEAD_HARNESS_MS_V1 {
+            return Err(
+                "overhead pair count and per-process timeout exceed the one-hour harness bound"
+                    .to_owned(),
+            );
+        }
+    }
     Ok(Options {
         action,
         authorization,
         pc_probe_authorization,
         pc_risk_acknowledgement,
+        repeated_execution_acknowledgement,
         tool,
         interpreter,
         pc_avail,
@@ -1549,6 +1972,8 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         pc_sampling,
         artifact_path,
         source_isa_characteristic_path,
+        direct_kfd_runtime_capture_path,
+        wrapper_overhead,
     })
 }
 
@@ -1827,6 +2252,10 @@ fn prepare_plan(
     pc_probe_admission: Option<PcCapabilityProbeAdmissionV1>,
 ) -> Result<Plan, String> {
     let working_directory = resolve_directory(options.working_directory.as_deref(), "--cwd")?;
+    let working_directory_identity = ObjectIdentity::from_metadata(
+        &fs::symlink_metadata(&working_directory)
+            .map_err(|error| format!("failed to inspect canonical --cwd: {error}"))?,
+    );
     let output_directory = resolve_new_output(&options.output_directory)?;
     let selected_tool = options.tool.clone().unwrap_or_else(default_tool_path);
     require_absolute_named(&selected_tool, "--tool", "rocprofv3")?;
@@ -1916,6 +2345,36 @@ fn prepare_plan(
     };
     let target = FilePin::open(&target_path, "profile target", MAX_TARGET_BYTES, true)?;
     require_elf(&target, "profile target")?;
+    let measurement_harness = if options.wrapper_overhead.is_some() {
+        let executable = env::current_exe().map_err(|error| {
+            format!("failed to resolve measurement harness executable: {error}")
+        })?;
+        let harness = FilePin::open(
+            &executable,
+            "profile measurement harness",
+            MAX_TARGET_BYTES,
+            true,
+        )?;
+        require_elf(&harness, "profile measurement harness")?;
+        Some(harness)
+    } else {
+        None
+    };
+    let pending_runtime_capture = match options.direct_kfd_runtime_capture_path.as_deref() {
+        Some(path) => {
+            if path.starts_with(&output_directory) {
+                return Err(
+                    "--direct-kfd-runtime-capture must be outside the collector output directory"
+                        .to_owned(),
+                );
+            }
+            Some(PendingRuntimeCaptureV1::prepare(
+                path,
+                &options.program_arguments,
+            )?)
+        }
+        None => None,
+    };
     let verified_kir_v7 = match options.kir_v7_path.as_deref() {
         Some(path) => Some(admit_kir_v7(path, &devices)?),
         None => None,
@@ -1935,6 +2394,36 @@ fn prepare_plan(
     let collector_arguments =
         collector_arguments(options.kind, &output_directory, &target, &options)?;
     let mut configuration = canonical_configuration(options.kind, &devices);
+    if let Some(overhead) = options.wrapper_overhead {
+        append_field(
+            &mut configuration,
+            b"fe2o3-rocprof-wrapper-host-wall-policy-v1",
+        );
+        let harness = measurement_harness
+            .as_ref()
+            .ok_or("profile measurement harness is missing")?;
+        append_field(&mut configuration, &harness.digest);
+        append_field(&mut configuration, &harness.identity.size.to_le_bytes());
+        append_field(&mut configuration, &overhead.warmup_pairs.to_le_bytes());
+        append_field(&mut configuration, &overhead.measured_pairs.to_le_bytes());
+        append_field(
+            &mut configuration,
+            &overhead.candidate_budget_bps.to_le_bytes(),
+        );
+        append_field(
+            &mut configuration,
+            &u64::try_from(options.timeout.as_millis())
+                .map_err(|_| "profile timeout is out of range".to_owned())?
+                .to_le_bytes(),
+        );
+    }
+    if let Some(capture) = &pending_runtime_capture {
+        append_field(&mut configuration, b"direct-kfd-runtime-capture-v1");
+        append_field(
+            &mut configuration,
+            capture.canonical_path.as_os_str().as_encoded_bytes(),
+        );
+    }
     if let Some(pc) = &pc_sampling {
         append_pc_configuration_v1(&mut configuration, &options, pc);
     }
@@ -1942,6 +2431,7 @@ fn prepare_plan(
     let authorization = authorization_digest(AuthorizationInputs {
         options: &options,
         working_directory: &working_directory,
+        working_directory_identity,
         output_directory: &output_directory,
         tool: &tool,
         interpreter: &interpreter,
@@ -1952,6 +2442,7 @@ fn prepare_plan(
         collector_tool: &collector_tool_digest,
         verified_kir_v7: verified_kir_v7.as_ref(),
         pc_sampling: pc_sampling.as_ref(),
+        pending_runtime_capture: pending_runtime_capture.as_ref(),
     });
     if let Some(pc) = &mut pc_sampling {
         pc.risk_acknowledgement = pc_risk_acknowledgement_v1(authorization, pc);
@@ -1959,6 +2450,7 @@ fn prepare_plan(
     Ok(Plan {
         options,
         working_directory,
+        working_directory_identity,
         output_directory,
         tool,
         interpreter,
@@ -1967,6 +2459,7 @@ fn prepare_plan(
         collector_tool_bytes,
         collector_tool_digest,
         target,
+        measurement_harness,
         environment,
         environment_bytes,
         environment_digest,
@@ -1977,6 +2470,7 @@ fn prepare_plan(
         authorization,
         verified_kir_v7,
         pc_sampling,
+        pending_runtime_capture,
     })
 }
 
@@ -2109,6 +2603,23 @@ fn pc_risk_acknowledgement_v1(authorization: [u8; 32], pc: &PcSamplingPlanV1) ->
     hash_field(&mut digest, &pc.capability.identity);
     hash_field(&mut digest, &pc.artifact.digest);
     hash_field(&mut digest, &pc.source_isa_characteristic.digest);
+    digest.finalize().into()
+}
+
+fn repeated_execution_acknowledgement_v1(plan: &Plan) -> [u8; 32] {
+    let overhead = plan
+        .options
+        .wrapper_overhead
+        .expect("repeated execution acknowledgement requires an overhead plan");
+    let mut digest = Sha256::new();
+    hash_field(
+        &mut digest,
+        b"fe2o3-repeated-target-execution-side-effect-acknowledgement-v1",
+    );
+    hash_field(&mut digest, &plan.authorization);
+    hash_field(&mut digest, &plan.target.digest);
+    hash_field(&mut digest, &overhead.warmup_pairs.to_le_bytes());
+    hash_field(&mut digest, &overhead.measured_pairs.to_le_bytes());
     digest.finalize().into()
 }
 
@@ -3167,6 +3678,24 @@ fn collector_arguments(
     target: &FilePin,
     options: &Options,
 ) -> Result<Vec<String>, String> {
+    collector_arguments_with_stem(kind, output, target, options, "capture")
+}
+
+fn collector_arguments_with_stem(
+    kind: ProfileKind,
+    output: &Path,
+    target: &FilePin,
+    options: &Options,
+    output_stem: &str,
+) -> Result<Vec<String>, String> {
+    if output_stem.is_empty()
+        || output_stem.len() > 128
+        || !output_stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("collector output stem violates the closed naming policy".to_owned());
+    }
     let output = output
         .to_str()
         .ok_or("canonical --output-dir must be valid UTF-8")?;
@@ -3198,7 +3727,7 @@ fn collector_arguments(
         "--output-directory".to_owned(),
         output.to_owned(),
         "--output-file".to_owned(),
-        "capture".to_owned(),
+        output_stem.to_owned(),
         "--".to_owned(),
         target,
     ]);
@@ -3292,6 +3821,7 @@ fn canonical_collector_tool(
 struct AuthorizationInputs<'a> {
     options: &'a Options,
     working_directory: &'a Path,
+    working_directory_identity: ObjectIdentity,
     output_directory: &'a Path,
     tool: &'a FilePin,
     interpreter: &'a FilePin,
@@ -3302,12 +3832,14 @@ struct AuthorizationInputs<'a> {
     collector_tool: &'a [u8; 32],
     verified_kir_v7: Option<&'a VerifiedKirInputV1>,
     pc_sampling: Option<&'a PcSamplingPlanV1>,
+    pending_runtime_capture: Option<&'a PendingRuntimeCaptureV1>,
 }
 
 fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
     let AuthorizationInputs {
         options,
         working_directory,
+        working_directory_identity,
         output_directory,
         tool,
         interpreter,
@@ -3318,6 +3850,7 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         collector_tool,
         verified_kir_v7,
         pc_sampling,
+        pending_runtime_capture,
     } = input;
     let mut hasher = Sha256::new();
     hash_field(&mut hasher, b"fe2o3-profile-authorization-v1");
@@ -3344,6 +3877,12 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
         &mut hasher,
         working_directory.as_os_str().as_encoded_bytes(),
     );
+    hash_field(
+        &mut hasher,
+        &working_directory_identity.device.to_le_bytes(),
+    );
+    hash_field(&mut hasher, &working_directory_identity.inode.to_le_bytes());
+    hash_field(&mut hasher, &working_directory_identity.mode.to_le_bytes());
     hash_field(&mut hasher, output_directory.as_os_str().as_encoded_bytes());
     hash_field(&mut hasher, environment);
     hash_field(&mut hasher, configuration);
@@ -3358,6 +3897,14 @@ fn authorization_digest(input: AuthorizationInputs<'_>) -> [u8; 32] {
     hash_field(&mut hasher, options.program.as_bytes());
     for argument in &options.program_arguments {
         hash_field(&mut hasher, argument.as_bytes());
+    }
+    if let Some(capture) = pending_runtime_capture {
+        hash_field(
+            &mut hasher,
+            capture.canonical_path.as_os_str().as_encoded_bytes(),
+        );
+        hash_field(&mut hasher, &capture.parent_identity.device.to_le_bytes());
+        hash_field(&mut hasher, &capture.parent_identity.inode.to_le_bytes());
     }
     hash_device_bindings(&mut hasher, devices);
     if let Some(kir) = &options.kir_binding {
@@ -3510,6 +4057,30 @@ fn render_plan(plan: &Plan) -> String {
         "collector-runtime-limitation",
         "rocprofv3-injects-rocprofiler-sdk-and-may-not-observe-direct-kfd-submission",
     );
+    match &plan.pending_runtime_capture {
+        Some(capture) => {
+            line(
+                &mut output,
+                "direct-kfd-rocprof-qualification",
+                "ready-after-successful-collector-exit-and-canonical-runtime-capture-admission",
+            );
+            redacted_value(
+                &mut output,
+                "direct-kfd-runtime-capture-path",
+                capture.canonical_path.as_os_str().as_encoded_bytes(),
+            );
+            line(
+                &mut output,
+                "direct-kfd-rocprof-qualification-truth",
+                "exact-run-juxtaposition-not-proof-of-universal-collector-inability",
+            );
+        }
+        None => line(
+            &mut output,
+            "direct-kfd-rocprof-qualification",
+            "not-requested",
+        ),
+    }
     identity_lines(&mut output, "tool", &plan.tool);
     identity_lines(&mut output, "python", &plan.interpreter);
     line(
@@ -3685,6 +4256,72 @@ fn render_plan(plan: &Plan) -> String {
     line(&mut output, "stdout-limit", plan.options.stdout_limit);
     line(&mut output, "stderr-limit", plan.options.stderr_limit);
     line(&mut output, "storage-limit", plan.options.storage_limit);
+    if let Some(overhead) = plan.options.wrapper_overhead {
+        line(
+            &mut output,
+            "measurement",
+            "rocprof-wrapper-host-wall-comparison-v1",
+        );
+        line(
+            &mut output,
+            "target-runtime-basis",
+            "caller-declared-direct-kfd-not-runtime-verified-by-this-harness",
+        );
+        line(&mut output, "overhead-warmup-pairs", overhead.warmup_pairs);
+        line(
+            &mut output,
+            "overhead-measured-pairs",
+            overhead.measured_pairs,
+        );
+        line(
+            &mut output,
+            "overhead-total-processes",
+            u32::from(overhead.warmup_pairs + overhead.measured_pairs) * 2,
+        );
+        line(
+            &mut output,
+            "overhead-total-harness-timeout-ms",
+            MAX_OVERHEAD_HARNESS_MS_V1,
+        );
+        line(
+            &mut output,
+            "overhead-order-policy",
+            "alternating-pairs-even-raw-first-odd-wrapped-first",
+        );
+        line(
+            &mut output,
+            "overhead-candidate-budget-bps",
+            overhead.candidate_budget_bps,
+        );
+        line(
+            &mut output,
+            "overhead-budget-authority",
+            "candidate-only-does-not-grant-production-qualification",
+        );
+        line(
+            &mut output,
+            "repeated-target-execution-risk",
+            "target-is-run-repeatedly-and-may-have-external-side-effects",
+        );
+        line(
+            &mut output,
+            "repeated-target-execution-acknowledgement",
+            hex(&repeated_execution_acknowledgement_v1(plan)),
+        );
+        line(
+            &mut output,
+            "overhead-scope",
+            "host-observed-rocprof-wrapper-process-overhead-only",
+        );
+        line(
+            &mut output,
+            "capture-overhead-scope",
+            "counter-pc-att-debugger-and-unadmitted-kernel-trace-capture-overhead-unavailable",
+        );
+        if let Some(harness) = &plan.measurement_harness {
+            identity_lines(&mut output, "measurement-harness", harness);
+        }
+    }
     line(
         &mut output,
         "environment-policy",
@@ -4017,7 +4654,462 @@ fn render_dispatch_import_plan(
 }
 
 fn collect(plan: Plan) -> Result<CommandReport, String> {
+    if plan.options.wrapper_overhead.is_some() {
+        return collect_wrapper_overhead_v1(plan, validate_device_bindings);
+    }
     collect_with_device_revalidator(plan, validate_device_bindings)
+}
+
+fn collect_wrapper_overhead_v1<F>(
+    plan: Plan,
+    device_revalidator: F,
+) -> Result<CommandReport, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
+    let request = plan
+        .options
+        .wrapper_overhead
+        .ok_or("wrapper overhead request is missing")?;
+    revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+    let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
+    let result = (|| {
+        let harness_started = monotonic_raw_ns_v1()?;
+        let harness_deadline = harness_started
+            .checked_add(MAX_OVERHEAD_HARNESS_MS_V1 * 1_000_000)
+            .ok_or("wrapper overhead harness deadline overflow")?;
+        let mut invocations =
+            Vec::with_capacity(usize::from(request.warmup_pairs + request.measured_pairs) * 2);
+        let mut inventory = Vec::<Artifact>::new();
+        for (phase, pairs) in [
+            (TrialPhaseV1::Warmup, request.warmup_pairs),
+            (TrialPhaseV1::Measured, request.measured_pairs),
+        ] {
+            for pair_index in 0..pairs {
+                let pair_order = if pair_index.is_multiple_of(2) {
+                    PairOrderV1::RawThenWrapped
+                } else {
+                    PairOrderV1::WrappedThenRaw
+                };
+                let order = match pair_order {
+                    PairOrderV1::RawThenWrapped => [
+                        InvocationKindV1::RawTarget,
+                        InvocationKindV1::RocprofWrappedTarget,
+                    ],
+                    PairOrderV1::WrappedThenRaw => [
+                        InvocationKindV1::RocprofWrappedTarget,
+                        InvocationKindV1::RawTarget,
+                    ],
+                };
+                for (leg, kind) in order.into_iter().enumerate() {
+                    if monotonic_raw_ns_v1()? >= harness_deadline {
+                        return Err(
+                            "wrapper overhead harness exceeded its one-hour deadline".to_owned()
+                        );
+                    }
+                    revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+                    let output_stem = format!(
+                        "overhead-{}-{pair_index:03}",
+                        match phase {
+                            TrialPhaseV1::Warmup => "warmup",
+                            TrialPhaseV1::Measured => "measured",
+                        }
+                    );
+                    let arguments = match kind {
+                        InvocationKindV1::RawTarget => target_argument_vector_v1(&plan),
+                        InvocationKindV1::RocprofWrappedTarget => collector_arguments_with_stem(
+                            plan.options.kind,
+                            &plan.output_directory,
+                            &plan.target,
+                            &plan.options,
+                            &output_stem,
+                        )?,
+                    };
+                    let started = monotonic_raw_ns_v1()?;
+                    let supervised = match kind {
+                        InvocationKindV1::RawTarget => {
+                            run_raw_target_v1(&plan, &device_revalidator)?
+                        }
+                        InvocationKindV1::RocprofWrappedTarget => {
+                            run_collector_with_arguments_v1(&plan, &device_revalidator, &arguments)?
+                        }
+                    };
+                    let finished = monotonic_raw_ns_v1()?;
+                    if finished > harness_deadline {
+                        return Err(
+                            "wrapper overhead harness exceeded its one-hour deadline".to_owned()
+                        );
+                    }
+                    let duration = finished
+                        .checked_sub(started)
+                        .filter(|duration| *duration > 0)
+                        .ok_or("CLOCK_MONOTONIC_RAW did not advance during an invocation")?;
+                    revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+                    let observed = scan_artifacts(&custody, plan.options.storage_limit)?;
+                    let artifacts = inventory_delta_v1(&inventory, &observed)?;
+                    if kind == InvocationKindV1::RawTarget && !artifacts.is_empty() {
+                        return Err(
+                            "raw target changed the rocprof wrapper output inventory".to_owned()
+                        );
+                    }
+                    inventory = observed;
+                    let artifact_state = match kind {
+                        InvocationKindV1::RawTarget => ArtifactStateV1::NotApplicableRawTarget,
+                        InvocationKindV1::RocprofWrappedTarget if artifacts.is_empty() => {
+                            ArtifactStateV1::InventoryCompleteNoArtifacts
+                        }
+                        InvocationKindV1::RocprofWrappedTarget => {
+                            ArtifactStateV1::InventoryCompleteArtifactsPresentUnadmitted
+                        }
+                    };
+                    let outcome = supervised_outcome_v1(&supervised);
+                    invocations.push(InvocationEvidenceV1 {
+                        phase,
+                        pair_index,
+                        pair_order,
+                        invocation_index_in_pair: leg as u8,
+                        kind,
+                        argv: RawContentIdentityV1::observed(&canonical_argument_vector_v1(
+                            &arguments,
+                        )?)
+                        .map_err(|error| error.to_string())?,
+                        host_wall_time_ns: duration,
+                        outcome,
+                        exit_code: supervised.status.and_then(|status| status.code()),
+                        exit_signal: supervised.status.and_then(|status| status.signal()),
+                        wait_error: supervised
+                            .wait_error
+                            .as_deref()
+                            .map(|error| RawContentIdentityV1::observed(error.as_bytes()))
+                            .transpose()
+                            .map_err(|error| error.to_string())?,
+                        stdout: RawContentIdentityV1::observed(&supervised.stdout.bytes)
+                            .map_err(|error| error.to_string())?,
+                        stdout_truncated: supervised.stdout.overflow,
+                        stderr: RawContentIdentityV1::observed(&supervised.stderr.bytes)
+                            .map_err(|error| error.to_string())?,
+                        stderr_truncated: supervised.stderr.overflow,
+                        artifact_state,
+                        capture_loss_state: match kind {
+                            InvocationKindV1::RawTarget => {
+                                CaptureLossStateV1::NotApplicableRawTarget
+                            }
+                            InvocationKindV1::RocprofWrappedTarget => {
+                                CaptureLossStateV1::UnavailableNoAdmittedCapture
+                            }
+                        },
+                        wrapped_output_inventory: artifacts
+                            .iter()
+                            .map(|artifact| CollectorArtifactV1 {
+                                relative_path: artifact.relative.clone(),
+                                content: RawContentIdentityV1 {
+                                    sha256: artifact.digest,
+                                    byte_len: artifact.length,
+                                },
+                            })
+                            .collect(),
+                    });
+                }
+            }
+        }
+        let target_argv = canonical_argument_vector_v1(&target_argument_vector_v1(&plan))?;
+        let topology = canonical_device_topology_v1(&plan.devices);
+        let working_directory = canonical_working_directory_v1(&plan);
+        let record = build_wrapper_overhead_v1(WrapperOverheadBuildInputsV1 {
+            plan_sha256: plan.authorization,
+            measurement_harness_executable: {
+                let harness = plan
+                    .measurement_harness
+                    .as_ref()
+                    .ok_or("profile measurement harness is missing")?;
+                RawContentIdentityV1 {
+                    sha256: harness.digest,
+                    byte_len: harness.identity.size,
+                }
+            },
+            target_executable: RawContentIdentityV1 {
+                sha256: plan.target.digest,
+                byte_len: plan.target.identity.size,
+            },
+            target_argv: RawContentIdentityV1::observed(&target_argv)
+                .map_err(|error| error.to_string())?,
+            collector_executable: RawContentIdentityV1 {
+                sha256: plan.tool.digest,
+                byte_len: plan.tool.identity.size,
+            },
+            collector_release: collector_release_v1(&plan),
+            collector_closure: RawContentIdentityV1 {
+                sha256: plan.collector_tool_digest,
+                byte_len: plan.collector_tool_bytes.len() as u64,
+            },
+            collector_configuration: RawContentIdentityV1 {
+                sha256: plan.configuration_digest,
+                byte_len: plan.configuration.len() as u64,
+            },
+            environment: RawContentIdentityV1 {
+                sha256: plan.environment_digest,
+                byte_len: plan.environment_bytes.len() as u64,
+            },
+            working_directory: RawContentIdentityV1::observed(&working_directory)
+                .map_err(|error| error.to_string())?,
+            device_topology: RawContentIdentityV1::observed(&topology)
+                .map_err(|error| error.to_string())?,
+            policy: OverheadPolicyV1 {
+                warmup_pairs: request.warmup_pairs,
+                measured_pairs: request.measured_pairs,
+                order_policy: OrderPolicyV1::AlternatingPairsEvenRawFirstOddWrappedFirst,
+                clock: HostClockV1::LinuxClockMonotonicRaw,
+                timing_boundary:
+                    TimingBoundaryV1::ImmediatelyBeforeSpawnThroughSupervisionAndBoundedOutputDrain,
+                per_process_timeout_ms: u64::try_from(plan.options.timeout.as_millis())
+                    .map_err(|_| "profile timeout does not fit u64".to_owned())?,
+                total_processes: (request.warmup_pairs + request.measured_pairs) * 2,
+                total_harness_timeout_ms: MAX_OVERHEAD_HARNESS_MS_V1,
+                candidate_wrapper_overhead_budget_bps: request.candidate_budget_bps,
+                excludes_outliers: false,
+            },
+            invocations,
+        })
+        .map_err(|error| error.to_string())?;
+        let bytes = encode_wrapper_overhead_v1(&record).map_err(|error| error.to_string())?;
+        let artifact_bytes = inventory
+            .iter()
+            .try_fold(0_u64, |total, artifact| total.checked_add(artifact.length));
+        let manifest = render_wrapper_overhead_manifest_v1(&plan, &record, &bytes, &inventory);
+        let total = artifact_bytes
+            .and_then(|total| total.checked_add(bytes.len() as u64))
+            .and_then(|total| total.checked_add(manifest.len() as u64))
+            .ok_or("wrapper overhead publication size overflow")?;
+        if total > plan.options.storage_limit {
+            return Err("wrapper overhead transaction exceeds the storage limit".to_owned());
+        }
+        revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+        custody.commit_record(
+            WRAPPER_OVERHEAD_FILE_V1,
+            WRAPPER_OVERHEAD_REDO_FILE_V1,
+            &bytes,
+            MAX_WRAPPER_OVERHEAD_BYTES_V1,
+        )?;
+        let durable =
+            custody.read_record(WRAPPER_OVERHEAD_FILE_V1, MAX_WRAPPER_OVERHEAD_BYTES_V1)?;
+        if durable != bytes
+            || decode_wrapper_overhead_v1(&durable).map_err(|error| error.to_string())? != record
+        {
+            return Err("durable wrapper overhead evidence changed".to_owned());
+        }
+        revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+        custody.write_manifest(manifest.as_bytes())?;
+        Ok::<_, String>((record, inventory))
+    })();
+    match result {
+        Ok((record, inventory)) => {
+            let summary = record.summary.as_ref();
+            let mut output = String::new();
+            line(&mut output, "schema", "fe2o3-profile-result-v1");
+            line(&mut output, "status", "completed");
+            line(
+                &mut output,
+                "measurement",
+                "rocprof-wrapper-host-wall-comparison-v1",
+            );
+            line(&mut output, "collector-artifacts", inventory.len());
+            line(
+                &mut output,
+                "wrapper-overhead-summary",
+                if summary.is_some() {
+                    "available"
+                } else {
+                    "unavailable"
+                },
+            );
+            if let Some(summary) = summary {
+                line(
+                    &mut output,
+                    "paired-overhead-median-bps",
+                    summary.paired_overhead_median_bps,
+                );
+            }
+            line(
+                &mut output,
+                "production-qualification",
+                "not-granted-candidate-budget-only",
+            );
+            Ok(CommandReport {
+                output,
+                succeeded: true,
+            })
+        }
+        Err(error) => {
+            let cleanup = custody.cleanup().err();
+            Err(match cleanup {
+                Some(cleanup) => format!(
+                    "wrapper overhead collection failed: {error}; cleanup also failed: {cleanup}"
+                ),
+                None => format!("wrapper overhead collection failed and was cleaned: {error}"),
+            })
+        }
+    }
+}
+
+fn target_argument_vector_v1(plan: &Plan) -> Vec<String> {
+    let mut arguments = Vec::with_capacity(plan.options.program_arguments.len() + 1);
+    arguments.push(plan.target.external_path().to_string_lossy().into_owned());
+    arguments.extend(plan.options.program_arguments.iter().cloned());
+    arguments
+}
+
+fn canonical_device_topology_v1(devices: &[DeviceIdentity]) -> Vec<u8> {
+    let mut bytes = b"fe2o3-profile-device-topology-v1\0".to_vec();
+    for device in devices {
+        append_field(&mut bytes, &device.node.to_le_bytes());
+        append_field(&mut bytes, &device.digest);
+        append_field(&mut bytes, &(device.bytes.len() as u64).to_le_bytes());
+        append_field(&mut bytes, device.target_profile_record().as_bytes());
+    }
+    bytes
+}
+
+fn canonical_working_directory_v1(plan: &Plan) -> Vec<u8> {
+    let mut bytes = b"fe2o3-profile-working-directory-v1\0".to_vec();
+    append_field(
+        &mut bytes,
+        plan.working_directory.as_os_str().as_encoded_bytes(),
+    );
+    append_field(
+        &mut bytes,
+        &plan.working_directory_identity.device.to_le_bytes(),
+    );
+    append_field(
+        &mut bytes,
+        &plan.working_directory_identity.inode.to_le_bytes(),
+    );
+    append_field(
+        &mut bytes,
+        &plan.working_directory_identity.mode.to_le_bytes(),
+    );
+    bytes
+}
+
+fn monotonic_raw_ns_v1() -> Result<u64, String> {
+    let mut observed = MaybeUninit::<libc::timespec>::zeroed();
+    // SAFETY: `observed` points to writable storage for one timespec and the clock id takes no
+    // caller-owned resources.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, observed.as_mut_ptr()) } != 0 {
+        return Err(format!(
+            "failed to observe CLOCK_MONOTONIC_RAW: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: successful clock_gettime initialized the timespec.
+    let observed = unsafe { observed.assume_init() };
+    let seconds = u64::try_from(observed.tv_sec)
+        .map_err(|_| "CLOCK_MONOTONIC_RAW seconds are negative".to_owned())?;
+    let nanoseconds = u64::try_from(observed.tv_nsec)
+        .map_err(|_| "CLOCK_MONOTONIC_RAW nanoseconds are negative".to_owned())?;
+    seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|value| value.checked_add(nanoseconds))
+        .ok_or("CLOCK_MONOTONIC_RAW value overflow".to_owned())
+}
+
+fn supervised_outcome_v1(supervised: &Supervised) -> InvocationOutcomeV1 {
+    match supervised.reason {
+        StopReason::Timeout => InvocationOutcomeV1::TimedOut,
+        StopReason::WaitFailure => InvocationOutcomeV1::WaitFailed,
+        StopReason::OutputOverflow if supervised.stdout.overflow => {
+            InvocationOutcomeV1::StdoutLimitExceeded
+        }
+        StopReason::OutputOverflow => InvocationOutcomeV1::StderrLimitExceeded,
+        StopReason::Exited if supervised.status.is_some_and(|status| status.success()) => {
+            InvocationOutcomeV1::ExitedSuccess
+        }
+        StopReason::Exited => InvocationOutcomeV1::ExitedFailure,
+    }
+}
+
+fn inventory_delta_v1(
+    previous: &[Artifact],
+    observed: &[Artifact],
+) -> Result<Vec<Artifact>, String> {
+    for retained in previous {
+        if observed
+            .iter()
+            .find(|artifact| artifact.relative == retained.relative)
+            != Some(retained)
+        {
+            return Err(format!(
+                "collector output {} changed between repeated invocations",
+                retained.relative
+            ));
+        }
+    }
+    let mut added = observed
+        .iter()
+        .filter(|artifact| {
+            !previous
+                .iter()
+                .any(|retained| retained.relative == artifact.relative)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    added.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(added)
+}
+
+fn collector_release_v1(plan: &Plan) -> CollectorReleaseV1 {
+    let recognized = plan.collector_libraries.as_ref().is_some_and(|libraries| {
+        plan.tool.digest == INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1
+            && plan.tool.identity.size == INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1
+            && libraries.tool.digest == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1
+            && libraries.tool.identity.size == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1
+            && libraries.core.digest == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1
+            && libraries.core.identity.size == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1
+    });
+    if recognized {
+        CollectorReleaseV1::RocprofilerSdk1_1_0Git97f5574
+    } else {
+        CollectorReleaseV1::UnavailableUnrecognizedExactTool
+    }
+}
+
+fn render_wrapper_overhead_manifest_v1(
+    plan: &Plan,
+    record: &crate::profile_wrapper_overhead_v1::DirectKfdWrapperOverheadV1,
+    bytes: &[u8],
+    inventory: &[Artifact],
+) -> String {
+    let mut output = String::new();
+    let evidence_digest: [u8; 32] = Sha256::digest(bytes).into();
+    line(&mut output, "schema", "fe2o3-profile-manifest-v1");
+    line(&mut output, "status", "complete-manifest-written-last");
+    line(&mut output, "authorization", hex(&plan.authorization));
+    line(
+        &mut output,
+        "measurement",
+        "rocprof-wrapper-host-wall-comparison-v1",
+    );
+    line(
+        &mut output,
+        "evidence",
+        content_identity(&evidence_digest, bytes.len() as u64),
+    );
+    line(
+        &mut output,
+        "production-qualification",
+        record.grants_production_qualification,
+    );
+    for (index, artifact) in inventory.iter().enumerate() {
+        line(
+            &mut output,
+            &format!("collector-artifact[{index}]"),
+            format!(
+                "{}:{}",
+                artifact.relative,
+                content_identity(&artifact.digest, artifact.length)
+            ),
+        );
+    }
+    output
 }
 
 fn collect_with_device_revalidator<F>(
@@ -4039,6 +5131,9 @@ where
     }
     device_revalidator(&plan.devices)?;
     revalidate_pc_sampling_plan_v1(&plan, true)?;
+    if let Some(capture) = &plan.pending_runtime_capture {
+        capture.validate_absent()?;
+    }
     let custody = OutputCustody::create(&plan.output_directory, &plan.authorization)?;
     let result = run_collector(&plan, &device_revalidator);
     let supervised = match result {
@@ -4099,7 +5194,22 @@ where
             return Err(format!("PC import custody failed and was cleaned: {error}"));
         }
     };
-    let manifest = render_manifest(&plan, &artifacts, &dispatch_import, &pc_import);
+    let live_qualification = match select_live_qualification_v1(&plan, &supervised, &artifacts) {
+        Ok(product) => product,
+        Err(error) => {
+            custody.cleanup()?;
+            return Err(format!(
+                "direct-KFD rocprof qualification failed and was cleaned: {error}"
+            ));
+        }
+    };
+    let manifest = render_manifest(
+        &plan,
+        &artifacts,
+        &dispatch_import,
+        &pc_import,
+        live_qualification.as_ref(),
+    );
     let artifact_bytes = artifacts
         .iter()
         .try_fold(0_u64, |total, artifact| total.checked_add(artifact.length));
@@ -4120,9 +5230,18 @@ where
             .and_then(|length| length.checked_add(product.source_isa_binding_bytes.len()))
             .and_then(|length| u64::try_from(length).ok()),
     };
+    let live_generated_bytes = match &live_qualification {
+        Some(product) => product
+            .bytes
+            .len()
+            .checked_add(product.runtime.bytes.len())
+            .and_then(|length| u64::try_from(length).ok()),
+        None => Some(0_u64),
+    };
     let total_publication_bytes = artifact_bytes
         .and_then(|total| total.checked_add(dispatch_generated_bytes?))
         .and_then(|total| total.checked_add(pc_generated_bytes?))
+        .and_then(|total| total.checked_add(live_generated_bytes?))
         .and_then(|total| total.checked_add(u64::try_from(manifest.len()).ok()?));
     if total_publication_bytes.is_none_or(|total| total > plan.options.storage_limit) {
         custody.cleanup()?;
@@ -4205,12 +5324,89 @@ where
             });
         }
     }
+    if let Some(product) = &live_qualification {
+        let persistence = (|| {
+            product.runtime.revalidate()?;
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)?;
+            custody.commit_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                LIVE_RUNTIME_CAPTURE_REDO_FILE_V1,
+                &product.runtime.bytes,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            let durable_runtime = custody.read_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            if durable_runtime != product.runtime.bytes {
+                return Err("durable direct-KFD runtime capture changed".to_owned());
+            }
+            fe2o3_profiler_protocol::decode_kfd_runtime_profile_v1(&durable_runtime)
+                .map_err(|error| error.to_string())?;
+            custody.commit_record(
+                LIVE_QUALIFICATION_FILE_V1,
+                LIVE_QUALIFICATION_REDO_FILE_V1,
+                &product.bytes,
+                MAX_LIVE_QUALIFICATION_BYTES_V1,
+            )?;
+            let durable =
+                custody.read_record(LIVE_QUALIFICATION_FILE_V1, MAX_LIVE_QUALIFICATION_BYTES_V1)?;
+            if durable != product.bytes
+                || RawContentIdentityV1::observed(&durable).map_err(|error| error.to_string())?
+                    != product.identity
+            {
+                return Err("durable direct-KFD rocprof qualification changed".to_owned());
+            }
+            decode_live_qualification_v1(&durable).map_err(|error| error.to_string())?;
+            let durable_runtime = custody.read_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            if durable_runtime != product.runtime.bytes {
+                return Err(
+                    "durable direct-KFD runtime capture changed after qualification publication"
+                        .to_owned(),
+                );
+            }
+            product.runtime.revalidate()?;
+            revalidate_collection_inputs_v1(&plan, &device_revalidator)
+        })();
+        if let Err(error) = persistence {
+            let cleanup = custody.cleanup().err();
+            return Err(match cleanup {
+                Some(cleanup) => format!(
+                    "direct-KFD rocprof qualification publication failed: {error}; cleanup also failed: {cleanup}"
+                ),
+                None => format!(
+                    "direct-KFD rocprof qualification publication failed and was cleaned: {error}"
+                ),
+            });
+        }
+    }
     let final_revalidation = (|| {
         if let DispatchImportOutcomeV1::Imported { source, .. } = &dispatch_import {
             source.revalidate(&custody)?;
         }
         if let PcImportOutcomeV1::Imported { source, .. } = &pc_import {
             source.revalidate(&custody)?;
+        }
+        if let Some(product) = &live_qualification {
+            product.runtime.revalidate()?;
+            let durable_runtime = custody.read_record(
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                fe2o3_profiler_protocol::MAX_KFD_RUNTIME_PROFILE_BYTES_V1 as usize,
+            )?;
+            if durable_runtime != product.runtime.bytes {
+                return Err("direct-KFD runtime capture changed before manifest".to_owned());
+            }
+            fe2o3_profiler_protocol::decode_kfd_runtime_profile_v1(&durable_runtime)
+                .map_err(|error| error.to_string())?;
+            let durable =
+                custody.read_record(LIVE_QUALIFICATION_FILE_V1, MAX_LIVE_QUALIFICATION_BYTES_V1)?;
+            if durable != product.bytes {
+                return Err("direct-KFD rocprof qualification changed before manifest".to_owned());
+            }
+            decode_live_qualification_v1(&durable).map_err(|error| error.to_string())?;
         }
         revalidate_collection_inputs_v1(&plan, &device_revalidator)
     })();
@@ -4240,6 +5436,7 @@ where
         &artifacts,
         &dispatch_import,
         &pc_import,
+        live_qualification.as_ref(),
     ))
 }
 
@@ -4247,6 +5444,7 @@ fn revalidate_collection_inputs_v1<F>(plan: &Plan, device_revalidator: &F) -> Re
 where
     F: Fn(&[DeviceIdentity]) -> Result<(), String>,
 {
+    validate_working_directory_v1(plan)?;
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
     plan.collector_execution.validate()?;
@@ -4254,11 +5452,36 @@ where
         libraries.validate()?;
     }
     plan.target.validate("profile target")?;
+    if let Some(harness) = &plan.measurement_harness {
+        harness.validate("profile measurement harness")?;
+    }
     if let Some(kir) = &plan.verified_kir_v7 {
         kir.revalidate()?;
     }
     device_revalidator(&plan.devices)?;
-    revalidate_pc_sampling_plan_v1(plan, false)
+    revalidate_pc_sampling_plan_v1(plan, false)?;
+    if let Some(capture) = &plan.pending_runtime_capture {
+        capture.validate_parent()?;
+    }
+    Ok(())
+}
+
+fn validate_working_directory_v1(plan: &Plan) -> Result<(), String> {
+    let canonical = fs::canonicalize(&plan.working_directory)
+        .map_err(|error| format!("profile working directory changed: {error}"))?;
+    let metadata = fs::symlink_metadata(&plan.working_directory)
+        .map_err(|error| format!("profile working directory changed: {error}"))?;
+    let identity = ObjectIdentity::from_metadata(&metadata);
+    if canonical != plan.working_directory
+        || !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || identity.device != plan.working_directory_identity.device
+        || identity.inode != plan.working_directory_identity.inode
+        || identity.mode != plan.working_directory_identity.mode
+    {
+        return Err("profile working directory was substituted".to_owned());
+    }
+    Ok(())
 }
 
 fn revalidate_pc_sampling_plan_v1(plan: &Plan, reobserve: bool) -> Result<(), String> {
@@ -4467,6 +5690,17 @@ fn run_collector<F>(plan: &Plan, device_revalidator: &F) -> Result<Supervised, S
 where
     F: Fn(&[DeviceIdentity]) -> Result<(), String>,
 {
+    run_collector_with_arguments_v1(plan, device_revalidator, &plan.collector_arguments)
+}
+
+fn run_collector_with_arguments_v1<F>(
+    plan: &Plan,
+    device_revalidator: &F,
+    arguments: &[String],
+) -> Result<Supervised, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
     plan.tool.validate("rocprofv3 script")?;
     plan.interpreter.validate("rocprofv3 Python interpreter")?;
     plan.target.validate("profile target")?;
@@ -4478,7 +5712,7 @@ where
     command
         .arg0(&plan.interpreter.canonical_path)
         .arg(plan.collector_execution.bootstrap_path())
-        .args(&plan.collector_arguments)
+        .args(arguments)
         .current_dir(&plan.working_directory)
         .env_clear()
         .envs(
@@ -4514,11 +5748,44 @@ where
     // an external topology change after these observations; that residual is reported explicitly.
     device_revalidator(&plan.devices)?;
     revalidate_pc_sampling_plan_v1(plan, true)?;
+    if let Some(capture) = &plan.pending_runtime_capture {
+        capture.validate_absent()?;
+    }
     spawn_and_supervise_collector_v1(
         &mut command,
         plan.options.timeout,
         plan.options.stdout_limit,
         plan.options.stderr_limit,
+    )
+}
+
+fn run_raw_target_v1<F>(plan: &Plan, device_revalidator: &F) -> Result<Supervised, String>
+where
+    F: Fn(&[DeviceIdentity]) -> Result<(), String>,
+{
+    plan.target.validate("profile target")?;
+    device_revalidator(&plan.devices)?;
+    let mut command = Command::new(plan.target.execution_path());
+    command
+        .arg0(plan.target.external_path())
+        .args(&plan.options.program_arguments)
+        .current_dir(&plan.working_directory)
+        .env_clear()
+        .envs(
+            plan.environment
+                .iter()
+                .map(|entry| (entry.name, &entry.value)),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    spawn_and_supervise_process_v1(
+        &mut command,
+        plan.options.timeout,
+        plan.options.stdout_limit,
+        plan.options.stderr_limit,
+        "pinned raw target",
     )
 }
 
@@ -4528,10 +5795,26 @@ fn spawn_and_supervise_collector_v1(
     stdout_limit: usize,
     stderr_limit: usize,
 ) -> Result<Supervised, String> {
+    spawn_and_supervise_process_v1(
+        command,
+        timeout,
+        stdout_limit,
+        stderr_limit,
+        "pinned rocprofv3 collector",
+    )
+}
+
+fn spawn_and_supervise_process_v1(
+    command: &mut Command,
+    timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    label: &str,
+) -> Result<Supervised, String> {
     let mut sigchld = CollectorSigchldScopeV1::enter()?;
     let result = (|| {
         let mut child = crate::process_execution::spawn(command)
-            .map_err(|error| format!("failed to spawn pinned rocprofv3 collector: {error}"))?;
+            .map_err(|error| format!("failed to spawn {label}: {error}"))?;
         supervise_with_sigchld_scope(
             &mut child,
             timeout,
@@ -5321,6 +6604,116 @@ enum PcImportOutcomeV1 {
     },
 }
 
+struct LiveQualificationProductV1 {
+    runtime: RetainedRuntimeCaptureV1,
+    bytes: Vec<u8>,
+    identity: RawContentIdentityV1,
+}
+
+fn select_live_qualification_v1(
+    plan: &Plan,
+    supervised: &Supervised,
+    artifacts: &[Artifact],
+) -> Result<Option<LiveQualificationProductV1>, String> {
+    let Some(pending) = &plan.pending_runtime_capture else {
+        return Ok(None);
+    };
+    let runtime = pending.admit()?;
+    let collector_artifacts = artifacts
+        .iter()
+        .map(|artifact| {
+            Ok(CollectorArtifactV1 {
+                relative_path: artifact.relative.clone(),
+                content: RawContentIdentityV1 {
+                    sha256: artifact.digest,
+                    byte_len: artifact.length,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let collector_argv = canonical_argument_vector_v1(&plan.collector_arguments)?;
+    let mut target_argv = Vec::with_capacity(plan.options.program_arguments.len() + 1);
+    target_argv.push(plan.options.program.clone());
+    target_argv.extend(plan.options.program_arguments.iter().cloned());
+    let target_argv = canonical_argument_vector_v1(&target_argv)?;
+    let recognized_installed_release = plan.collector_libraries.as_ref().is_some_and(|libraries| {
+        plan.tool.digest == INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1
+            && plan.tool.identity.size == INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1
+            && libraries.tool.digest == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1
+            && libraries.tool.identity.size == INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1
+            && libraries.core.digest == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1
+            && libraries.core.identity.size == INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1
+    });
+    let collector_release = if recognized_installed_release {
+        CollectorReleaseV1::RocprofilerSdk1_1_0Git97f5574
+    } else {
+        CollectorReleaseV1::UnavailableUnrecognizedExactTool
+    };
+    let record = build_live_qualification_v1(QualificationInputsV1 {
+        plan_sha256: plan.authorization,
+        collector_executable: RawContentIdentityV1 {
+            sha256: plan.tool.digest,
+            byte_len: plan.tool.identity.size,
+        },
+        collector_release,
+        collector_closure: RawContentIdentityV1 {
+            sha256: plan.collector_tool_digest,
+            byte_len: plan.collector_tool_bytes.len() as u64,
+        },
+        collector_configuration: RawContentIdentityV1 {
+            sha256: plan.configuration_digest,
+            byte_len: plan.configuration.len() as u64,
+        },
+        collector_argv: RawContentIdentityV1::observed(&collector_argv)
+            .map_err(|error| error.to_string())?,
+        collector_environment: RawContentIdentityV1 {
+            sha256: plan.environment_digest,
+            byte_len: plan.environment_bytes.len() as u64,
+        },
+        target_executable: RawContentIdentityV1 {
+            sha256: plan.target.digest,
+            byte_len: plan.target.identity.size,
+        },
+        target_argv: RawContentIdentityV1::observed(&target_argv)
+            .map_err(|error| error.to_string())?,
+        collector_stdout: RawContentIdentityV1::observed(&supervised.stdout.bytes)
+            .map_err(|error| error.to_string())?,
+        collector_stdout_overflow: supervised.stdout.overflow,
+        collector_stderr: RawContentIdentityV1::observed(&supervised.stderr.bytes)
+            .map_err(|error| error.to_string())?,
+        collector_stderr_overflow: supervised.stderr.overflow,
+        collector_artifacts,
+        runtime_capture_bytes: &runtime.bytes,
+    })
+    .map_err(|error| error.to_string())?;
+    let bytes = encode_live_qualification_v1(&record).map_err(|error| error.to_string())?;
+    let decoded = decode_live_qualification_v1(&bytes).map_err(|error| error.to_string())?;
+    if decoded != record {
+        return Err("direct-KFD rocprof qualification changed during readmission".to_owned());
+    }
+    let identity = RawContentIdentityV1::observed(&bytes).map_err(|error| error.to_string())?;
+    runtime.revalidate()?;
+    Ok(Some(LiveQualificationProductV1 {
+        runtime,
+        bytes,
+        identity,
+    }))
+}
+
+fn canonical_argument_vector_v1(arguments: &[String]) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"fe2o3-profile-argument-vector-v1\0");
+    bytes.extend_from_slice(
+        &u64::try_from(arguments.len())
+            .map_err(|_| "profile argument count overflow".to_owned())?
+            .to_le_bytes(),
+    );
+    for argument in arguments {
+        append_field(&mut bytes, argument.as_bytes());
+    }
+    Ok(bytes)
+}
+
 fn select_dispatch_import_v1(
     plan: &Plan,
     custody: &OutputCustody,
@@ -5935,6 +7328,12 @@ fn scan_artifacts_with_entry_limit(
                 PROFILE_PC_RELATION_REDO_FILE_V1,
                 PROFILE_PC_SOURCE_ISA_BINDING_FILE_V1,
                 PROFILE_PC_SOURCE_ISA_BINDING_REDO_FILE_V1,
+                LIVE_QUALIFICATION_FILE_V1,
+                LIVE_QUALIFICATION_REDO_FILE_V1,
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+                LIVE_RUNTIME_CAPTURE_REDO_FILE_V1,
+                WRAPPER_OVERHEAD_FILE_V1,
+                WRAPPER_OVERHEAD_REDO_FILE_V1,
             ]
             .contains(&relative.as_str())
             {
@@ -6074,6 +7473,7 @@ fn render_manifest(
     artifacts: &[Artifact],
     dispatch_import: &DispatchImportOutcomeV1,
     pc_import: &PcImportOutcomeV1,
+    live_qualification: Option<&LiveQualificationProductV1>,
 ) -> String {
     let mut output = String::new();
     line(&mut output, "schema", "fe2o3-profile-artifact-manifest-v1");
@@ -6132,6 +7532,7 @@ fn render_manifest(
     render_import_plan(&mut output, plan);
     render_dispatch_import_outcome_v1(&mut output, dispatch_import);
     render_pc_import_outcome_v1(&mut output, plan, pc_import);
+    render_live_qualification_v1(&mut output, live_qualification);
     line(&mut output, "att-observation-origin", "unavailable");
     line(
         &mut output,
@@ -6141,12 +7542,48 @@ fn render_manifest(
     output
 }
 
+fn render_live_qualification_v1(
+    output: &mut String,
+    qualification: Option<&LiveQualificationProductV1>,
+) {
+    match qualification {
+        Some(product) => {
+            line(output, "direct-kfd-rocprof-qualification", "published");
+            line(
+                output,
+                "direct-kfd-rocprof-qualification-schema",
+                "fe2o3-direct-kfd-rocprof-qualification-v1",
+            );
+            line(
+                output,
+                "direct-kfd-rocprof-qualification-identity",
+                content_identity(&product.identity.sha256, product.identity.byte_len),
+            );
+            line(
+                output,
+                "direct-kfd-runtime-capture-copy",
+                LIVE_RUNTIME_CAPTURE_FILE_V1,
+            );
+            line(
+                output,
+                "direct-kfd-runtime-capture-copy-identity",
+                content_identity(
+                    &Sha256::digest(&product.runtime.bytes).into(),
+                    product.runtime.bytes.len() as u64,
+                ),
+            );
+        }
+        None => line(output, "direct-kfd-rocprof-qualification", "not-requested"),
+    }
+}
+
 fn render_successful_collection(
     plan: &Plan,
     result: Supervised,
     artifacts: &[Artifact],
     dispatch_import: &DispatchImportOutcomeV1,
     pc_import: &PcImportOutcomeV1,
+    live_qualification: Option<&LiveQualificationProductV1>,
 ) -> CommandReport {
     let mut output = String::new();
     line(&mut output, "schema", "fe2o3-profile-collection-v1");
@@ -6185,6 +7622,7 @@ fn render_successful_collection(
     }
     render_dispatch_import_outcome_v1(&mut output, dispatch_import);
     render_pc_import_outcome_v1(&mut output, plan, pc_import);
+    render_live_qualification_v1(&mut output, live_qualification);
     line(&mut output, "att-observability-origin", "unavailable");
     line(
         &mut output,
@@ -7684,6 +9122,25 @@ Flags: interval pow2\n";
     }
 
     #[test]
+    fn installed_release_allowlist_identities_are_exact() {
+        assert_eq!(
+            hex(&INSTALLED_ROCPROFV3_724_SCRIPT_SHA256_V1),
+            "195ff5e6faf48a3abbc6f4db9f69dd598fe71fa9ff695ba2556d65af636fdc48"
+        );
+        assert_eq!(
+            hex(&INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_SHA256_V1),
+            "478df9af09b74707652d9d5574ef37151ff1234d09c68843972c1409a505cdd0"
+        );
+        assert_eq!(
+            hex(&INSTALLED_ROCPROFV3_724_CORE_LIBRARY_SHA256_V1),
+            "40cf6fefffa5e9e8da249dbc1ce6feab0bb2613438caf37b0224d7fce09241e1"
+        );
+        assert_eq!(INSTALLED_ROCPROFV3_724_SCRIPT_LENGTH_V1, 62_506);
+        assert_eq!(INSTALLED_ROCPROFV3_724_TOOL_LIBRARY_LENGTH_V1, 5_435_848);
+        assert_eq!(INSTALLED_ROCPROFV3_724_CORE_LIBRARY_LENGTH_V1, 8_314_944);
+    }
+
+    #[test]
     fn att_plan_discloses_sealed_decoder_boundary_and_collection_fails_closed() {
         let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
         let root = env::temp_dir().join(format!(
@@ -7851,6 +9308,7 @@ Flags: interval pow2\n";
         plan.authorization = authorization_digest(AuthorizationInputs {
             options: &plan.options,
             working_directory: &plan.working_directory,
+            working_directory_identity: plan.working_directory_identity,
             output_directory: &plan.output_directory,
             tool: &plan.tool,
             interpreter: &plan.interpreter,
@@ -7861,6 +9319,7 @@ Flags: interval pow2\n";
             collector_tool: &plan.collector_tool_digest,
             verified_kir_v7: plan.verified_kir_v7.as_ref(),
             pc_sampling: plan.pc_sampling.as_ref(),
+            pending_runtime_capture: plan.pending_runtime_capture.as_ref(),
         });
 
         let revalidations = Cell::new(0_u8);
@@ -8284,6 +9743,23 @@ Flags: interval pow2\n";
                 .contains("global entry-count bound")
         );
         custody.cleanup().unwrap();
+    }
+
+    #[test]
+    fn collector_cannot_precreate_live_qualification_transaction_members() {
+        for (label, name) in [
+            ("qualification", LIVE_QUALIFICATION_FILE_V1),
+            ("runtime", LIVE_RUNTIME_CAPTURE_FILE_V1),
+        ] {
+            let (output, custody) = test_custody(label);
+            fs::write(output.join(name), b"hostile").unwrap();
+            assert!(
+                scan_artifacts(&custody, 1024)
+                    .unwrap_err()
+                    .contains("precreated reserved transaction entry")
+            );
+            custody.cleanup().unwrap();
+        }
     }
 
     #[test]
@@ -9217,5 +10693,44 @@ Flags: interval pow2\n";
             canonical_configuration(ProfileKind::DispatchJson, &[device(GFX942_TARGET_VERSION)]),
             canonical_configuration(ProfileKind::DispatchJson, &[device(GFX950_TARGET_VERSION)])
         );
+    }
+
+    #[test]
+    fn runtime_capture_admission_requires_one_new_exact_target_argument() {
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-runtime-capture-admission-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let capture = root.join("capture.json");
+        let argument = capture.to_str().unwrap().to_owned();
+        assert!(
+            PendingRuntimeCaptureV1::prepare(&capture, std::slice::from_ref(&argument)).is_ok()
+        );
+        assert!(PendingRuntimeCaptureV1::prepare(&capture, &[]).is_err());
+        assert!(PendingRuntimeCaptureV1::prepare(&capture, &[argument.clone(), argument]).is_err());
+        fs::write(&capture, b"stale").unwrap();
+        assert!(PendingRuntimeCaptureV1::prepare(&capture, &[]).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_capture_symlink_substitution_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let id = NEXT_TOPOLOGY_FIXTURE.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "cargo-fe2o3-runtime-capture-symlink-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let capture = root.join("capture.json");
+        let pending =
+            PendingRuntimeCaptureV1::prepare(&capture, &[capture.to_str().unwrap().to_owned()])
+                .unwrap();
+        symlink("/dev/null", &capture).unwrap();
+        assert!(pending.admit().is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

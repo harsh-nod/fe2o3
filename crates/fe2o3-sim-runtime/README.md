@@ -22,25 +22,34 @@ the simulator limits. Worker loss makes the backend terminal and retains
 outstanding resources.
 
 V3 materializes exact scalar, thin global pointer, and global slice storage
-correspondences. V4 content-binds an independently versioned one-to-many
+correspondences. V4 and V5 content-bind an independently versioned one-to-many
 semantic component map, including explicit physical kernarg size, alignment,
-and slots. The production exporter derives those components from rustc layout,
-ABI, and the sole semantic-MIR-to-KIR lowering correspondence. The consumer
-independently rederives canonical KIR packing and admits pointer-free by-value
-aggregates only when their ABI is exact `Direct`, `Pair`, or zero-sized
-`Ignore`. It validates nested projections, scalar validity, direct and niche
+and slots; V5 binds that map directly to its exact KIR V10 body. The production
+exporter derives those components from rustc layout, ABI, and the sole
+semantic-MIR-to-KIR lowering correspondence. The consumer independently
+rederives canonical KIR packing and admits bounded, pointer-free by-value
+arrays, tuples, and structs as an exact recursive scalar-leaf roster.
+The retained source ABI must be zero-sized `Ignore`, scalar `Direct`, `Pair`,
+GPU `Unadjusted` `Direct(Memory)`, a simple Rust integer `Cast`, or sized,
+non-stack, non-metadata `Indirect` with exact carrier attributes. `Cast` and
+`Indirect` are evidence about source transport, not simulator
+materialization: callers supply each logical scalar leaf separately, and the
+runtime never reads a raw aggregate, its padding, or an indirect carrier
+pointer. It validates nested projections, scalar validity, direct and niche
 discriminants, inactive-payload poison, region metadata, and physical slot
-bounds without reading padding or host pointer bytes. This grants semantic CPU
-simulation only, not compiler-execution, KFD, or GPU launch authority.
+bounds. This grants semantic CPU simulation only, not compiler-execution, KFD,
+or GPU launch authority.
 
 An owned RegionSlice wrapper is admitted only when retained compiler facts show
 the exact ordinary three-field pointer/usize/ZST layout, initialized pointer and
 integer scalar-pair ABI, raw mutable pointer evidence, whole-value component
 correspondence, ownership/access, and canonical pointer/extent slots. Structural
 lookalikes, reordered fields or slots, and ownership/access substitutions fail
-typed admission. Other embedded pointers, adjusted, cast, or indirect ABIs,
-ambiguous storage, unsupported wrapper regions, and layouts without exact slots
-also fail typed admission. For a kernel with exactly one reachable canonical
+typed admission. Enums without exact discriminant/variant materialization,
+niches, embedded pointers, adjusted values, complex or foreign casts,
+metadata-bearing or stack indirect values, ambiguous storage, unsupported
+wrapper regions, and layouts without exact slots also fail typed admission.
+For a kernel with exactly one reachable canonical
 dynamic LDS declaration, the normal launch geometry's `dynamic_shared_bytes`
 is propagated as the explicit simulator byte extent, including zero. A nonzero
 extent supplied to a kernel without such a declaration fails typed preflight

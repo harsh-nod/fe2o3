@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod agent_c5_v1;
+
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;

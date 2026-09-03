@@ -54,7 +54,7 @@ for:
 | fe2o3 native KFD debugger | usable executable identity | KFD device/queue/publication only; no native wave/register/source/memory claim |
 | fe2o3 ROCgdb/KFD debugger | usable workflow identity at compiler `308d8fa00fa41e098b2a1a47bbfea1bc29735464` | exact run reached KFD declaration and publication; ROCgdb stopped state was unavailable |
 | ROCgdb | `rocm-rel-7.2-93`, GDB 16.3 | native debugging is documentation-only in the task matrix unless an exact fe2o3 stop is admitted |
-| rocprofv3 | 1.1.0, git `97f5574f`, ROCm 7.2.4 | counter/PC/ATT collection is documented; no new complete capture is claimed |
+| rocprofv3 | 1.1.0, git `97f5574f`, ROCm 7.2.4 | one exact direct-KFD run completed with a canonical runtime capture and zero collector artifacts; no dispatch/code-object/clock join or general SDK limitation is claimed |
 | ROCprof Compute Viewer/ATT | entrypoint content observed, initialization unusable | version probe failed because required Python dependencies are absent; decoded ATT remains unavailable locally |
 | HIP | HIP 7.2.53211, clang 22, ROCm 7.2.4 | representative compiler driver only; no comparative debug study was run |
 | Mojo | unavailable | documentation describes a CUDA-GDB/NVIDIA path; no AMD or local parity claim |
@@ -121,3 +121,20 @@ authenticated producer or collector path for the archived evidence; canonical
 self-consistency alone is not authenticity. T6 still needs approved budgets,
 real measurements, broader target/reset/loss qualification, and committed
 task-based usability studies. CPU performance prediction remains outside scope.
+
+The separate bounded
+[rocprof wrapper host-wall comparison](kfd-native-profiler-v1.md#rocprof-wrapper-host-wall-comparison)
+now supplies a real 5-warmup/30-measured-pair MI300X process-wall observation.
+It is not projected into the six-mode qualification manifest: the exact
+rocprof wrapper produced no admitted artifact, so it cannot establish
+no-capture, counter, PC, ATT, debugger, or instrumented capture overhead. Its
+caller candidate comparison is informative and non-authoritative only.
+
+The separate
+[2026-09-03 MI300X direct-KFD/rocprofv3 record](evidence/mi300x-direct-kfd-rocprof-2026-09-03.md)
+is produced by the plan-bound collection transaction rather than projected
+into this caller-supplied installation manifest. Its durable runtime member and
+qualification member are checked in and readmitted by tests. It closes only
+the exact live juxtaposition: runtime dispatches were observed, the collector
+completed with no artifacts, and all cross-collector joins stayed typed
+unavailable.

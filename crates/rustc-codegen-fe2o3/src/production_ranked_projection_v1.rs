@@ -19835,6 +19835,21 @@ fn project_place_access_with_atomic(
             }
         }
     }
+    if dereferenced_memory_space.is_none()
+        && let SemanticLocalRoleV1::Argument(argument) = local.role()
+        && function
+            .abi()
+            .source_argument_ownership()
+            .get(argument as usize)
+            == Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+    {
+        if requirement == PlaceAccessRequirementV1::ExplicitMemory {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an explicit memory operation targets a by-value argument component",
+            ));
+        }
+        return Ok(());
+    }
     if indices.is_empty() && crosses_memory_boundary {
         let singleton = matches!(dereferenced_memory_space, Some(MemorySpaceAttr::Global))
             && local_contracts

@@ -59,6 +59,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 #[cfg(not(any(
     feature = "oob",
     feature = "debug_scalar",
+    feature = "debug_helper",
     feature = "debug_long_name",
     feature = "debug_mutated_argument",
     feature = "shifted",
@@ -87,7 +88,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "aggregate_zst",
     feature = "aggregate_nested",
     feature = "aggregate_enum",
-    feature = "aggregate_pointer"
+    feature = "aggregate_pointer",
+    feature = "aggregate_drop"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
@@ -242,6 +244,27 @@ pub fn aggregate_pointer(_value: AggregatePointer, mut output: DisjointSlice<u64
     }
 }
 
+#[cfg(feature = "aggregate_drop")]
+pub struct AggregateDrop {
+    pub value: u64,
+}
+
+#[cfg(feature = "aggregate_drop")]
+impl Drop for AggregateDrop {
+    fn drop(&mut self) {}
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_drop")]
+pub fn aggregate_drop(_value: AggregateDrop, mut output: DisjointSlice<u64>, scale: u64) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = scale;
+    }
+}
+
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
@@ -278,6 +301,25 @@ pub fn debug_scalar(value: f32, input: &[f32], mut output: DisjointSlice<f32>) {
     let _input_extent = input.len();
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = value;
+    }
+}
+
+#[cfg(feature = "debug_helper")]
+#[inline(never)]
+fn debug_helper_add_one(value: f32) -> f32 {
+    let adjusted = value + 1.0;
+    adjusted
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "debug_helper")]
+pub fn debug_helper(value: f32, mut output: DisjointSlice<f32>) {
+    let adjusted = debug_helper_add_one(value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = adjusted;
     }
 }
 

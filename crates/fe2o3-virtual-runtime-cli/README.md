@@ -24,3 +24,17 @@ back to hardware, or predicts performance. Bundle/KIR admission remains the
 existing verified simulator trust boundary.
 The no-GPU audit is an exact dependency/source and final linked-binary policy
 check; it does not claim to prove arbitrary source syscall-free.
+
+The separate `fe2o3-sim-agent` binary is a bounded fresh-process JSONL service
+for advisory diagnosis and reduction of retained simulator evidence. It admits
+an exact canonical race-reduction report plus its detailed race, or canonical
+virtual host-lifetime evidence. Requests can discover capabilities, open one
+immutable evidence session, diagnose it, page its retained witness, and
+terminate. Exact artifact/session identities and content-bound cursors prevent
+cross-run or local-ordinal substitution.
+
+The agent has no execution, filesystem, network, or patch operation and rejects
+all command-line arguments. It reports incomplete blocker/input custody,
+unproven schedule coverage, producer authentication, and hardware conclusions
+as typed unavailable facts. See the [Simulator diagnosis agent V1](../../docs/simulator-agent-c5-v1.md)
+contract for the schemas and evidence boundaries.

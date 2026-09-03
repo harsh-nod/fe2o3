@@ -27,8 +27,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    MirToKirSyntheticRuleEvidenceV4, ProductionCanonicalKernelIrVersionV1,
-    ProductionCorrespondenceEvidenceErrorV4, ProductionFormalMemoryEvidenceErrorV4,
+    InertCanonicalMirToKirCorrespondenceEvidenceV5, MirToKirSyntheticRuleEvidenceV4,
+    ProductionCanonicalKernelIrVersionV1, ProductionCorrespondenceEvidenceErrorV4,
+    ProductionCorrespondenceEvidenceErrorV5, ProductionFormalMemoryEvidenceErrorV4,
     ProductionLineageEvidenceErrorV3,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -578,10 +579,15 @@ fn decode_and_cross_check_stages_v4(
             kernel_ir.canonical_preimage().to_vec(),
         )
         .map_err(CompilerProofInputValidationErrorV3::KernelIrV8)?;
-    let decoded_correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(
-        mir_to_kir_correspondence.canonical_preimage(),
-    )
-    .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?;
+    let correspondence_bytes = mir_to_kir_correspondence.canonical_preimage();
+    let decoded_correspondence = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
+            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?
+            .into_nested_v4()
+    } else {
+        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
+            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?
+    };
     let decoded_formal_memory =
         InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(formal_memory.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::FormalMemoryV4Decode)?;
@@ -1314,6 +1320,8 @@ pub enum CompilerProofInputValidationErrorV3 {
     CorrespondenceDecode(ProductionLineageEvidenceErrorV3),
     /// Exact lossless MIR-to-KIR aggregate evidence could not be decoded.
     CorrespondenceV4Decode(ProductionCorrespondenceEvidenceErrorV4),
+    /// Exact function-owner MIR-to-KIR aggregate evidence could not be decoded.
+    CorrespondenceV5Decode(ProductionCorrespondenceEvidenceErrorV5),
     /// Exact formal-memory admission evidence could not be decoded.
     FormalMemoryDecode(ProductionLineageEvidenceErrorV3),
     /// Exact current formal-memory admission evidence could not be decoded.
@@ -1374,6 +1382,10 @@ impl fmt::Display for CompilerProofInputValidationErrorV3 {
                 formatter,
                 "cannot decode lossless compiler MIR-to-KIR evidence: {error}"
             ),
+            Self::CorrespondenceV5Decode(error) => write!(
+                formatter,
+                "cannot decode exact-function compiler MIR-to-KIR evidence: {error}"
+            ),
             Self::FormalMemoryDecode(error) => {
                 write!(
                     formatter,
@@ -1418,6 +1430,7 @@ impl Error for CompilerProofInputValidationErrorV3 {
             Self::KernelIrV8(error) => Some(error),
             Self::CorrespondenceDecode(error) | Self::FormalMemoryDecode(error) => Some(error),
             Self::CorrespondenceV4Decode(error) => Some(error),
+            Self::CorrespondenceV5Decode(error) => Some(error),
             Self::FormalMemoryV4Decode(error) => Some(error),
             Self::SemanticInductionAnalysis(error) => Some(error),
             Self::SemanticInductionEvidence(error) => Some(error),

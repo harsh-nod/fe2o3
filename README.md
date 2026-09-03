@@ -42,7 +42,10 @@ the conditions in the [release process](docs/release-process.md) and
   This model-only path grants no KFD, load, launch, or hardware authority.
 - **Semantic debugging and profiling.** Agent-facing JSONL protocols preserve
   provenance and distinguish declared, observed, inferred, and unavailable
-  facts. CPU replay supports reverse navigation and structured diagnosis;
+  facts. An artifact-bound transformation sidecar preserves exact one-to-one,
+  one-to-many, many-to-one, many-to-many, and eliminated relations without
+  mistaking cardinality for an optimization observation. CPU replay supports
+  reverse navigation and structured diagnosis;
   bounded ROCgdb control and rocprofv3 planning/import workflows are
   implemented. Admitted stopped-GPU state, protected real-dispatch capture, and
   ATT decoding remain incomplete.
@@ -166,8 +169,8 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | CPU simulation | Deterministic execution of admitted canonical KIR V7 plus exact direct V9/V10 custody, including supported helpers, barriers, workgroup memory, wave f32 collectives, memory intrinsics, atomics, fences, floating point, and seeded schedule exploration |
 | Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
-| Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
-| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, plus opt-in direct-KFD runtime lifecycle, host-staging, queue/stream membership, completion, and evidence-cited lifecycle causality queries; protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, device-copy/dependency producers, cross-run site comparison, and direct-KFD cross-collector correlation remain incomplete |
+| Live debugger | Bounded direct-KFD observation/control; ROCgdb V4 authenticates hierarchy/relative PC and V5 adds same-stop structured register/scalar-local inspection, while the installed direct-KFD target still cannot produce a physical GPU stop and source/ISA/memory remain typed unavailable |
+| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, opt-in direct-KFD runtime lifecycle, host-staging, queue/stream membership, completion and evidence-cited lifecycle causality queries, and a bounded paired rocprof-wrapper host-wall comparison; protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, device-copy/dependency producers, cross-run site comparison, capture-overhead qualification, and direct-KFD cross-collector correlation remain incomplete |
 | Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
 | Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
 
@@ -188,12 +191,17 @@ milestones are retained in the [project status archive](docs/project-status.md).
   predictions.
 - CPU logical waves model semantic collectives and visualization partitions,
   not physical GPU wave scheduling or `EXEC` state.
-- Live KFD debugging does not yet expose general wave/lane PC, registers,
-  target memory, source stepping, or breakpoints.
+- Live KFD debugging admits authenticated hierarchy and relative-PC evidence and
+  can retain same-stop, wave-scoped register values and simple scalar locals.
+  The installed direct-KFD target cannot yet produce a physical GPU stop, and
+  general lane values, target memory, source stepping, and breakpoints remain
+  unavailable.
 - ROCgdb integration is bounded by what the installed debugger exposes and is
   not a source of fe2o3 compiler or runtime authority.
-- Profiler import has not completed a protected real GPU-dispatch rocprofv3
-  round trip. Supplied PC evidence can be joined exactly to sparse
+- One protected MI300X direct-KFD/rocprofv3 qualification completed with exact
+  runtime dispatch evidence, but that ROCprofiler SDK 1.1.0 run produced no
+  collector artifacts and therefore no cross-collector dispatch import or
+  join. Supplied PC evidence can be joined exactly to sparse
   characteristic source/IR/ISA coordinates, but that archive remains a
   self-claim without producer readmission and does not enable cross-run site
   deltas. Direct-KFD runtime observations now expose bounded local lifecycle

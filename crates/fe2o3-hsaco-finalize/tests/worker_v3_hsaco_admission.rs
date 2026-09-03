@@ -96,9 +96,12 @@ use fe2o3_kernel_ir::{
     SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1,
     SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapBindingV1,
     SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1, SemanticDebugMappingOutputV1,
-    SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugTransformationV1,
-    SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
-    VerifiedCanonicalKernelIrV9, production_semantic_debug_transformation_capabilities_v1,
+    SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugRelationCardinalityV2,
+    SemanticDebugTransformationClassV2, SemanticDebugTransformationClassificationV2,
+    SemanticDebugTransformationEvidenceInputV2, SemanticDebugTransformationEvidenceKindV2,
+    SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    production_semantic_debug_transformation_capabilities_v1,
 };
 use fe2o3_verifier::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
@@ -676,6 +679,7 @@ fn native_v3_finalizer_admits_only_the_exact_artifact_and_bounded_isa_interval()
     assert!(!admitted.validates_all_input_axes());
     assert!(!admitted.authenticates_compiler_execution());
     assert!(!admitted.grants_publication_authority());
+    assert!(admitted.transformation_map_v2().is_none());
 
     let stale = finalizer_semantic_map(b"substituted-hsaco", 4);
     assert!(matches!(
@@ -751,6 +755,40 @@ fn production_semantic_debug_legacy_and_unavailable_states_are_typed() {
         available.raw_output_identity()
     );
     let outer = available.outer_handoff();
+    let transformation_map = admitted
+        .transformation_map_v2()
+        .expect("exact production admission carries cardinality evidence");
+    let correspondence = outer
+        .capsule()
+        .receipts()
+        .mir_to_kir_correspondence()
+        .canonical_preimage();
+    transformation_map
+        .validate_exact_inputs(
+            admitted.canonical_bytes(),
+            &[SemanticDebugTransformationEvidenceInputV2 {
+                kind: SemanticDebugTransformationEvidenceKindV2::MirKirCorrespondenceV4,
+                canonical_bytes: correspondence,
+            }],
+        )
+        .unwrap();
+    assert!(transformation_map.relations().iter().any(|relation| {
+        relation.classification()
+            == SemanticDebugTransformationClassificationV2::Observed {
+                class: SemanticDebugTransformationClassV2::Eliminated,
+            }
+    }));
+    let expanded = transformation_map
+        .relations()
+        .iter()
+        .find(|relation| relation.cardinality() == SemanticDebugRelationCardinalityV2::OneToMany)
+        .expect("fixture contains an exact lowering expansion");
+    assert_eq!(
+        expanded.classification(),
+        SemanticDebugTransformationClassificationV2::Unavailable {
+            reason: fe2o3_kernel_ir::SemanticDebugTransformationUnavailableReasonV2::ProducerDidNotClassify,
+        }
+    );
     let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
         outer
             .capsule()
@@ -2496,7 +2534,7 @@ fn production_source_isa_catalog_admits_real_worker_kernel_family_matrix() {
                 capability.class() == ProductionSemanticDebugTransformationClassV1::Duplicated
             })
             .map(|capability| capability.availability()),
-        Some(ProductionSemanticDebugTransformationAvailabilityV1::Representable)
+        Some(ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter)
     );
 }
 
@@ -4182,14 +4220,13 @@ fn validate_fixture_target_lineage(
         receipts.formal_memory(),
     )
     .unwrap();
-    validate_compiler_target_lineage_v1(capsule, &proof_inputs).map(|lineage| {
+    validate_compiler_target_lineage_v1(capsule, &proof_inputs).inspect(|lineage| {
         assert!(lineage.has_exact_receipt_association());
         assert!(lineage.has_exact_kir_to_llvm_replay());
         assert!(!lineage.establishes_semantic_refinement());
         assert!(!lineage.establishes_llvm_to_machine_refinement());
         assert!(!lineage.authenticates_producer());
         assert!(!lineage.grants_runtime_authority());
-        lineage
     })
 }
 

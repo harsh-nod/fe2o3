@@ -12,13 +12,14 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_kir_sim::{AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiArgumentV1, SemanticAbiPassModeV1,
-    SemanticAbiPointeeKindV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
-    SemanticBackendScalarV1, SemanticEnumEncodingV1, SemanticFieldsShapeV1, SemanticLocalRoleV1,
-    SemanticMirLimitsV1, SemanticMutabilityV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
-    SemanticRustTypeKindV1, SemanticRustcVariantsV1, SemanticScalarTypeV1,
-    SemanticScalarValidityRangeV1, SemanticSourceArgumentOwnershipV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+    AdmittedInertSemanticMirV1, SemanticAbiArgumentV1, SemanticAbiExtensionV1,
+    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
+    SemanticAbiRegisterKindV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
+    SemanticBackendScalarV1, SemanticCanonAbiV1, SemanticEnumEncodingV1, SemanticFieldsShapeV1,
+    SemanticLocalRoleV1, SemanticMirLimitsV1, SemanticMutabilityV1, SemanticPointerKindV1,
+    SemanticPointerMetadataV1, SemanticRustTypeKindV1, SemanticRustcVariantsV1,
+    SemanticScalarTypeV1, SemanticScalarValidityRangeV1, SemanticSourceArgumentOwnershipV1,
+    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
 };
 use fe2o3_runtime::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
@@ -48,6 +49,7 @@ const QUEUE_CAPACITY: u32 = 64;
 const COMMAND_QUEUE_CAPACITY: usize = 64;
 const FAILED_SIMULATION_CODE: i64 = -1;
 const WORKER_LIVENESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2: usize = 256;
 
 /// Stable evidence describing what this backend can establish.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1682,15 +1684,15 @@ fn argument_layout_v2(
         let has_pointer = components.iter().any(|component| {
             component.representation() == SemanticKirComponentRepresentationV2::RegionPointer
         });
-        if matches!(
+        let is_scalar_aggregate = matches!(
             source_declaration.shape(),
             SemanticTypeShapeV1::Unit
                 | SemanticTypeShapeV1::Array { .. }
                 | SemanticTypeShapeV1::Tuple(_)
                 | SemanticTypeShapeV1::Aggregate(_)
         ) && !has_slice
-            && !has_pointer
-        {
+            && !has_pointer;
+        if is_scalar_aggregate {
             validate_scalar_aggregate_abi_v2(
                 semantic_types,
                 source_type,
@@ -1698,6 +1700,8 @@ fn argument_layout_v2(
                 components,
                 kir_types,
                 source,
+                abi.canon_abi(),
+                abi.spec_abi_unadjusted(),
             )?;
         }
         match physical.mode() {
@@ -1708,6 +1712,8 @@ fn argument_layout_v2(
                 if has_slice && !has_pointer && components.len() == 1 => {}
             SemanticAbiPassModeV1::Pair { .. }
                 if !has_slice && !has_pointer && components.len() == 2 => {}
+            SemanticAbiPassModeV1::Cast { .. } | SemanticAbiPassModeV1::Indirect { .. }
+                if is_scalar_aggregate => {}
             SemanticAbiPassModeV1::Ignore => {
                 unsupported.get_or_insert_with(|| {
                     format!("source argument {source} is ABI-ignored but has retained storage")
@@ -1985,6 +1991,280 @@ fn validate_compiler_packing_plan_v2(
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecursiveArgumentLeafV2 {
+    path: Vec<SemanticStorageProjectionV2>,
+    semantic_type: SemanticTypeIdV1,
+    byte_offset: usize,
+    backend_scalar: SemanticBackendScalarV1,
+}
+
+/// Rebuilds the logical simulator leaf roster from retained compiler layout.
+///
+/// These leaves are not reads of an aggregate, its padding bytes, or an
+/// indirect ABI carrier. Each leaf remains an independently supplied logical
+/// simulator input whose identity and placement are checked below.
+fn recursive_argument_leaves_v2(
+    semantic_types: &[SemanticTypeDeclV1],
+    source_type: SemanticTypeIdV1,
+    source: usize,
+) -> Result<Vec<RecursiveArgumentLeafV2>, SimRuntimeBackendErrorV1> {
+    #[allow(clippy::too_many_arguments)]
+    fn append(
+        semantic_types: &[SemanticTypeDeclV1],
+        semantic_type: SemanticTypeIdV1,
+        source: usize,
+        path: &mut Vec<SemanticStorageProjectionV2>,
+        byte_offset: usize,
+        structural_nodes: &mut usize,
+        leaves: &mut Vec<RecursiveArgumentLeafV2>,
+    ) -> Result<(), SimRuntimeBackendErrorV1> {
+        *structural_nodes = structural_nodes.checked_add(1).ok_or_else(|| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} recursive component count overflows"
+            ))
+        })?;
+        if *structural_nodes > MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2
+            || path.len() > MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2
+            || leaves.len() > MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2
+        {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} exceeds the recursive component limit of {MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2}"
+            )));
+        }
+        let declaration = semantic_types
+            .get(semantic_type.index() as usize)
+            .ok_or_else(|| {
+                SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                    "source argument {source} recursive component type is absent"
+                ))
+            })?;
+        if declaration.layout().is_uninhabited() || declaration.layout().size_bytes().is_none() {
+            return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} recursive component is uninhabited or unsized"
+            )));
+        }
+        match declaration.shape() {
+            SemanticTypeShapeV1::Unit => Ok(()),
+            SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {
+                let SemanticBackendReprV1::Scalar(backend_scalar) =
+                    declaration.layout().backend_repr()
+                else {
+                    return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                        "source argument {source} recursive scalar leaf lacks a scalar backend representation"
+                    )));
+                };
+                leaves.try_reserve(1).map_err(|_| {
+                    SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                        "source argument {source} recursive leaf allocation failed"
+                    ))
+                })?;
+                leaves.push(RecursiveArgumentLeafV2 {
+                    path: path.clone(),
+                    semantic_type,
+                    byte_offset,
+                    backend_scalar: *backend_scalar,
+                });
+                Ok(())
+            }
+            SemanticTypeShapeV1::Array { element, length } => {
+                let SemanticFieldsShapeV1::Array {
+                    stride_bytes,
+                    count,
+                } = declaration.layout().fields()
+                else {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                        "source argument {source} recursive array lacks exact stride evidence"
+                    )));
+                };
+                if count != length || *length > MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2 as u64 {
+                    return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                        "source argument {source} recursive array length is inconsistent or exceeds the component limit"
+                    )));
+                }
+                for index in 0..*length {
+                    path.try_reserve(1).map_err(|_| {
+                        SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} recursive path allocation failed"
+                        ))
+                    })?;
+                    path.push(SemanticStorageProjectionV2::ArrayElement { index });
+                    let relative = index.checked_mul(*stride_bytes).ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} recursive array offset overflows"
+                        ))
+                    })?;
+                    let relative = usize::try_from(relative).map_err(|_| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                            "source argument {source} recursive array offset does not fit this host"
+                        ))
+                    })?;
+                    let offset = byte_offset.checked_add(relative).ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} recursive array offset overflows"
+                        ))
+                    })?;
+                    append(
+                        semantic_types,
+                        *element,
+                        source,
+                        path,
+                        offset,
+                        structural_nodes,
+                        leaves,
+                    )?;
+                    path.pop();
+                }
+                Ok(())
+            }
+            SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
+                let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details()
+                else {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                        "source argument {source} recursive aggregate lacks exact field offsets"
+                    )));
+                };
+                if fields.fields().len() != layout.field_offsets().len() {
+                    return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                        "source argument {source} recursive aggregate field roster differs from its layout"
+                    )));
+                }
+                for (index, (&field, &relative)) in fields
+                    .fields()
+                    .iter()
+                    .zip(layout.field_offsets())
+                    .enumerate()
+                {
+                    path.try_reserve(1).map_err(|_| {
+                        SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} recursive path allocation failed"
+                        ))
+                    })?;
+                    path.push(SemanticStorageProjectionV2::Field {
+                        index: u32::try_from(index).map_err(|_| {
+                            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                                "source argument {source} recursive field index does not fit the wire"
+                            ))
+                        })?,
+                    });
+                    let relative = usize::try_from(relative).map_err(|_| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                            "source argument {source} recursive field offset does not fit this host"
+                        ))
+                    })?;
+                    let offset = byte_offset.checked_add(relative).ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                            "source argument {source} recursive field offset overflows"
+                        ))
+                    })?;
+                    append(
+                        semantic_types,
+                        field,
+                        source,
+                        path,
+                        offset,
+                        structural_nodes,
+                        leaves,
+                    )?;
+                    path.pop();
+                }
+                Ok(())
+            }
+            SemanticTypeShapeV1::Enum { .. } => {
+                Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "source argument {source} enum requires exact discriminant and variant evidence"
+                )))
+            }
+            SemanticTypeShapeV1::Pointer(_) => {
+                Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "source argument {source} recursive aggregate contains a pointer without an owned region binding"
+                )))
+            }
+            _ => Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} has no pointer-free recursive component contract"
+            ))),
+        }
+    }
+
+    let source_declaration = semantic_types
+        .get(source_type.index() as usize)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} aggregate type is absent"
+            ))
+        })?;
+    let source_size =
+        usize::try_from(source_declaration.layout().size_bytes().ok_or_else(|| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} aggregate is unsized"
+            ))
+        })?)
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} aggregate size does not fit this host"
+            ))
+        })?;
+    let mut leaves = Vec::new();
+    leaves
+        .try_reserve(MAX_RECURSIVE_ARGUMENT_COMPONENTS_V2.min(8))
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} recursive leaf allocation failed"
+            ))
+        })?;
+    let mut structural_nodes = 0;
+    append(
+        semantic_types,
+        source_type,
+        source,
+        &mut Vec::new(),
+        0,
+        &mut structural_nodes,
+        &mut leaves,
+    )?;
+    let mut ranges = Vec::new();
+    ranges.try_reserve_exact(leaves.len()).map_err(|_| {
+        SimRuntimeBackendErrorV1::InvalidBundle(format!(
+            "source argument {source} recursive range allocation failed"
+        ))
+    })?;
+    for leaf in &leaves {
+        let width = usize::try_from(leaf.backend_scalar.primitive().size_bytes().ok_or_else(
+            || {
+                SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "source argument {source} recursive scalar has no exact byte width"
+                ))
+            },
+        )?)
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                "source argument {source} recursive scalar width does not fit this host"
+            ))
+        })?;
+        let end = leaf.byte_offset.checked_add(width).ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} recursive scalar range overflows"
+            ))
+        })?;
+        if end > source_size {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} recursive scalar exceeds its Rust layout"
+            )));
+        }
+        ranges.push((leaf.byte_offset, end));
+    }
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+            "source argument {source} recursive scalar leaves overlap"
+        )));
+    }
+    Ok(leaves)
+}
+
+// Keep the independently retained source, layout, physical ABI, and canonical
+// ABI axes explicit at this consumer trust boundary.
+#[allow(clippy::too_many_arguments)]
 fn validate_scalar_aggregate_abi_v2(
     semantic_types: &[SemanticTypeDeclV1],
     source_type: SemanticTypeIdV1,
@@ -1992,6 +2272,8 @@ fn validate_scalar_aggregate_abi_v2(
     components: &[fe2o3_kernel_ir::SemanticKirComponentStorageV2],
     kir_types: &[Type],
     source: usize,
+    canon_abi: SemanticCanonAbiV1,
+    spec_abi_unadjusted: bool,
 ) -> Result<(), SimRuntimeBackendErrorV1> {
     let source_declaration = semantic_types
         .get(source_type.index() as usize)
@@ -2001,71 +2283,91 @@ fn validate_scalar_aggregate_abi_v2(
             ))
         })?;
     let source_size = source_declaration.layout().size_bytes();
+    let leaves = recursive_argument_leaves_v2(semantic_types, source_type, source)?;
+    if leaves.len() != components.len() {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+            "source argument {source} recursive component roster is incomplete"
+        )));
+    }
+    for (index, (leaf, component)) in leaves.iter().zip(components).enumerate() {
+        if component.representation() != SemanticKirComponentRepresentationV2::ScalarValue
+            || component.metadata_slot().is_some()
+            || component.path() != leaf.path
+            || index != 0
+                && component.kir_parameter_ordinal()
+                    != components[index - 1]
+                        .kir_parameter_ordinal()
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                                "source argument {source} recursive KIR ordinal overflows"
+                            ))
+                        })?
+        {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} recursive component order or representation differs"
+            )));
+        }
+        let projected = project_semantic_component_v2(
+            semantic_types,
+            source_type,
+            component.path(),
+            0,
+            components,
+            component,
+            source,
+        )?;
+        if projected.is_enum_discriminant
+            || projected.semantic_type != leaf.semantic_type
+            || projected.byte_offset != leaf.byte_offset
+        {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} recursive component offset or identity differs"
+            )));
+        }
+        validate_aggregate_abi_leaf_v2(
+            semantic_types,
+            leaf.semantic_type,
+            leaf.backend_scalar,
+            component,
+            kir_types,
+            source,
+        )?;
+    }
     match (
         physical.mode(),
         source_declaration.layout().backend_repr(),
-        components,
+        leaves.as_slice(),
     ) {
         (SemanticAbiPassModeV1::Ignore, SemanticBackendReprV1::Memory { sized: true }, [])
             if source_size == Some(0) =>
         {
             Ok(())
         }
-        (
-            SemanticAbiPassModeV1::Direct(_),
-            SemanticBackendReprV1::Scalar(expected),
-            [component],
-        ) if component.representation() == SemanticKirComponentRepresentationV2::ScalarValue => {
-            let projected = project_semantic_component_v2(
-                semantic_types,
-                source_type,
-                component.path(),
-                0,
-                components,
-                component,
-                source,
-            )?;
-            if projected.is_enum_discriminant || projected.byte_offset != 0 {
+        (SemanticAbiPassModeV1::Direct(_), SemanticBackendReprV1::Scalar(expected), [leaf]) => {
+            if leaf.byte_offset != 0 || leaf.backend_scalar != *expected {
                 return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
                     "source argument {source} direct aggregate projection differs from the compiler ABI"
                 )));
             }
-            validate_aggregate_abi_leaf_v2(
-                semantic_types,
-                projected.semantic_type,
-                *expected,
-                component,
-                kir_types,
-                source,
-            )
+            Ok(())
+        }
+        (
+            SemanticAbiPassModeV1::Direct(attributes),
+            SemanticBackendReprV1::Memory { sized: true },
+            [_, ..],
+        ) if spec_abi_unadjusted
+            && *attributes
+                == fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueAttributesV1::plain()
+            && source_size.is_some_and(|size| size != 0) =>
+        {
+            Ok(())
         }
         (
             SemanticAbiPassModeV1::Pair { .. },
             SemanticBackendReprV1::ScalarPair { first, second },
-            [first_component, second_component],
-        ) if first_component.representation()
-            == SemanticKirComponentRepresentationV2::ScalarValue
-            && second_component.representation()
-                == SemanticKirComponentRepresentationV2::ScalarValue =>
-        {
-            let first_projected = project_semantic_component_v2(
-                semantic_types,
-                source_type,
-                first_component.path(),
-                0,
-                components,
-                first_component,
-                source,
-            )?;
-            let second_projected = project_semantic_component_v2(
-                semantic_types,
-                source_type,
-                second_component.path(),
-                0,
-                components,
-                second_component,
-                source,
-            )?;
+            [first_leaf, second_leaf],
+        ) => {
             let second_offset =
                 usize::try_from(first.primitive().size_bytes().ok_or_else(|| {
                     SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
@@ -2084,43 +2386,76 @@ fn validate_scalar_aggregate_abi_v2(
                     ))
                 })?;
             let second_offset = align_up(second_offset, second_alignment)?;
-            if first_projected.is_enum_discriminant
-                || second_projected.is_enum_discriminant
-                || first_projected.byte_offset != 0
-                || second_projected.byte_offset != second_offset
-                || second_component.kir_parameter_ordinal()
-                    != first_component
-                        .kir_parameter_ordinal()
-                        .checked_add(1)
-                        .ok_or_else(|| {
-                            SimRuntimeBackendErrorV1::InvalidBundle(format!(
-                                "source argument {source} pair KIR ordinal overflows"
-                            ))
-                        })?
+            if first_leaf.byte_offset != 0
+                || second_leaf.byte_offset != second_offset
+                || first_leaf.backend_scalar != *first
+                || second_leaf.backend_scalar != *second
             {
                 return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
                     "source argument {source} pair projection order differs from the compiler ABI"
                 )));
             }
-            validate_aggregate_abi_leaf_v2(
-                semantic_types,
-                first_projected.semantic_type,
-                *first,
-                first_component,
-                kir_types,
-                source,
-            )?;
-            validate_aggregate_abi_leaf_v2(
-                semantic_types,
-                second_projected.semantic_type,
-                *second,
-                second_component,
-                kir_types,
-                source,
+            Ok(())
+        }
+        (
+            SemanticAbiPassModeV1::Cast { pad_i32, cast },
+            SemanticBackendReprV1::Memory { sized: true },
+            [_, ..],
+        ) if matches!(
+            canon_abi,
+            SemanticCanonAbiV1::Rust
+                | SemanticCanonAbiV1::RustCold
+                | SemanticCanonAbiV1::RustPreserveNone
+        ) && source_size.is_some_and(|size| size != 0)
+            && !pad_i32
+            && cast.prefix().iter().all(Option::is_none)
+            && cast.rest_offset_bytes().is_none()
+            && cast.rest().unit().kind() == SemanticAbiRegisterKindV1::Integer
+            && source_size == Some(cast.rest().unit().size_bytes())
+            && source_size == Some(cast.rest_total_bytes())
+            && !cast.rest_consecutive()
+            && !cast.attributes().regular().no_alias()
+            && cast.attributes().regular().pointer_capture().is_none()
+            && !cast.attributes().regular().non_null()
+            && !cast.attributes().regular().read_only()
+            && !cast.attributes().regular().in_register()
+            && cast.attributes().extension() == SemanticAbiExtensionV1::None
+            && cast.attributes().pointee_size_bytes() == 0
+            && cast.attributes().pointee_alignment_bytes().is_none() =>
+        {
+            Ok(())
+        }
+        (
+            SemanticAbiPassModeV1::Indirect {
+                attributes,
+                metadata_attributes,
+                on_stack,
+            },
+            SemanticBackendReprV1::Memory { sized: true },
+            [_, ..],
+        ) if source_size.is_some_and(|size| size != 0)
+            && metadata_attributes.is_none()
+            && !on_stack
+            && attributes.regular().no_alias()
+            && matches!(
+                attributes.regular().pointer_capture(),
+                Some(
+                    SemanticAbiPointerCaptureV1::CapturesAddress
+                        | SemanticAbiPointerCaptureV1::CapturesNone
+                )
             )
+            && attributes.regular().non_null()
+            && attributes.regular().no_undef()
+            && attributes.extension() == SemanticAbiExtensionV1::None
+            && attributes.pointee_size_bytes()
+                == source_declaration.layout().rustc_size_bytes()
+            && attributes.pointee_alignment_bytes()
+                == Some(source_declaration.layout().alignment_bytes()) =>
+        {
+            Ok(())
         }
         _ => Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
-            "source argument {source} aggregate ABI is not an exact Direct, Pair, or zero-sized Ignore"
+            "source argument {source} aggregate ABI has no exact recursive logical-component rule"
         ))),
     }
 }
@@ -3760,10 +4095,12 @@ mod tests {
         ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
     };
     use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiPointeeInfoV1, SemanticAbiValueAttributesV1, SemanticAbiValueV1,
-        SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticBackendScalarV1,
-        SemanticLayoutIdentityV1, SemanticPointerTypeV1, SemanticTypeAbiPropertiesV1,
-        SemanticTypeIdentityV1, SemanticTypeLayoutV1,
+        SemanticAbiCastV1, SemanticAbiPointeeInfoV1, SemanticAbiRegisterV1,
+        SemanticAbiRegularAttributesV1, SemanticAbiUniformV1, SemanticAbiValueAttributesV1,
+        SemanticAbiValueV1, SemanticAggregateLayoutV1, SemanticAggregateTypeV1,
+        SemanticBackendScalarV1, SemanticLayoutIdentityV1, SemanticPaddingV1,
+        SemanticPointerTypeV1, SemanticTypeAbiPropertiesV1, SemanticTypeIdentityV1,
+        SemanticTypeLayoutV1, SemanticValidityScalarTypeV1,
     };
 
     fn runtime_dynamic_reachability_module(call_helper: bool) -> (Module, FunctionId) {
@@ -4744,6 +5081,21 @@ mod tests {
         )
     }
 
+    fn recursive_component(
+        path: Vec<SemanticStorageProjectionV2>,
+        ordinal: u32,
+        slot: SemanticKernargSlotV2,
+    ) -> fe2o3_kernel_ir::SemanticKirComponentStorageV2 {
+        fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+            path,
+            ordinal,
+            ordinal,
+            SemanticKirComponentRepresentationV2::ScalarValue,
+            slot,
+            None,
+        )
+    }
+
     #[test]
     fn aggregate_pair_projection_order_is_proven_against_rustc_backend_repr() {
         let u32_scalar = SemanticBackendScalarV1::initialized(
@@ -4799,6 +5151,8 @@ mod tests {
             &exact,
             &[Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U64)],
             0,
+            SemanticCanonAbiV1::Rust,
+            false,
         )
         .unwrap();
 
@@ -4817,9 +5171,11 @@ mod tests {
                     Type::Scalar(ScalarType::U32),
                 ],
                 0,
+                SemanticCanonAbiV1::Rust,
+                false,
             ),
             Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
-                if detail.contains("projection order")
+                if detail.contains("recursive component order")
         ));
 
         let wrong_type = [Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64)];
@@ -4831,6 +5187,8 @@ mod tests {
                 &exact,
                 &wrong_type,
                 0,
+                SemanticCanonAbiV1::Rust,
+                false,
             ),
             Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
                 if detail.contains("aggregate leaf")
@@ -4852,9 +5210,11 @@ mod tests {
                     Type::Scalar(ScalarType::U64),
                 ],
                 0,
+                SemanticCanonAbiV1::Rust,
+                false,
             ),
             Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
-                if detail.contains("projection order")
+                if detail.contains("recursive component order")
         ));
     }
 
@@ -4895,6 +5255,8 @@ mod tests {
             )],
             &[Type::Scalar(ScalarType::U64)],
             0,
+            SemanticCanonAbiV1::Rust,
+            false,
         )
         .unwrap();
 
@@ -4921,6 +5283,8 @@ mod tests {
             &[],
             &[],
             0,
+            SemanticCanonAbiV1::Rust,
+            false,
         )
         .unwrap();
         assert!(matches!(
@@ -4931,10 +5295,402 @@ mod tests {
                 &[],
                 &[],
                 0,
+                SemanticCanonAbiV1::Rust,
+                false,
             ),
-            Err(SimRuntimeBackendErrorV1::UnsupportedBundle(detail))
-                if detail.contains("zero-sized Ignore")
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("recursive component roster is incomplete")
         ));
+    }
+
+    #[test]
+    fn recursive_nested_indirect_contract_rejects_hostile_rosters_and_carriers() {
+        use SemanticStorageProjectionV2::{ArrayElement, Field};
+
+        let u32_scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 32, 4),
+            SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+        );
+        let u64_scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        let pair = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x82; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x83; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(16),
+                8,
+                SemanticBackendReprV1::ScalarPair {
+                    first: u32_scalar,
+                    second: u64_scalar,
+                },
+                false,
+                SemanticAggregateLayoutV1::new(
+                    vec![0, 8],
+                    vec![SemanticPaddingV1::new(4, 4).unwrap()],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(
+                SemanticAggregateTypeV1::new(vec![
+                    SemanticTypeIdV1::from_index(0),
+                    SemanticTypeIdV1::from_index(1),
+                ])
+                .unwrap(),
+            ),
+        );
+        let array = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x84; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x85; 32]),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                4,
+                2,
+                SemanticFieldsShapeV1::array(2, 2),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::Memory { sized: true },
+                None,
+                false,
+                None,
+                2,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Array {
+                element: SemanticTypeIdV1::from_index(2),
+                length: 2,
+            },
+        );
+        let nested = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x86; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x87; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(24),
+                8,
+                SemanticBackendReprV1::Memory { sized: true },
+                false,
+                SemanticAggregateLayoutV1::new(
+                    vec![0, 16],
+                    vec![SemanticPaddingV1::new(20, 4).unwrap()],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![
+                    SemanticTypeIdV1::from_index(3),
+                    SemanticTypeIdV1::from_index(4),
+                ])
+                .unwrap(),
+            ),
+        );
+        let constrained_u16 = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x88; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x89; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(2),
+                2,
+                SemanticBackendReprV1::Scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 16, 2),
+                    SemanticScalarValidityRangeV1::new(1, 10),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::ValidityScalar(
+                SemanticValidityScalarTypeV1::new(
+                    SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 16,
+                    },
+                    vec![SemanticScalarValidityRangeV1::new(1, 10)],
+                )
+                .unwrap(),
+            ),
+        );
+        let types = vec![
+            scalar_semantic_type(0x80, 32, 4),
+            scalar_semantic_type(0x81, 64, 8),
+            constrained_u16,
+            pair,
+            array,
+            nested,
+        ];
+        let components = vec![
+            recursive_component(
+                vec![Field { index: 0 }, Field { index: 0 }],
+                0,
+                SemanticKernargSlotV2::new(0, 4, 4),
+            ),
+            recursive_component(
+                vec![Field { index: 0 }, Field { index: 1 }],
+                1,
+                SemanticKernargSlotV2::new(8, 8, 8),
+            ),
+            recursive_component(
+                vec![Field { index: 1 }, ArrayElement { index: 0 }],
+                2,
+                SemanticKernargSlotV2::new(16, 2, 2),
+            ),
+            recursive_component(
+                vec![Field { index: 1 }, ArrayElement { index: 1 }],
+                3,
+                SemanticKernargSlotV2::new(18, 2, 2),
+            ),
+        ];
+        let kir_types = [
+            Type::Scalar(ScalarType::U32),
+            Type::Scalar(ScalarType::U64),
+            Type::Scalar(ScalarType::U16),
+            Type::Scalar(ScalarType::U16),
+        ];
+        let indirect_attributes = SemanticAbiValueAttributesV1::new(
+            SemanticAbiRegularAttributesV1::new(
+                true,
+                Some(SemanticAbiPointerCaptureV1::CapturesAddress),
+                true,
+                false,
+                false,
+                true,
+            ),
+            SemanticAbiExtensionV1::None,
+            24,
+            Some(8),
+        )
+        .unwrap();
+        let indirect = |metadata_attributes, on_stack| {
+            SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                SemanticTypeIdV1::from_index(5),
+                SemanticAbiPassModeV1::Indirect {
+                    attributes: indirect_attributes,
+                    metadata_attributes,
+                    on_stack,
+                },
+            ))
+        };
+        validate_scalar_aggregate_abi_v2(
+            &types,
+            SemanticTypeIdV1::from_index(5),
+            &indirect(None, false),
+            &components,
+            &kir_types,
+            0,
+            SemanticCanonAbiV1::GpuKernel,
+            true,
+        )
+        .unwrap();
+
+        let validity =
+            semantic_component_validity_v2(&types, SemanticTypeIdV1::from_index(2)).unwrap();
+        let validity_kernel = materialization_kernel(
+            vec![scalar_argument(
+                0,
+                2,
+                ScalarType::U16,
+                ArgumentMaterializationV1::ExactBytes {
+                    validity,
+                    guards: Vec::new(),
+                },
+            )],
+            2,
+        );
+        assert!(matches!(
+            prepare_arguments(&validity_kernel, &11_u16.to_le_bytes(), &[], &HashMap::new()),
+            Err(SimRuntimeBackendErrorV1::InvalidArguments(detail))
+                if detail.contains("Rust validity")
+        ));
+
+        let mut overlapping_types = types.clone();
+        overlapping_types[5] = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x93; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x94; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(24),
+                8,
+                SemanticBackendReprV1::Memory { sized: true },
+                false,
+                SemanticAggregateLayoutV1::new(vec![0, 8], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![
+                    SemanticTypeIdV1::from_index(3),
+                    SemanticTypeIdV1::from_index(4),
+                ])
+                .unwrap(),
+            ),
+        );
+        assert!(matches!(
+            validate_scalar_aggregate_abi_v2(
+                &overlapping_types,
+                SemanticTypeIdV1::from_index(5),
+                &indirect(None, false),
+                &components,
+                &kir_types,
+                0,
+                SemanticCanonAbiV1::GpuKernel,
+                true,
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("overlap")
+        ));
+
+        for hostile_components in [
+            components[..3].to_vec(),
+            {
+                let mut reordered = components.clone();
+                reordered.swap(1, 2);
+                reordered
+            },
+            {
+                let mut wrong_path = components.clone();
+                wrong_path[3] = recursive_component(
+                    vec![Field { index: 1 }, ArrayElement { index: 0 }],
+                    3,
+                    SemanticKernargSlotV2::new(18, 2, 2),
+                );
+                wrong_path
+            },
+        ] {
+            assert!(matches!(
+                validate_scalar_aggregate_abi_v2(
+                    &types,
+                    SemanticTypeIdV1::from_index(5),
+                    &indirect(None, false),
+                    &hostile_components,
+                    &kir_types,
+                    0,
+                    SemanticCanonAbiV1::GpuKernel,
+                    true,
+                ),
+                Err(SimRuntimeBackendErrorV1::InvalidBundle(_))
+            ));
+        }
+        for hostile in [
+            indirect(Some(SemanticAbiValueAttributesV1::plain()), false),
+            indirect(None, true),
+        ] {
+            assert!(matches!(
+                validate_scalar_aggregate_abi_v2(
+                    &types,
+                    SemanticTypeIdV1::from_index(5),
+                    &hostile,
+                    &components,
+                    &kir_types,
+                    0,
+                    SemanticCanonAbiV1::GpuKernel,
+                    true,
+                ),
+                Err(SimRuntimeBackendErrorV1::UnsupportedBundle(detail))
+                    if detail.contains("recursive logical-component rule")
+            ));
+        }
+    }
+
+    #[test]
+    fn simple_rust_cast_contract_is_exact_and_foreign_casts_stay_unavailable() {
+        let element = scalar_semantic_type(0x90, 8, 1);
+        let array = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x91; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x92; 32]),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                3,
+                1,
+                SemanticFieldsShapeV1::array(1, 3),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::Memory { sized: true },
+                None,
+                false,
+                None,
+                1,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Array {
+                element: SemanticTypeIdV1::from_index(0),
+                length: 3,
+            },
+        );
+        let types = [element, array];
+        let components = (0..3)
+            .map(|index| {
+                recursive_component(
+                    vec![SemanticStorageProjectionV2::ArrayElement { index }],
+                    index as u32,
+                    SemanticKernargSlotV2::new(index as u32, 1, 1),
+                )
+            })
+            .collect::<Vec<_>>();
+        let cast_with_attributes = |width, attributes| {
+            let register =
+                SemanticAbiRegisterV1::new(SemanticAbiRegisterKindV1::Integer, width).unwrap();
+            SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                SemanticTypeIdV1::from_index(1),
+                SemanticAbiPassModeV1::cast(
+                    false,
+                    SemanticAbiCastV1::new(
+                        [None; 8],
+                        None,
+                        SemanticAbiUniformV1::new(register, width).unwrap(),
+                        attributes,
+                    ),
+                ),
+            ))
+        };
+        let cast = |width| cast_with_attributes(width, SemanticAbiValueAttributesV1::plain());
+        let kir_types = vec![Type::Scalar(ScalarType::U8); 3];
+        validate_scalar_aggregate_abi_v2(
+            &types,
+            SemanticTypeIdV1::from_index(1),
+            &cast(3),
+            &components,
+            &kir_types,
+            0,
+            SemanticCanonAbiV1::Rust,
+            false,
+        )
+        .unwrap();
+        for (physical, canon_abi) in [
+            (cast(2), SemanticCanonAbiV1::Rust),
+            (cast(3), SemanticCanonAbiV1::GpuKernel),
+            (
+                cast_with_attributes(
+                    3,
+                    SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(
+                            true,
+                            Some(SemanticAbiPointerCaptureV1::CapturesNone),
+                            false,
+                            false,
+                            false,
+                            false,
+                        ),
+                        SemanticAbiExtensionV1::None,
+                        0,
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                SemanticCanonAbiV1::Rust,
+            ),
+        ] {
+            assert!(matches!(
+                validate_scalar_aggregate_abi_v2(
+                    &types,
+                    SemanticTypeIdV1::from_index(1),
+                    &physical,
+                    &components,
+                    &kir_types,
+                    0,
+                    canon_abi,
+                    false,
+                ),
+                Err(SimRuntimeBackendErrorV1::UnsupportedBundle(_))
+            ));
+        }
     }
 
     fn direct_enum_decoder() -> EnumDecoderV1 {

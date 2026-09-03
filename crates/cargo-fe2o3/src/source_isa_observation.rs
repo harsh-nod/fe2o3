@@ -15,7 +15,7 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_kernel_ir::{
     ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugFragmentErrorV1,
     ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
-    SemanticDebugMapErrorV1,
+    SemanticDebugMapErrorV1, SemanticDebugTransformationMapErrorV2,
 };
 pub(crate) use fe2o3_source_isa_observation::wire_v1::*;
 use sha2::{Digest, Sha256};
@@ -458,6 +458,9 @@ const fn map_semantic_debug_map_error(
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV4 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV4
         }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5
+        }
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8
         }
@@ -473,6 +476,15 @@ const fn map_semantic_debug_map_error(
         FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence
         }
+        FinalizedSemanticDebugMapErrorV1::TransformationMapV2(error) => match error {
+            SemanticDebugTransformationMapErrorV2::ResourceLimit => {
+                SourceIsaObservationErrorCodeV1::ResourceLimit
+            }
+            SemanticDebugTransformationMapErrorV2::AllocationFailure => {
+                SourceIsaObservationErrorCodeV1::FinalizedMapAllocationFailure
+            }
+            _ => SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence,
+        },
         FinalizedSemanticDebugMapErrorV1::ArtifactInspection => {
             SourceIsaObservationErrorCodeV1::FinalizedMapArtifactInspection
         }
@@ -799,6 +811,10 @@ mod tests {
                 SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV4,
             ),
             (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5,
+            ),
+            (
                 FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8,
                 SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8,
             ),
@@ -829,6 +845,28 @@ mod tests {
         ] {
             assert_code(
                 ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(error),
+                code,
+            );
+        }
+
+        for (error, code) in [
+            (
+                SemanticDebugTransformationMapErrorV2::InvalidRelation,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence,
+            ),
+            (
+                SemanticDebugTransformationMapErrorV2::ResourceLimit,
+                SourceIsaObservationErrorCodeV1::ResourceLimit,
+            ),
+            (
+                SemanticDebugTransformationMapErrorV2::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::FinalizedMapAllocationFailure,
+            ),
+        ] {
+            assert_code(
+                ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
+                    FinalizedSemanticDebugMapErrorV1::TransformationMapV2(error),
+                ),
                 code,
             );
         }

@@ -28,21 +28,22 @@ use fe2o3_kernel_ir::{
     verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticAbiPointeeKindV1,
+    AdmittedInertSemanticMirV1, SemanticAbiExtensionV1, SemanticAbiPassModeV1,
+    SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1, SemanticAbiRegisterKindV1,
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicOrderingV1,
     SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1, SemanticAxisV1,
     SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
     SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
-    SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDisjointIndexSpaceV1,
-    SemanticEnumEncodingV1, SemanticEnumVariantV1, SemanticF32MathFunctionV1,
-    SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
-    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
-    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
-    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1,
-    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticRustcVariantsV1,
-    SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
+    SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
+    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
+    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
+    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
+    SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
     SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
     SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
@@ -19979,14 +19980,91 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 local: place.local().index(),
             },
         )?;
+        let mut current_type = self.function.locals()[local].ty();
         for projection in place.projections() {
             match projection.kind() {
                 SemanticProjectionKindV1::Dereference
-                | SemanticProjectionKindV1::Field(0)
                 | SemanticProjectionKindV1::Downcast(_)
                 | SemanticProjectionKindV1::OpaqueCast
                 | SemanticProjectionKindV1::Subtype => {}
+                SemanticProjectionKindV1::Field(field) => {
+                    if let SemanticValueBindingV1::Aggregate(fields) = &binding {
+                        binding = fields.get(field as usize).cloned().ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "indexed aggregate field projection is out of range",
+                            )
+                        })?;
+                    } else if field != 0 {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "indexed non-aggregate field projection is not transparent",
+                        ));
+                    }
+                }
                 SemanticProjectionKindV1::Index(index_local) => {
+                    if let SemanticValueBindingV1::Aggregate(fields) = &binding {
+                        let Some(SemanticTypeShapeV1::Array { length, .. }) = self
+                            .types
+                            .get(current_type.index() as usize)
+                            .map(SemanticTypeDeclV1::shape)
+                        else {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "indexed aggregate binding is not a fixed-size array",
+                            ));
+                        };
+                        if usize::try_from(*length) != Ok(fields.len()) {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "indexed array binding differs from its semantic length",
+                            ));
+                        }
+                        let index_binding = self
+                            .locals
+                            .get(index_local.index() as usize)
+                            .and_then(Option::as_ref)
+                            .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                                function: 0,
+                                block: block.index(),
+                                statement,
+                                local: index_local.index(),
+                            })?;
+                        let (index, _) = index_binding.value().map_err(|detail| {
+                            unsupported(0, Some(block.index()), statement, detail)
+                        })?;
+                        let index = self
+                            .emitted_unsigned_constants
+                            .get(&index)
+                            .copied()
+                            .and_then(|index| usize::try_from(index).ok())
+                            .ok_or_else(|| {
+                                unsupported(
+                                    0,
+                                    Some(block.index()),
+                                    statement,
+                                    "by-value array component requires an exact constant index",
+                                )
+                            })?;
+                        binding = fields.get(index).cloned().ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "by-value array constant index is out of range",
+                            )
+                        })?;
+                        current_type = projection.result_type();
+                        continue;
+                    }
                     let (slice, slice_ty) = binding
                         .value()
                         .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
@@ -20057,9 +20135,43 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         },
                     )?;
                 }
-                SemanticProjectionKindV1::ConstantIndex { .. }
-                | SemanticProjectionKindV1::Subslice { .. }
-                | SemanticProjectionKindV1::Field(_) => {
+                SemanticProjectionKindV1::ConstantIndex {
+                    offset, from_end, ..
+                } => {
+                    let SemanticValueBindingV1::Aggregate(fields) = &binding else {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "constant index does not select a by-value aggregate",
+                        ));
+                    };
+                    let offset = usize::try_from(offset).map_err(|_| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "by-value array constant index does not fit this host",
+                        )
+                    })?;
+                    let index = if from_end {
+                        fields.len().checked_sub(offset)
+                    } else {
+                        Some(offset)
+                    };
+                    binding = index
+                        .and_then(|index| fields.get(index))
+                        .cloned()
+                        .ok_or_else(|| {
+                            unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "by-value array constant index is out of range",
+                            )
+                        })?;
+                }
+                SemanticProjectionKindV1::Subslice { .. } => {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
@@ -20068,6 +20180,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
             }
+            current_type = projection.result_type();
         }
         Ok(binding)
     }
@@ -21745,17 +21858,27 @@ fn lower_kernel_parameter_type(
     {
         return Ok(parameter);
     }
-    if !matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_)) {
-        return lower_parameter_type(types, callables, ty);
+    if matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_))
+        && let Some(parameter) =
+            authenticated_global_mut_pointer_parameter(types, function, argument, ty)
+    {
+        return Ok(parameter);
     }
-    authenticated_global_mut_pointer_parameter(types, function, argument, ty).ok_or_else(|| {
-        unsupported(
+    if matches!(
+        declaration.shape(),
+        SemanticTypeShapeV1::Unit
+            | SemanticTypeShapeV1::Array { .. }
+            | SemanticTypeShapeV1::Tuple(_)
+            | SemanticTypeShapeV1::Aggregate(_)
+    ) {
+        return Err(unsupported(
             0,
             None,
             None,
-            "kernel argument type has no authenticated Kernel IR representation",
-        )
-    })
+            "by-value kernel argument requires exact component lowering",
+        ));
+    }
+    lower_parameter_type(types, callables, ty)
 }
 
 fn lower_by_value_kernel_parameter_components_v1(
@@ -21996,6 +22119,47 @@ fn lower_by_value_kernel_parameter_components_v1(
     let mut path = Vec::new();
     let mut structural_nodes = 0;
     append(types, ty, &mut path, &mut output, &mut structural_nodes, 0)?;
+    let source_size = types[ty.index() as usize]
+        .layout()
+        .size_bytes()
+        .ok_or_else(|| unsupported(0, None, None, "by-value argument layout is unsized"))?;
+    let mut leaf_ranges = Vec::new();
+    leaf_ranges.try_reserve_exact(output.len()).map_err(|_| {
+        ProductionSemanticKirErrorV1::AllocationFailure {
+            resource: ProductionSemanticKirResourceV1::DebugBindings,
+        }
+    })?;
+    for (_, _, _, offset, scalar) in &output {
+        let width = scalar.primitive().size_bytes().ok_or_else(|| {
+            unsupported(
+                0,
+                None,
+                None,
+                "by-value scalar component has no exact byte width",
+            )
+        })?;
+        let end = offset.checked_add(width).ok_or_else(|| {
+            unsupported(0, None, None, "by-value scalar component range overflows")
+        })?;
+        if end > source_size {
+            return Err(unsupported(
+                0,
+                None,
+                None,
+                "by-value scalar component exceeds its source layout",
+            ));
+        }
+        leaf_ranges.push((*offset, end));
+    }
+    leaf_ranges.sort_unstable();
+    if leaf_ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "by-value scalar component ranges overlap",
+        ));
+    }
     let exact_mode = match abi.mode() {
         SemanticAbiPassModeV1::Ignore => {
             output.is_empty()
@@ -22005,21 +22169,21 @@ fn lower_by_value_kernel_parameter_components_v1(
                     SemanticBackendReprV1::Memory { sized: true }
                 )
         }
-        SemanticAbiPassModeV1::Direct(_) => {
-            let SemanticBackendReprV1::Scalar(root_scalar) =
-                types[ty.index() as usize].layout().backend_repr()
-            else {
-                return Err(unsupported(
-                    0,
-                    None,
-                    None,
-                    "direct by-value aggregate lacks scalar ABI representation",
-                ));
-            };
-            matches!(
-                output.as_slice(),
-                [(_, _, _, 0, leaf_scalar)] if leaf_scalar == root_scalar
-            )
+        SemanticAbiPassModeV1::Direct(attributes) => {
+            match types[ty.index() as usize].layout().backend_repr() {
+                SemanticBackendReprV1::Scalar(root_scalar) => matches!(
+                    output.as_slice(),
+                    [(_, _, _, 0, leaf_scalar)] if leaf_scalar == root_scalar
+                ),
+                SemanticBackendReprV1::Memory { sized: true } => {
+                    function.abi().spec_abi_unadjusted()
+                        && *attributes
+                            == fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueAttributesV1::plain(
+                            )
+                        && !output.is_empty()
+                }
+                _ => false,
+            }
         }
         SemanticAbiPassModeV1::Pair { .. } => {
             let SemanticBackendReprV1::ScalarPair { first, second } =
@@ -22055,21 +22219,82 @@ fn lower_by_value_kernel_parameter_components_v1(
                         && *leaf_offset == second_offset
             )
         }
-        SemanticAbiPassModeV1::Cast { .. } => {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "aggregate kernel argument uses an unsupported cast ABI",
-            ));
+        SemanticAbiPassModeV1::Cast { pad_i32, cast } => {
+            let layout = types[ty.index() as usize].layout();
+            let regular = cast.attributes().regular();
+            let exact = matches!(
+                function.abi().canon_abi(),
+                SemanticCanonAbiV1::Rust
+                    | SemanticCanonAbiV1::RustCold
+                    | SemanticCanonAbiV1::RustPreserveNone
+            ) && matches!(
+                layout.backend_repr(),
+                SemanticBackendReprV1::Memory { sized: true }
+            ) && layout.size_bytes().is_some_and(|size| size != 0)
+                && !pad_i32
+                && cast.prefix().iter().all(Option::is_none)
+                && cast.rest_offset_bytes().is_none()
+                && cast.rest().unit().kind() == SemanticAbiRegisterKindV1::Integer
+                && layout.size_bytes() == Some(cast.rest().unit().size_bytes())
+                && layout.size_bytes() == Some(cast.rest_total_bytes())
+                && !cast.rest_consecutive()
+                && !regular.no_alias()
+                && regular.pointer_capture().is_none()
+                && !regular.non_null()
+                && !regular.read_only()
+                && !regular.in_register()
+                && cast.attributes().extension() == SemanticAbiExtensionV1::None
+                && cast.attributes().pointee_size_bytes() == 0
+                && cast.attributes().pointee_alignment_bytes().is_none()
+                && !output.is_empty();
+            if !exact {
+                return Err(unsupported(
+                    0,
+                    None,
+                    None,
+                    "aggregate cast ABI is not an exact simple Rust integer transport",
+                ));
+            }
+            true
         }
-        SemanticAbiPassModeV1::Indirect { .. } => {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "aggregate kernel argument uses an unsupported indirect ABI",
-            ));
+        SemanticAbiPassModeV1::Indirect {
+            attributes,
+            metadata_attributes,
+            on_stack,
+        } => {
+            let layout = types[ty.index() as usize].layout();
+            let regular = attributes.regular();
+            let exact = matches!(
+                layout.backend_repr(),
+                SemanticBackendReprV1::Memory { sized: true }
+            ) && layout.size_bytes().is_some_and(|size| size != 0)
+                && metadata_attributes.is_none()
+                && !on_stack
+                && regular.no_alias()
+                && matches!(
+                    regular.pointer_capture(),
+                    Some(
+                        SemanticAbiPointerCaptureV1::CapturesAddress
+                            | SemanticAbiPointerCaptureV1::CapturesNone
+                    )
+                )
+                && regular.non_null()
+                && regular.no_undef()
+                && attributes.extension() == SemanticAbiExtensionV1::None
+                && attributes.pointee_size_bytes() == layout.rustc_size_bytes()
+                && attributes.pointee_alignment_bytes() == Some(layout.alignment_bytes())
+                && !output.is_empty();
+            if !exact {
+                let reason = if metadata_attributes.is_some() {
+                    "metadata-bearing indirect aggregate ABI is unsupported"
+                } else if *on_stack {
+                    "on-stack indirect aggregate ABI is unsupported"
+                } else {
+                    "indirect aggregate carrier does not exactly match its sized source layout"
+                };
+                return Err(unsupported(0, None, None, reason));
+            }
+            true
         }
     };
     if !exact_mode {

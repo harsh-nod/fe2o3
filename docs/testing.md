@@ -32,6 +32,8 @@ cargo test --locked -p fe2o3-sim-runtime
 cargo test --locked -p fe2o3-sim-differential
 cargo test --locked -p fe2o3-kernel-ir simulation_bundle_v3
 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact
+cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed -- --ignored --exact
+cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- --ignored --exact
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0
 cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-runtime -p fe2o3-sim-differential --all-targets -- -D warnings

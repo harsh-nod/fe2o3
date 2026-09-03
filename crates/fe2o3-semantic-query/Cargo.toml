@@ -10,6 +10,7 @@ description = "Bounded read-only debugger and profiler queries over fe2o3 semant
 
 [dependencies]
 fe2o3-hsaco.workspace = true
+fe2o3-hsaco-finalize.workspace = true
 fe2o3-profiler-protocol.workspace = true
 fe2o3-semantic-import.workspace = true
 fe2o3-semantic-trace.workspace = true

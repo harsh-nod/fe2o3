@@ -51,8 +51,14 @@ documentation.
 - [Authority-free virtual runtime V1](virtual-runtime-v1.md): bounded
   allocation, copy, queue, dependency, dispatch, completion, and failure-model
   composition over admitted KIR.
+- [Simulator diagnosis agent V1](simulator-agent-c5-v1.md): fresh-process,
+  read-only diagnosis and bounded witness paging for exact races and virtual
+  host-lifetime incidents.
 - [Debugger and profiler architecture](debugger-profiler-architecture-v1.md)
+- [Semantic debug transformation map V2](semantic-debug-transformation-map-v2.md): exact
+  cross-layer cardinality separated from producer-authenticated optimization classification.
 - [Debugger and profiler task matrix](debugger-profiler-task-matrix-v1.md)
+- [Production multi-function semantic debug](production-multifunction-semantic-debug-v1.md)
 - [Decoded ATT interchange](decoded-att-interchange-v1.md)
 - [Debugger and profiler qualification](debugger-profiler-qualification-v1.md)
 - [Direct-KFD runtime profiler](kfd-native-profiler-v1.md)

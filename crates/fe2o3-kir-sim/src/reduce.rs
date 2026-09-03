@@ -257,6 +257,15 @@ impl SimulationFailureReductionReportV1 {
         false
     }
 
+    /// Checks that an exact retained race observation is the one fingerprinted
+    /// by this already validated reduction report.
+    ///
+    /// This is content consistency only. It does not authenticate the report's
+    /// producer or replay the simulator.
+    pub fn matches_data_race(&self, race: &SimulationDataRaceV1) -> bool {
+        validate_report(self).is_ok() && self.fingerprint == fingerprint_race(race)
+    }
+
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, SimulationFailureReductionCodecErrorV1> {
         validate_report(self)?;
         let wire = ReportEncodeWireV1::from(self);

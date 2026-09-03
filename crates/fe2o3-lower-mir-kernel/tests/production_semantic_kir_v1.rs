@@ -10,7 +10,8 @@ use fe2o3_kernel_ir::{
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
+    InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV5,
+    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionCorrespondenceEvidenceErrorV5,
     ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
     ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
@@ -2697,6 +2698,94 @@ fn reachable_defined_scalar_helper_survives_kir_effects_and_exact_llvm() {
     let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
     assert!(llvm.contains(&format!("define internal i64 @{helper_id}(i64 %arg0)")));
     assert!(llvm.contains(&format!("call i64 @{helper_id}(i64 %arg0)")));
+}
+
+#[test]
+fn exact_function_owner_correspondence_v5_round_trips_and_rejects_hostile_rosters() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::Valid),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let induction = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
+        lowered.semantic().semantic(),
+        SemanticFunctionIdV1::from_index(0),
+    )
+    .unwrap();
+    let evidence =
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(&lowered, &induction)
+            .unwrap();
+    evidence.revalidate().unwrap();
+    evidence.validate_against_module(lowered.module()).unwrap();
+    assert_eq!(evidence.functions().len(), 2);
+    assert_eq!(evidence.functions()[0].kernel_ir_function_ordinal(), 0);
+    assert_eq!(evidence.functions()[1].kernel_ir_function_ordinal(), 1);
+    assert_eq!(
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(evidence.canonical_bytes()).unwrap(),
+        evidence
+    );
+
+    let canonical = evidence.canonical_bytes();
+    let read_u32 = |offset: usize| {
+        u32::from_le_bytes(canonical[offset..offset + 4].try_into().unwrap()) as usize
+    };
+    let first = 28 + read_u32(20);
+    let second = first + 20 + read_u32(first + 16);
+
+    let mut duplicate_ordinal = canonical.to_vec();
+    duplicate_ordinal[second + 8..second + 12].copy_from_slice(&canonical[first + 8..first + 12]);
+    assert!(matches!(
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&duplicate_ordinal),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster)
+    ));
+
+    let mut duplicate_function = canonical.to_vec();
+    duplicate_function[second + 4..second + 8].copy_from_slice(&canonical[first + 4..first + 8]);
+    assert!(matches!(
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&duplicate_function),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster)
+            | Err(ProductionCorrespondenceEvidenceErrorV5::NonCanonical)
+    ));
+
+    let mut reordered = canonical.to_vec();
+    let first_semantic = canonical[first + 4..first + 8].to_vec();
+    reordered[first + 4..first + 8].copy_from_slice(&canonical[second + 4..second + 8]);
+    reordered[second + 4..second + 8].copy_from_slice(&first_semantic);
+    assert!(matches!(
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&reordered),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster)
+            | Err(ProductionCorrespondenceEvidenceErrorV5::NonCanonical)
+    ));
+
+    let mut sparse_substitution = canonical.to_vec();
+    sparse_substitution[second + 8..second + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+    let sparse =
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&sparse_substitution).unwrap();
+    assert!(matches!(
+        sparse.validate_against_module(lowered.module()),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster)
+    ));
+
+    let mut identity_substitution = canonical.to_vec();
+    identity_substitution[second + 20] ^= 1;
+    let substituted =
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&identity_substitution).unwrap();
+    assert!(matches!(
+        substituted.validate_against_module(lowered.module()),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidFunctionRoster)
+    ));
+
+    assert!(matches!(
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&canonical[..canonical.len() - 1]),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidLength)
+            | Err(ProductionCorrespondenceEvidenceErrorV5::Truncated)
+    ));
+    let mut trailing = canonical.to_vec();
+    trailing.push(0);
+    assert!(matches!(
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&trailing),
+        Err(ProductionCorrespondenceEvidenceErrorV5::InvalidLength)
+    ));
 }
 
 #[test]

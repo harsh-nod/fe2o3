@@ -7,6 +7,9 @@
 //! produced here grants compiler, artifact, load, launch, KFD, hardware,
 //! equivalence, performance, or universal-correctness authority.
 
+mod host_lifetime_v1;
+pub use host_lifetime_v1::*;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;

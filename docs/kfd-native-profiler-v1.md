@@ -111,6 +111,59 @@ The opt-in `scripts/ci-local.sh hardware-smoke` lane runs a separate short
 producer/query acceptance with a fresh scope. It is deliberately distinct from
 the 5-warmup/30-repetition profiler-overhead protocol.
 
+## Rocprof wrapper host-wall comparison
+
+`cargo fe2o3 profile --measure-direct-kfd-wrapper-overhead` runs exact paired
+invocations of one caller-declared direct-KFD target without a collector and
+through the sealed rocprofv3 `--kernel-trace` wrapper. It is an explicitly
+authorized process-wall comparison, not a GPU capture-overhead measurement.
+The dry run binds the sealed harness, target, collector and native SDK closure,
+target and collector argument vectors, allowlisted environment, working
+directory identity, direct-KFD topology, limits, order, repetitions, and caller
+candidate budget. Collection additionally requires the plan-derived
+`--acknowledge-repeated-target-execution` digest because repeated targets may
+have external side effects.
+
+The required qualification shape is five warmup pairs followed by thirty
+measured pairs. Even pairs run raw then wrapped; odd pairs reverse the order.
+Every process uses the existing profile process-group supervisor, timeout, and
+bounded stdout/stderr capture. Timing uses `CLOCK_MONOTONIC_RAW` immediately
+before spawn through supervision and bounded pipe drain. No observations are
+discarded as outliers. The transaction has a one-hour harness limit and rejects
+a requested repetition/timeout product above that bound.
+
+```bash
+TARGET=/absolute/path/to/direct-kfd-target
+OUTPUT=/absolute/new/output-directory
+
+cargo fe2o3 profile --kind dispatch-json \
+  --tool /opt/rocm-7.2.4/bin/rocprofv3 \
+  --python /usr/bin/python3.12 \
+  --output-dir "$OUTPUT" --timeout-ms 30000 \
+  --measure-direct-kfd-wrapper-overhead \
+  --overhead-warmup-pairs 5 --overhead-measured-pairs 30 \
+  --overhead-candidate-budget-bps 1000 -- \
+  "$TARGET" TARGET_ARGS...
+```
+
+Use the printed `collection-authorization` and
+`repeated-target-execution-acknowledgement` in a second invocation with
+`--collect`. The durable
+`fe2o3-rocprof-wrapper-host-wall-comparison-v1.json` records every leg's exact
+outcome, duration, stream identities/truncation, and complete bounded wrapper
+output inventory. A failed or truncated warmup or measured leg suppresses the
+summary. The median signed per-pair delta and candidate comparison never grant
+production qualification.
+
+An empty rocprof output inventory means only that this exact wrapper execution
+created no admitted artifact. It is not proof that no GPU work occurred or
+that rocprof observed nothing internally. Kernel-trace capture overhead and
+loss/completeness remain typed unavailable without an admitted capture;
+counter, PC, ATT, and debugger overhead remain typed unmeasured. The harness
+records the target as caller-declared direct KFD and does not elevate that
+declaration into runtime evidence. See the checked-in
+[MI300X host-wall record](evidence/mi300x-rocprof-wrapper-host-wall-2026-09-03.md).
+
 ## ROCprof boundary
 
 `cargo fe2o3 profile` still owns strict rocprofv3 JSON/CSV and ATT-reference
@@ -130,3 +183,66 @@ rocprof PC-sample case: exact rocprof source, Capture V3, HSACO, code-object
 relation, and Characteristic V1 bytes can be joined to sparse source/IR/ISA
 coordinates. This does not join those PC samples to a direct-KFD profile;
 direct-KFD still has no observed PC or cross-collector common identity.
+
+### Live qualification
+
+The opt-in `--direct-kfd-runtime-capture` path juxtaposes one exact rocprofv3
+run with one canonical capture emitted by any target using the production KFD
+runtime profiler. The absolute path must be new, outside collector output, use
+a canonical parent, and occur exactly once in the target argv. For example:
+
+```console
+RUNTIME=/absolute/new/direct-kfd-runtime.json
+OUTPUT=/absolute/new/rocprof-output
+TARGET=/absolute/gfx942-runtime-vecadd-benchmark
+SCOPE=1111111111111111111111111111111111111111111111111111111111111111
+
+cargo fe2o3 profile --kind dispatch-json \
+  --output-dir "$OUTPUT" \
+  --direct-kfd-runtime-capture "$RUNTIME" -- \
+  "$TARGET" unique-id 1 1 1 "$SCOPE" "$RUNTIME"
+
+cargo fe2o3 profile --kind dispatch-json \
+  --output-dir "$OUTPUT" \
+  --direct-kfd-runtime-capture "$RUNTIME" \
+  --collect --authorize-collection <plan-sha256> -- \
+  "$TARGET" unique-id 1 1 1 "$SCOPE" "$RUNTIME"
+```
+
+The first command is inert and prints the path-bound authorization. The second
+must use the same still-absent runtime path and output directory. A successful
+transaction publishes these generated members before its manifest:
+
+- `fe2o3-direct-kfd-runtime-profile-v1.json`, the exact canonical target
+  capture copied from an already retained descriptor; and
+- `fe2o3-direct-kfd-rocprof-qualification-v1.json`, which binds exact collector,
+  configuration, argv, environment, target, stdout/stderr, complete collector
+  inventory, exit, and runtime identities.
+
+Admission rejects a stale file, symlink, parent or leaf substitution,
+non-private or multiply linked file, overflow, noncanonical runtime capture,
+reserved collector output, or durability/readback mismatch. Both generated
+members count against the plan's storage limit and are published with
+no-replace transaction semantics. The runtime copy is reread and decoded from
+output custody before manifest publication.
+
+The qualification outcome distinguishes a runtime capture with no dispatch,
+a successful collector with no artifacts alongside runtime-observed
+dispatches, and collector artifacts that remain unjoined. No outcome invents a
+common dispatch, code-object, or clock identity. ATT and PC-sampling facts say
+only whether those capabilities were requested or probed in this exact record.
+The record grants no collection or dispatch authority and never proves
+universal collector inability.
+
+The checked-in [MI300X qualification evidence](evidence/mi300x-direct-kfd-rocprof-2026-09-03.md)
+records one ROCprofiler SDK 1.1.0/ROCm 7.2.4 run in which the direct-KFD target
+published, completed, and released three dispatches while the successfully
+exited collector produced no artifacts. That is an exact observed outcome,
+not a claim about every SDK version or direct-KFD workload. A follow-up raw
+collector probe confirmed that kernel tracing was enabled, the collector client
+and contexts started, the requested output directory was writable, and the
+minimum output threshold was zero, while the collector still reported zero
+services generating output. The installed CLI exposes no direct-KFD dispatch
+registration mode. Consequently, adding an output flag or weakening artifact
+admission would not repair this boundary; a future collector path needs an
+actual common direct-KFD queue/dispatch observation contract.

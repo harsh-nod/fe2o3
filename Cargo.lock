@@ -324,6 +324,7 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron",
  "fe2o3-process-identity",
+ "fe2o3-profiler-protocol",
  "fe2o3-proof-contracts",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
@@ -1752,6 +1753,7 @@ name = "fe2o3-semantic-query"
 version = "0.1.0"
 dependencies = [
  "fe2o3-hsaco",
+ "fe2o3-hsaco-finalize",
  "fe2o3-profiler-protocol",
  "fe2o3-semantic-import",
  "fe2o3-semantic-trace",
@@ -1955,6 +1957,9 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-kir-sim",
  "fe2o3-runtime-model",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

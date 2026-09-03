@@ -271,8 +271,8 @@ canonical archive. The client securely reads the singly linked archive and
 requires its path to resolve to the same admitted object after the read,
 requires the caller-pinned digest of its exact bytes, verifies every member
 digest and the canonical complete member set, and then supplies member bytes
-directly to the existing debugger, Bundle V4, Variant V1, diagnosis V2, and
-Agent Profiler V1 admissions. Members are never extracted or interpreted as
+directly to the existing debugger, Bundle V4, Variant V1 and V2, diagnosis V2,
+and Agent Profiler V1 admissions. Members are never extracted or interpreted as
 filesystem paths. The archive route therefore has no member symlink, hardlink,
 or traversal surface. The archive report preserves the complete existing V1
 workflow report and adds the archive plus ordered member content identities.
@@ -299,19 +299,24 @@ One workflow discovers capabilities and then performs four read-only tasks:
 
 - diagnose a retained simulator memory out-of-bounds failure;
 - diagnose a retained simulator workgroup-barrier divergence;
-- compare a seeded schedule/resource Variant V1 regression while preserving
-  decoded ATT, runtime/copy, semantic/ISA, and causal gaps as unavailable; and
+- compare a seeded schedule/resource Variant V1 regression;
+- independently compare the same exact treatments through Variant V2, binding
+  both schedules and preserving absent PC/ATT sessions, the profiler-KIR bridge,
+  and causal attribution as typed unavailable facts; and
 - page the exact dispatch set and ask Agent Profiler V1 for the minimum capture
   that distinguishes scheduling delay from resource pressure.
 
 The client decodes simulator diagnoses with the full evidence-manifest
-validator, validates the serialized Variant response identity, and requires
+validator, validates both serialized Variant response identities, and requires
 the capability, continued, and diagnosis sessions to carry one configuration
 identity, with the diagnosis session exactly equal to the continued session.
 Treatment files consume one decreasing aggregate admission budget before any
 read past that budget, and exact byte inputs are emitted with fallible bounded
-streaming hex encoding. The returned typed Variant comparison is independently
-recomputed and decoded with the production exact-input comparator. Its bounded
+streaming hex encoding. The returned typed Variant V1 comparison is independently
+recomputed and decoded with the production exact-input comparator. The V2
+comparison is independently reproduced from the same retained bytes and must
+equal the complete service result, including its request, artifact and schedule
+bindings, evidence IDs, and unavailable facts. Its bounded
 report retains each full
 authenticated diagnosis with every material citation identity and the capture
 plan's exact Agent V1 evidence/origins. Agent Profiler V1 responses must match
@@ -326,8 +331,10 @@ content identities, truth classifications, cited claims, typed unavailable
 states, and pagination counts. It has no launch, attach,
 pause, scheduling, KFD, ROCgdb-control, rocprofv3-collection, or recapture
 operation. `fe2o3-agent-profiler-service` is a small companion executable that
-exposes the unchanged Agent Profiler V1 JSONL mode and the separate Variant V1
-mode for this process-isolated workflow; it is not an MCP adapter.
+exposes the unchanged Agent Profiler V1 JSONL mode and separate Variant V1 and
+V2 modes for this process-isolated workflow; it is not an MCP adapter. Neither
+Variant mode accepts paths or grants execution, replay, file, network, patch,
+decoder, attach, scheduling, collection, or launch authority.
 
 ## KFD hardware protocol V2
 
@@ -537,3 +544,49 @@ requires compatible ROCm runtime metadata, whereas the production fe2o3
 direct-KFD runtime intentionally supplies `r_debug=0`. This result is
 therefore an installed bridge capability gap, not permission to infer stopped
 waves from KFD publication.
+
+## Authenticated native stopped-state inspection V5
+
+`fe2o3-debug live-rocgdb-kfd-v5` preserves the V4 launch, telemetry, artifact,
+hierarchy, stop, and relative-PC contract and adds machine-interface register
+and simple-local inspection. Registry discovery is reported separately and is
+never treated as an observation. Register names and values are obtained with
+`-data-list-register-names` and `-data-list-register-values`; locals use
+`-stack-list-variables --simple-values`. Every command selects the exact
+private current-thread token admitted by V4, and the stop generation is checked
+after every result. Published scopes and evidence identities bind the V4
+association, redacted stop, redacted thread, and authenticated wave. Counts,
+MI records, commands, strings, and values retain the V3 bounds. The scope is
+wave-level (`lane` is absent): V4 authenticates the current wave thread but has
+no independent selected-lane observation, so locals are not labeled as
+lane-specific.
+
+Register bit patterns are captured, except the absolute `pc`/`pc_all` register,
+which is redacted because V4 already supplies the authenticated artifact-relative
+PC. Local values are captured only for explicitly scalar integral or Boolean
+debug types. Pointers, aggregates, floating-point text, unknown types,
+optimized-out values, and values outside the MI capture are typed unavailable;
+the adapter does not reinterpret debugger text with host arithmetic. Source is
+unavailable until an authenticated artifact-relative source map is supplied,
+ISA until instruction boundaries and decoded bytes are bound to the artifact,
+and memory until the target publishes exact allocation-relative authority.
+Native selectors and MI address fields are not serialized or treated as
+identity. Register bit patterns remain opaque machine bits and can numerically
+resemble an address, but are never admitted as pointer or memory authority;
+the known absolute PC register is redacted. Pointer local values are not
+serialized.
+
+The installed MI300X ROCgdb reports all five V5 inspection command names. A
+2026-09-03 run of the public V5 command with the same SHA-pinned diagnostic,
+direct-KFD device, and target used for V4 returned:
+
+```json
+{"schema":"fe2o3-rocgdb-kfd-native-response-v5","result":{"status":"unavailable","probe":{"structured_mi_commands":true,"direct_kfd_device_admitted":true,"cooperative_v2_declaration":true,"cooperative_v2_publication":true},"inspection_probe":{"register_names":true,"register_values":true,"simple_locals":true,"disassembly":true,"memory_bytes":true},"reason":"gpu_stopped_state_unavailable"}}
+```
+
+The exact JSONL record has SHA-256
+`71ea391f489e0f068e524bef93fee1384b2dbf4956aeb33ef854db2b2a3dc5e1`.
+Thus the direct-KFD launch still reaches the V4 stopped-state boundary.
+This release validates V5 parsing, same-stop collection, redaction, and hostile
+substitution with deterministic MI fixtures; it does not claim a physical
+register or local capture on MI300X.
