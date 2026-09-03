@@ -412,6 +412,76 @@ fn timeout_observation_does_not_claim_execution_stopped() {
 }
 
 #[test]
+fn reset_atomically_replaces_the_complete_runtime_generation() {
+    let mut runtime = runtime(18);
+    let previous_identity = runtime.config().runtime_identity;
+    let module = runtime.register_module(admitted_fill()).unwrap();
+    let ambiguous_queue = runtime.create_queue(8).unwrap();
+    let prepared_queue = runtime.create_queue(8).unwrap();
+    let buffer = runtime
+        .allocate_buffer(8, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[11; 8]).unwrap();
+    let ambiguous = runtime
+        .submit(ambiguous_queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+    let prepared = runtime
+        .submit(prepared_queue, module, fill_request(buffer, 1, vec![]))
+        .unwrap();
+    runtime.observe_completion_timeout(ambiguous).unwrap();
+    let replacement_identity = IdentityDigestV1::from_untrusted_bytes([19; 32]);
+
+    let summary = runtime.reset_generation(replacement_identity).unwrap();
+    assert_eq!(summary.previous_runtime_identity, previous_identity);
+    assert_eq!(summary.replacement_runtime_identity, replacement_identity);
+    assert_eq!(summary.cancelled_prepared_dispatches, 1);
+    assert_eq!(summary.settled_ambiguous_dispatches, 1);
+    assert_eq!(summary.released_buffers, 1);
+    assert_eq!(summary.released_modules, 1);
+    assert_eq!(summary.released_queues, 2);
+    assert_eq!(runtime.config().runtime_identity, replacement_identity);
+    for (kind, foreign) in [
+        ("buffer", runtime.buffer_snapshot(buffer).unwrap_err()),
+        ("module", runtime.release_module(module).unwrap_err()),
+        ("queue", runtime.release_queue(prepared_queue).unwrap_err()),
+        (
+            "completion",
+            runtime.completion_state(prepared).unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(foreign, VirtualRuntimeErrorV1::ForeignHandle { kind: observed } if observed == kind)
+        );
+    }
+    let fresh = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(fresh, 0, &[23; 4]).unwrap();
+}
+
+#[test]
+fn reset_rejects_reused_or_zero_identity_without_mutation() {
+    let mut runtime = runtime(20);
+    let original_identity = runtime.config().runtime_identity;
+    let buffer = runtime
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    runtime.copy_from_host(buffer, 0, &[29; 4]).unwrap();
+
+    assert!(matches!(
+        runtime.reset_generation(original_identity),
+        Err(VirtualRuntimeErrorV1::ReusedResetIdentity)
+    ));
+    assert!(matches!(
+        runtime.reset_generation(IdentityDigestV1::from_untrusted_bytes([0; 32])),
+        Err(VirtualRuntimeErrorV1::InvalidRuntimeIdentity)
+    ));
+    let mut output = [0; 4];
+    runtime.copy_to_host(buffer, 0, &mut output).unwrap();
+    assert_eq!(output, [29; 4]);
+}
+
+#[test]
 fn foreign_handles_and_uninitialized_reads_are_typed_failures() {
     let mut first = runtime(5);
     let mut second = runtime(6);

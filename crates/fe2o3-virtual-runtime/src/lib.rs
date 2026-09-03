@@ -286,6 +286,18 @@ pub struct VirtualSimulationSummaryV1 {
     pub race_state: VirtualRaceStateV1,
 }
 
+/// Exact terminalization counts for one atomic virtual-runtime generation reset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualResetSummaryV1 {
+    pub previous_runtime_identity: IdentityDigestV1,
+    pub replacement_runtime_identity: IdentityDigestV1,
+    pub cancelled_prepared_dispatches: usize,
+    pub settled_ambiguous_dispatches: usize,
+    pub released_buffers: usize,
+    pub released_modules: usize,
+    pub released_queues: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VirtualConflictStateV1 {
     NoneObserved,
@@ -319,6 +331,7 @@ pub enum VirtualRunProgressV1 {
 #[derive(Debug)]
 pub enum VirtualRuntimeErrorV1 {
     InvalidRuntimeIdentity,
+    ReusedResetIdentity,
     InvalidLimit(&'static str),
     CapacityExceeded(&'static str),
     ByteLengthOverflow,
@@ -382,6 +395,9 @@ impl fmt::Display for VirtualRuntimeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRuntimeIdentity => formatter.write_str("runtime identity must be nonzero"),
+            Self::ReusedResetIdentity => {
+                formatter.write_str("reset replacement identity must be fresh")
+            }
             Self::InvalidLimit(field) => write!(formatter, "invalid virtual runtime limit {field}"),
             Self::CapacityExceeded(kind) => {
                 write!(formatter, "virtual runtime {kind} limit reached")
@@ -1025,6 +1041,137 @@ impl VirtualRuntimeV1 {
         completion: VirtualCompletionHandleV1,
     ) -> Result<Option<VirtualCompletionAmbiguityV1>, VirtualRuntimeErrorV1> {
         Ok(self.dispatch(completion)?.ambiguity)
+    }
+
+    /// Atomically replaces the complete virtual runtime generation.
+    ///
+    /// The old model must first admit cancellation of prepared dispatches,
+    /// queue quiescence, ambiguous-completion settlement, and release of every
+    /// queue, module, allocation, VM, and device. A fresh runtime identity is
+    /// mandatory so every old handle is rejected by the replacement runtime.
+    pub fn reset_generation(
+        &mut self,
+        replacement_runtime_identity: IdentityDigestV1,
+    ) -> Result<VirtualResetSummaryV1, VirtualRuntimeErrorV1> {
+        if replacement_runtime_identity == self.config.runtime_identity {
+            return Err(VirtualRuntimeErrorV1::ReusedResetIdentity);
+        }
+        let replacement = Self::new(VirtualRuntimeConfigV1 {
+            runtime_identity: replacement_runtime_identity,
+            ..self.config
+        })?;
+        let transition_capacity = self
+            .dispatches
+            .len()
+            .checked_mul(2)
+            .and_then(|count| {
+                self.queues
+                    .len()
+                    .checked_mul(5)
+                    .and_then(|queues| count.checked_add(queues))
+            })
+            .and_then(|count| {
+                self.modules
+                    .len()
+                    .checked_mul(3)
+                    .and_then(|modules| count.checked_add(modules))
+            })
+            .and_then(|count| {
+                self.buffers
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|buffers| count.checked_add(buffers))
+            })
+            .and_then(|count| count.checked_add(6))
+            .ok_or(VirtualRuntimeErrorV1::CapacityExceeded("reset transitions"))?;
+        let mut transitions = Vec::new();
+        transitions
+            .try_reserve_exact(transition_capacity)
+            .map_err(|_| VirtualRuntimeErrorV1::CapacityExceeded("reset transitions"))?;
+        let mut cancelled_prepared_dispatches = 0_usize;
+        let mut settled_ambiguous_dispatches = 0_usize;
+
+        for dispatch in &self.dispatches {
+            if dispatch.state == VirtualCompletionStateV1::Prepared {
+                transitions.push(RuntimeTransitionV1::AbortPrepared {
+                    completion: dispatch.model_completion,
+                });
+                cancelled_prepared_dispatches += 1;
+            }
+        }
+        for queue in self.queues.iter().filter(|queue| !queue.released) {
+            if !queue.quiescent {
+                transitions.push(RuntimeTransitionV1::BeginQueueFailure { key: queue.queue });
+                transitions
+                    .push(RuntimeTransitionV1::EstablishQueueQuiescence { key: queue.queue });
+            }
+            for dispatch in self.dispatches.iter().filter(|dispatch| {
+                dispatch.queue == queue.handle
+                    && dispatch.state == VirtualCompletionStateV1::Ambiguous
+            }) {
+                transitions.push(RuntimeTransitionV1::SettleAfterQuiescence {
+                    completion: dispatch.model_completion,
+                });
+                settled_ambiguous_dispatches += 1;
+            }
+            transitions.push(RuntimeTransitionV1::ReleaseQueue { key: queue.queue });
+            transitions.push(RuntimeTransitionV1::Unmap { key: queue.mapping });
+            transitions.push(RuntimeTransitionV1::ReleaseAllocation {
+                key: queue.allocation,
+            });
+        }
+        for module in self.modules.iter().filter(|module| !module.released) {
+            transitions.push(RuntimeTransitionV1::UnloadCode { key: module.code });
+            transitions.push(RuntimeTransitionV1::Unmap {
+                key: module.mapping,
+            });
+            transitions.push(RuntimeTransitionV1::ReleaseAllocation {
+                key: module.allocation,
+            });
+        }
+        for buffer in self.buffers.iter().filter(|buffer| !buffer.released) {
+            transitions.push(RuntimeTransitionV1::Unmap {
+                key: buffer.mapping,
+            });
+            transitions.push(RuntimeTransitionV1::ReleaseAllocation {
+                key: buffer.allocation,
+            });
+        }
+        transitions.extend([
+            RuntimeTransitionV1::BeginVmFailure { key: self.vm },
+            RuntimeTransitionV1::EstablishVmQuiescence { key: self.vm },
+            RuntimeTransitionV1::ReleaseVm { key: self.vm },
+            RuntimeTransitionV1::BeginDeviceFailure {
+                key: self.vm.device,
+            },
+            RuntimeTransitionV1::EstablishDeviceQuiescence {
+                key: self.vm.device,
+            },
+            RuntimeTransitionV1::ReleaseDevice {
+                key: self.vm.device,
+            },
+        ]);
+        drop(self.model.next_all(transitions)?);
+
+        let summary = VirtualResetSummaryV1 {
+            previous_runtime_identity: self.config.runtime_identity,
+            replacement_runtime_identity,
+            cancelled_prepared_dispatches,
+            settled_ambiguous_dispatches,
+            released_buffers: self
+                .buffers
+                .iter()
+                .filter(|buffer| !buffer.released)
+                .count(),
+            released_modules: self
+                .modules
+                .iter()
+                .filter(|module| !module.released)
+                .count(),
+            released_queues: self.queues.iter().filter(|queue| !queue.released).count(),
+        };
+        *self = replacement;
+        Ok(summary)
     }
 
     /// Cancels work that has not crossed the modeled publication boundary.

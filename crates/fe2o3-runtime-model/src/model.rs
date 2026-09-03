@@ -372,12 +372,22 @@ impl RuntimeStateV1 {
     }
 
     pub fn next(&self, transition: RuntimeTransitionV1) -> Result<Self, TransitionErrorV1> {
+        self.next_all([transition])
+    }
+
+    /// Applies a transition batch atomically while cloning the source state once.
+    pub fn next_all(
+        &self,
+        transitions: impl IntoIterator<Item = RuntimeTransitionV1>,
+    ) -> Result<Self, TransitionErrorV1> {
         self.validate_global_invariants()
             .map_err(TransitionErrorV1::SourceInvariant)?;
         let mut next = self.clone();
-        next.apply(transition)?;
-        next.validate_global_invariants()
-            .map_err(TransitionErrorV1::NextInvariant)?;
+        for transition in transitions {
+            next.apply(transition)?;
+            next.validate_global_invariants()
+                .map_err(TransitionErrorV1::NextInvariant)?;
+        }
         Ok(next)
     }
 

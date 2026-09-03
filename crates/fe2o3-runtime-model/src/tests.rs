@@ -558,6 +558,30 @@ fn rejected_transitions_are_failure_atomic_and_invariants_detect_corruption() {
 }
 
 #[test]
+fn transition_batches_are_atomic_when_a_late_transition_fails() {
+    let first = device(1);
+    let state = RuntimeStateV1::new();
+    assert_eq!(
+        state.next_all([
+            RuntimeTransitionV1::AddDevice { key: first },
+            RuntimeTransitionV1::AddDevice { key: first },
+        ]),
+        Err(TransitionErrorV1::AlreadyExists(RecordRefV1::Device(first)))
+    );
+    assert!(state.devices().is_empty());
+
+    let advanced = state
+        .next_all([
+            RuntimeTransitionV1::AddDevice { key: first },
+            RuntimeTransitionV1::CreateVm { key: vm(first, 10) },
+        ])
+        .unwrap();
+    assert_eq!(advanced.devices().len(), 1);
+    assert_eq!(advanced.vms().len(), 1);
+    advanced.validate_global_invariants().unwrap();
+}
+
+#[test]
 fn identity_types_are_domain_distinct_and_explicitly_untrusted() {
     let bytes = digest(9);
     let model = RuntimeModelIdV1::from_untrusted_digest(bytes);
