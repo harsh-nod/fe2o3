@@ -643,8 +643,9 @@ fn validate_source_variable_storage(
                 Some(source_binding),
             ) if source_binding.generation() == 1
                 && source_binding.value_ordinal() == u64::from(*kir_value_ordinal) => {}
-            (SemanticStorageBindingV1::ExactKirParameter { .. }, _)
-            | (_, Some(_)) => return Err(SimulationBundleErrorV3::StorageMapBindingMismatch),
+            (SemanticStorageBindingV1::ExactKirParameter { .. }, _) | (_, Some(_)) => {
+                return Err(SimulationBundleErrorV3::StorageMapBindingMismatch);
+            }
             (_, None) => {}
         }
     }

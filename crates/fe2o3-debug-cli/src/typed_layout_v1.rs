@@ -295,7 +295,10 @@ fn validate_correspondence(
             .get(kernel.kir_function_ordinal() as usize)
             .ok_or_else(|| "storage map KIR function is out of range".to_owned())?;
         if function.role != fe2o3_kernel_ir::FunctionRole::KernelEntry
-            || !module.kernels.iter().any(|entry| entry.entry == function.id)
+            || !module
+                .kernels
+                .iter()
+                .any(|entry| entry.entry == function.id)
         {
             return Err("storage map KIR function is not a declared kernel entry".into());
         }
@@ -436,10 +439,10 @@ fn observe_argument(
             "same_backing": Vec::<Value>::new(),
         }),
         SimulationArgumentV1::BufferView(view) => {
-            let element_bytes = element_bytes(admitted, view.element())?;
+            let element_byte_len = element_bytes(admitted, view.element())?;
             let length = view
                 .elements()
-                .checked_mul(element_bytes)
+                .checked_mul(element_byte_len)
                 .ok_or_else(|| "admitted buffer-view byte length overflowed".to_owned())?;
             let end = view
                 .byte_offset()
@@ -452,12 +455,7 @@ fn observe_argument(
                 .iter()
                 .find(|backing| backing.id == view.backing());
             let initialized = backing
-                .and_then(|backing| {
-                    backing
-                        .buffer
-                        .initialized()
-                        .get(view.byte_offset()..end)
-                })
+                .and_then(|backing| backing.buffer.initialized().get(view.byte_offset()..end))
                 .map(initialized_ranges)
                 .unwrap_or_default();
             let same_backing = admitted
@@ -489,8 +487,8 @@ fn observe_argument(
                         })?;
                     let overlap_start = view.byte_offset().max(other_view.byte_offset());
                     let overlap_end = end.min(other_end);
-                    let overlap = (overlap_start < overlap_end)
-                        .then_some([overlap_start, overlap_end]);
+                    let overlap =
+                        (overlap_start < overlap_end).then_some([overlap_start, overlap_end]);
                     Ok(json!({
                         "argument": other,
                         "overlap_byte_range": overlap,
@@ -517,14 +515,12 @@ fn element_bytes(
     scalar: fe2o3_kernel_ir::ScalarType,
 ) -> Result<usize, String> {
     match scalar {
-        fe2o3_kernel_ir::ScalarType::Index => Ok(match admitted
-            .input()
-            .simulation_target()
-            .index_width()
-        {
-            IndexWidthV1::Bits32 => 4,
-            IndexWidthV1::Bits64 => 8,
-        }),
+        fe2o3_kernel_ir::ScalarType::Index => {
+            Ok(match admitted.input().simulation_target().index_width() {
+                IndexWidthV1::Bits32 => 4,
+                IndexWidthV1::Bits64 => 8,
+            })
+        }
         _ => scalar
             .bit_width()
             .map(|bits| usize::from(bits / 8))
