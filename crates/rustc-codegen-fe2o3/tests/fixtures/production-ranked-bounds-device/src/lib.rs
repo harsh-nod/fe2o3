@@ -98,7 +98,11 @@ use fe2o3_device::{DynamicLds, WorkgroupCollectives, WorkgroupLdsScope};
     feature = "aggregate_nested",
     feature = "aggregate_enum",
     feature = "aggregate_pointer",
-    feature = "aggregate_drop"
+    feature = "aggregate_drop",
+    feature = "aggregate_pointer_name_collision",
+    feature = "aggregate_device_pointer_import",
+    feature = "aggregate_device_pointer_alias",
+    feature = "aggregate_device_pointer_qualified"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
@@ -272,6 +276,65 @@ pub fn aggregate_drop(_value: AggregateDrop, mut output: DisjointSlice<u64>, sca
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = scale;
     }
+}
+
+#[cfg(feature = "aggregate_pointer_name_collision")]
+mod aggregate_pointer_name_collision {
+    use super::{DisjointSlice, kernel, thread};
+
+    #[repr(C)]
+    pub struct DeviceGlobalConstPtr<T> {
+        pub value: T,
+    }
+
+    #[kernel(
+        typed,
+        launch(required = [64, 1, 1], max = [64, 1, 1]),
+    )]
+    pub fn pointer_name_collision(
+        value: DeviceGlobalConstPtr<u64>,
+        mut output: DisjointSlice<u64>,
+    ) {
+        if let Some(slot) = output.get_mut(thread::index_1d()) {
+            *slot = value.value;
+        }
+    }
+}
+
+#[cfg(feature = "aggregate_device_pointer_import")]
+mod aggregate_device_pointer_import {
+    use super::kernel;
+    use fe2o3_device::DeviceGlobalConstPtr;
+
+    #[kernel(
+        typed,
+        launch(required = [64, 1, 1], max = [64, 1, 1]),
+    )]
+    pub fn imported_device_pointer(_value: DeviceGlobalConstPtr<u64>) {}
+}
+
+#[cfg(feature = "aggregate_device_pointer_alias")]
+mod aggregate_device_pointer_alias {
+    use super::kernel;
+
+    type ImportedDeviceGlobalConstPtr = fe2o3_device::DeviceGlobalConstPtr<u64>;
+
+    #[kernel(
+        typed,
+        launch(required = [64, 1, 1], max = [64, 1, 1]),
+    )]
+    pub fn aliased_device_pointer(_value: ImportedDeviceGlobalConstPtr) {}
+}
+
+#[cfg(feature = "aggregate_device_pointer_qualified")]
+mod aggregate_device_pointer_qualified {
+    use super::kernel;
+
+    #[kernel(
+        typed,
+        launch(required = [64, 1, 1], max = [64, 1, 1]),
+    )]
+    pub fn qualified_device_pointer(_value: fe2o3_device::DeviceGlobalConstPtr<u64>) {}
 }
 
 #[kernel(

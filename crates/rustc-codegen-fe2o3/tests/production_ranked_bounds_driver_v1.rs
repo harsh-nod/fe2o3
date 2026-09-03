@@ -2365,6 +2365,77 @@ fn ordinary_rust_struct_argument_exports_exact_v4_components() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn generic_device_pointer_name_collisions_defer_to_rustc_semantics() {
+    let target = ScratchTarget::new();
+    let bundle_path = target
+        .path()
+        .join("aggregate-pointer-name-collision-v5.fe2sim");
+    let accepted = output(
+        simulation_export_command_for_feature(
+            "gfx942",
+            &bundle_path,
+            &target
+                .path()
+                .join("aggregate-pointer-name-collision-target"),
+            Some(5),
+            "aggregate_pointer_name_collision",
+        ),
+        "export local generic aggregate sharing a device pointer identifier",
+    );
+    assert!(
+        accepted.status.success() && bundle_path.is_file(),
+        "local generic aggregate name collision did not export:\n{}",
+        accepted.stderr,
+    );
+
+    for feature in [
+        "aggregate_device_pointer_import",
+        "aggregate_device_pointer_alias",
+    ] {
+        let rejected = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &target.path().join(format!("{feature}-v5.fe2sim")),
+                &target.path().join(format!("{feature}-target")),
+                Some(5),
+                feature,
+            ),
+            "reject genuine unsupported device pointer after rustc type resolution",
+        );
+        assert!(
+            !rejected.status.success()
+                && rejected.stderr.contains("contains a pointer or reference"),
+            "{feature} did not fail at rustc semantic extraction:\n{}",
+            rejected.stderr,
+        );
+    }
+
+    let qualified = output(
+        simulation_export_command_for_feature(
+            "gfx942",
+            &target
+                .path()
+                .join("aggregate-device-pointer-qualified-v5.fe2sim"),
+            &target
+                .path()
+                .join("aggregate-device-pointer-qualified-target"),
+            Some(5),
+            "aggregate_device_pointer_qualified",
+        ),
+        "reject explicitly qualified unsupported device pointer",
+    );
+    assert!(
+        !qualified.status.success()
+            && qualified
+                .stderr
+                .contains("#[kernel(typed)] requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`"),
+        "qualified unsupported device pointer omitted its stable macro diagnostic:\n{}",
+        qualified.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     use fe2o3_kernel_ir::SemanticStorageProjectionV2::{ArrayElement, Field};
 
