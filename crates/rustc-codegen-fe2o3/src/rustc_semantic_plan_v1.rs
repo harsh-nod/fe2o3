@@ -3228,6 +3228,8 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
+        ProductionTerminalExpansionV1::MemoryVolatileStore => 116,
     }
 }
 

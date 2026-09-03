@@ -17,6 +17,8 @@ use fe2o3_kir_sim::{
     SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
 };
 
+pub(crate) const STANDARD_DEBUG_MAX_CALL_DEPTH_V1: usize = 64;
+
 /// Exact, strictly parsed simulator inputs admitted through the standalone
 /// command's hardened file boundary.
 #[derive(Debug)]
@@ -625,6 +627,44 @@ pub fn load_debug_simulation_bundle_v5(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (bundle, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation bundle V5 admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely captures and admits a V5 bundle with the standard debug limits
+/// except for an explicitly reduced maximum call depth.
+///
+/// This narrow entry point supports bounded conformance fixtures whose wide
+/// workgroups make the simulator's conservative per-frame resident estimate
+/// exceed the standard cap. Zero and values above the standard limit fail
+/// before either input path is accessed.
+pub fn load_debug_simulation_bundle_v5_with_reduced_call_depth_v1(
+    bundle: &Path,
+    request: &Path,
+    max_call_depth: usize,
+) -> Result<AdmittedSimulationBundleInputV5, SimulationInputErrorV1> {
+    if max_call_depth == 0 || max_call_depth > STANDARD_DEBUG_MAX_CALL_DEPTH_V1 {
+        return Err(SimulationInputErrorV1 {
+            stage: "arguments".to_owned(),
+            code: "invalid_command_line".to_owned(),
+            message: "reduced Bundle V5 call-depth limit must be between 1 and 64".to_owned(),
+        });
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_bundle_v5_with_reduced_call_depth_v1(
+            bundle.as_os_str().to_owned(),
+            request.as_os_str().to_owned(),
+            max_call_depth,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (bundle, request, max_call_depth);
         Err(SimulationInputErrorV1 {
             stage: "platform".to_owned(),
             code: "unsupported_platform".to_owned(),

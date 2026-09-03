@@ -26,6 +26,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
     GridDimension(SemanticAxisV1),
+    MemoryVolatileLoad,
+    MemoryVolatileStore,
     ThreadIndex1d,
     ThreadIndexGet,
     ThreadIndexIntoDisjoint,
@@ -173,6 +175,12 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::GridDimensionZ => Self::Expand(
                 ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z),
             ),
+            TrustedDeviceItem::MemoryVolatileLoad => {
+                Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad)
+            }
+            TrustedDeviceItem::MemoryVolatileStore => {
+                Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileStore)
+            }
             TrustedDeviceItem::ThreadIndex1d => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndex1d)
             }
@@ -487,6 +495,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z)) => {
                 TrustedDeviceItem::GridDimensionZ
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad) => {
+                TrustedDeviceItem::MemoryVolatileLoad
+            }
+            Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileStore) => {
+                TrustedDeviceItem::MemoryVolatileStore
             }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndex1d) => {
                 TrustedDeviceItem::ThreadIndex1d
@@ -1063,6 +1077,14 @@ mod tests {
                 TrustedDeviceItem::DisjointSliceGetRowStriped2DMut,
                 ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut,
             ),
+            (
+                TrustedDeviceItem::MemoryVolatileLoad,
+                ProductionTerminalExpansionV1::MemoryVolatileLoad,
+            ),
+            (
+                TrustedDeviceItem::MemoryVolatileStore,
+                ProductionTerminalExpansionV1::MemoryVolatileStore,
+            ),
         ];
         for (item, expansion) in cases {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
@@ -1074,8 +1096,6 @@ mod tests {
     #[test]
     fn every_unimplemented_terminal_is_retained_as_an_explicit_rejection() {
         for item in [
-            TrustedDeviceItem::MemoryVolatileLoad,
-            TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,
             TrustedDeviceItem::HalfOperation(TrustedHalfOperation::FromBits(

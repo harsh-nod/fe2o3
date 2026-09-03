@@ -255,7 +255,7 @@ struct IntrinsicProjectionV1 {
     capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
     transpose_workgroup_effects: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
-    direct_write_effects: Vec<Option<GuardedRankedAccessV1>>,
+    direct_memory_effects: Vec<Option<GuardedRankedAccessV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
     extent_argument_count: usize,
@@ -3016,7 +3016,7 @@ fn project_and_verify_ranked_root_v1(
             });
         }
         if let Some(access) = intrinsic
-            .direct_write_effects
+            .direct_memory_effects
             .get(block_index)
             .cloned()
             .flatten()
@@ -7379,7 +7379,8 @@ fn project_intrinsic_contracts(
 
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
-    let mut direct_write_effects = vec![None; function.blocks().len()];
+    let mut direct_memory_effects = vec![None; function.blocks().len()];
+    let mut volatile_extents = BTreeMap::<u64, ProductionRankedValueV1>::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
@@ -7389,10 +7390,20 @@ fn project_intrinsic_contracts(
         else {
             continue;
         };
-        let write_only_effect = matches!(
+        let direct_memory_effect = matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
+                | SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. }
         );
+        let access = if matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
+        ) {
+            AccessKindAttr::Read
+        } else {
+            AccessKindAttr::Write
+        };
         let (element, index, precondition, checked_success, direct_write) = match operation {
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { element, .. } => {
                 let projected = projected_disjoint_operand_v1(
@@ -7413,10 +7424,15 @@ fn project_intrinsic_contracts(
                     projected.value,
                     projected.precondition,
                     None,
-                    false,
+                    direct_memory_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                element,
+                index_space,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::VolatileStore {
                 element,
                 index_space,
                 ..
@@ -7439,7 +7455,7 @@ fn project_intrinsic_contracts(
                     projected.value,
                     projected.precondition,
                     None,
-                    false,
+                    direct_memory_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
@@ -7471,7 +7487,7 @@ fn project_intrinsic_contracts(
                     projected.value,
                     projected.precondition,
                     None,
-                    write_only_effect,
+                    direct_memory_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
@@ -7556,7 +7572,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     Some(leader.precondition),
                     None,
-                    write_only_effect,
+                    direct_memory_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
@@ -7755,7 +7771,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
                     None,
-                    write_only_effect,
+                    direct_memory_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
@@ -7864,7 +7880,7 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
                     Some(ProductionRankedValueV1::Local(success)),
-                    write_only_effect,
+                    direct_memory_effect,
                 )
             }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
@@ -7962,9 +7978,24 @@ fn project_intrinsic_contracts(
                     ProductionRankedValueV1::Local(index),
                     projected.precondition,
                     Some(ProductionRankedValueV1::Local(success)),
-                    write_only_effect,
+                    direct_memory_effect,
                 )
             }
+            SemanticCompilerIntrinsicOperationV1::VolatileLoad { element, .. } => (
+                *element,
+                project_runtime_index_operand_v1(
+                    call.arguments().get(1),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?,
+                None,
+                None,
+                direct_memory_effect,
+            ),
             _ => continue,
         };
 
@@ -7981,22 +8012,53 @@ fn project_intrinsic_contracts(
                 "a checked disjoint receiver without one authenticated kernel-argument origin",
             ),
         )?;
-        if !allocation_contract.writable {
+        if access == AccessKindAttr::Write && !allocation_contract.writable {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a checked mutable access is rooted in a read-only Rust allocation",
             ));
         }
         let origin_index = allocation_contract.allocation_origin as usize;
         let element_width = type_width(types, element)?;
+        let dynamic_extent = if matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. }
+        ) {
+            match volatile_extents.get(&allocation_contract.allocation_origin) {
+                Some(extent) => *extent,
+                None => {
+                    let argument = if volatile_extents.is_empty() {
+                        0
+                    } else {
+                        let argument = u32::try_from(next_runtime_argument).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "too many volatile slice extents",
+                            )
+                        })?;
+                        next_runtime_argument = next_runtime_argument.checked_add(1).ok_or(
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "volatile slice extent argument count overflow",
+                            ),
+                        )?;
+                        argument
+                    };
+                    let extent = ProductionRankedValueV1::Argument(argument);
+                    volatile_extents.insert(allocation_contract.allocation_origin, extent);
+                    extent
+                }
+            }
+        } else {
+            ProductionRankedValueV1::Argument(0)
+        };
         let view = match views_by_origin
             .get(origin_index)
             .and_then(|view| view.as_ref())
         {
             Some(view)
                 if view.element_width == element_width
-                    && view.writable
+                    && view.writable == allocation_contract.writable
                     && view.shape == [DYNAMIC_EXTENT]
-                    && view.dynamic_extents == [ProductionRankedValueV1::Argument(0)]
+                    && view.dynamic_extents == [dynamic_extent]
                     && view.memory_space == MemorySpaceAttr::Global
                     && view.allocation_origin == allocation_contract.allocation_origin
                     && view.noalias_class == allocation_contract.noalias_class =>
@@ -8014,9 +8076,9 @@ fn project_intrinsic_contracts(
                 operations.push(ProductionRankedOperationV1::ViewInSpace {
                     result: view,
                     element_width,
-                    writable: true,
+                    writable: allocation_contract.writable,
                     shape: vec![DYNAMIC_EXTENT],
-                    dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                    dynamic_extents: vec![dynamic_extent],
                     memory_space: MemorySpaceAttr::Global,
                     allocation_origin: allocation_contract.allocation_origin,
                     noalias_class: allocation_contract.noalias_class,
@@ -8037,9 +8099,9 @@ fn project_intrinsic_contracts(
                 *slot = Some(ProjectedViewV1 {
                     result: view,
                     element_width,
-                    writable: true,
+                    writable: allocation_contract.writable,
                     shape: vec![DYNAMIC_EXTENT],
-                    dynamic_extents: vec![ProductionRankedValueV1::Argument(0)],
+                    dynamic_extents: vec![dynamic_extent],
                     memory_space: MemorySpaceAttr::Global,
                     allocation_origin: allocation_contract.allocation_origin,
                     noalias_class: allocation_contract.noalias_class,
@@ -8051,26 +8113,26 @@ fn project_intrinsic_contracts(
         if let Some(precondition) = precondition {
             comparisons.push(precondition);
         }
-        comparisons.push((index, ProductionRankedValueV1::Argument(0)));
+        comparisons.push((index, dynamic_extent));
         let access = GuardedRankedAccessV1 {
             view,
             indices: vec![index],
             checked_success,
             comparisons,
-            access: AccessKindAttr::Write,
+            access,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
             semantic_site: None,
         };
         if direct_write {
-            let slot = direct_write_effects.get_mut(block_index).ok_or(
+            let slot = direct_memory_effects.get_mut(block_index).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
-                    "a write-only access block outside the semantic CFG",
+                    "a direct memory access block outside the semantic CFG",
                 ),
             )?;
             if slot.replace(access).is_some() {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "multiple write-only effects occupy one semantic block",
+                    "multiple direct memory effects occupy one semantic block",
                 ));
             }
             continue;
@@ -8224,7 +8286,7 @@ fn project_intrinsic_contracts(
         index_values,
         local_contracts,
         extent_argument_count: if guarded_accesses.is_empty()
-            && direct_write_effects.iter().all(Option::is_none)
+            && direct_memory_effects.iter().all(Option::is_none)
             && next_runtime_argument == 1
         {
             0
@@ -8240,7 +8302,7 @@ fn project_intrinsic_contracts(
         capability_read_effects,
         transpose_workgroup_effects,
         read_view_effects,
-        direct_write_effects,
+        direct_memory_effects,
         pipeline_effects,
         generated_terminator_effects,
     })

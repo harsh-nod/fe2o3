@@ -2,7 +2,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fe2o3_kernel_ir::ScalarType;
+use fe2o3_kernel_ir::{
+    AddressSpace, AmdGpuDiagnosticOperation, ComparePredicate, Module, OperationKind, ScalarType,
+    Terminator, ValueId,
+};
+use fe2o3_mir_model::semantic_mir_v1::{
+    AdmittedInertSemanticMirV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticMirLimitsV1, SemanticMirWireVersionV1,
+};
 use fe2o3_sim_differential::{
     ExactBufferExpectationV3, ExactBufferUnavailableV3, ProductionSemanticCaseV3,
     ProductionSemanticConformanceErrorV3, run_production_semantic_conformance_v3,
@@ -600,4 +607,301 @@ fn ordinary_producer_boundaries_and_cross_artifact_inputs_fail_closed() {
         "fe2o3-sim-semantic-differential-capabilities-v2"
     );
     assert_eq!(legacy.exact_float_types, ["f16", "bf16", "f32", "f64"]);
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn authenticated_volatile_load_store_execute_with_exact_bounds_semantics() {
+    let scratch = Scratch::new();
+    let bundle = require_export(&scratch, "volatile-memory");
+    let mut source = vec![0_u8; LANES * 4];
+    source[..4].copy_from_slice(&7_u32.to_le_bytes());
+    let destination = vec![0_u8; LANES * 4];
+    let request = write_request(
+        &scratch,
+        "volatile-memory",
+        "volatile_memory",
+        json!([
+            buffer_json("u32", &source, 4),
+            buffer_json("u32", &destination, 4),
+        ]),
+    );
+    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle, &request)
+        .expect("strictly admit compiler-produced volatile Bundle V5 and request");
+    let expected = repeated_scalar_bytes(7, 4);
+    let initialized = vec![true; expected.len()];
+    let outputs = [ExactBufferExpectationV3 {
+        argument_ordinal: 1,
+        element: ScalarType::U32,
+        bytes: &expected,
+        initialized: &initialized,
+    }];
+    let report = run_production_semantic_conformance_v3(
+        &admitted,
+        ProductionSemanticCaseV3 {
+            case_id: "volatile-memory",
+            outputs: &outputs,
+        },
+    )
+    .expect("execute compiler-produced volatile KIR");
+    assert_eq!(report.status, "agreement");
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn v11_full_request_composes_volatile_scan_and_reduce_canonically() {
+    let scratch = Scratch::new();
+    let bundle = require_export(&scratch, "volatile-collectives");
+    let source = vec![1_u8; LANES * 4];
+    let destination = vec![0_u8; LANES * 4];
+    let request = write_request(
+        &scratch,
+        "volatile-collectives",
+        "volatile_collectives",
+        json!([
+            buffer_json("u32", &source, 4),
+            buffer_json("u32", &destination, 4),
+        ]),
+    );
+    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5_with_reduced_call_depth_v1(
+        &bundle, &request, 16,
+    )
+    .expect("admit mixed V11 volatile and collective bundle with explicit shallow depth");
+    assert_eq!(admitted.input().simulation_limits.max_call_depth, 16);
+    let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        admitted.bundle().semantic_mir(),
+        SemanticMirLimitsV1::default(),
+    )
+    .expect("decode compiler-admitted mixed V11 semantic request");
+    assert_eq!(semantic.wire_version(), SemanticMirWireVersionV1::V11);
+    assert_eq!(
+        semantic.canonical_encoding(),
+        admitted.bundle().semantic_mir()
+    );
+    let mut volatile = false;
+    let mut scan = false;
+    let mut reduce = false;
+    for callable in semantic.callables() {
+        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+            continue;
+        };
+        match operation {
+            SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
+            | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. } => volatile = true,
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. } => scan = true,
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. } => reduce = true,
+            _ => {}
+        }
+    }
+    assert!(volatile && scan && reduce);
+
+    let mut expected = Vec::with_capacity(LANES * 4);
+    for lane in 1..=LANES as u32 {
+        expected.extend_from_slice(&0x0101_0101_u32.wrapping_mul(lane).to_le_bytes());
+    }
+    let initialized = vec![true; expected.len()];
+    let outputs = [ExactBufferExpectationV3 {
+        argument_ordinal: 1,
+        element: ScalarType::U32,
+        bytes: &expected,
+        initialized: &initialized,
+    }];
+    let report = run_production_semantic_conformance_v3(
+        &admitted,
+        ProductionSemanticCaseV3 {
+            case_id: "volatile-collectives",
+            outputs: &outputs,
+        },
+    )
+    .expect("execute mixed V11 volatile, scan, and reduce KIR");
+    assert_eq!(report.status, "agreement");
+    assert_eq!(report.expected_bytes, LANES * 4);
+}
+
+#[test]
+fn reduced_call_depth_bundle_loader_rejects_invalid_limits_before_path_access() {
+    let absent = Path::new("/fe2o3-v5-reduced-depth-input-must-not-be-opened");
+    for max_call_depth in [0, 65] {
+        let error = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5_with_reduced_call_depth_v1(
+            absent,
+            absent,
+            max_call_depth,
+        )
+        .expect_err("invalid reduced depth must fail closed before input capture");
+        assert_eq!(error.stage, "arguments");
+        assert_eq!(error.code, "invalid_command_line");
+        assert!(error.message.contains("between 1 and 64"));
+    }
+}
+
+fn operation_defining<'a>(
+    block: &'a fe2o3_kernel_ir::BasicBlock,
+    value: ValueId,
+) -> &'a fe2o3_kernel_ir::Operation {
+    block
+        .operations
+        .iter()
+        .find(|operation| operation.results.iter().any(|result| result.id == value))
+        .expect("guarded volatile operand must have a same-block definition")
+}
+
+fn assert_volatile_bounds_trap_shape(module: &Module) {
+    let mut guarded_loads = 0;
+    let mut guarded_stores = 0;
+    for function in &module.functions {
+        let Some(body) = &function.body else {
+            continue;
+        };
+        for block in &body.blocks {
+            for operation in &block.operations {
+                let (pointer, predicate) = match &operation.kind {
+                    OperationKind::GuardedLoad {
+                        pointer,
+                        predicate,
+                        access,
+                        ..
+                    } => {
+                        guarded_loads += 1;
+                        assert!(access.volatile);
+                        assert_eq!(access.address_space, AddressSpace::Global);
+                        (*pointer, *predicate)
+                    }
+                    OperationKind::GuardedStore {
+                        pointer,
+                        predicate,
+                        access,
+                        ..
+                    } => {
+                        guarded_stores += 1;
+                        assert!(access.volatile);
+                        assert_eq!(access.address_space, AddressSpace::Global);
+                        (*pointer, *predicate)
+                    }
+                    _ => continue,
+                };
+                assert!(matches!(
+                    &operation_defining(block, predicate).kind,
+                    OperationKind::Compare {
+                        predicate: ComparePredicate::LessThan,
+                        ..
+                    }
+                ));
+                let OperationKind::GetElementPointer { offset, .. } =
+                    &operation_defining(block, pointer).kind
+                else {
+                    panic!("guarded volatile pointer must be formed by a bounded GEP");
+                };
+                assert!(matches!(
+                    &operation_defining(block, *offset).kind,
+                    OperationKind::Select { condition, .. } if *condition == predicate
+                ));
+                let Some(Terminator::ConditionalBranch {
+                    condition,
+                    else_target,
+                    ..
+                }) = &block.terminator
+                else {
+                    panic!("guarded volatile call must branch to a failure block");
+                };
+                assert_eq!(*condition, predicate);
+                let failure = body
+                    .blocks
+                    .iter()
+                    .find(|candidate| candidate.id == *else_target)
+                    .expect("volatile bounds failure block");
+                assert!(matches!(&failure.terminator, Some(Terminator::Unreachable)));
+                assert!(failure.operations.iter().any(|operation| matches!(
+                    &operation.kind,
+                    OperationKind::Call { callee, arguments }
+                        if matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::Trap)
+                        )
+                )));
+            }
+        }
+    }
+    assert_eq!(guarded_loads, 1);
+    assert_eq!(guarded_stores, 1);
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn volatile_bounds_failures_skip_memory_access_and_trap() {
+    let scratch = Scratch::new();
+    let bundle = require_export(&scratch, "volatile-memory");
+
+    let load_request = write_request(
+        &scratch,
+        "volatile-load-oob",
+        "volatile_memory",
+        json!([
+            buffer_json("u32", &[], 4),
+            buffer_json("u32", &vec![0_u8; LANES * 4], 4),
+        ]),
+    );
+    let load_admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle, &load_request)
+        .expect("admit empty-source volatile request");
+    assert_volatile_bounds_trap_shape(load_admitted.input().module.module());
+    let destination = vec![0_u8; LANES * 4];
+    let initialized = vec![true; destination.len()];
+    let load_outputs = [ExactBufferExpectationV3 {
+        argument_ordinal: 1,
+        element: ScalarType::U32,
+        bytes: &destination,
+        initialized: &initialized,
+    }];
+    let load_error = run_production_semantic_conformance_v3(
+        &load_admitted,
+        ProductionSemanticCaseV3 {
+            case_id: "volatile-load-oob",
+            outputs: &load_outputs,
+        },
+    )
+    .expect_err("out-of-range volatile load must trap");
+    assert!(
+        matches!(
+        &load_error,
+        ProductionSemanticConformanceErrorV3::Simulation(message)
+            if message.contains("ReachedUnreachable")
+        ),
+        "unexpected volatile-load failure: {load_error:?}"
+    );
+
+    let store_request = write_request(
+        &scratch,
+        "volatile-store-oob",
+        "volatile_memory",
+        json!([
+            buffer_json("u32", &7_u32.to_le_bytes(), 4),
+            buffer_json("u32", &[], 4),
+        ]),
+    );
+    let store_admitted =
+        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle, &store_request)
+            .expect("admit empty-destination volatile request");
+    let empty_bytes: [u8; 0] = [];
+    let empty_initialized: [bool; 0] = [];
+    let store_outputs = [ExactBufferExpectationV3 {
+        argument_ordinal: 1,
+        element: ScalarType::U32,
+        bytes: &empty_bytes,
+        initialized: &empty_initialized,
+    }];
+    let store_error = run_production_semantic_conformance_v3(
+        &store_admitted,
+        ProductionSemanticCaseV3 {
+            case_id: "volatile-store-oob",
+            outputs: &store_outputs,
+        },
+    )
+    .expect_err("out-of-range volatile store must trap");
+    assert!(
+        matches!(
+        &store_error,
+        ProductionSemanticConformanceErrorV3::Simulation(message)
+            if message.contains("ReachedUnreachable")
+        ),
+        "unexpected volatile-store failure: {store_error:?}"
+    );
 }

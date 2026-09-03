@@ -9008,6 +9008,7 @@ fn semantic_reachable_blocks_avoiding_node_v1(
 
 fn semantic_requires_runtime_assert_failure(
     function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
     infallible_asserts: &BTreeSet<u32>,
 ) -> bool {
     function
@@ -9019,6 +9020,14 @@ fn semantic_requires_runtime_assert_failure(
                 !infallible_asserts.contains(&(block_index as u32))
             }
             SemanticTerminatorKindV1::Abort | SemanticTerminatorKindV1::UnwindTerminate => true,
+            SemanticTerminatorKindV1::Call(call) => matches!(
+                callables.get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
+                        | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. },
+                    ..
+                })
+            ),
             _ => false,
         })
 }
@@ -9461,8 +9470,11 @@ fn lower_one_semantic_function_v1(
                 "lowered semantic function is missing",
             )
         })?;
-    let has_runtime_assert =
-        semantic_requires_runtime_assert_failure(function, &infallible_asserts);
+    let has_runtime_assert = semantic_requires_runtime_assert_failure(
+        function,
+        semantic.callables(),
+        &infallible_asserts,
+    );
     let statement_count = function
         .blocks()
         .iter()
@@ -10401,7 +10413,9 @@ fn lower_single_root_module(
             .checked_add(function.blocks().len())
             .and_then(|count| {
                 count.checked_add(usize::from(semantic_requires_runtime_assert_failure(
-                    function, infallible,
+                    function,
+                    semantic.callables(),
+                    infallible,
                 )))
             })
             .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
@@ -15331,7 +15345,24 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "compiler intrinsic call has no destination",
             )
         })?;
+        let mut runtime_condition = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::VolatileLoad { element, .. } => {
+                let (binding, condition) =
+                    self.lower_volatile_load(block, call, operations, *element)?;
+                runtime_condition = Some(condition);
+                binding
+            }
+            SemanticCompilerIntrinsicOperationV1::VolatileStore {
+                element,
+                index_space,
+                ..
+            } => {
+                let (binding, condition) =
+                    self.lower_volatile_store(block, call, operations, *element, *index_space)?;
+                runtime_condition = Some(condition);
+                binding
+            }
             SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
                 dynamic_lds,
                 element_storage,
@@ -17280,10 +17311,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             operations,
         )?;
         self.bind_destination(block, None, destination.place(), binding)?;
-        Ok(Terminator::Branch {
-            target: BlockId(destination.edge().target().index()),
-            arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
-        })
+        let target = BlockId(destination.edge().target().index());
+        let arguments = self.edge_arguments(block, destination.edge().target(), operations)?;
+        if let Some(condition) = runtime_condition {
+            let failure = self.assert_failure_block.ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "volatile memory terminal has no runtime failure block",
+                )
+            })?;
+            Ok(Terminator::ConditionalBranch {
+                condition,
+                then_target: target,
+                then_arguments: arguments,
+                else_target: failure,
+                else_arguments: vec![],
+            })
+        } else {
+            Ok(Terminator::Branch { target, arguments })
+        }
     }
 
     fn lower_defined_call(
@@ -17392,6 +17440,223 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             target: BlockId(destination.edge().target().index()),
             arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
         })
+    }
+
+    fn lower_volatile_load(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        element: SemanticTypeIdV1,
+    ) -> Result<(SemanticValueBindingV1, ValueId), ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 2)?;
+        let (slice, slice_ty) = self
+            .lower_operand(block, None, &call.arguments()[0], operations)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let Type::Slice(slice_type) = slice_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load source is not a lowered slice",
+            ));
+        };
+        let element_ty = lower_scalar_type(self.types, element)?;
+        if slice_type.address_space != AddressSpace::Global
+            || slice_type.access != AccessMode::ReadOnly
+            || *slice_type.element != element_ty
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load source is not an exact read-only global scalar slice",
+            ));
+        }
+        let index = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+        let index = self
+            .coerce_index(block, operations, index)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice },
+        )?;
+        let present = self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+        let zero_index = self.emit_index_constant(operations, 0)?;
+        let guarded_index = self.emit_select_index(operations, present, index, zero_index)?;
+        let pointer_ty = Type::pointer(
+            element_ty.clone(),
+            slice_type.address_space,
+            slice_type.access,
+        );
+        let base = self.emit_id(
+            operations,
+            pointer_ty.clone(),
+            OperationKind::SliceData { slice },
+        )?;
+        let pointer = self.emit_id(
+            operations,
+            pointer_ty,
+            OperationKind::GetElementPointer {
+                base,
+                offset: guarded_index,
+            },
+        )?;
+        let fallback = self.emit_id(
+            operations,
+            element_ty.clone(),
+            OperationKind::Constant(volatile_zero_constant_v1(&element_ty).ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "volatile-load scalar has no exact zero fallback",
+                )
+            })?),
+        )?;
+        let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-load scalar has no exact alignment",
+            )
+        })?;
+        let mut access = MemoryAccess::new(AddressSpace::Global, alignment);
+        access.volatile = true;
+        let binding = self.emit(
+            operations,
+            element_ty,
+            OperationKind::GuardedLoad {
+                pointer,
+                predicate: present,
+                fallback,
+                access,
+            },
+        )?;
+        Ok((binding, present))
+    }
+
+    fn lower_volatile_store(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        element: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+    ) -> Result<(SemanticValueBindingV1, ValueId), ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 3)?;
+        let (slice, slice_ty) = self
+            .lower_operand(block, None, &call.arguments()[0], operations)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let Type::Slice(slice_type) = slice_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-store destination is not a lowered slice",
+            ));
+        };
+        let element_ty = lower_scalar_type(self.types, element)?;
+        if slice_type.address_space != AddressSpace::Global
+            || slice_type.access != AccessMode::ReadWrite
+            || *slice_type.element != element_ty
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-store destination is not an exact read-write global scalar slice",
+            ));
+        }
+        let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+        let SemanticValueBindingV1::IndexWitness {
+            id: index,
+            index_space: actual_space,
+            disjoint: true,
+            availability: None,
+        } = witness
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-store lacks exact disjoint index authority",
+            ));
+        };
+        if actual_space != index_space {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-store index mapping identity changed",
+            ));
+        }
+        let value = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+        let (value, value_ty) = value
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        if value_ty != element_ty {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-store value type changed",
+            ));
+        }
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice },
+        )?;
+        let present = self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+        let zero_index = self.emit_index_constant(operations, 0)?;
+        let guarded_index = self.emit_select_index(operations, present, index, zero_index)?;
+        let pointer_ty = Type::pointer(
+            element_ty.clone(),
+            slice_type.address_space,
+            slice_type.access,
+        );
+        let base = self.emit_id(
+            operations,
+            pointer_ty.clone(),
+            OperationKind::SliceData { slice },
+        )?;
+        let pointer = self.emit_id(
+            operations,
+            pointer_ty,
+            OperationKind::GetElementPointer {
+                base,
+                offset: guarded_index,
+            },
+        )?;
+        let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "volatile-store scalar has no exact alignment",
+            )
+        })?;
+        let mut access = MemoryAccess::new(AddressSpace::Global, alignment);
+        access.volatile = true;
+        self.push_operation(operations, || {
+            Operation::new(
+                Vec::new(),
+                OperationKind::GuardedStore {
+                    pointer,
+                    predicate: present,
+                    value,
+                    access,
+                },
+            )
+        })?;
+        Ok((SemanticValueBindingV1::Unit, present))
     }
 
     fn lower_subgroup_reduce_f32(
@@ -21981,6 +22246,27 @@ fn strided_read_scalar_alignment_v1(element: &Type) -> Option<u32> {
     }
 }
 
+fn volatile_zero_constant_v1(element: &Type) -> Option<Constant> {
+    Some(match element.as_scalar()? {
+        ScalarType::Bool => Constant::Bool(false),
+        ScalarType::I8 => Constant::I8(0),
+        ScalarType::I16 => Constant::I16(0),
+        ScalarType::I32 => Constant::I32(0),
+        ScalarType::I64 => Constant::I64(0),
+        ScalarType::U8 => Constant::U8(0),
+        ScalarType::U16 => Constant::U16(0),
+        ScalarType::U32 => Constant::U32(0),
+        ScalarType::U64 => Constant::U64(0),
+        ScalarType::F32 => Constant::F32Bits(0),
+        ScalarType::Index
+        | ScalarType::I128
+        | ScalarType::U128
+        | ScalarType::F16
+        | ScalarType::Bf16
+        | ScalarType::F64 => return None,
+    })
+}
+
 fn unsupported_terminator_detail(terminator: &SemanticTerminatorKindV1) -> &'static str {
     match terminator {
         SemanticTerminatorKindV1::SwitchInt { .. } => {
@@ -24011,6 +24297,12 @@ fn disjoint_slice_descriptor(
                         element,
                         raw_index,
                         ..
+                    }
+                    | SemanticCompilerIntrinsicOperationV1::VolatileStore {
+                        disjoint_slice,
+                        element,
+                        raw_index,
+                        ..
                     },
                 ..
             } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::ReadWrite)),
@@ -24131,6 +24423,11 @@ fn disjoint_slice_operation_element(
             ..
         }
         | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::VolatileStore {
             disjoint_slice,
             element,
             ..

@@ -1599,6 +1599,8 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic => {
             Some("fe2o3_device::atomic::{impl#3}::as_atomic")
         }
+        TrustedDeviceItem::MemoryVolatileLoad => Some("fe2o3_device::memory::volatile_load"),
+        TrustedDeviceItem::MemoryVolatileStore => Some("fe2o3_device::memory::volatile_store"),
         _ if safe_execution_provider_bound_item(item) => {
             Some(safe_execution_compiler_definition_path(item))
         }
@@ -2869,7 +2871,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_view_capabilities_reject_type_constructor_and_load_lookalikes() {
+    fn checked_memory_capabilities_reject_type_constructor_and_load_lookalikes() {
         for item in [
             TrustedDeviceItem::StridedReadView2D,
             TrustedDeviceItem::StridedReadView2DError,
@@ -2881,6 +2883,8 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
+            TrustedDeviceItem::MemoryVolatileLoad,
+            TrustedDeviceItem::MemoryVolatileStore,
         ] {
             let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
             let local = structural.strip_prefix("fe2o3_device::").unwrap();

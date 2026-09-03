@@ -872,6 +872,55 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::MemoryVolatileLoad
+            if inputs.len() == 2
+                && rust_inputs.len() == 2
+                && rust_shared_slice_element_v1(rust_inputs[0]) == Some(rust_output)
+                && rust_supported_volatile_scalar_v1(rust_output)
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::VolatileLoad {
+                slice: inputs[0],
+                element: output,
+                raw_index: inputs[1],
+            })
+        }
+        ProductionTerminalExpansionV1::MemoryVolatileStore
+            if inputs.len() == 3
+                && rust_inputs.len() == 3
+                && matches!(rust_output.kind(), TyKind::Tuple(fields) if fields.is_empty()) =>
+        {
+            let (rust_element, index_space) = rust_reference_pointee_v1(rust_inputs[0])
+                .and_then(|ty| rust_disjoint_slice_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("volatile-store disjoint slice"))?;
+            let rust_witness = rust_reference_pointee_v1(rust_inputs[1]).ok_or_else(|| {
+                body_owner_table_mismatch_v1("volatile-store index witness reference")
+            })?;
+            if rust_inputs[2] != rust_element
+                || !rust_supported_volatile_scalar_v1(rust_element)
+                || rust_index_witness_space_v1(tcx, rust_witness, TrustedDeviceItem::DisjointIndex)
+                    != Some(index_space)
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "volatile-store element or mapping",
+                ));
+            }
+            let disjoint_slice = pointer_pointee_v1(types, inputs[0])?;
+            let index_witness = pointer_pointee_v1(types, inputs[1])?;
+            let raw_index = aggregate_field_v1(types, index_witness, 0)?;
+            let element_pointer = aggregate_field_v1(types, disjoint_slice, 0)?;
+            let element = pointer_pointee_v1(types, element_pointer)?;
+            if inputs[2] != element {
+                return Err(body_owner_table_mismatch_v1("volatile-store element type"));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::VolatileStore {
+                disjoint_slice,
+                index_witness,
+                element,
+                raw_index,
+                index_space,
+            })
+        }
         ProductionTerminalExpansionV1::ThreadIndex(axis)
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -2533,6 +2582,8 @@ fn terminal_operation_v1<'tcx>(
             )
         }
         ProductionTerminalExpansionV1::ThreadIndex(_)
+        | ProductionTerminalExpansionV1::MemoryVolatileLoad
+        | ProductionTerminalExpansionV1::MemoryVolatileStore
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -3086,6 +3137,16 @@ fn rust_supported_read_view_scalar_v1(ty: Ty<'_>) -> bool {
             | TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
             | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64)
             | TyKind::Float(FloatTy::F32 | FloatTy::F64)
+    )
+}
+
+fn rust_supported_volatile_scalar_v1(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Bool
+            | TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+            | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64)
+            | TyKind::Float(FloatTy::F32)
     )
 }
 
@@ -3927,6 +3988,8 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
+        ProductionTerminalExpansionV1::MemoryVolatileStore => 116,
     }
 }
 

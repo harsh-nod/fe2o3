@@ -1134,6 +1134,29 @@ pub(crate) fn load_debug_simulation_bundle_v5(
     })
 }
 
+pub(crate) fn load_debug_simulation_bundle_v5_with_reduced_call_depth_v1(
+    bundle: OsString,
+    request: OsString,
+    max_call_depth: usize,
+) -> Result<crate::AdmittedSimulationBundleInputV5, crate::SimulationInputErrorV1> {
+    let mut limits = cli_simulation_limits();
+    if max_call_depth == 0 || max_call_depth > limits.max_call_depth {
+        return Err(crate::SimulationInputErrorV1 {
+            stage: "arguments".to_owned(),
+            code: "invalid_command_line".to_owned(),
+            message: "reduced Bundle V5 call-depth limit must be between 1 and 64".to_owned(),
+        });
+    }
+    limits.max_call_depth = max_call_depth;
+    load_admitted_bundle_v5_with_limits(Path::new(&bundle), Path::new(&request), limits).map_err(
+        |failure: Failure| crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        },
+    )
+}
+
 pub(crate) fn load_debug_sidecar_v1(
     path: OsString,
     maximum: usize,
@@ -1840,6 +1863,14 @@ fn load_admitted_bundle_v5(
     bundle_path: &Path,
     request: &Path,
 ) -> Result<crate::AdmittedSimulationBundleInputV5, Failure> {
+    load_admitted_bundle_v5_with_limits(bundle_path, request, cli_simulation_limits())
+}
+
+fn load_admitted_bundle_v5_with_limits(
+    bundle_path: &Path,
+    request: &Path,
+    limits: SimulationLimitsV1,
+) -> Result<crate::AdmittedSimulationBundleInputV5, Failure> {
     let bytes = secure_read(
         bundle_path,
         MAX_SIMULATION_BUNDLE_BYTES_V5,
@@ -1880,6 +1911,7 @@ fn load_admitted_bundle_v5(
         target,
         Some((*bundle.identity().as_bytes(), *bundle.subject_identity())),
         Some(bundle_evidence_v5(&bundle)),
+        limits,
     )?;
     if input.kir_sha256 != *bundle.canonical_kir_v10_digest()
         || u64::try_from(bundle.canonical_kir_v10().len()).ok()
@@ -1981,6 +2013,7 @@ fn load_admitted_input_bytes_v10(
     target: SimulationTargetV1,
     bundle_identity: Option<([u8; 32], [u8; 32])>,
     bundle_evidence: Option<crate::AdmittedSimulationBundleEvidenceV1>,
+    limits: SimulationLimitsV1,
 ) -> Result<crate::AdmittedSimulationInputV1, Failure> {
     if kir.len() > MAX_KIR_BYTES {
         return Err(Failure::input(
@@ -1992,7 +2025,6 @@ fn load_admitted_input_bytes_v10(
             ),
         ));
     }
-    let limits = cli_simulation_limits();
     let canonical =
         VerifiedCanonicalKernelIrV10::from_canonical_bytes(kir.to_vec()).map_err(|error| {
             Failure::new(
@@ -2135,7 +2167,7 @@ const fn cli_simulation_limits() -> SimulationLimitsV1 {
         max_workgroups: 1 << 20,
         max_scheduled_slots: 1 << 22,
         max_steps: 1 << 27,
-        max_call_depth: 64,
+        max_call_depth: crate::STANDARD_DEBUG_MAX_CALL_DEPTH_V1,
         max_ssa_values: 4_096,
         max_allocations: 16_384,
         max_allocation_bytes: MAX_TOTAL_BUFFER_BYTES,
@@ -5029,6 +5061,7 @@ mod tests {
             SimulationTargetV1::amdgpu_64(),
             None,
             None,
+            cli_simulation_limits(),
         )
         .unwrap_err();
         assert_eq!(failure.0.kind, ErrorKind::InputTooLarge);
