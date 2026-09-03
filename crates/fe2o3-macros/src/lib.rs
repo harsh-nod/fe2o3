@@ -2802,7 +2802,10 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         [segment] if segment.ident == "DeviceGlobalMutPtr" => {
             (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
         }
-        [segment] if is_unsupported_general_typed_device_pointer_v1(&segment.ident) => {
+        [segment]
+            if !matches!(segment.arguments, PathArguments::None)
+                && is_unsupported_general_typed_device_pointer_v1(&segment.ident) =>
+        {
             return Err(());
         }
         [namespace, segment]
@@ -6874,6 +6877,14 @@ mod tests {
                 model_general_typed_signature_v1(&input, &options, [0x71; 32]).is_err(),
                 "unexpectedly accepted {pointer}",
             );
+            let input: ItemFn = syn::parse_str(&format!(
+                "pub fn wrong_address_space(value: fe2o3_device::{pointer}<u32>) {{ let _ = value; }}"
+            ))
+            .unwrap();
+            assert!(
+                model_general_typed_signature_v1(&input, &options, [0x71; 32]).is_err(),
+                "unexpectedly accepted qualified fe2o3_device::{pointer}",
+            );
         }
     }
 
@@ -6920,6 +6931,23 @@ mod tests {
             first, second,
             "the compiler marker retains source binding identity"
         );
+    }
+
+    #[test]
+    fn local_aggregate_may_share_an_unsupported_device_pointer_identifier() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let input: ItemFn = parse_quote!(
+            pub fn pointer_name_collision(value: DeviceGlobalConstPtr) {}
+        );
+        let model = model_general_typed_signature_v1(&input, &options, [0x74; 32])
+            .expect("rustc validates the local aggregate layout");
+
+        assert_eq!(
+            model.arguments,
+            vec![GeneralTypedArgumentKindV1::CompilerLaidOutByValue]
+        );
+        assert_eq!(model.abi.size(), 0);
+        assert!(model.abi.fields().is_empty());
     }
 
     #[test]

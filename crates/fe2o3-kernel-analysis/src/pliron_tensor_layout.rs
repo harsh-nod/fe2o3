@@ -858,12 +858,25 @@ fn symbolic_subgroup_convergence(
     analyses: &mut PlironAnalysisManagerV1,
     tensor_sites: &[(usize, usize)],
 ) -> Result<(), PlironTensorLayoutFindingV1> {
-    let potentially_partial = layout
+    let workgroup_size = layout
+        .workgroup_extents
+        .into_iter()
+        .try_fold(1_u64, u64::checked_mul)
+        .ok_or(PlironTensorLayoutFindingV1::ResourceLimitExceeded)?;
+    if !workgroup_size.is_multiple_of(layout.subgroup_size) {
+        return Err(
+            PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
+                detail: "symbolic tensor convergence cannot establish full subgroup participation for a partial subgroup"
+                    .to_owned(),
+            },
+        );
+    }
+    let potentially_partial_workgroup = layout
         .global_extents
         .iter()
         .zip(layout.workgroup_extents)
         .any(|(global, workgroup)| *global == 0 || !global.is_multiple_of(workgroup));
-    if potentially_partial
+    if potentially_partial_workgroup
         && layout.execution_domain != dialect_gpu::ExecutionDomainAttr::FullPhysicalWorkgroups
     {
         return Err(

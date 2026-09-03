@@ -424,6 +424,30 @@ fn cyclic_symbolic_fallback_never_accepts_a_partial_subgroup() {
 }
 
 #[test]
+fn cyclic_symbolic_fallback_never_accepts_an_exact_workgroup_partial_subgroup() {
+    let context = &mut setup();
+    let (function, _) = function(context, "exact_workgroup_partial_subgroup_cycle", 0);
+    let entry = function.get_entry_block(context);
+    let body = block(context, &function, "body");
+    let execution = layout(context, 65, 65, 64);
+    let enter = BranchOp::new(context, body);
+    let matrix = tensor(context, 64);
+    let repeat = BranchOp::new(context, body);
+    append(context, entry, &execution);
+    append(context, entry, &enter);
+    append(context, body, &matrix);
+    append(context, body, &repeat);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(matches!(report.status(), KernelCheckStatusV1::Incomplete));
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("partial subgroup")
+    )));
+}
+
+#[test]
 fn forged_full_workgroups_conflicting_with_static_extent_fail_closed() {
     let context = &mut setup();
     let (function, _) = function(context, "forged_full_workgroups", 0);
