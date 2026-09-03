@@ -69,6 +69,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Bf16Conversion(ProductionBf16ConversionV1),
     WorkgroupCollectiveContextCurrent,
     NeutralWorkgroupReduceSum,
+    NeutralWorkgroupInclusiveScanSum,
+    NeutralWorkgroupExclusiveScanSum,
     CollectiveContextCurrent,
     WorkgroupReduceSum,
     SubgroupReduceSumF32,
@@ -319,6 +321,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::WorkgroupReduceSum => {
                 Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum)
+            }
+            TrustedDeviceItem::WorkgroupInclusiveScanSum => {
+                Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum)
+            }
+            TrustedDeviceItem::WorkgroupExclusiveScanSum => {
+                Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum)
             }
             TrustedDeviceItem::Gfx942WorkgroupReduceSum => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupReduceSum)
@@ -625,6 +633,12 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum) => {
                 TrustedDeviceItem::WorkgroupReduceSum
             }
+            Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum) => {
+                TrustedDeviceItem::WorkgroupInclusiveScanSum
+            }
+            Self::Expand(ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum) => {
+                TrustedDeviceItem::WorkgroupExclusiveScanSum
+            }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupReduceSum) => {
                 TrustedDeviceItem::Gfx942WorkgroupReduceSum
             }
@@ -912,6 +926,14 @@ mod tests {
             (
                 TrustedDeviceItem::WorkgroupReduceSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+            ),
+            (
+                TrustedDeviceItem::WorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+            ),
+            (
+                TrustedDeviceItem::WorkgroupExclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ),
             (
                 TrustedDeviceItem::Gfx942SubgroupReduceSumF32,

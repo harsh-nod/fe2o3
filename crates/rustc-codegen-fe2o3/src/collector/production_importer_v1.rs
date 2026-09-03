@@ -20,7 +20,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1, SemanticTypeDeclV1,
     SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
     SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
-    SemanticWorkgroupDimensionsV1, SemanticWorkgroupPipelineEventV1,
+    SemanticWorkgroupDimensionsV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1,
 };
 use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
@@ -1216,6 +1216,50 @@ fn terminal_operation_v1<'tcx>(
                     dynamic_lds,
                     element_storage,
                     element: output,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum
+        | ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum
+            if inputs.len() == 3
+                && rust_inputs.len() == 3
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::WorkgroupCollectivesContext)
+                })
+                && rust_dynamic_lds_uninitialized_scalar_element_v1(tcx, rust_inputs[1])
+                    == Some(rust_output)
+                && rust_inputs[2] == rust_output
+                && matches!(
+                    rust_output.kind(),
+                    TyKind::Int(IntTy::I32)
+                        | TyKind::Uint(UintTy::U32)
+                        | TyKind::Float(FloatTy::F32)
+                ) =>
+        {
+            let context = pointer_pointee_v1(types, inputs[0])?;
+            let dynamic_lds = inputs[1];
+            let element_storage = dynamic_lds_element_storage_v1(types, dynamic_lds)?;
+            if inputs[2] != output {
+                return Err(body_owner_table_mismatch_v1(
+                    "target-neutral workgroup scan element",
+                ));
+            }
+            let kind = match expansion {
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => {
+                    SemanticWorkgroupScanKindV1::Inclusive
+                }
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => {
+                    SemanticWorkgroupScanKindV1::Exclusive
+                }
+                _ => unreachable!("match arm admits only target-neutral workgroup scans"),
+            };
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+                    context,
+                    dynamic_lds,
+                    element_storage,
+                    element: output,
+                    kind,
                 },
             )
         }
@@ -2514,6 +2558,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MathF32(_)
         | ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
+        | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum
+        | ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::WorkgroupReduceSum
         | ProductionTerminalExpansionV1::SubgroupReduceSumF32
@@ -3849,6 +3895,16 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
             TerminalIdentitySchemaV1::CombinedV3 => 112,
         },
+        ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 106,
+            TerminalIdentitySchemaV1::CombinedV3 => 113,
+        },
+        ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 107,
+            TerminalIdentitySchemaV1::CombinedV3 => 114,
+        },
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -4136,9 +4192,11 @@ mod tests {
             [
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
-            [111, 112]
+            [111, 112, 113, 114]
         );
         assert_eq!(
             [
@@ -4163,9 +4221,13 @@ mod tests {
                 ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
-            [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+            [
+                100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+            ]
         );
         assert_eq!(
             [

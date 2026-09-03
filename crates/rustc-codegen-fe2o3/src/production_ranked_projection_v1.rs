@@ -49,7 +49,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSwitchTargetsV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
     SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
-    SemanticWriteOnlyDisjointWriteKindV1,
+    SemanticWorkgroupScanKindV1, SemanticWriteOnlyDisjointWriteKindV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -6290,6 +6290,32 @@ fn blocked_mapping_fits_launch_v1(
 
 const NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/NEUTRAL-WORKGROUP-ALLOCATION/V1\0";
+const NEUTRAL_WORKGROUP_SCAN_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/NEUTRAL-WORKGROUP-SCAN-ALLOCATION/V1\0";
+
+#[derive(Clone, Copy)]
+enum NeutralWorkgroupRecipeKindV1 {
+    Reduction,
+    InclusiveScan,
+    ExclusiveScan,
+}
+
+impl NeutralWorkgroupRecipeKindV1 {
+    const fn from_scan(kind: SemanticWorkgroupScanKindV1) -> Self {
+        match kind {
+            SemanticWorkgroupScanKindV1::Inclusive => Self::InclusiveScan,
+            SemanticWorkgroupScanKindV1::Exclusive => Self::ExclusiveScan,
+        }
+    }
+
+    const fn identity_tag(self) -> u8 {
+        match self {
+            Self::Reduction => 0,
+            Self::InclusiveScan => 1,
+            Self::ExclusiveScan => 2,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct NeutralWorkgroupRecipeIdentityInputV1 {
@@ -6300,6 +6326,7 @@ struct NeutralWorkgroupRecipeIdentityInputV1 {
     element: SemanticTypeIdV1,
     elements: u32,
     scalar_tag: u8,
+    kind: NeutralWorkgroupRecipeKindV1,
 }
 
 fn neutral_workgroup_recipe_identity_v1(
@@ -6307,8 +6334,18 @@ fn neutral_workgroup_recipe_identity_v1(
     input: NeutralWorkgroupRecipeIdentityInputV1,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1);
-    hasher.update(b"recipe-v1\0");
+    match input.kind {
+        NeutralWorkgroupRecipeKindV1::Reduction => {
+            hasher.update(NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1);
+            hasher.update(b"recipe-v1\0");
+        }
+        NeutralWorkgroupRecipeKindV1::InclusiveScan
+        | NeutralWorkgroupRecipeKindV1::ExclusiveScan => {
+            hasher.update(NEUTRAL_WORKGROUP_SCAN_ALLOCATION_IDENTITY_DOMAIN_V1);
+            hasher.update(b"scan-recipe-v1\0");
+            hasher.update([input.kind.identity_tag()]);
+        }
+    }
     hasher.update(function.identity().as_bytes());
     for value in [
         input.producer_block as u64,
@@ -6353,18 +6390,38 @@ fn project_generated_terminator_effects_v1(
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation:
-                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
-                    context,
-                    dynamic_lds,
-                    element_storage,
-                    element,
-                },
-            ..
-        }) = callables.get(call.callee().index() as usize)
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
         else {
             continue;
+        };
+        let (context, dynamic_lds, element_storage, element, kind) = match operation {
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+            } => (
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+                NeutralWorkgroupRecipeKindV1::Reduction,
+            ),
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+                kind,
+            } => (
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+                NeutralWorkgroupRecipeKindV1::from_scan(*kind),
+            ),
+            _ => continue,
         };
         let [context_argument, dynamic_argument, value_argument] = call.arguments() else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -6482,6 +6539,7 @@ fn project_generated_terminator_effects_v1(
                 element: *element,
                 elements,
                 scalar_tag,
+                kind,
             },
         );
         let (allocation_origin, noalias_class) =
@@ -18795,7 +18853,8 @@ fn project_direct_call_accesses(
     if matches!(
         callables.get(call.callee().index() as usize),
         Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. },
+            operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. }
+                | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. },
             ..
         })
     ) {
@@ -20826,7 +20885,9 @@ mod tests {
         )
     }
 
-    fn neutral_ranked_program_v1() -> ProductionRankedSemanticProgramV1 {
+    fn neutral_ranked_program_for_operation_v1(
+        operation: SemanticCompilerIntrinsicOperationV1,
+    ) -> ProductionRankedSemanticProgramV1 {
         let scope_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
             neutral_test_place_v1(2, NEUTRAL_LDS_SCOPE_REFERENCE_TYPE),
             SemanticRvalueV1::new(
@@ -20986,12 +21047,7 @@ mod tests {
                     neutral_plain_direct_abi_value_v1(NEUTRAL_ELEMENT_TYPE),
                 ],
                 neutral_plain_direct_abi_value_v1(NEUTRAL_ELEMENT_TYPE),
-                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
-                    context: NEUTRAL_CONTEXT_TYPE,
-                    dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
-                    element_storage: NEUTRAL_ELEMENT_TYPE,
-                    element: NEUTRAL_ELEMENT_TYPE,
-                },
+                operation,
             ),
         ];
         let admitted = InertSemanticMirRequestV1::new_with_callables(
@@ -21018,6 +21074,126 @@ mod tests {
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
         )
         .unwrap()
+    }
+
+    fn neutral_ranked_program_v1() -> ProductionRankedSemanticProgramV1 {
+        neutral_ranked_program_for_operation_v1(
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                context: NEUTRAL_CONTEXT_TYPE,
+                dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+                element_storage: NEUTRAL_ELEMENT_TYPE,
+                element: NEUTRAL_ELEMENT_TYPE,
+            },
+        )
+    }
+
+    fn neutral_scan_ranked_program_v1(
+        kind: SemanticWorkgroupScanKindV1,
+    ) -> ProductionRankedSemanticProgramV1 {
+        neutral_ranked_program_for_operation_v1(
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+                context: NEUTRAL_CONTEXT_TYPE,
+                dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+                element_storage: NEUTRAL_ELEMENT_TYPE,
+                element: NEUTRAL_ELEMENT_TYPE,
+                kind,
+            },
+        )
+    }
+
+    #[test]
+    fn neutral_scan_projection_and_lowering_bind_kind_and_complete_effect_stream() {
+        let mut recipe_identities = Vec::new();
+        for kind in [
+            SemanticWorkgroupScanKindV1::Inclusive,
+            SemanticWorkgroupScanKindV1::Exclusive,
+        ] {
+            let program = neutral_scan_ranked_program_v1(kind);
+            let sources = &program.roots[0].executable_effect_sources;
+            assert_eq!(sources.len(), 34);
+            let recipe = sources[0].recipe_identity();
+            assert_ne!(recipe, [0; 32]);
+            assert!(
+                sources
+                    .iter()
+                    .all(|source| source.recipe_identity() == recipe)
+            );
+            recipe_identities.push(recipe);
+
+            let ProductionRankedSemanticProgramV1 {
+                semantic_owner,
+                roots,
+            } = program;
+            let root = roots.into_vec().into_iter().next().unwrap();
+            let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+                semantic_owner,
+                root.lowering,
+                root.ranked_ir,
+                root.access_sources,
+                root.executable_effect_sources,
+            )
+            .unwrap();
+            let _ = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+                receipt,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                1,
+            )
+            .expect("the exact scan projection and generated KIR recipe must validate");
+        }
+        assert_ne!(recipe_identities[0], recipe_identities[1]);
+    }
+
+    #[test]
+    fn neutral_scan_full_path_rejects_kind_recipe_and_partial_effect_substitution() {
+        let exclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive);
+        let exclusive_recipe = exclusive.roots[0].executable_effect_sources[0].recipe_identity();
+        let inclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Inclusive);
+        let ProductionRankedSemanticProgramV1 {
+            semantic_owner,
+            roots,
+        } = inclusive;
+        let mut root = roots.into_vec().into_iter().next().unwrap();
+        root.executable_effect_sources = root
+            .executable_effect_sources
+            .into_iter()
+            .map(|source| {
+                ProductionRankedExecutableEffectSourceV1::new(
+                    source.semantic_block(),
+                    source.semantic_effect_ordinal(),
+                    source.ranked_block(),
+                    source.ranked_operation(),
+                    source.origin(),
+                    exclusive_recipe,
+                )
+            })
+            .collect();
+        let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+            semantic_owner,
+            root.lowering,
+            root.ranked_ir,
+            root.access_sources,
+            root.executable_effect_sources,
+        )
+        .unwrap();
+        assert_neutral_mutated_projection_rejected_v1(receipt);
+
+        let ProductionRankedSemanticProgramV1 {
+            semantic_owner,
+            roots,
+        } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive);
+        let mut root = roots.into_vec().into_iter().next().unwrap();
+        root.executable_effect_sources
+            .pop()
+            .expect("scan projection has a final barrier effect");
+        let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+            semantic_owner,
+            root.lowering,
+            root.ranked_ir,
+            root.access_sources,
+            root.executable_effect_sources,
+        )
+        .unwrap();
+        assert_neutral_mutated_projection_rejected_v1(receipt);
     }
 
     fn neutral_mutated_projection_receipt_v1(

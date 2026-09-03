@@ -29,6 +29,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V6: u16 = 6;
 pub const INERT_SEMANTIC_MIR_VERSION_V7: u16 = 7;
 pub const INERT_SEMANTIC_MIR_VERSION_V8: u16 = 8;
 pub const INERT_SEMANTIC_MIR_VERSION_V9: u16 = 9;
+pub const INERT_SEMANTIC_MIR_VERSION_V10: u16 = 10;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -45,6 +46,7 @@ pub enum SemanticMirWireVersionV1 {
     V7,
     V8,
     V9,
+    V10,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -58,6 +60,7 @@ impl SemanticMirWireVersionV1 {
             Self::V7 => INERT_SEMANTIC_MIR_VERSION_V7,
             Self::V8 => INERT_SEMANTIC_MIR_VERSION_V8,
             Self::V9 => INERT_SEMANTIC_MIR_VERSION_V9,
+            Self::V10 => INERT_SEMANTIC_MIR_VERSION_V10,
         }
     }
 
@@ -71,6 +74,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V7 => Some(Self::V7),
             INERT_SEMANTIC_MIR_VERSION_V8 => Some(Self::V8),
             INERT_SEMANTIC_MIR_VERSION_V9 => Some(Self::V9),
+            INERT_SEMANTIC_MIR_VERSION_V10 => Some(Self::V10),
             _ => None,
         }
     }
@@ -5037,6 +5041,13 @@ pub enum SemanticSubgroupReductionKindV1 {
     Maximum,
 }
 
+/// Prefix convention for one convergent target-neutral workgroup sum scan.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticWorkgroupScanKindV1 {
+    Inclusive,
+    Exclusive,
+}
+
 /// Exact low-precision format of one gfx950 LDS transpose tile.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticGfx950LdsTransposeFormatV1 {
@@ -5227,6 +5238,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         dynamic_lds: SemanticTypeIdV1,
         element_storage: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
+    },
+    /// Computes one ordered scalar prefix sum across the current workgroup by
+    /// consuming the exact compiler-issued dynamic-LDS allocation directly.
+    NeutralWorkgroupScanSum {
+        context: SemanticTypeIdV1,
+        dynamic_lds: SemanticTypeIdV1,
+        element_storage: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        kind: SemanticWorkgroupScanKindV1,
     },
     /// Reduces one scalar across each contiguous subgroup of `width` lanes.
     SubgroupReduceF32 {
@@ -5963,10 +5983,19 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V9, limits)
     }
 
+    /// Admits under the exact closed V10 schema that adds target-neutral
+    /// inclusive and exclusive workgroup sum scans.
+    pub fn admit_exact_v10(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V10, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
-    /// extensions, V8 when authenticated BF16 conversions are present, and V9
-    /// for target-neutral workgroup reduction or when BF16 conversions and
-    /// workgroup pipelines occur together.
+    /// extensions, V8 when authenticated BF16 conversions are present, V9 for
+    /// target-neutral workgroup reduction or when BF16 conversions and
+    /// workgroup pipelines occur together, and V10 for target-neutral scans.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -5983,7 +6012,7 @@ impl InertSemanticMirRequestV1 {
         validate_request(&self, limits)?;
         let mut required = minimum_wire_version(&self);
         if wire_version == SemanticMirWireVersionV1::V8 && uses_workgroup_pipeline(&self) {
-            required = SemanticMirWireVersionV1::V9;
+            required = required.max(SemanticMirWireVersionV1::V9);
         }
         if wire_version < required {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -7584,6 +7613,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum { .. }
         | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. }
+        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { .. }
@@ -7889,6 +7919,21 @@ fn compiler_intrinsic_signature_matches(
             dynamic_lds,
             element_storage,
             element,
+        } => {
+            inputs.len() == 3
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1] == dynamic_lds
+                && inputs[2] == element
+                && output == element
+                && dynamic_lds_storage_type_matches(request, dynamic_lds, element_storage)
+                && dynamic_lds_element_storage_matches(request, element_storage, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+            context,
+            dynamic_lds,
+            element_storage,
+            element,
+            ..
         } => {
             inputs.len() == 3
                 && shared_reference_to(request, inputs[0], context)
@@ -11831,7 +11876,8 @@ fn dynamic_lds_call_role_v1(
             dynamic_lds,
             ..
         }
-        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { dynamic_lds, .. } => {
+        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { dynamic_lds, .. }
+        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { dynamic_lds, .. } => {
             DynamicLdsCallRoleV1::Consumer(*dynamic_lds)
         }
         _ => DynamicLdsCallRoleV1::None,
@@ -15485,6 +15531,13 @@ fn enqueue_compiler_intrinsic_type_references(
             dynamic_lds,
             element_storage,
             element,
+        }
+        | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+            context,
+            dynamic_lds,
+            element_storage,
+            element,
+            ..
         } => {
             pending.push_back(context);
             pending.push_back(dynamic_lds);
@@ -16254,12 +16307,24 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. },
+                ..
+            }
+        )
+    }) {
+        required = SemanticMirWireVersionV1::V10;
+    }
+
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
                 operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. },
                 ..
             }
         )
     }) {
-        required = SemanticMirWireVersionV1::V9;
+        required = required.max(SemanticMirWireVersionV1::V9);
     }
 
     if request.callables.iter().any(|callable| {
@@ -16272,7 +16337,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             }
         )
     }) {
-        required = SemanticMirWireVersionV1::V9;
+        required = required.max(SemanticMirWireVersionV1::V9);
     }
 
     if request.functions.iter().any(|function| {
@@ -16362,7 +16427,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         required = required.max(SemanticMirWireVersionV1::V8);
     }
     if uses_pipeline && uses_bf16 {
-        required = SemanticMirWireVersionV1::V9;
+        required = required.max(SemanticMirWireVersionV1::V9);
     }
     required
 }
@@ -17539,6 +17604,29 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(dynamic_lds.0)?;
             writer.u32(element_storage.0)?;
             writer.u32(element.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+            context,
+            dynamic_lds,
+            element_storage,
+            element,
+            kind,
+        } => {
+            if wire_version != SemanticMirWireVersionV1::V10 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V10,
+                });
+            }
+            writer.u8(63)?;
+            writer.u32(context.0)?;
+            writer.u32(dynamic_lds.0)?;
+            writer.u32(element_storage.0)?;
+            writer.u32(element.0)?;
+            writer.u8(match kind {
+                SemanticWorkgroupScanKindV1::Inclusive => 0,
+                SemanticWorkgroupScanKindV1::Exclusive => 1,
+            })
         }
         SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 {
             context,
