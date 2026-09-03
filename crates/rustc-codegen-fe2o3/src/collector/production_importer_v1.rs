@@ -65,8 +65,11 @@ const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v2";
+#[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v3";
+const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4: &[u8] =
+    b"fe2o3/semantic-mir/production-compiler-intrinsic/v4";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminalIdentitySchemaV1 {
@@ -74,7 +77,9 @@ enum TerminalIdentitySchemaV1 {
     IndependentV1,
     #[cfg(test)]
     CombinedV2,
+    #[cfg_attr(not(test), allow(dead_code))]
     CombinedV3,
+    CombinedV4,
 }
 
 #[derive(Debug)]
@@ -465,12 +470,12 @@ fn construct_complete_request_v1<'tcx>(
     {
         let operation =
             terminal_operation_v1(tcx, terminal.instance, terminal.expansion, abi, &types)?;
-        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3);
+        let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4);
         digest.field(terminal.identities.function().as_bytes());
         digest.field(abi.identity().as_bytes());
         digest.field(&[terminal_operation_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV3,
+            TerminalIdentitySchemaV1::CombinedV4,
         )]);
         digest.field(
             &u32::try_from(index)
@@ -1117,6 +1122,40 @@ fn terminal_operation_v1<'tcx>(
                 && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::FabsF32)
+        }
+        ProductionTerminalExpansionV1::MemoryVolatileLoad
+            if inputs.len() == 2
+                && rust_inputs.len() == 2
+                && rust_shared_slice_element_v1(rust_inputs[0]) == Some(rust_output)
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize))
+                && rust_supported_volatile_load_scalar_v1(rust_output) =>
+        {
+            let slice = pointer_pointee_v1(types, inputs[0])?;
+            let SemanticTypeShapeV1::Slice { element } = types
+                .get(slice.index() as usize)
+                .ok_or_else(|| body_owner_table_mismatch_v1("volatile-load slice type"))?
+                .shape()
+            else {
+                return Err(body_owner_table_mismatch_v1("volatile-load slice type"));
+            };
+            if *element != output
+                || !types
+                    .get(inputs[1].index() as usize)
+                    .is_some_and(|declaration| {
+                        matches!(
+                            declaration.shape(),
+                            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                                signed: false,
+                                bits: 64,
+                            })
+                        )
+                    })
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "volatile-load element or index type",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element: *element })
         }
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             if inputs.len() != 1 || rust_inputs.len() != 1 {
@@ -2623,6 +2662,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx950LdsTransposePublish
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
+        | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath
         | ProductionTerminalExpansionV1::WorkgroupBarrier => {
@@ -3083,7 +3123,9 @@ fn rust_shared_u8_slice_v1(ty: Ty<'_>) -> bool {
 }
 
 fn rust_shared_slice_element_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
-    let pointee = rust_reference_pointee_v1(ty)?;
+    let TyKind::Ref(_, pointee, rustc_hir::Mutability::Not) = *ty.kind() else {
+        return None;
+    };
     match *pointee.kind() {
         TyKind::Slice(element) => Some(element),
         _ => None,
@@ -3095,6 +3137,16 @@ fn rust_supported_read_view_scalar_v1(ty: Ty<'_>) -> bool {
         ty.kind(),
         TyKind::Bool
             | TyKind::Char
+            | TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+            | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64)
+            | TyKind::Float(FloatTy::F32 | FloatTy::F64)
+    )
+}
+
+fn rust_supported_volatile_load_scalar_v1(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Bool
             | TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
             | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64)
             | TyKind::Float(FloatTy::F32 | FloatTy::F64)
@@ -3900,12 +3952,12 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
-            TerminalIdentitySchemaV1::CombinedV3 => 111,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 111,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
-            TerminalIdentitySchemaV1::CombinedV3 => 112,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
             #[cfg(test)]
@@ -3918,13 +3970,14 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3 => 114,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
-                TerminalIdentitySchemaV1::CombinedV3 => 100,
+                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -4189,11 +4242,27 @@ mod tests {
             PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V2,
             PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3
         );
+        assert_ne!(
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V3,
+            PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4
+        );
         assert_eq!(
             pipeline.map(|expansion| {
                 terminal_operation_tag_for_schema_v1(expansion, combined_schema)
             }),
             [91, 92, 93, 94, 95, 96, 97, 98, 99]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::RustcFabsF32,
+                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs),
+                ProductionTerminalExpansionV1::MemoryVolatileLoad,
+            ]
+            .map(|expansion| terminal_operation_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV4,
+            )),
+            [113, 114, 115],
         );
         assert_eq!(
             bf16.map(|conversion| terminal_operation_tag_for_schema_v1(

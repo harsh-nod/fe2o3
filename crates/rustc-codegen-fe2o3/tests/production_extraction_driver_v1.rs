@@ -301,6 +301,58 @@ fn exact_core_f32_is_finite_wrapper_reaches_fabs_and_float_compare() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn exact_volatile_load_reaches_checked_ordered_llvm_at_engineering_o0() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("volatile-load-f32.ll");
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "volatile-load-f32",
+        &llvm_output,
+        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "exact engineering O0 volatile-load extraction failed:\n{stderr}",
+    );
+    let llvm = std::fs::read_to_string(&llvm_output).expect("read volatile-load LLVM observation");
+    let kernel = llvm
+        .find("define amdgpu_kernel void @volatile_load_f32(")
+        .expect("volatile-load kernel definition");
+    let load = llvm
+        .find("load volatile float, ptr addrspace(1)")
+        .expect("exact volatile global load");
+    let guarding_branch = llvm[..load]
+        .rfind("br i1 ")
+        .expect("bounds branch before volatile load");
+    assert!(kernel < guarding_branch && guarding_branch < load);
+    assert_eq!(
+        llvm.matches("load volatile float, ptr addrspace(1)")
+            .count(),
+        1
+    );
+    assert_eq!(llvm.matches("declare void @llvm.trap()").count(), 1);
+    assert_eq!(llvm.matches("call void @llvm.trap()").count(), 1);
+    assert!(
+        llvm[load..].contains("store float"),
+        "volatile read was not retained before its observable result store:\n{llvm}",
+    );
+    for forbidden in [
+        "MemoryVolatileStore",
+        "MemoryCopyNonOverlapping",
+        "MemoryCopyOneNonOverlapping",
+        "semantic importer rejected complete semantic MIR",
+        "semantic importer rejected semantic body construction",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "volatile load entered forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn core_atomic_rmw_set_reaches_complete_semantic_import() {
     let target = ScratchTarget::new();
     let output = run_extraction_command(&target, Some("atomic-rmw"), true);

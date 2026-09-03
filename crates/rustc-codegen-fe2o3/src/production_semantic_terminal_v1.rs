@@ -68,6 +68,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     MathF32(F32MathFunction),
     /// The exact rustc `core::intrinsics::fabs::<f32>` compiler intrinsic.
     RustcFabsF32,
+    /// The exact checked `fe2o3_device::memory::volatile_load` provider.
+    MemoryVolatileLoad,
     Bf16Conversion(ProductionBf16ConversionV1),
     WorkgroupCollectiveContextCurrent,
     NeutralWorkgroupReduceSum,
@@ -447,6 +449,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap) => {
                 Self::Expand(ProductionTerminalExpansionV1::Trap)
             }
+            TrustedDeviceItem::MemoryVolatileLoad => {
+                Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad)
+            }
             unsupported => Self::Reject(unsupported),
         }
     }
@@ -758,6 +763,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Trap) => {
                 TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap)
             }
+            Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad) => {
+                TrustedDeviceItem::MemoryVolatileLoad
+            }
             Self::Expand(
                 ProductionTerminalExpansionV1::ColdPath
                 | ProductionTerminalExpansionV1::RustcFabsF32,
@@ -1068,6 +1076,10 @@ mod tests {
                 TrustedDeviceItem::DisjointSliceGetRowStriped2DMut,
                 ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut,
             ),
+            (
+                TrustedDeviceItem::MemoryVolatileLoad,
+                ProductionTerminalExpansionV1::MemoryVolatileLoad,
+            ),
         ];
         for (item, expansion) in cases {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
@@ -1079,7 +1091,6 @@ mod tests {
     #[test]
     fn every_unimplemented_terminal_is_retained_as_an_explicit_rejection() {
         for item in [
-            TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,

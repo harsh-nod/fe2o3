@@ -2120,6 +2120,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::WorkgroupPipelineStage
         | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
         | ProductionTerminalExpansionV1::WorkgroupPipelineWait
