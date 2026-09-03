@@ -5,11 +5,14 @@ produced by `SimulationScheduleRecordV1`. It is not another scheduler. Canonical
 and seeded recording, in-process replay, command-line replay, and debugger
 capture all use the same cooperative simulator implementation.
 
-The canonical JSON document binds exact KIR V7 identity, direct-KIR versus
-verified-bundle admission, the complete canonical bundle identity and its
-semantic subject, exact request bytes, CPU target profile, every simulation
-limit, schedule identity and seed, complete coverage, context/transcript/record
-identities, and every workgroup, phase, and runnable local selection.
+The canonical JSON document binds exact KIR V7, V9, or V10 identity and the
+matching raw-artifact kind, or verified-bundle admission with the complete
+canonical bundle identity and its semantic subject. It also binds exact request
+bytes, CPU target profile, every simulation limit, schedule identity and seed,
+complete coverage, context/transcript/record identities, and every workgroup,
+phase, and runnable local selection. The current command-line route accepts raw
+V7 and V7-bearing bundles; library callers can persist exact V9/V10 schedules
+for directly admitted canonical owners.
 
 The decoder accepts only its unique whitespace-free encoding. Unknown,
 duplicate, missing, null, trailing, alternate-case, oversized, over-limit,

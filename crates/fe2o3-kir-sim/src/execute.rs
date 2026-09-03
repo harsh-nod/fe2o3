@@ -13,8 +13,8 @@ use fe2o3_kernel_ir::{
     CheckedBinaryOperator, ComparePredicate, Constant, Fence, Function, FunctionId, FunctionRole,
     IndexKind, IntrinsicKind, MemoryAccess, MemoryIntrinsicOperation, MemoryOrdering, Module,
     Operation, OperationKind, PointerDistanceKind, PointerDistanceUnit, ScalarType,
-    SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId, WaveOperation,
-    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemoryExtent,
+    SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -3626,6 +3626,43 @@ fn resolve_ready_waves<'a>(
             }
         }
 
+        let mut reduced_f32 = [ScalarBitsV1::boolean(false); 64];
+        if let WaveOperationKind::ReduceF32 {
+            tile_width, kind, ..
+        } = arrival.wave.kind
+        {
+            for lane in 0..width {
+                let source = wave_member_index(machines, start, lane).ok_or_else(|| {
+                    engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::InternalInvariant("f32 reduction member"),
+                    )
+                })?;
+                let Some(WaveInput::ReduceF32(value)) = machines[source].wave_input() else {
+                    return Err(engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::InternalInvariant("f32 reduction input"),
+                    ));
+                };
+                reduced_f32[lane as usize] = value;
+            }
+            let mut distance = 1_u32;
+            while distance < tile_width {
+                let previous = reduced_f32;
+                for lane in 0..width {
+                    let source = lane ^ u64::from(distance);
+                    reduced_f32[lane as usize] = execute_wave_f32_reduction(
+                        kind,
+                        previous[lane as usize],
+                        previous[source as usize],
+                        engine.target,
+                    )
+                    .map_err(|error| engine.at(arrival.site, map_soft_float_error(error)))?;
+                }
+                distance *= 2;
+            }
+        }
+
         results.clear();
         for lane in 0..width {
             let index = wave_member_index(machines, start, lane).ok_or_else(|| {
@@ -3744,13 +3781,42 @@ fn resolve_ready_waves<'a>(
                     };
                     value
                 }
-                WaveOperationKind::ReduceF32 { .. } | WaveOperationKind::BroadcastF32 { .. } => {
-                    return Err(engine.at(
-                        arrival.site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "unsupported wave operation passed preflight",
-                        ),
-                    ));
+                WaveOperationKind::ReduceF32 { .. } => reduced_f32[lane as usize],
+                WaveOperationKind::BroadcastF32 { .. } => {
+                    let Some(WaveInput::BroadcastF32 {
+                        source_lane,
+                        tile_width,
+                        ..
+                    }) = machines[index].wave_input()
+                    else {
+                        return Err(engine.at(
+                            arrival.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "f32 broadcast input",
+                            ),
+                        ));
+                    };
+                    let tile_start = (lane / u64::from(tile_width)) * u64::from(tile_width);
+                    let source =
+                        wave_member_index(machines, start, tile_start + u64::from(source_lane))
+                            .ok_or_else(|| {
+                                engine.at(
+                                    arrival.site,
+                                    SimulationExecutionErrorKindV1::InternalInvariant(
+                                        "f32 broadcast source member",
+                                    ),
+                                )
+                            })?;
+                    let Some(WaveInput::BroadcastF32 { value, .. }) = machines[source].wave_input()
+                    else {
+                        return Err(engine.at(
+                            arrival.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "f32 broadcast source input",
+                            ),
+                        ));
+                    };
+                    value
                 }
             };
             results.push((index, value));
@@ -4321,6 +4387,12 @@ enum WaveInput {
     LaneId,
     Predicate(bool),
     Shuffle {
+        value: ScalarBitsV1,
+        source_lane: u32,
+        tile_width: u32,
+    },
+    ReduceF32(ScalarBitsV1),
+    BroadcastF32 {
         value: ScalarBitsV1,
         source_lane: u32,
         tile_width: u32,
@@ -5115,16 +5187,83 @@ fn prepare_wave_wait(
                 tile_width,
             }
         }
-        WaveOperationKind::ReduceF32 { .. } | WaveOperationKind::BroadcastF32 { .. } => {
-            return Err(engine.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "unsupported wave operation passed preflight",
-                ),
-            ));
+        WaveOperationKind::ReduceF32 { value, .. } => {
+            let value_id = value;
+            let value = scalar_value(engine, &frame.values, value_id, &site)?;
+            if value.ty() != ScalarType::F32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(value_id),
+                        expected: "f32 wave reduction value",
+                    },
+                ));
+            }
+            WaveInput::ReduceF32(value)
+        }
+        WaveOperationKind::BroadcastF32 {
+            value,
+            source_lane,
+            tile_width,
+        } => {
+            let value_id = value;
+            let value = scalar_value(engine, &frame.values, value_id, &site)?;
+            if value.ty() != ScalarType::F32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(value_id),
+                        expected: "f32 wave broadcast value",
+                    },
+                ));
+            }
+            let source = scalar_value(engine, &frame.values, source_lane, &site)?;
+            if source.ty() != ScalarType::U32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(source_lane),
+                        expected: "u32 wave broadcast source lane",
+                    },
+                ));
+            }
+            let source_lane = source.bits() as u32;
+            if source_lane >= tile_width {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "verified f32 broadcast source bound",
+                    ),
+                ));
+            }
+            WaveInput::BroadcastF32 {
+                value,
+                source_lane,
+                tile_width,
+            }
         }
     });
     Ok(())
+}
+
+fn execute_wave_f32_reduction(
+    kind: WaveF32ReductionKindV1,
+    lhs: ScalarBitsV1,
+    rhs: ScalarBitsV1,
+    target: SimulationTargetV1,
+) -> Result<ScalarBitsV1, SoftFloatErrorV1> {
+    match kind {
+        WaveF32ReductionKindV1::Sum => {
+            crate::soft_float::execute_binary_v1(BinaryOp::Add, lhs, rhs, target)
+        }
+        WaveF32ReductionKindV1::Maximum => {
+            if crate::soft_float::execute_compare_v1(ComparePredicate::LessThan, lhs, rhs)? {
+                Ok(rhs)
+            } else {
+                Ok(lhs)
+            }
+        }
+    }
 }
 
 #[inline(never)]

@@ -32,7 +32,7 @@ the conditions in the [release process](docs/release-process.md) and
 - **Typed compiler contracts.** Source, semantic MIR, Pliron, Kernel IR,
   LLVM, artifact, and runtime boundaries are represented explicitly and fail
   closed when a required association is unavailable.
-- **CPU simulation without a GPU.** A deterministic Kernel IR V7 simulator can
+- **CPU simulation without a GPU.** A deterministic Kernel IR simulator can
   execute the supported semantic subset and expose logical work-item, wave,
   workgroup, memory, atomic, fence, and barrier observations. It does not
   predict GPU performance.
@@ -145,7 +145,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | --- | --- |
 | Rust kernel surface | Typed kernels, device indexing, checked buffer views, bounded scalar/control/memory subsets |
 | Compiler | Source/MIR through typed Pliron and verified KIR; bounded `gfx942` LLVM/HSACO vertical slices |
-| CPU simulation | Deterministic execution of admitted canonical KIR V7, including supported helpers, barriers, workgroup memory, atomics, fences, floating point, and seeded schedule exploration |
+| CPU simulation | Deterministic execution of admitted canonical KIR V7 plus exact direct V9/V10 custody, including supported helpers, barriers, workgroup memory, wave f32 collectives, memory intrinsics, atomics, fences, floating point, and seeded schedule exploration |
 | Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
@@ -163,7 +163,8 @@ milestones are retained in the [project status archive](docs/project-status.md).
   MI300X `gfx942:xnack-` profile. Other AMD targets are not implied.
 - An ordinary external project cannot yet compile and dispatch a general Rust
   kernel through one supported public command.
-- The simulator accepts a defined KIR V7 semantic subset. Unsupported types and
+- The simulator accepts defined KIR V7/V9/V10 semantic subsets. The current
+  ordinary-Rust bundle and raw CLI routes still carry V7. Unsupported types and
   operations fail closed; CPU results are not timing or performance predictions.
 - CPU logical waves model semantic collectives and visualization partitions,
   not physical GPU wave scheduling or `EXEC` state.

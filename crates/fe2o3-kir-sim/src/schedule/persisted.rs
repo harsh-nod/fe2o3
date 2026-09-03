@@ -27,6 +27,8 @@ const UNSUPPORTED_SCHEMA_MARKER: &str = "fe2o3:schedule_schema_unsupported";
 pub enum PersistedSimulationScheduleArtifactV1 {
     /// Exact canonical Kernel IR V7 was supplied directly.
     CanonicalKirV7,
+    /// Exact canonical Kernel IR V9 was supplied directly.
+    CanonicalKirV9,
     /// Exact canonical Kernel IR V10 was supplied directly.
     CanonicalKirV10,
     /// An authority-free simulation bundle supplied the exact canonical KIR.
@@ -40,6 +42,7 @@ pub enum PersistedSimulationScheduleArtifactV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PersistedSimulationScheduleBindingV1 {
     artifact: PersistedSimulationScheduleArtifactV1,
+    kir_wire_version: u16,
     kir_sha256: [u8; 32],
     kir_canonical_bytes: u64,
     request_sha256: [u8; 32],
@@ -61,6 +64,7 @@ impl PersistedSimulationScheduleBindingV1 {
         let kir = kir.into();
         Self {
             artifact,
+            kir_wire_version: kir.wire_version(),
             kir_sha256: *kir.digest(),
             kir_canonical_bytes: kir.canonical_length(),
             request_sha256,
@@ -72,6 +76,10 @@ impl PersistedSimulationScheduleBindingV1 {
 
     pub const fn artifact(self) -> PersistedSimulationScheduleArtifactV1 {
         self.artifact
+    }
+
+    pub const fn kir_wire_version(self) -> u16 {
+        self.kir_wire_version
     }
 
     pub const fn kir_sha256(self) -> [u8; 32] {
@@ -321,6 +329,10 @@ enum ArtifactWireV1 {
         kir_sha256: HexIdentityV1,
         kir_canonical_bytes: u64,
     },
+    CanonicalKirV9 {
+        kir_sha256: HexIdentityV1,
+        kir_canonical_bytes: u64,
+    },
     CanonicalKirV10 {
         kir_sha256: HexIdentityV1,
         kir_canonical_bytes: u64,
@@ -530,6 +542,14 @@ impl TryFrom<ScheduleDocumentWireV1> for PersistedSimulationScheduleDocumentV1 {
                 kir_sha256.0,
                 kir_canonical_bytes,
             ),
+            ArtifactWireV1::CanonicalKirV9 {
+                kir_sha256,
+                kir_canonical_bytes,
+            } => (
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV9,
+                kir_sha256.0,
+                kir_canonical_bytes,
+            ),
             ArtifactWireV1::CanonicalKirV10 {
                 kir_sha256,
                 kir_canonical_bytes,
@@ -583,6 +603,12 @@ impl TryFrom<ScheduleDocumentWireV1> for PersistedSimulationScheduleDocumentV1 {
         };
         let binding = PersistedSimulationScheduleBindingV1 {
             artifact,
+            kir_wire_version: match artifact {
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV7
+                | PersistedSimulationScheduleArtifactV1::SimulationBundleV1 { .. } => 7,
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV9 => 9,
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV10 => 10,
+            },
             kir_sha256,
             kir_canonical_bytes,
             request_sha256: wire.request.sha256.0,
@@ -615,7 +641,16 @@ fn encode_parts(
 fn validate_binding(
     binding: &PersistedSimulationScheduleBindingV1,
 ) -> Result<(), PersistedSimulationScheduleCodecErrorV1> {
-    if binding.kir_canonical_bytes == 0 || binding.request_bytes == 0 {
+    let expected_wire_version = match binding.artifact {
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7
+        | PersistedSimulationScheduleArtifactV1::SimulationBundleV1 { .. } => 7,
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV9 => 9,
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV10 => 10,
+    };
+    if binding.kir_wire_version != expected_wire_version
+        || binding.kir_canonical_bytes == 0
+        || binding.request_bytes == 0
+    {
         return Err(PersistedSimulationScheduleCodecErrorV1::InvalidBinding);
     }
     binding
@@ -650,6 +685,10 @@ fn wire_from_parts<'a>(
 ) -> Result<ScheduleDocumentEncodeWireV1<'a>, PersistedSimulationScheduleCodecErrorV1> {
     let artifact = match binding.artifact {
         PersistedSimulationScheduleArtifactV1::CanonicalKirV7 => ArtifactWireV1::CanonicalKirV7 {
+            kir_sha256: HexIdentityV1(binding.kir_sha256),
+            kir_canonical_bytes: binding.kir_canonical_bytes,
+        },
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV9 => ArtifactWireV1::CanonicalKirV9 {
             kir_sha256: HexIdentityV1(binding.kir_sha256),
             kir_canonical_bytes: binding.kir_canonical_bytes,
         },

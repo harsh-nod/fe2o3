@@ -72,10 +72,59 @@ fn memory_intrinsic_ownership_is_explicitly_additive_v10() {
                 reason: SimulationUnsupportedReasonCodeV1::MemoryIntrinsic,
             }
         );
+        assert_eq!(
+            capability(SimulationKirWireVersionV1::V9),
+            &SimulationCapabilityDispositionV1::Unsupported {
+                reason: SimulationUnsupportedReasonCodeV1::MemoryIntrinsic,
+            }
+        );
         assert!(matches!(
             capability(SimulationKirWireVersionV1::V10),
             SimulationCapabilityDispositionV1::Owned { .. }
         ));
+    }
+}
+
+#[test]
+fn f32_wave_ownership_is_explicitly_additive_v9_and_v10() {
+    let matrix = semantic_capability_matrix_v1();
+    for profile in matrix
+        .top_level_rows
+        .iter()
+        .map(|row| row.profile)
+        .collect::<BTreeSet<_>>()
+    {
+        let capability = |version| {
+            &matrix
+                .top_level_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == version
+                        && row.operation == SimulationOperationSurfaceV1::Wave
+                })
+                .unwrap()
+                .capability
+        };
+        assert!(matches!(
+            capability(SimulationKirWireVersionV1::V7),
+            SimulationCapabilityDispositionV1::Owned {
+                typed_rejections,
+                ..
+            } if *typed_rejections == [SimulationUnsupportedReasonCodeV1::Wave]
+        ));
+        for version in [
+            SimulationKirWireVersionV1::V9,
+            SimulationKirWireVersionV1::V10,
+        ] {
+            assert!(matches!(
+                capability(version),
+                SimulationCapabilityDispositionV1::Owned {
+                    typed_rejections,
+                    ..
+                } if typed_rejections.is_empty()
+            ));
+        }
     }
 }
 

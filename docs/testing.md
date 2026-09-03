@@ -63,7 +63,9 @@ the broader CPU package set. It checks the stable JSON command and requires an
 exact simulator owner or typed unsupported reason for every top-level KIR
 operation, terminator, profile, and scalar operation/type combination. The
 matrix marks these as declared tool-contract facts with `authority: none`; its
-newline-terminated compact JSON is fixed at 4,698,338 bytes.
+newline-terminated compact JSON is fixed at 4,746,086 bytes.
+Named GPU profiles select simulator data-layout semantics and do not claim
+compiler lowering, ISA support, hardware availability, or physical validation.
 
 The generic lane translates 256 deterministic wrapping-`i32` programs from the
 independent `fe2o3-differential` model into admitted KIR V7, executes them in

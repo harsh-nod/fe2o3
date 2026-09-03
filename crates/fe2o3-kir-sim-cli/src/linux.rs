@@ -2968,6 +2968,9 @@ fn write_exploration_input<W: Write + ?Sized>(
         PersistedSimulationScheduleArtifactV1::CanonicalKirV7 => {
             writer.write_all(b"{\"kind\":\"canonical_kir_v7\",\"kir_sha256\":\"")?;
         }
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV9 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v9\",\"kir_sha256\":\"")?;
+        }
         PersistedSimulationScheduleArtifactV1::CanonicalKirV10 => {
             writer.write_all(b"{\"kind\":\"canonical_kir_v10\",\"kir_sha256\":\"")?;
         }

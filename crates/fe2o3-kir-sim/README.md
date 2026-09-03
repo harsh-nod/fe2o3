@@ -3,20 +3,30 @@
 `fe2o3-kir-sim` is a bounded, deterministic CPU execution engine for an
 explicit subset of verified canonical Kernel IR. The frozen
 `AdmittedSimulationModuleV1::admit` route consumes exact V7 custody;
-`admit_v10` consumes exact V10 custody for additive memory-intrinsic execution.
-Raw in-memory modules and older wire formats are not execution inputs. The
+`admit_v9` consumes exact V9 custody for additive f32 wave collectives, and
+`admit_v10` consumes exact V10 custody for those collectives plus additive
+memory-intrinsic execution. Raw in-memory modules and other wire formats are
+not execution inputs. The
 production compiler and simulation-bundle exporter continue to emit V7; source
-export to V10 is not part of this simulator slice.
+export to V9 or V10 is not part of this simulator slice.
 
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies V7 and V10 separately, names those rows as declared tool-contract facts with no authority, and
+identifies V7, V9, and V10 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,724,072 bytes and its regression test rejects
+compact V1 document is fixed at 4,746,086 bytes and its regression test rejects
 any unreviewed schema-size change.
+
+The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
+semantics only. An owned row describes execution of already-verified KIR; it
+does not assert that the compiler can lower that operation for the named GPU,
+that the ISA or hardware supports it, or that a physical execution was
+observed. Those remain separate compiler, artifact, runtime, and qualification
+contracts. In particular, V9/V10 f32 wave ownership must not be read as a
+`gfx942` hardware-availability claim.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
@@ -57,6 +67,18 @@ must reach the same wave operation and semantics; divergence, mismatch,
 out-of-tile shuffle sources, and a final partial logical wave are exact typed
 failures. These are logical collective semantics, not ISA emulation or a claim
 about a hardware `EXEC` mask.
+
+V9 and V10 additionally execute already-verified `ReduceF32` sum/maximum and `BroadcastF32`
+over fixed contiguous power-of-two tiles. Reduction reproduces the canonical
+AMDGPU lowerer's stage-synchronous XOR butterfly in ascending distances for
+every lane. Sum uses software IEEE f32 round-to-nearest, ties-to-even. Maximum
+reproduces `fcmp olt` followed by `select`: an unordered comparison or an equal
+pair retains the exact left operand bits, including a NaN payload/sign or the
+sign of zero. Broadcast copies the exact bits from each invocation's bounded
+tile-local source lane. No collective uses native host floating-point
+arithmetic. KIR requires a full uniform physical wave; a partial final wave is
+therefore rejected with exact active and required masks instead of being
+silently filled.
 
 Each static `WorkgroupMemory` operation denotes one zeroed-but-uninitialized
 allocation site per workgroup. The allocation is shared by that workgroup and
@@ -174,8 +196,8 @@ are never implemented with host `f32`/`f64` arithmetic and are never implicitly
 contracted.
 
 Float atomics, generic-address-space atomics, external calls, generic barriers,
-dynamic or non-scalar workgroup memory, V9 F32 wave reductions and broadcasts,
-matrix operations, gfx950 LDS transpose operations, V7 memory intrinsics,
+dynamic or non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
+operations, V7 memory intrinsics,
 V10 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
 volatile access, target-layout mismatches, and inline assembly remain typed
 unsupported states. Pointer distance additionally rejects distinct logical
@@ -188,7 +210,8 @@ GPU floating-point modes, GPU timing, GPU performance, or prove memory-model
 race freedom.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, or
-an exact V10 owner with `AdmittedSimulationModuleV1::admit_v10`, then
+an exact V9/V10 owner with `AdmittedSimulationModuleV1::admit_v9` or
+`AdmittedSimulationModuleV1::admit_v10`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
 byte-addressed buffer arguments in `SimulationRequestV1`. Index scalars,
 buffers, and views are bound to the 32- or 64-bit layout used to construct them;

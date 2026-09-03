@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_724_072;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_746_086;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -78,6 +78,8 @@ const CAST_OPERATIONS: [CastKind; 8] = [
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// CPU simulation layouts only. A named GPU profile does not claim compiler
+/// lowering, ISA support, launch authority, or observed hardware behavior.
 pub enum SimulationCapabilityProfileV1 {
     LittleEndianIndex32,
     Amdgpu64TargetNeutral,
@@ -108,11 +110,12 @@ impl SimulationCapabilityProfileV1 {
 #[serde(rename_all = "snake_case")]
 pub enum SimulationKirWireVersionV1 {
     V7,
+    V9,
     V10,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 2] = [Self::V7, Self::V10];
+    const ALL: [Self; 3] = [Self::V7, Self::V9, Self::V10];
     const COUNT: usize = Self::ALL.len();
 }
 
@@ -487,7 +490,12 @@ fn top_level_capability(
             },
         ),
         Surface::Intrinsic => owned(Owner::LaunchGeometry, &[]),
-        Surface::MemoryIntrinsic if kir_wire_version == SimulationKirWireVersionV1::V7 => {
+        Surface::MemoryIntrinsic
+            if matches!(
+                kir_wire_version,
+                SimulationKirWireVersionV1::V7 | SimulationKirWireVersionV1::V9
+            ) =>
+        {
             unsupported(Reason::MemoryIntrinsic)
         }
         Surface::MemoryIntrinsic => owned(
@@ -547,7 +555,10 @@ fn top_level_capability(
         ),
         Surface::Matrix => unsupported(Reason::Matrix),
         Surface::Gfx950LdsTranspose => unsupported(Reason::Gfx950LdsTranspose),
-        Surface::Wave => owned(Owner::WaveCooperative, &[Reason::Wave]),
+        Surface::Wave if kir_wire_version == SimulationKirWireVersionV1::V7 => {
+            owned(Owner::WaveCooperative, &[Reason::Wave])
+        }
+        Surface::Wave => owned(Owner::WaveCooperative, &[]),
         Surface::InlineAssembly => unsupported(Reason::InlineAssembly),
         Surface::Branch | Surface::ConditionalBranch | Surface::Return | Surface::Unreachable => {
             owned(Owner::ControlFlow, &[])
