@@ -2996,7 +2996,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("32522393cdf2c3d502067095e39084fa9c302ff807474f359718f8fa75ffd5e6")
+            digest("6620ab678ea01b4d0feb88ac8076617b748451426c1c6a6f8981b4013f64cd0e")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
