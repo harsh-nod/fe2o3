@@ -51,7 +51,8 @@ use crate::queue_linux::{
     LinuxCwsrShadowPagesV1, LinuxCwsrShadowsAfterEventDestroyedV1,
     LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1, LinuxDoorbellSliceV1,
     LinuxKfdRuntimeDisabledV1, LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1,
-    QueueExceptionWaitObservationV1, arm_process_global_kfd_runtime_gate_for_teardown_v1,
+    LinuxUnpublishedCwsrShadowPagesV1, QueueExceptionWaitObservationV1,
+    arm_process_global_kfd_runtime_gate_for_teardown_v1,
     permanently_poison_process_global_kfd_runtime_gate_v1,
 };
 use crate::sdma::{
@@ -1551,7 +1552,9 @@ struct PreparedAuxiliaryComputeLaneV1 {
     completion_owner: CompletionSignalArenaOwnerV1,
     submission: NativeAqlSubmissionOwnerV1,
     dispatch: DispatchResourceOwnerV1,
-    exception: QueueExceptionStateV1,
+    runtime: LinuxKfdRuntimeEnabledV1,
+    event: LinuxQueueExceptionEventV1,
+    unpublished_shadows: LinuxUnpublishedCwsrShadowPagesV1,
     ring_bytes: u32,
 }
 
@@ -2426,19 +2429,28 @@ impl ComputeAqlQueueSessionV1 {
             let event = LinuxQueueExceptionEventV1::create(memory.kfd_fd(), memory.opener_pid())?;
             memory.check_queue_currentness()?;
             let shadow_plan = memory.cwsr_shadow_plan(&context_save)?;
-            let shadows = LinuxCwsrShadowPagesV1::install(shadow_plan, &event)?;
+            let unpublished_shadows = LinuxCwsrShadowPagesV1::install(shadow_plan, &event)?;
             let cwsr_initialization = memory.with_bytes_mut(&mut context_save, |bytes| {
-                shadows.initialize_and_validate_bo_headers(bytes)
+                unpublished_shadows
+                    .shadows()
+                    .initialize_and_validate_bo_headers(bytes)
             })?;
             cwsr_initialization.map_err(|_| {
                 ComputeAqlQueueSessionErrorV1::Contract("CWSR header initialization")
             })?;
             runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
-            event.validate_live_with_shadows(memory.kfd_fd(), memory.opener_pid(), &shadows)?;
+            event.validate_live_with_shadows(
+                memory.kfd_fd(),
+                memory.opener_pid(),
+                unpublished_shadows.shadows(),
+            )?;
             memory.check_queue_currentness()?;
 
             let eop = memory.seal_executable(eop)?;
             let context_save = memory.seal_executable(context_save)?;
+            unpublished_shadows
+                .shadows()
+                .restore_kernel_write_access_after_bo_seal()?;
             let ring = ring.map_and_retain(memory)?;
             let control = memory.map_to_gpu(control)?;
             let completion_signals = memory.map_to_gpu(completion_signals)?;
@@ -2470,12 +2482,9 @@ impl ComputeAqlQueueSessionV1 {
                 completion_owner,
                 submission,
                 dispatch,
-                exception: QueueExceptionStateV1 {
-                    runtime,
-                    runtime_control: None,
-                    event,
-                    shadows,
-                },
+                runtime,
+                event,
+                unpublished_shadows,
                 ring_bytes,
             })
         });
@@ -2495,25 +2504,38 @@ impl ComputeAqlQueueSessionV1 {
 
     fn finish_auxiliary_compute_lane_creation_v1(
         &mut self,
-        mut prepared: PreparedAuxiliaryComputeLaneV1,
+        prepared: PreparedAuxiliaryComputeLaneV1,
         slot: PreparedAuxiliaryComputeLaneSlotV1,
     ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
-        let (key, outputs, queue_id) = {
+        let PreparedAuxiliaryComputeLaneV1 {
+            authority,
+            completion_signals,
+            completion_owner,
+            submission,
+            dispatch,
+            mut runtime,
+            event,
+            unpublished_shadows,
+            ring_bytes,
+        } = prepared;
+        let (key, outputs, queue_id, shadows) = {
             let engine = self
                 .engine
                 .as_mut()
                 .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                     "missing queue engine",
                 ))?;
-            let key = engine.admit(prepared.authority).map_err(map_native)?;
-            engine.create(key).map_err(map_create)?;
-            prepared
-                .exception
-                .runtime
-                .mark_queue_created()
-                .map_err(|error| {
-                    terminal_creation("runtime queue-live transition", error.into())
-                })?;
+            let key = engine.admit(authority).map_err(map_native)?;
+            let mut shadows = None;
+            engine
+                .create_at_native_boundary(key, || {
+                    shadows = Some(unpublished_shadows.publish_for_native_queue_creation());
+                })
+                .map_err(map_create)?;
+            let shadows = shadows.expect("native CREATE_QUEUE boundary published CWSR shadows");
+            runtime.mark_queue_created().map_err(|error| {
+                terminal_creation("runtime queue-live transition", error.into())
+            })?;
             let outputs = engine.create_outputs(key).ok_or_else(|| {
                 terminal_creation(
                     "CREATE_QUEUE output recovery",
@@ -2526,14 +2548,14 @@ impl ComputeAqlQueueSessionV1 {
                     ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
                 )
             })?;
-            (key, outputs, queue_id)
+            (key, outputs, queue_id, shadows)
         };
         let mut observation = ComputeAqlQueueObservationV1 {
             queue_id,
-            ring_bytes: prepared.ring_bytes,
+            ring_bytes,
             doorbell_slice_bytes: 0,
             doorbell_byte_offset: 0,
-            event_id: prepared.exception.event.event_id_observation(),
+            event_id: event.event_id_observation(),
             cwsr_shadow_pages: 8,
         };
         self.check_currentness()?;
@@ -2551,15 +2573,20 @@ impl ComputeAqlQueueSessionV1 {
             ComputeAqlQueueLaneStateV1 {
                 key,
                 doorbell: Some(doorbell),
-                submission: Some(prepared.submission),
-                completion_signals: Some(prepared.completion_signals),
-                completion_owner: prepared.completion_owner,
-                dispatch: Some(prepared.dispatch),
+                submission: Some(submission),
+                completion_signals: Some(completion_signals),
+                completion_owner,
+                dispatch: Some(dispatch),
                 detached_data_count: 0,
                 detached_dispatch_generation: None,
                 detached_data_identities: Vec::new(),
                 detached_next_insertion_index: None,
-                exception: Some(prepared.exception),
+                exception: Some(QueueExceptionStateV1 {
+                    runtime,
+                    runtime_control: None,
+                    event,
+                    shadows,
+                }),
                 observation,
             },
         );
@@ -2630,14 +2657,13 @@ impl ComputeAqlQueueSessionV1 {
                     engine.backend.session.kfd_fd(),
                     engine.backend.session.opener_pid(),
                 )?;
+                let shadows = exception.shadows.after_event_destroy(destroyed_event)?;
                 exception.runtime.mark_event_destroyed()?;
                 let disabled_runtime = exception.runtime.disable(
                     engine.backend.session.kfd_fd(),
                     engine.backend.session.opener_pid(),
                 )?;
-                let shadow_release = exception
-                    .shadows
-                    .after_event_and_runtime_destroy(destroyed_event, disabled_runtime)?;
+                let shadow_release = shadows.after_runtime_destroy(disabled_runtime)?;
                 state
                     .doorbell
                     .take()
@@ -7491,5 +7517,47 @@ mod tests {
                 "{post_handoff_step}"
             );
         }
+    }
+
+    #[test]
+    fn auxiliary_queue_publishes_cwsr_payload_only_at_native_create_boundary() {
+        let source = include_str!("queue_live.rs");
+        let prepared_state = source
+            .split("struct PreparedAuxiliaryComputeLaneV1")
+            .nth(1)
+            .unwrap()
+            .split("fn prepare_auxiliary_compute_lane_slot_v1")
+            .next()
+            .unwrap();
+        assert!(prepared_state.contains("unpublished_shadows: LinuxUnpublishedCwsrShadowPagesV1"));
+        assert!(!prepared_state.contains("exception: QueueExceptionStateV1"));
+
+        let body = source
+            .split("pub fn create_auxiliary_compute_lane_with_fixed_dispatch")
+            .nth(1)
+            .unwrap()
+            .split("pub fn auxiliary_compute_lane_count_v1")
+            .next()
+            .unwrap();
+        let install = body
+            .find("let unpublished_shadows = LinuxCwsrShadowPagesV1::install")
+            .unwrap();
+        let restore = body
+            .find("restore_kernel_write_access_after_bo_seal")
+            .unwrap();
+        let native_boundary = body.find("create_at_native_boundary(key").unwrap();
+        let publish = body
+            .find("unpublished_shadows.publish_for_native_queue_creation()")
+            .unwrap();
+        let published_exception = body.find("exception: Some(QueueExceptionStateV1").unwrap();
+        assert!(install < restore);
+        assert!(restore < native_boundary);
+        assert!(native_boundary < publish);
+        assert!(publish < published_exception);
+        assert_eq!(
+            body.matches("publish_for_native_queue_creation()").count(),
+            1
+        );
+        assert!(!body.contains("engine.create(key)"));
     }
 }
