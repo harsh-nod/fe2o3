@@ -35,9 +35,8 @@ final compiler-module commitment receipt identity as two distinct axes.
 Resource limits are part of the wire contract:
 
 - semantic MIR: at most 128 MiB;
-- rustc preflight plan: at most 8 MiB;
-- every other non-MIR stage transcript, including the compact final
-  compiler-module commitment: at most 4 MiB each;
+- every other stage transcript, including the compact final compiler-module
+  commitment: at most 4 MiB each;
 - complete capsule: at most 160 MiB;
 - rustc invocation: the bound exported by `fe2o3-rustc-invocation`;
 - target spelling: at most 128 bytes.

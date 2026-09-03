@@ -59,12 +59,6 @@ impl Eq for ImmutableBytesV3 {}
 /// Maximum bytes retained for one non-MIR lineage receipt preimage.
 pub const MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3: usize = 4 * 1024 * 1024;
 
-/// Maximum bytes retained for the canonical rustc preflight-plan transcript.
-///
-/// The plan records the complete admitted rustc producer closure and can be
-/// larger than the other non-MIR receipts for aggregate device crates.
-pub const MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3: usize = 8 * 1024 * 1024;
-
 /// Maximum bytes retained for exact canonical semantic MIR.
 pub const MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3: usize = 128 * 1024 * 1024;
 
@@ -252,7 +246,7 @@ define_receipt!(
     InertRustcPreflightPlanReceiptV3,
     "rustc preflight plan",
     b"FE2O3/INERT-LINEAGE-CONTENT/RUSTC-PREFLIGHT-PLAN/V3\0",
-    MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3
+    MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3
 );
 define_receipt!(
     /// Inert content identity of one canonical semantic-MIR transcript.
