@@ -173,8 +173,11 @@ milestones are retained in the [project status archive](docs/project-status.md).
   predictions.
 - CPU logical waves model semantic collectives and visualization partitions,
   not physical GPU wave scheduling or `EXEC` state.
-- Live KFD debugging does not yet expose general wave/lane PC, registers,
-  target memory, source stepping, or breakpoints.
+- Live KFD debugging admits authenticated hierarchy and relative-PC evidence and
+  can retain same-stop, wave-scoped register values and simple scalar locals.
+  The installed direct-KFD target cannot yet produce a physical GPU stop, and
+  general lane values, target memory, source stepping, and breakpoints remain
+  unavailable.
 - ROCgdb integration is bounded by what the installed debugger exposes and is
   not a source of fe2o3 compiler or runtime authority.
 - One protected MI300X direct-KFD/rocprofv3 qualification completed with exact
