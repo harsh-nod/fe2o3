@@ -750,6 +750,7 @@ for core_step in \
   rustc-codegen-shard-policy \
   parity-matrix-check \
   parity-matrix-tests \
+  runtime-parity-report-tests \
   parity-evidence-tests \
   parity-oci-executor-tests \
   parity-oci-operator-tests \
@@ -1313,6 +1314,10 @@ unset FE2O3_ALLOW_GPU_SMOKE FE2O3_TARGET
 STEP_NAMES=()
 STEP_COMMANDS=()
 main parity-evidence
+assert_equals \
+  "python3 scripts/tests/test_runtime_parity_report.py" \
+  "$(step_command runtime-parity-report-tests)" \
+  'parity evidence command did not dispatch the runtime report suite'
 assert_equals \
   "bash scripts/tests/parity-row-evidence.sh" \
   "$(step_command parity-row-evidence-tests)" \

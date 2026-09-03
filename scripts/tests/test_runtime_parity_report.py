@@ -31,6 +31,8 @@ def row(backend: str, scale: float = 1.0) -> str:
         "d2h_p95_ns": 100 * scale,
         "d2h_p50_GBps": 25 / scale,
     }
+    if backend == "kfd":
+        fields["profile"] = "directional"
     return " ".join(f"{key}={value}" for key, value in fields.items())
 
 
@@ -64,6 +66,8 @@ def benchmark_context(schema: str, depth: int) -> str:
             kfd_surface="runtime-facade",
             timing="submit-through-observed-completion",
             setup_validation="outside-timing",
+            measurement="persistent-hot",
+            mapping_lifetime="persistent-no-host-access-between-timed-rounds",
         )
     return "context " + " ".join(f"{key}={value}" for key, value in fields.items())
 
@@ -261,6 +265,44 @@ class CheckParityTests(unittest.TestCase):
         self.assertEqual(len(bandwidth), 2)
         self.assertTrue(all("ratio=inf" not in line for line in bandwidth))
 
+    def test_rejects_missing_declared_depth_and_profile_substitution(self) -> None:
+        lines = evidence(
+            [row("kfd"), row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+        )
+        lines[0] = lines[0].replace("depths=16", "depths=1,16")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "declared depths"):
+            CHECK_PARITY.check_rows(
+                lines,
+                "fe2o3.async-copy-benchmark.v1",
+                1.0,
+                1.0,
+            )
+
+        substituted = evidence(
+            [row("kfd").replace("profile=directional", "profile=generic"), row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+        )
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "profile does not match"):
+            CHECK_PARITY.check_rows(
+                substituted,
+                "fe2o3.async-copy-benchmark.v1",
+                1.0,
+                1.0,
+            )
+
+    def test_preserves_exact_decimal_threshold(self) -> None:
+        kfd = row("kfd").replace("h2d_p50_ns=100.0", "h2d_p50_ns=1.00000000000000015")
+        hsa = row("hsa").replace("h2d_p50_ns=100.0", "h2d_p50_ns=1")
+        hip = row("hip").replace("h2d_p50_ns=100.0", "h2d_p50_ns=1")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "parity_status=fail"):
+            CHECK_PARITY.check_rows(
+                evidence([kfd, hsa, hip], "fe2o3.async-copy-benchmark.v1"),
+                "fe2o3.async-copy-benchmark.v1",
+                CHECK_PARITY.Decimal("1.00000000000000012"),
+                CHECK_PARITY.Decimal("1"),
+            )
+
     def test_accepts_multi_device_schema(self) -> None:
         rows = []
         for backend in ("kfd", "hsa", "hip"):
@@ -295,25 +337,58 @@ class CheckParityTests(unittest.TestCase):
     def test_accepts_xgmi_schema(self) -> None:
         rows = []
         for backend in ("kfd", "hsa", "hip"):
-            rows.append(
-                " ".join(
+            fields = [
+                f"backend={backend}",
+                "schema=fe2o3.xgmi-peer-benchmark.v1",
+                "unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf",
+                "bytes=1048576",
+                "depth=8",
+                "warmups=10",
+                "samples=30",
+                "forward_p50_ns=100",
+                "forward_p95_ns=120",
+                "forward_p50_GBps=20",
+                "reverse_p50_ns=110",
+                "reverse_p95_ns=130",
+                "reverse_p50_GBps=18",
+            ]
+            if backend == "kfd":
+                fields.extend(
                     (
-                        f"backend={backend}",
-                        "schema=fe2o3.xgmi-peer-benchmark.v1",
-                        "unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf",
-                        "bytes=1048576",
-                        "depth=8",
-                        "warmups=10",
-                        "samples=30",
-                        "forward_p50_ns=100",
-                        "forward_p95_ns=120",
-                        "forward_p50_GBps=20",
-                        "reverse_p50_ns=110",
-                        "reverse_p95_ns=130",
-                        "reverse_p50_GBps=18",
+                        "surface=runtime-facade",
+                        "target=gfx942:xnack-",
+                        "queue_depth=8",
+                        "batch_size=8",
+                        "direction=forward-then-reverse",
+                        "outstanding_depth=8",
+                        "engine_parallelism=ordered-single-sdma",
+                        "measurement=persistent-hot",
+                        "peer_access=topology-xgmi",
+                        "mapping_lifetime=persistent-no-host-access-between-timed-rounds",
+                        "prime_batches=1",
+                        "doorbells_per_batch=1",
+                        "progress=explicit-flush-then-wait",
+                        "background_progress=false",
+                        "forward_engine=topology-selected",
+                        "reverse_engine=topology-selected",
+                        "canaries=pass",
+                        "teardown=explicit",
+                        "timing=facade-enqueue-flush-through-observed-completion",
                     )
                 )
-            )
+            rows.append(" ".join(fields))
+        persistent = rows[0]
+        diagnostic = persistent.replace(
+            "measurement=persistent-hot",
+            "measurement=remap-per-round",
+        ).replace(
+            "mapping_lifetime=persistent-no-host-access-between-timed-rounds",
+            "mapping_lifetime=host-access-between-rounds",
+        ).replace(
+            "prime_batches=1",
+            "prime_batches=0",
+        )
+        rows.insert(0, diagnostic)
         output = CHECK_PARITY.check_rows(
             evidence(rows, "fe2o3.xgmi-peer-benchmark.v1", 8),
             "fe2o3.xgmi-peer-benchmark.v1",
@@ -321,6 +396,14 @@ class CheckParityTests(unittest.TestCase):
             1.0,
         )
         self.assertEqual(output[-1], "parity_status=pass")
+
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "remap diagnostic"):
+            CHECK_PARITY.check_rows(
+                evidence(rows[1:], "fe2o3.xgmi-peer-benchmark.v1", 8),
+                "fe2o3.xgmi-peer-benchmark.v1",
+                1.0,
+                1.0,
+            )
 
 
 if __name__ == "__main__":

@@ -92,7 +92,9 @@ target/XNACK mode, device roster, ROCm and Rust versions, queue profile or XGMI
 timing scope, and load ceiling. Decimal arithmetic prevents binary-float
 overflow or underflow from satisfying a bound. Multi-device copy and XGMI logs
 use their corresponding schema names and require the same ordered pair of
-device IDs.
+device IDs. XGMI qualification requires both emitted KFD rows: the
+`remap-per-round` row is a completeness diagnostic, while only the exact
+`persistent-hot` row is ratioed against the persistent HSA and HIP peers.
 
 A passing threshold is evidence only for the rows, devices, timing boundary,
 software stack, and workload encoded in that input. It does not establish a

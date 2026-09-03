@@ -135,7 +135,7 @@ g++ -std=c++17 -O3 -Wall -Wextra -Werror \
 
 rocm_version=unknown
 [[ ! -r "${rocm_path}/.info/version" ]] || IFS= read -r rocm_version < "${rocm_path}/.info/version"
-printf 'context schema=fe2o3.xgmi-peer-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s kfd_surface=runtime-facade timing=submit-through-observed-completion setup_validation=outside-timing\n' \
+printf 'context schema=fe2o3.xgmi-peer-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s kfd_surface=runtime-facade timing=submit-through-observed-completion setup_validation=outside-timing measurement=persistent-hot mapping_lifetime=persistent-no-host-access-between-timed-rounds\n' \
   "$(git rev-parse HEAD)" "${gpu_index}" "${peer_gpu_index}" \
   "${unique_id}" "${peer_unique_id}" "${bytes}" "${depths// /,}" \
   "${warmups}" "${samples}" "${max_busy}" "${phase_timeout}" \

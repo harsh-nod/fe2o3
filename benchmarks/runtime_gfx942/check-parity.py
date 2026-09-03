@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import pathlib
 import re
 import sys
@@ -81,6 +80,8 @@ SCHEMA_CONTEXT_FIELDS = {
         "kfd_surface",
         "timing",
         "setup_validation",
+        "measurement",
+        "mapping_lifetime",
     ),
 }
 
@@ -106,13 +107,6 @@ def parse_fields(line: str, line_number: int) -> dict[str, str]:
     return fields
 
 
-def parse_row(line: str, line_number: int) -> dict[str, str] | None:
-    fields = parse_fields(line, line_number)
-    if "backend" not in fields:
-        return None
-    return fields
-
-
 def positive_number(row: dict[str, str], field: str) -> Decimal:
     try:
         value = Decimal(row[field])
@@ -125,6 +119,16 @@ def positive_number(row: dict[str, str], field: str) -> Decimal:
     if not value.is_finite() or value <= 0:
         raise CheckError(f"field {field} must be finite and positive")
     return value
+
+
+def positive_decimal(value: Decimal | float | str, description: str) -> Decimal:
+    try:
+        parsed = value if isinstance(value, Decimal) else Decimal(str(value))
+    except InvalidOperation as error:
+        raise CheckError(f"{description} must be numeric") from error
+    if not parsed.is_finite() or parsed <= 0:
+        raise CheckError(f"{description} must be finite and positive")
+    return parsed
 
 
 def matched_methodology(row: dict[str, str], schema: str) -> tuple[str, ...]:
@@ -220,9 +224,46 @@ def validate_context(context: dict[str, str], schema: str) -> tuple[str, ...]:
         context["kfd_surface"] != "runtime-facade"
         or context["timing"] != "submit-through-observed-completion"
         or context["setup_validation"] != "outside-timing"
+        or context["measurement"] != "persistent-hot"
+        or context["mapping_lifetime"]
+        != "persistent-no-host-access-between-timed-rounds"
     ):
         raise CheckError("XGMI context has an unsupported timing methodology")
     return tuple(value.removeprefix("0x") for value in context_ids)
+
+
+def validate_xgmi_kfd_measurement(row: dict[str, str], measurement: str) -> None:
+    depth = row.get("depth")
+    expected = {
+        "surface": "runtime-facade",
+        "target": "gfx942:xnack-",
+        "queue_depth": depth,
+        "batch_size": depth,
+        "direction": "forward-then-reverse",
+        "outstanding_depth": depth,
+        "engine_parallelism": "ordered-single-sdma",
+        "measurement": measurement,
+        "peer_access": "topology-xgmi",
+        "mapping_lifetime": (
+            "persistent-no-host-access-between-timed-rounds"
+            if measurement == "persistent-hot"
+            else "host-access-between-rounds"
+        ),
+        "prime_batches": "1" if measurement == "persistent-hot" else "0",
+        "doorbells_per_batch": "1",
+        "progress": "explicit-flush-then-wait",
+        "background_progress": "false",
+        "forward_engine": "topology-selected",
+        "reverse_engine": "topology-selected",
+        "canaries": "pass",
+        "teardown": "explicit",
+        "timing": "facade-enqueue-flush-through-observed-completion",
+    }
+    for field, value in expected.items():
+        if value is None or row.get(field) != value:
+            raise CheckError(
+                f"KFD XGMI {measurement} row has invalid {field} methodology"
+            )
 
 
 def validate_phase_evidence(
@@ -294,19 +335,16 @@ def comparison_key(row: dict[str, str], schema: str) -> tuple[str, str]:
 def check_rows(
     lines: Iterable[str],
     schema: str,
-    max_latency_ratio: float,
-    min_bandwidth_ratio: float,
+    max_latency_ratio: Decimal | float | str,
+    min_bandwidth_ratio: Decimal | float | str,
 ) -> list[str]:
     if schema not in SCHEMA_METRICS:
         raise CheckError(f"unsupported schema: {schema}")
-    if not math.isfinite(max_latency_ratio) or max_latency_ratio <= 0:
-        raise CheckError("maximum latency ratio must be finite and positive")
-    if not math.isfinite(min_bandwidth_ratio) or min_bandwidth_ratio <= 0:
-        raise CheckError("minimum bandwidth ratio must be finite and positive")
-    maximum_latency = Decimal(str(max_latency_ratio))
-    minimum_bandwidth = Decimal(str(min_bandwidth_ratio))
+    maximum_latency = positive_decimal(max_latency_ratio, "maximum latency ratio")
+    minimum_bandwidth = positive_decimal(min_bandwidth_ratio, "minimum bandwidth ratio")
 
     groups: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
+    xgmi_diagnostics: dict[tuple[str, str], dict[str, str]] = {}
     context: dict[str, str] | None = None
     phases: list[dict[str, str]] = []
     for line_number, line in enumerate(lines, 1):
@@ -327,6 +365,17 @@ def check_rows(
         if backend not in {"kfd", "hsa", "hip"}:
             raise CheckError(f"line {line_number}: unexpected backend {backend!r}")
         key = comparison_key(row, schema)
+        if schema == "fe2o3.xgmi-peer-benchmark.v1" and backend == "kfd":
+            measurement = row.get("measurement")
+            if measurement == "remap-per-round":
+                if key in xgmi_diagnostics:
+                    raise CheckError(
+                        f"duplicate KFD XGMI diagnostic for bytes={key[0]} depth={key[1]}"
+                    )
+                xgmi_diagnostics[key] = row
+                continue
+            if measurement != "persistent-hot":
+                raise CheckError("KFD XGMI row has an unsupported measurement")
         group = groups.setdefault(key, {})
         if backend in group:
             raise CheckError(
@@ -340,6 +389,17 @@ def check_rows(
         raise CheckError(f"missing benchmark context for schema {schema}")
     context_ids = validate_context(context, schema)
     context_depths = set(context["depths"].split(","))
+    observed_depths = {key[1] for key in groups}
+    if observed_depths != context_depths:
+        missing_depths = context_depths - observed_depths
+        extra_depths = observed_depths - context_depths
+        detail = (
+            f"missing={','.join(sorted(missing_depths, key=int)) or '-'} "
+            f"extra={','.join(sorted(extra_depths, key=int)) or '-'}"
+        )
+        raise CheckError(f"benchmark rows do not cover declared depths: {detail}")
+    if schema == "fe2o3.xgmi-peer-benchmark.v1" and set(xgmi_diagnostics) != set(groups):
+        raise CheckError("XGMI evidence requires one remap diagnostic per persistent-hot row")
 
     output: list[str] = []
     failed = False
@@ -352,6 +412,20 @@ def check_rows(
             )
         kfd = group["kfd"]
         kfd_methodology = matched_methodology(kfd, schema)
+        if schema == "fe2o3.async-copy-benchmark.v1":
+            if kfd.get("profile") != context["kfd_profile"]:
+                raise CheckError("KFD copy row profile does not match benchmark context")
+        elif schema == "fe2o3.async-copy-multi-device-benchmark.v1":
+            if context["kfd_profile"] != "directional":
+                raise CheckError("multi-device KFD copy requires the directional profile")
+        else:
+            validate_xgmi_kfd_measurement(kfd, "persistent-hot")
+            diagnostic = xgmi_diagnostics[key]
+            validate_xgmi_kfd_measurement(diagnostic, "remap-per-round")
+            if matched_methodology(diagnostic, schema) != kfd_methodology:
+                raise CheckError("KFD XGMI diagnostic does not match persistent methodology")
+            for metric, _ in SCHEMA_METRICS[schema]:
+                positive_number(diagnostic, metric)
         if key[0] != context["bytes"] or key[1] not in context_depths:
             raise CheckError(
                 f"bytes={key[0]} depth={key[1]} is absent from the benchmark context"
@@ -418,8 +492,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=pathlib.Path)
     parser.add_argument("--schema", required=True, choices=tuple(SCHEMA_METRICS))
-    parser.add_argument("--max-latency-ratio", required=True, type=float)
-    parser.add_argument("--min-bandwidth-ratio", required=True, type=float)
+    parser.add_argument("--max-latency-ratio", required=True, type=Decimal)
+    parser.add_argument("--min-bandwidth-ratio", required=True, type=Decimal)
     arguments = parser.parse_args()
     try:
         with arguments.input.open(encoding="utf-8") as input_file:
