@@ -112,6 +112,7 @@ fn exact_float_contracts_verify() {
         F32MathFunction::Ln,
         F32MathFunction::Log2,
         F32MathFunction::Log10,
+        F32MathFunction::Abs,
     ] {
         verify_module(&f32_math(function)).unwrap();
     }
@@ -204,6 +205,23 @@ fn sqrt_call_identity_reconstructs_the_ieee_semantic_contract() {
     assert_eq!(
         FloatOperation::from_intrinsic_call(&sqrt.intrinsic_function_id(), &[ValueId(9)]),
         Some(sqrt)
+    );
+}
+
+#[test]
+fn fabs_call_identity_reconstructs_the_ieee_semantic_contract() {
+    let fabs = FloatOperation::F32Math {
+        function: F32MathFunction::Abs,
+        implementation: F32MathImplementation::IeeeFabsV1,
+        arguments: vec![ValueId(9)],
+    };
+    assert_eq!(
+        F32MathFunction::Abs.required_implementation(),
+        F32MathImplementation::IeeeFabsV1
+    );
+    assert_eq!(
+        FloatOperation::from_intrinsic_call(&fabs.intrinsic_function_id(), &[ValueId(9)]),
+        Some(fabs)
     );
 }
 

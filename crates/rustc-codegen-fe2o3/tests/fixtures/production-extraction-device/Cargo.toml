@@ -38,6 +38,7 @@ reference-two-output-substitution = []
 reference-two-output-alias = []
 reference-two-output-schedule = []
 scalar-transmute = []
+fabs-f32 = []
 
 [dependencies]
 fe2o3-device.workspace = true

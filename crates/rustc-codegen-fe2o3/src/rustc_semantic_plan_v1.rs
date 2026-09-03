@@ -729,6 +729,30 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                         None => {
                             match crate::production_rustc_intrinsic_v1::classify(tcx, resolved) {
                                 Ok(Some(classification)) => {
+                                    if classification.operation
+                                        == ProductionRustcIntrinsicOperationV1::FabsF32
+                                    {
+                                        if args.len() != 1 {
+                                            remember_rejection(
+                                                &mut first_rejection,
+                                                "fabs intrinsic with unexpected call arity",
+                                                site,
+                                            );
+                                            continue;
+                                        }
+                                        terminal_expansions.push(TerminalExpansionRecipeV1 {
+                                            caller: function_id,
+                                            block: block.index() as u32,
+                                            expansion: ProductionTerminalExpansionV1::RustcFabsF32,
+                                            arguments: 1,
+                                            instance: resolved,
+                                            identities: canonical_function_identities_v1(
+                                                tcx, resolved,
+                                            ),
+                                            terminal: u32::MAX,
+                                        });
+                                        continue;
+                                    }
                                     if args.len() != 2 {
                                         remember_rejection(
                                             &mut first_rejection,
@@ -2969,7 +2993,10 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(&recipe.caller.index().to_le_bytes());
         digest.field(&recipe.block.to_le_bytes());
         digest.field(&[recipe.operation.operation_tag()]);
-        let (operation, access) = recipe.operation.atomic_rmw();
+        let (operation, access) = recipe
+            .operation
+            .atomic_rmw()
+            .expect("preflight retains only normalized atomic intrinsics");
         digest.field(&[atomic_rmw_operation_tag_v1(operation)]);
         digest.field(&[atomic_ordering_tag_v1(access.ordering())]);
         digest.field(&[atomic_scope_tag_v1(access.scope())]);
@@ -3206,6 +3233,7 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
         },
+        ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -3247,6 +3275,7 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
         Function::Ln => 10,
         Function::Log2 => 11,
         Function::Log10 => 12,
+        Function::Abs => 77,
     }
 }
 
@@ -3451,12 +3480,16 @@ mod tests {
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
+                ProductionTerminalExpansionV1::RustcFabsF32,
+                ProductionTerminalExpansionV1::MathF32(
+                    fe2o3_kernel_ir::F32MathFunction::Abs,
+                ),
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(
                 expansion,
                 TerminalIdentitySchemaV1::CombinedV3,
             )),
-            [111, 112, 113, 114],
+            [111, 112, 113, 114, 113, 114],
         );
 
         let gfx950 = [

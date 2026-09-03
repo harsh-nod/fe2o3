@@ -66,6 +66,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     WorkgroupBarrier,
     MathContextCurrent,
     MathF32(F32MathFunction),
+    /// The exact rustc `core::intrinsics::fabs::<f32>` compiler intrinsic.
+    RustcFabsF32,
     Bf16Conversion(ProductionBf16ConversionV1),
     WorkgroupCollectiveContextCurrent,
     NeutralWorkgroupReduceSum,

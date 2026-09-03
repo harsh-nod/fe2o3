@@ -227,6 +227,28 @@ fn safe_scalar_from_bits_reaches_complete_semantic_import() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn rustc_fabs_f32_reaches_exact_llvm_intrinsic() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("fabs-f32.ll");
+    let output = run_llvm_extraction_command(&target, "fabs-f32", &llvm_output);
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "exact rustc fabs::<f32> extraction failed:\n{stderr}"
+    );
+    let llvm = std::fs::read_to_string(&llvm_output).expect("read fabs LLVM observation");
+    assert!(
+        llvm.contains("declare float @llvm.fabs.f32(float)")
+            && llvm.contains("call float @llvm.fabs.f32(float")
+            && llvm.contains("define amdgpu_kernel void @fabs_f32("),
+        "fabs extraction omitted the exact target-neutral/LLVM observation:\n{llvm}",
+    );
+    assert_eq!(llvm.matches("call float @llvm.fabs.f32(float").count(), 1);
+    assert!(!llvm.contains("@llvm.fabs.f64"));
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn core_atomic_rmw_set_reaches_complete_semantic_import() {
     let target = ScratchTarget::new();
     let output = run_extraction_command(&target, Some("atomic-rmw"), true);
@@ -645,6 +667,48 @@ fn run_extraction_command(
         .arg(&target.path)
         .output()
         .expect("run AMD extraction fixture")
+}
+
+fn run_llvm_extraction_command(
+    target: &ScratchTarget,
+    feature: &str,
+    llvm_output: &Path,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", llvm_output)
+        .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "55".repeat(32))
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            feature,
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("run AMD LLVM extraction fixture")
 }
 
 fn identity_inventory_sha256(stderr: &str) -> &str {

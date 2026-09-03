@@ -17319,8 +17319,38 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::Unit
             }
-            SemanticCompilerIntrinsicOperationV1::WaveBarrier
-            | SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+            SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+                self.require_call_argument_count(block, call, 1)?;
+                if semantic_operand_type(&call.arguments()[0]) != destination.place().ty() {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "fabs input and destination types changed",
+                    ));
+                }
+                let (argument, ty) = self
+                    .lower_operand(block, None, &call.arguments()[0], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                if ty != Type::Scalar(ScalarType::F32) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "fabs input is not f32",
+                    ));
+                }
+                self.emit_float_operation(
+                    operations,
+                    FloatOperation::F32Math {
+                        function: F32MathFunction::Abs,
+                        implementation: F32MathFunction::Abs.required_implementation(),
+                        arguments: vec![argument],
+                    },
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::WaveBarrier => {
                 return Err(unsupported(
                     0,
                     Some(block.index()),

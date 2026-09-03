@@ -36,6 +36,7 @@ pub const F32_SCALAR_OPERATION_ROSTER_V1: &[F32ScalarOperationV1] = &[
     F32ScalarOperationV1::Math(F32MathFunction::Ceil),
     F32ScalarOperationV1::Math(F32MathFunction::Truncate),
     F32ScalarOperationV1::Math(F32MathFunction::RoundTiesEven),
+    F32ScalarOperationV1::Math(F32MathFunction::Abs),
 ];
 
 impl F32ScalarOperationV1 {

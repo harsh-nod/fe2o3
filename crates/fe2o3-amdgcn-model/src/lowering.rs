@@ -2085,6 +2085,9 @@ fn emit_float_support_declarations(
                 )
                 .unwrap();
             }
+            F32MathImplementation::IeeeFabsV1 => {
+                writeln!(output, "declare float @llvm.fabs.f32(float)").unwrap();
+            }
             F32MathImplementation::ConstrainedLlvm => {
                 let arguments = match function {
                     F32MathFunction::FusedMultiplyAdd => "float, float, float, metadata, metadata",
@@ -8070,6 +8073,17 @@ impl<'a> FunctionLowerer<'a> {
                         output,
                         "  {result} = call float @{}(float {}{metadata})",
                         constrained_math_name(*function, self.target),
+                        self.value(*argument).0
+                    )
+                    .unwrap();
+                }
+                F32MathImplementation::IeeeFabsV1 => {
+                    let [argument] = arguments.as_slice() else {
+                        unreachable!("verifier checked fabs arity")
+                    };
+                    writeln!(
+                        output,
+                        "  {result} = call float @llvm.fabs.f32(float {})",
                         self.value(*argument).0
                     )
                     .unwrap();
