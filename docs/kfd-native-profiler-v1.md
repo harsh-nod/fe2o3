@@ -119,3 +119,9 @@ typed unavailable; it is never replaced with inferred dispatch records. The
 direct-KFD capture provides separately identified runtime evidence that can be
 queried today. Joining it to rocprof counters, PC samples, or decoded ATT will
 require an independently observed common identity and a new additive schema.
+
+The PC/Source-ISA V1 query now handles a narrower, independently admitted
+rocprof PC-sample case: exact rocprof source, Capture V3, HSACO, code-object
+relation, and Characteristic V1 bytes can be joined to sparse source/IR/ISA
+coordinates. This does not join those PC samples to a direct-KFD profile;
+direct-KFD still has no observed PC or cross-collector common identity.

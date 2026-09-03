@@ -11,8 +11,10 @@ use fe2o3_semantic_import::{
     decode_pc_sample_code_object_relation_v1, pc_sample_code_object_relation_content_identity_v1,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 pub const MAX_PC_SAMPLE_CODE_OBJECT_QUERY_ARTIFACT_BYTES_V1: u64 = 64 * 1024 * 1024;
+const PC_SAMPLE_KERNEL_SYMBOL_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.pc-sample.kernel-symbol.v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PcSampleCodeObjectQueryLimitsV1 {
@@ -126,6 +128,11 @@ pub struct PcSampleResolvedSymbolPcV1 {
     pub device_identity: CaptureIdentityV1,
     pub code_object_identity: CaptureIdentityV1,
     pub metadata_kernel_ordinal: u32,
+    /// Relation-bound identity of the exact code-object symbol interval. This
+    /// is deliberately independent of an untrusted or ambiguous symbol name.
+    pub kernel_symbol_identity: CaptureIdentityV1,
+    pub kernel_symbol_code_object_offset: u64,
+    pub kernel_symbol_byte_len: u64,
     pub symbol_relative_pc: u64,
     pub from_stochastic_sample: bool,
     pub claims: PcSampleCodeObjectRelationClaimsV1,
@@ -375,12 +382,30 @@ impl PcSampleCodeObjectQuerySessionV1 {
                 device_identity: record.device_identity,
                 code_object_identity,
                 metadata_kernel_ordinal: domain.metadata_kernel_ordinal,
+                kernel_symbol_identity: kernel_symbol_identity(self.relation_identity, *domain),
+                kernel_symbol_code_object_offset: domain.code_object_offset,
+                kernel_symbol_byte_len: domain.byte_len,
                 symbol_relative_pc: code_object_offset - domain.code_object_offset,
                 from_stochastic_sample: sample_context.is_some(),
                 claims: self.relation.claims,
             },
         }
     }
+}
+
+fn kernel_symbol_identity(
+    relation: ContentIdentityRecordV1,
+    domain: fe2o3_semantic_import::PcSampleKernelSymbolDomainV1,
+) -> CaptureIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(PC_SAMPLE_KERNEL_SYMBOL_IDENTITY_DOMAIN_V1);
+    digest.update(relation.digest.as_bytes());
+    digest.update(relation.canonical_len.to_le_bytes());
+    digest.update(domain.code_object_identity.as_bytes());
+    digest.update(domain.metadata_kernel_ordinal.to_le_bytes());
+    digest.update(domain.code_object_offset.to_le_bytes());
+    digest.update(domain.byte_len.to_le_bytes());
+    CaptureIdentityV1::new(digest.finalize().into()).expect("domain-separated SHA-256 is nonzero")
 }
 
 fn check_size(bytes: &[u8], limit: u64) -> Result<(), PcSampleCodeObjectQueryErrorV1> {

@@ -186,6 +186,36 @@ unavailable. Outputs contain no native address or profiler handle and retain the
 stochastic/incomplete, no-authority, no-schedule, and no-source-attribution
 limits.
 
+`PcSourceIsaSessionV1` composes that admitted relation with one canonical
+Source/ISA Characteristic V1 archive. `fe2o3-profiler-service
+pc-source-isa-jsonl` exposes capability discovery, evidence opening, binding
+inspection, sampled-PC lookup, and capture-local code-object-PC lookup to
+agent clients. Opening replays the original rocprof/capture/HSACO relation,
+requires the archive's artifact digest and byte length to equal that exact
+HSACO, and requires the HSACO's inspected canonical target to equal the
+archive target. A sampled PC then joins only through its relation-bound code
+object, metadata-kernel ordinal, symbol identity, and symbol-relative PC.
+
+Results page every matching characteristic ISA interval occurrence. Each item
+retains the source span, MIR, neutral KIR, target KIR, compiler-handoff LLVM,
+semantic-operation, ISA, correlation, and transformation coordinates actually
+present in the archive. Duplicate interval occurrences and multiple
+correlations at one PC remain distinct; the latter disables singular
+attribution. Missing source provenance, optimized-out correlations, pre-KIR
+eliminations, incomplete characteristic scans, stochastic capture scope, and
+collector loss remain explicit. Characteristic V1 does not represent a moved
+shape, so that state remains typed unavailable rather than inferred.
+
+All five raw inputs, their admitted content identities, and the composed
+binding are response evidence. Cursors bind that complete evidence set and the
+resolved sample/symbol/PC query. Requests, pages, collection bytes, and encoded
+responses have independent hard limits; malformed and noncanonical JSONL
+records consume the same 64-record budget. No native address, profiler handle,
+collection authority, or execution capability is retained. The canonical
+archive is still a self-claim unless independently re-admitted against its
+producer, and one bound session does not authorize a semantic/IR/ISA
+cross-capture delta claim.
+
 ## Capture comparison
 
 `compare_dispatch_captures_v1` and `compare_counter_captures_v2` perform a

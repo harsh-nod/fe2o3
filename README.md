@@ -149,7 +149,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
-| Profiling | Bounded rocprofv3 dispatch import plus opt-in direct-KFD runtime lifecycle, host-staging, AQL publication/completion observations, and agent queries; rocprof real-dispatch correlation, counters, PC samples, and ATT remain incomplete |
+| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, plus opt-in direct-KFD runtime lifecycle, host-staging, AQL publication/completion observations, and agent queries; protected real-GPU PC capture, cross-run site comparison, decoded ATT, and direct-KFD cross-collector correlation remain incomplete |
 | Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
 | Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
 
@@ -172,7 +172,10 @@ milestones are retained in the [project status archive](docs/project-status.md).
 - ROCgdb integration is bounded by what the installed debugger exposes and is
   not a source of fe2o3 compiler or runtime authority.
 - Profiler import has not completed a protected real GPU-dispatch rocprofv3
-  round trip. Direct-KFD runtime observations do not imply rocprof correlation,
+  round trip. Supplied PC evidence can be joined exactly to sparse
+  characteristic source/IR/ISA coordinates, but that archive remains a
+  self-claim without producer readmission and does not enable cross-run site
+  deltas. Direct-KFD runtime observations do not imply rocprof correlation,
   device timing, counters, PC samples, or copy-engine events. ATT decoding is
   unavailable without a mutation-proof decoder.
 - Multi-GPU distributed kernels and communication/computation overlap are not

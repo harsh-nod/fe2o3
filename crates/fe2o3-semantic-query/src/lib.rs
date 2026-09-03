@@ -17,6 +17,8 @@ mod pc_sample_query;
 pub use pc_sample_query::*;
 mod pc_sample_code_object_query;
 pub use pc_sample_code_object_query::*;
+mod pc_sample_source_isa_v1;
+pub use pc_sample_source_isa_v1::*;
 mod profiler_query;
 pub use profiler_query::*;
 mod profiler_variant_v1;
