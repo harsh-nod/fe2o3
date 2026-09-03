@@ -64,11 +64,11 @@ selected-wave evidence and never establishes full-grid coverage. Trace V1 has
 no compute-unit selector, so hardware steps report it as unspecified rather
 than inventing one.
 
-The direct-KFD observation boundary currently reports only redacted queue
-lifecycle facts. Plans label direct-KFD dispatch capture as future/unavailable;
-they do not claim that an actual KFD dispatch, completion, timing interval, or
-semantic execution trace exists. Plans and diagnosis status never claim a
-successful diagnosis or performance prediction.
+The legacy capture planner still treats direct-KFD capture as unavailable to its
+Trace V1 diagnosis path. Separately, canonical KFD Runtime Profile V1 evidence
+can now be queried for observed queue/stream membership, host staging, dispatch
+publication/completion/release, and capture-local host durations. Those facts do
+not constitute semantic execution history or a performance prediction.
 
 Site ordinals and Kernel-IR content identities remain producer claims. The query
 surface does not resolve them to names or source locations without a future
@@ -106,6 +106,26 @@ MIR, KIR-operation, schedule, LLVM, and ISA-interval attribution remain typed
 unavailable until independently admitted PC, ATT, or semantic-event evidence is
 joined. The service is read-only and grants no compiler, proof, load, dispatch,
 attach, or collection authority.
+
+## Direct-KFD runtime causality
+
+`fe2o3-profiler-service runtime-causality-jsonl` opens one exact canonical KFD
+Runtime Profile V1 plus an optional exact Bundle V4. It pages observed runtime
+events, dispatch summaries, and host-staging records. It also pages only the
+schema-required lifecycle edges, marked `inferred` and citing their exact
+predecessor/successor event identities, producer sequences, and fixed rule
+identity. Queue creation, stream creation, and bound allocation creation can
+therefore be related to dispatch publication; publication can be related to an
+observed completion and completion to release. The producer sequence is
+explicitly capture-local and is not a GPU or global clock.
+
+Device-copy and inter-dispatch dependency pages are typed unavailable because
+Runtime Profile V1 has no such producer records. Host reads/writes remain host
+staging and are never promoted to copy-engine events. The optional Bundle V4 is
+content-bound as a juxtaposed input while direct-KFD/rocprof dispatch and clock
+joins remain unavailable. Its local opaque collector ticks and loss status are
+preserved where represented. Details and remaining producer dependencies are in
+[`../../docs/runtime-causality-v1.md`](../../docs/runtime-causality-v1.md).
 
 ## Profiler capture queries
 
