@@ -69,13 +69,14 @@ use fe2o3_kir_sim::{
 use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
     load_debug_simulation_bundle_v1, load_debug_simulation_bundle_v2,
-    load_debug_simulation_bundle_v3, load_debug_simulation_input_bytes_v1,
-    load_debug_simulation_input_v1, load_debug_simulation_schedule_v1,
+    load_debug_simulation_bundle_v3, load_debug_simulation_bundle_v4,
+    load_debug_simulation_input_bytes_v1, load_debug_simulation_input_v1,
+    load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug live-rocgdb-kfd-v4 --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -111,6 +112,7 @@ enum ProgramInputV1 {
     Bundle(PathBuf),
     BundleV2(PathBuf),
     BundleV3(PathBuf),
+    BundleV4(PathBuf),
 }
 
 #[derive(Debug)]
@@ -2092,6 +2094,18 @@ pub fn main() -> ExitCode {
                 }
             }
         }
+        (ProgramInputV1::BundleV4(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_bundle_v4(path, request) {
+                Ok(admitted) => {
+                    let (input, bundle) = admitted.into_parts();
+                    (input, None, Some(bundle.into_inner_v3().into_inner_v2()))
+                }
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
         _ => unreachable!("argument parser pairs program and request input custody"),
     };
     let (source_map, caller_source_map_v2) =
@@ -2376,6 +2390,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     let mut bundle = None;
     let mut bundle_v2 = None;
     let mut bundle_v3 = None;
+    let mut bundle_v4 = None;
     let mut request = None;
     let mut request_fd = None;
     let mut source_map = None;
@@ -2401,6 +2416,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             set_once(&mut bundle_v2, PathBuf::from(value), "--bundle-v2")?;
         } else if option == OsStr::new("--bundle-v3") {
             set_once(&mut bundle_v3, PathBuf::from(value), "--bundle-v3")?;
+        } else if option == OsStr::new("--bundle-v4") {
+            set_once(&mut bundle_v4, PathBuf::from(value), "--bundle-v4")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
         } else if option == OsStr::new("--request-fd") {
@@ -2453,13 +2470,14 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             "--source-map and --source-bundle-subject must be supplied together; {USAGE}"
         ));
     }
-    let program = match (kir_v7, kir_v7_fd, bundle, bundle_v2, bundle_v3) {
-        (Some(path), None, None, None, None) => ProgramInputV1::KirV7(path),
-        (None, Some(fd), None, None, None) => ProgramInputV1::SealedKirV7Fd(fd),
-        (None, None, Some(path), None, None) => ProgramInputV1::Bundle(path),
-        (None, None, None, Some(path), None) => ProgramInputV1::BundleV2(path),
-        (None, None, None, None, Some(path)) => ProgramInputV1::BundleV3(path),
-        (None, None, None, None, None) => {
+    let program = match (kir_v7, kir_v7_fd, bundle, bundle_v2, bundle_v3, bundle_v4) {
+        (Some(path), None, None, None, None, None) => ProgramInputV1::KirV7(path),
+        (None, Some(fd), None, None, None, None) => ProgramInputV1::SealedKirV7Fd(fd),
+        (None, None, Some(path), None, None, None) => ProgramInputV1::Bundle(path),
+        (None, None, None, Some(path), None, None) => ProgramInputV1::BundleV2(path),
+        (None, None, None, None, Some(path), None) => ProgramInputV1::BundleV3(path),
+        (None, None, None, None, None, Some(path)) => ProgramInputV1::BundleV4(path),
+        (None, None, None, None, None, None) => {
             return Err(format!("exactly one program input is required; {USAGE}"));
         }
         _ => {
@@ -2468,7 +2486,10 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     };
     if matches!(
         program,
-        ProgramInputV1::Bundle(_) | ProgramInputV1::BundleV2(_) | ProgramInputV1::BundleV3(_)
+        ProgramInputV1::Bundle(_)
+            | ProgramInputV1::BundleV2(_)
+            | ProgramInputV1::BundleV3(_)
+            | ProgramInputV1::BundleV4(_)
     ) && source_map.is_some()
     {
         return Err(format!(
@@ -7587,6 +7608,24 @@ mod tests {
         assert!(matches!(options.program, ProgramInputV1::SealedKirV7Fd(7)));
         assert!(matches!(options.request, RequestInputV1::SealedFd(8)));
 
+        let options = parse_options(
+            [
+                "sim",
+                "--bundle-v4",
+                "aggregate.fe2sim",
+                "--request",
+                "request.json",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert!(matches!(
+            options.program,
+            ProgramInputV1::BundleV4(ref path)
+                if path == &PathBuf::from("aggregate.fe2sim")
+        ));
+
         for arguments in [
             vec!["sim", "--kir-v7", "kernel.kir", "--request"],
             vec![
@@ -7611,6 +7650,15 @@ mod tests {
             vec!["sim", "--kir-v7-fd", "07", "--request-fd", "8"],
             vec!["sim", "--kir-v7-fd", "7", "--request", "request.json"],
             vec!["sim", "--kir-v7", "kernel.kir", "--request-fd", "8"],
+            vec![
+                "sim",
+                "--bundle-v3",
+                "old.fe2sim",
+                "--bundle-v4",
+                "new.fe2sim",
+                "--request",
+                "request.json",
+            ],
         ] {
             assert!(parse_options(arguments.into_iter().map(OsString::from)).is_err());
         }

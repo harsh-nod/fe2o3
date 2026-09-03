@@ -6,7 +6,8 @@ use crate::rust_type_layout_v3::{
     GeneralTypedArgumentKindV3, GeneralTypedExtractError, extract_general_typed_kernel_v3,
 };
 use fe2o3_artifacts::{
-    LaunchContract, RustLayoutEvidenceV1, TypeIdentity, derive_generated_host_contract_identity_v1,
+    LaunchContract, RustLayoutEvidenceV1, RustcAbiClassV1, TypeIdentity,
+    derive_compiler_layout_registration_identity_v1, derive_generated_host_contract_identity_v1,
 };
 use fe2o3_compiler_ffi::{
     CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1,
@@ -78,6 +79,7 @@ enum DescriptorArgumentKindV1 {
     DisjointSlice(ScalarTypeV1),
     GlobalMutPointer(ScalarTypeV1),
     Scalar(ScalarTypeV1),
+    CompilerLaidOutByValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,7 +88,10 @@ struct TypedDescriptorArgumentV1 {
     kind: DescriptorArgumentKindV1,
     access: AccessMode,
     offset: u32,
-    layout: RustLayoutEvidenceV1,
+    layout: Option<RustLayoutEvidenceV1>,
+    source_size: u64,
+    source_alignment: u32,
+    rustc_abi_class: RustcAbiClassV1,
     semantic_type_identity: SemanticTypeIdentityV1,
 }
 
@@ -154,14 +159,24 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                             reason: "typed descriptor argument/signature arity changed".to_owned(),
                         });
                     }
-                    let derived = derive_generated_host_contract_identity_v1(
-                        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                        kernel_binding.as_bytes(),
-                        &logical_name,
-                        &function.export_name,
-                        contract.abi(),
-                        contract.launch(),
-                    );
+                    let derived = if contract.layout_deferred() {
+                        derive_compiler_layout_registration_identity_v1(
+                            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                            kernel_binding.as_bytes(),
+                            &logical_name,
+                            &function.export_name,
+                            contract.launch(),
+                        )
+                    } else {
+                        derive_generated_host_contract_identity_v1(
+                            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                            kernel_binding.as_bytes(),
+                            &logical_name,
+                            &function.export_name,
+                            contract.abi(),
+                            contract.launch(),
+                        )
+                    };
                     if derived.as_bytes() != &generated_identity.as_bytes() {
                         return Err(CompilerDescriptorError::GeneratedHostContractMismatch(
                             function.export_name.clone(),
@@ -170,12 +185,14 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                     let arguments = contract
                         .arguments()
                         .iter()
-                        .zip(contract.abi().fields())
                         .zip(signature.inputs().iter().copied())
                         .enumerate()
-                        .map(|(index, ((argument, field), source_ty))| {
+                        .map(|(index, (argument, source_ty))| {
+                            let field = contract.abi().fields().get(index);
                             Ok(TypedDescriptorArgumentV1 {
-                                name: field.name().as_str().to_owned(),
+                                name: field
+                                    .map(|field| field.name().as_str().to_owned())
+                                    .unwrap_or_else(|| format!("arg{index}")),
                                 kind: descriptor_argument_kind(argument.kind()),
                                 access: match argument.kind() {
                                     GeneralTypedArgumentKindV3::Scalar(_) => AccessMode::ByValue,
@@ -189,14 +206,21 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     | GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
                                         AccessMode::ReadWrite
                                     }
-                                },
-                                offset: u32::try_from(field.offset()).map_err(|_| {
-                                    CompilerDescriptorError::ArgumentOffsetOverflow {
-                                        kernel: function.export_name.clone(),
-                                        index,
+                                    GeneralTypedArgumentKindV3::CompilerLaidOutByValue => {
+                                        AccessMode::ByValue
                                     }
-                                })?,
-                                layout: argument.layout().clone(),
+                                },
+                                offset: u32::try_from(field.map_or(0, |field| field.offset()))
+                                    .map_err(|_| {
+                                        CompilerDescriptorError::ArgumentOffsetOverflow {
+                                            kernel: function.export_name.clone(),
+                                            index,
+                                        }
+                                    })?,
+                                layout: argument.layout().cloned(),
+                                source_size: argument.size(),
+                                source_alignment: argument.alignment(),
+                                rustc_abi_class: argument.abi_class(),
                                 semantic_type_identity:
                                     crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
                                         tcx, source_ty,
@@ -280,18 +304,25 @@ pub(crate) fn order_typed_descriptor_roots_by_semantic_v1(
 }
 
 fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgumentKindV1 {
-    let scalar = descriptor_scalar(kind.scalar());
+    let scalar = kind.scalar().map(descriptor_scalar);
     match kind {
-        GeneralTypedArgumentKindV3::Scalar(_) => DescriptorArgumentKindV1::Scalar(scalar),
-        GeneralTypedArgumentKindV3::SharedSlice(_) => DescriptorArgumentKindV1::SharedSlice(scalar),
+        GeneralTypedArgumentKindV3::Scalar(_) => {
+            DescriptorArgumentKindV1::Scalar(scalar.expect("scalar kind has a scalar"))
+        }
+        GeneralTypedArgumentKindV3::SharedSlice(_) => {
+            DescriptorArgumentKindV1::SharedSlice(scalar.expect("slice kind has a scalar"))
+        }
         GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_) => {
-            DescriptorArgumentKindV1::DisjointSlice(scalar)
+            DescriptorArgumentKindV1::DisjointSlice(scalar.expect("slice kind has a scalar"))
         }
         GeneralTypedArgumentKindV3::DisjointSlice(_) => {
-            DescriptorArgumentKindV1::DisjointSlice(scalar)
+            DescriptorArgumentKindV1::DisjointSlice(scalar.expect("slice kind has a scalar"))
         }
         GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
-            DescriptorArgumentKindV1::GlobalMutPointer(scalar)
+            DescriptorArgumentKindV1::GlobalMutPointer(scalar.expect("pointer kind has a scalar"))
+        }
+        GeneralTypedArgumentKindV3::CompilerLaidOutByValue => {
+            DescriptorArgumentKindV1::CompilerLaidOutByValue
         }
     }
 }
@@ -531,8 +562,14 @@ fn validate_production_v1_descriptor_root_evidence(
                 .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
                     "pre-ranked semantic argument identity",
                 ))?;
-            let RustSourceTypeShapeV1::DisjointSlice { index_space, .. } =
-                root_argument.layout.rust_type().source_type()
+            let RustSourceTypeShapeV1::DisjointSlice { index_space, .. } = root_argument
+                .layout
+                .as_ref()
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "typed disjoint Rust layout evidence",
+                ))?
+                .rust_type()
+                .source_type()
             else {
                 return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                     "typed disjoint source identity",
@@ -655,7 +692,14 @@ fn validate_production_v1_descriptor_root_evidence(
         .as_slice()
         .iter()
         .enumerate()
-        .filter(|(_, argument)| !matches!(argument.kind, DescriptorArgumentKindV1::Scalar(_)))
+        .filter(|(_, argument)| {
+            matches!(
+                argument.kind,
+                DescriptorArgumentKindV1::SharedSlice(_)
+                    | DescriptorArgumentKindV1::DisjointSlice(_)
+                    | DescriptorArgumentKindV1::GlobalMutPointer(_)
+            )
+        })
         .collect::<Vec<_>>();
     if obligations.allocations().len() != expected_allocations.len()
         || !obligations.inter_invocation_conflicts().is_empty()
@@ -684,13 +728,15 @@ fn validate_production_v1_descriptor_root_evidence(
                 }
             },
             DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
-            DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
+            DescriptorArgumentKindV1::Scalar(_)
+            | DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(),
         };
         let expected_kind = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_)
             | DescriptorArgumentKindV1::DisjointSlice(_) => FormalParameterKind::Slice,
             DescriptorArgumentKindV1::GlobalMutPointer(_) => FormalParameterKind::Pointer,
-            DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
+            DescriptorArgumentKindV1::Scalar(_)
+            | DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(),
         };
         if allocation.value() != body.parameters[index]
             || allocation.kind() != expected_kind
@@ -913,22 +959,25 @@ fn validate_production_v1_semantic_root_ownership_evidence(
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner
             }
+            DescriptorArgumentKindV1::CompilerLaidOutByValue => {
+                SemanticSourceArgumentOwnershipV1::ByValue
+            }
         };
         require_production_descriptor_argument_semantic_type_v1(
             argument,
             semantic_type.identity(),
         )?;
         let exact_abi_mode = matches!(
-            (argument.layout.abi_class(), semantic_abi.mode()),
+            (argument.rustc_abi_class, semantic_abi.mode()),
             (RustcAbiClassV1::Scalar, SemanticAbiPassModeV1::Direct(_))
                 | (
                     RustcAbiClassV1::ScalarPair,
                     SemanticAbiPassModeV1::Pair { .. }
                 )
+                | (RustcAbiClassV1::Aggregate, SemanticAbiPassModeV1::Ignore)
         );
-        if semantic_type.layout().size_bytes() != Some(argument.layout.size())
-            || semantic_type.layout().alignment_bytes()
-                != u64::from(argument.layout.abi_alignment())
+        if semantic_type.layout().size_bytes() != Some(argument.source_size)
+            || semantic_type.layout().alignment_bytes() != u64::from(argument.source_alignment)
             || semantic_abi.ty() != function.abi().source_input_types()[index]
             || function.abi().source_argument_ownership()[index] != expected_ownership
             || !exact_abi_mode
@@ -1032,6 +1081,18 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
     if envelope.code_object_version() != CodeObjectVersion::V6 {
         return Err(CompilerDescriptorError::UnsupportedCodeObjectVersion(
             envelope.code_object_version(),
+        ));
+    }
+    if typed_roots.iter().any(|root| {
+        root.arguments.as_slice().iter().any(|argument| {
+            matches!(
+                argument.kind,
+                DescriptorArgumentKindV1::CompilerLaidOutByValue
+            )
+        })
+    }) {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "generated KFD packing is unavailable for compiler-laid-out by-value aggregates",
         ));
     }
 
@@ -1140,6 +1201,9 @@ fn construct_compiler_descriptor_source_with_profiles_v1(
                             argument.offset,
                         )
                     }
+                    DescriptorArgumentKindV1::CompilerLaidOutByValue => unreachable!(
+                        "compiler-laid-out aggregates are rejected before descriptor construction"
+                    ),
                 }
                 .map_err(CompilerDescriptorError::Validation)
             })
@@ -1241,6 +1305,9 @@ fn descriptor_records(
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(scalar)),
             DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::global_mut_pointer(scalar)),
         ),
+        DescriptorArgumentKindV1::CompilerLaidOutByValue => {
+            unreachable!("compiler-laid-out aggregates are rejected before descriptor construction")
+        }
     }
 }
 
@@ -1366,7 +1433,15 @@ fn source_evidence(root: &TypedDescriptorRootV1) -> BuildEvidenceV1 {
         .arguments
         .as_slice()
         .iter()
-        .map(|argument| type_identity_bytes(argument.layout.type_identity()))
+        .map(|argument| {
+            type_identity_bytes(
+                argument
+                    .layout
+                    .as_ref()
+                    .expect("aggregate descriptors are rejected before evidence construction")
+                    .type_identity(),
+            )
+        })
         .collect::<Vec<_>>();
     for bytes in &identity_bytes {
         identity_frames.push(bytes.as_slice());
@@ -1375,7 +1450,13 @@ fn source_evidence(root: &TypedDescriptorRootV1) -> BuildEvidenceV1 {
         .arguments
         .as_slice()
         .iter()
-        .map(|argument| argument.layout.canonical_bytes())
+        .map(|argument| {
+            argument
+                .layout
+                .as_ref()
+                .expect("aggregate descriptors are rejected before evidence construction")
+                .canonical_bytes()
+        })
         .collect::<Vec<_>>();
     let digest_frames = canonical_layouts
         .iter()
@@ -1676,6 +1757,9 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(index, layout)| {
+                let source_size = layout.size();
+                let source_alignment = layout.abi_alignment();
+                let rustc_abi_class = layout.abi_class();
                 let disjoint = matches!(
                     layout.rust_type().source_type(),
                     RustSourceTypeShapeV1::DisjointSlice { .. }
@@ -1693,7 +1777,10 @@ mod tests {
                         AccessMode::ReadOnly
                     },
                     offset: u32::try_from(index * 16).unwrap(),
-                    layout,
+                    layout: Some(layout),
+                    source_size,
+                    source_alignment,
+                    rustc_abi_class,
                     semantic_type_identity: SemanticTypeIdentityV1::from_sha256(
                         [u8::try_from(index).unwrap(); 32],
                     ),
@@ -1775,13 +1862,22 @@ mod tests {
             DescriptorArgumentKindV1::GlobalMutPointer(_) => {
                 (global_mut_pointer_layout(), AccessMode::ReadWrite)
             }
+            DescriptorArgumentKindV1::CompilerLaidOutByValue => {
+                panic!("aggregate descriptor fixtures require compiler layout evidence")
+            }
         };
+        let source_size = layout.size();
+        let source_alignment = layout.abi_alignment();
+        let rustc_abi_class = layout.abi_class();
         TypedDescriptorArgumentV1 {
             name: format!("arg{index}"),
             kind,
             access,
             offset,
-            layout,
+            layout: Some(layout),
+            source_size,
+            source_alignment,
+            rustc_abi_class,
             semantic_type_identity: SemanticTypeIdentityV1::from_sha256(
                 [u8::try_from(index).unwrap(); 32],
             ),

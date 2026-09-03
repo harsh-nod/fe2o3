@@ -1359,6 +1359,334 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_rust_struct_argument_exports_exact_v4_components() {
+    let target = ScratchTarget::new();
+    let bundle_path = target.path().join("aggregate-pair-struct-v4.fe2sim");
+    let result = output(
+        simulation_export_command_for_feature(
+            "gfx942",
+            &bundle_path,
+            &target.path().join("aggregate-pair-struct-target"),
+            Some(4),
+            "aggregate_pair_struct",
+        ),
+        "export ordinary attributed Rust aggregate V4 bundle",
+    );
+    assert!(
+        result.status.success(),
+        "ordinary aggregate V4 export failed:\n{}",
+        result.stderr
+    );
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV4::from_canonical_bytes(
+        std::fs::read(&bundle_path).unwrap(),
+    )
+    .unwrap();
+    let map =
+        fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
+            .unwrap();
+    let [kernel] = map.kernels() else {
+        panic!("compiler must emit one exact aggregate storage map");
+    };
+    assert_eq!(kernel.explicit_kernarg_bytes(), 40);
+    assert_eq!(kernel.explicit_kernarg_alignment(), 8);
+    let [argument, output, scalar] = kernel.arguments() else {
+        panic!("compiler must retain the aggregate, slice, and scalar arguments");
+    };
+    let components = argument.storage().components().unwrap();
+    assert_eq!(components.len(), 2);
+    assert_eq!(
+        components[0].path(),
+        &[fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: 0 }]
+    );
+    assert_eq!(components[0].kir_parameter_ordinal(), 0);
+    assert_eq!(components[0].value_slot().byte_offset(), 0);
+    assert_eq!(components[0].value_slot().byte_width(), 4);
+    assert_eq!(
+        components[1].path(),
+        &[fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: 1 }]
+    );
+    assert_eq!(components[1].kir_parameter_ordinal(), 1);
+    assert_eq!(components[1].value_slot().byte_offset(), 8);
+    assert_eq!(components[1].value_slot().byte_width(), 8);
+    let output_component = &output.storage().components().unwrap()[0];
+    assert_eq!(output_component.value_slot().byte_offset(), 16);
+    assert_eq!(output_component.metadata_slot().unwrap().byte_offset(), 24);
+    let scalar_component = &scalar.storage().components().unwrap()[0];
+    assert_eq!(scalar_component.kir_parameter_ordinal(), 3);
+    assert_eq!(scalar_component.value_slot().byte_offset(), 32);
+    assert_eq!(scalar_component.value_slot().byte_width(), 8);
+
+    let request_path = target.path().join("aggregate-pair-struct-request.json");
+    std::fs::write(
+        &request_path,
+        serde_json::to_vec(&json!({
+            "schema": "fe2o3-simulation-request-v1",
+            "kernel": "aggregate_pair_struct",
+            "grid": [64, 1, 1],
+            "workgroup": [64, 1, 1],
+            "arguments": [
+                {"kind": "scalar", "type": "u32", "bits": "0x11223344"},
+                {"kind": "scalar", "type": "u64", "bits": "0x0102030405060708"},
+                {
+                    "kind": "buffer_view",
+                    "backing": 7,
+                    "element": "u64",
+                    "access": "read_write",
+                    "alignment": 8,
+                    "byte_offset": 0,
+                    "elements": 64,
+                },
+                {"kind": "scalar", "type": "u64", "bits": "0x0000000000000003"},
+            ],
+            "shared_buffers": [{
+                "id": 7,
+                "element": "u64",
+                "access": "read_write",
+                "alignment": 8,
+                "bytes": format!("0x{}", "00".repeat(64 * 8)),
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let debug_target = target.path().join("aggregate-debug-cli-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production V4 aggregate integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+    let mut simulator = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["sim", "--bundle-v4"])
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request_path)
+        .args(["--protocol", "jsonl"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start debugger simulator on compiler-produced V4 bundle");
+    simulator
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"direction\":\"forward\",\"granularity\":\"operation\",\"count\":1}\n")
+        .unwrap();
+    let simulated = simulator.wait_with_output().unwrap();
+    assert!(
+        simulated.status.success(),
+        "V4 debugger simulation failed:\n{}",
+        String::from_utf8_lossy(&simulated.stderr)
+    );
+    let simulated_response: Value = serde_json::from_slice(&simulated.stdout).unwrap();
+    assert_eq!(simulated_response["status"], "ok");
+    assert_eq!(simulated_response["session"]["simulated"], true);
+    assert_eq!(simulated_response["session"]["hardware_observed"], false);
+
+    let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        bundle.semantic_mir(),
+        fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let abi_identity = *semantic.functions()[kernel.semantic_root() as usize]
+        .abi()
+        .identity()
+        .as_bytes();
+    let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xa6; 32]).unwrap();
+    let backend_module =
+        fe2o3_runtime::RuntimeBackendV1::load_module_v1(&mut backend, 1, bundle.canonical_bytes())
+            .unwrap();
+    let unavailable = fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
+        &mut backend,
+        backend_module,
+        "aggregate_pair_struct",
+        abi_identity,
+    );
+    assert!(matches!(
+        unavailable,
+        Err(fe2o3_runtime::RuntimeBackendFailureV1::Rejected(
+            fe2o3_sim_runtime::SimRuntimeBackendErrorV1::UnsupportedBundle(detail)
+        )) if detail.contains("semantic source type is not an exact pointer or reference")
+    ));
+    fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, backend_module).unwrap();
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
+    let target = ScratchTarget::new();
+    for (feature, expected_components) in [
+        ("aggregate_pair_tuple", 2_usize),
+        ("aggregate_zst", 0_usize),
+    ] {
+        let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
+        let result = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &bundle_path,
+                &target.path().join(format!("{feature}-target")),
+                Some(4),
+                feature,
+            ),
+            "export ordinary attributed Rust aggregate V4 bundle",
+        );
+        assert!(
+            result.status.success(),
+            "{feature} V4 export failed:\n{}",
+            result.stderr
+        );
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV4::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        let map =
+            fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
+                .unwrap();
+        let components = map.kernels()[0].arguments()[0]
+            .storage()
+            .components()
+            .unwrap();
+        assert_eq!(components.len(), expected_components);
+        if expected_components == 2 {
+            assert_eq!(
+                components[0].path(),
+                &[fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: 0 }]
+            );
+            assert_eq!(
+                components[1].path(),
+                &[fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: 1 }]
+            );
+        }
+    }
+
+    let tuple_request = target.path().join("aggregate-pair-tuple-request.json");
+    std::fs::write(
+        &tuple_request,
+        serde_json::to_vec(&json!({
+            "schema": "fe2o3-simulation-request-v1",
+            "kernel": "aggregate_pair_tuple",
+            "grid": [64, 1, 1],
+            "workgroup": [64, 1, 1],
+            "arguments": [
+                {"kind": "scalar", "type": "u32", "bits": "0x11223344"},
+                {"kind": "scalar", "type": "u64", "bits": "0x0102030405060708"},
+                {
+                    "kind": "buffer_view",
+                    "backing": 7,
+                    "element": "u64",
+                    "access": "read_write",
+                    "alignment": 8,
+                    "byte_offset": 0,
+                    "elements": 64,
+                },
+                {"kind": "scalar", "type": "u64", "bits": "0x0000000000000003"},
+            ],
+            "shared_buffers": [{
+                "id": 7,
+                "element": "u64",
+                "access": "read_write",
+                "alignment": 8,
+                "bytes": format!("0x{}", "00".repeat(64 * 8)),
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let debug_target = target.path().join("aggregate-tuple-debug-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production V4 tuple integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+    let mut simulator = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["sim", "--bundle-v4"])
+        .arg(target.path().join("aggregate_pair_tuple-v4.fe2sim"))
+        .arg("--request")
+        .arg(&tuple_request)
+        .args(["--protocol", "jsonl"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start debugger simulator on compiler-produced tuple V4 bundle");
+    simulator
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"direction\":\"forward\",\"granularity\":\"operation\",\"count\":1}\n")
+        .unwrap();
+    let simulated = simulator.wait_with_output().unwrap();
+    assert!(
+        simulated.status.success(),
+        "tuple V4 debugger simulation failed:\n{}",
+        String::from_utf8_lossy(&simulated.stderr)
+    );
+    let response: Value = serde_json::from_slice(&simulated.stdout).unwrap();
+    assert_eq!(response["status"], "ok");
+    assert_eq!(response["session"]["simulated"], true);
+
+    for (feature, typed_reason) in [
+        ("aggregate_pair_array", "aggregate ABI"),
+        ("aggregate_nested", "aggregate ABI"),
+        ("aggregate_enum", "variant-aware packing evidence"),
+        ("aggregate_pointer", "contains a pointer or reference"),
+    ] {
+        let result = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &target.path().join(format!("{feature}-v4.fe2sim")),
+                &target.path().join(format!("{feature}-target")),
+                Some(4),
+                feature,
+            ),
+            "reject unsupported ordinary attributed Rust aggregate ABI",
+        );
+        assert!(
+            !result.status.success()
+                && (result.stderr.contains(typed_reason)
+                    || result
+                        .stderr
+                        .contains("unsupported cast or indirect aggregate ABI")
+                    || result.stderr.contains("unsupported cast ABI")
+                    || result.stderr.contains("unsupported indirect ABI")),
+            "{feature} did not fail at the typed ABI boundary:\n{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1() {
     let target = ScratchTarget::new();
     let default_path = target.path().join("debug-long-name-default-v1.fe2sim");
@@ -1503,6 +1831,7 @@ fn simulation_export_command_for_feature(
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3")
+        .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4")
         .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
         .env_remove("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1")
         .env_remove("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1")

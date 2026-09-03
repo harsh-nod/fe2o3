@@ -1,9 +1,9 @@
 # fe2o3-sim-runtime
 
 `fe2o3-sim-runtime` is an explicitly selected, no-GPU implementation of
-`fe2o3_runtime::RuntimeBackendV1`. It executes exact admitted `.fe2sim` V3
-Kernel IR through `fe2o3-virtual-runtime`; it never probes for or falls back to
-GPU execution.
+`fe2o3_runtime::RuntimeBackendV1`. It executes exact admitted `.fe2sim` V3 or
+V4 Kernel IR through `fe2o3-virtual-runtime`; it never probes for or falls back
+to GPU execution.
 
 The backend reports `hardware = false` and `performance_prediction = false`.
 Its results are deterministic semantic-simulation evidence within the admitted
@@ -23,14 +23,17 @@ outstanding resources.
 V3 materializes exact scalar, thin global pointer, and global slice storage
 correspondences. V4 content-binds an independently versioned one-to-many
 semantic component map, including explicit physical kernarg size, alignment,
-and slots. Those facts are available to typed debugger inspection, but V4 does
-not grant compiler authority. Ordinary by-value aggregate execution therefore
-fails with a typed unsupported error until the production compiler exports an
-authenticated component and host packing plan. The consumer already validates
-nested Rust projections, scalar validity, direct and niche discriminants,
-inactive-payload poison, region metadata, and physical slot bounds without
-reading padding or host pointer bytes. Embedded pointers, cast or adjusted
-ABIs, indirect arguments, ambiguous storage, and layouts without exact slots
-also fail typed admission. Dynamic shared memory, peer copy, multiple devices,
-and host runtime collectives are not advertised. KIR wave operations remain
-simulated kernel semantics; they do not constitute a host collective primitive.
+and slots. The production exporter derives those components from rustc layout,
+ABI, and the sole semantic-MIR-to-KIR lowering correspondence. The consumer
+independently rederives canonical KIR packing and admits pointer-free by-value
+aggregates only when their ABI is exact `Direct`, `Pair`, or zero-sized
+`Ignore`. It validates nested projections, scalar validity, direct and niche
+discriminants, inactive-payload poison, region metadata, and physical slot
+bounds without reading padding or host pointer bytes. This grants semantic CPU
+simulation only, not compiler-execution, KFD, or GPU launch authority.
+
+Embedded pointers, adjusted, cast, or indirect ABIs, ambiguous storage,
+unsupported wrapper regions, and layouts without exact slots fail typed
+admission. Dynamic shared memory, peer copy, multiple devices, and host runtime
+collectives are not advertised. KIR wave operations remain simulated kernel
+semantics; they do not constitute a host collective primitive.

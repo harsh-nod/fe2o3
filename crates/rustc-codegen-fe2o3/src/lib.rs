@@ -90,6 +90,7 @@ pub use production_rustc_driver_v1::{
     run_production_simulation_bundle_extraction_driver_v1,
     run_production_simulation_bundle_extraction_driver_v2,
     run_production_simulation_bundle_extraction_driver_v3,
+    run_production_simulation_bundle_extraction_driver_v4,
 };
 
 use fe2o3_artifact_transaction as artifact_transaction;
