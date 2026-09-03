@@ -271,8 +271,8 @@ canonical archive. The client securely reads the singly linked archive and
 requires its path to resolve to the same admitted object after the read,
 requires the caller-pinned digest of its exact bytes, verifies every member
 digest and the canonical complete member set, and then supplies member bytes
-directly to the existing debugger, Bundle V4, Variant V1, diagnosis V2, and
-Agent Profiler V1 admissions. Members are never extracted or interpreted as
+directly to the existing debugger, Bundle V4, Variant V1 and V2, diagnosis V2,
+and Agent Profiler V1 admissions. Members are never extracted or interpreted as
 filesystem paths. The archive route therefore has no member symlink, hardlink,
 or traversal surface. The archive report preserves the complete existing V1
 workflow report and adds the archive plus ordered member content identities.
@@ -299,19 +299,24 @@ One workflow discovers capabilities and then performs four read-only tasks:
 
 - diagnose a retained simulator memory out-of-bounds failure;
 - diagnose a retained simulator workgroup-barrier divergence;
-- compare a seeded schedule/resource Variant V1 regression while preserving
-  decoded ATT, runtime/copy, semantic/ISA, and causal gaps as unavailable; and
+- compare a seeded schedule/resource Variant V1 regression;
+- independently compare the same exact treatments through Variant V2, binding
+  both schedules and preserving absent PC/ATT sessions, the profiler-KIR bridge,
+  and causal attribution as typed unavailable facts; and
 - page the exact dispatch set and ask Agent Profiler V1 for the minimum capture
   that distinguishes scheduling delay from resource pressure.
 
 The client decodes simulator diagnoses with the full evidence-manifest
-validator, validates the serialized Variant response identity, and requires
+validator, validates both serialized Variant response identities, and requires
 the capability, continued, and diagnosis sessions to carry one configuration
 identity, with the diagnosis session exactly equal to the continued session.
 Treatment files consume one decreasing aggregate admission budget before any
 read past that budget, and exact byte inputs are emitted with fallible bounded
-streaming hex encoding. The returned typed Variant comparison is independently
-recomputed and decoded with the production exact-input comparator. Its bounded
+streaming hex encoding. The returned typed Variant V1 comparison is independently
+recomputed and decoded with the production exact-input comparator. The V2
+comparison is independently reproduced from the same retained bytes and must
+equal the complete service result, including its request, artifact and schedule
+bindings, evidence IDs, and unavailable facts. Its bounded
 report retains each full
 authenticated diagnosis with every material citation identity and the capture
 plan's exact Agent V1 evidence/origins. Agent Profiler V1 responses must match
@@ -326,8 +331,10 @@ content identities, truth classifications, cited claims, typed unavailable
 states, and pagination counts. It has no launch, attach,
 pause, scheduling, KFD, ROCgdb-control, rocprofv3-collection, or recapture
 operation. `fe2o3-agent-profiler-service` is a small companion executable that
-exposes the unchanged Agent Profiler V1 JSONL mode and the separate Variant V1
-mode for this process-isolated workflow; it is not an MCP adapter.
+exposes the unchanged Agent Profiler V1 JSONL mode and separate Variant V1 and
+V2 modes for this process-isolated workflow; it is not an MCP adapter. Neither
+Variant mode accepts paths or grants execution, replay, file, network, patch,
+decoder, attach, scheduling, collection, or launch authority.
 
 ## KFD hardware protocol V2
 

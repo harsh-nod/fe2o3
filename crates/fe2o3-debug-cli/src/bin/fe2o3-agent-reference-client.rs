@@ -39,17 +39,23 @@ use fe2o3_semantic_import::{
 use fe2o3_semantic_query::{
     AGENT_PROFILER_PLAN_REQUEST_SCHEMA_V1, AGENT_PROFILER_PLAN_SCHEMA_V1,
     AGENT_PROFILER_REQUEST_SCHEMA_V1, AGENT_PROFILER_RESPONSE_SCHEMA_V1,
-    AGENT_PROFILER_VARIANT_COMPARISON_SCHEMA_V1, AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1,
-    AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V1, MAX_AGENT_PROFILER_REQUEST_BYTES_V1,
-    MAX_AGENT_PROFILER_RESPONSE_BYTES_V1, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V1,
-    MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V1, MAX_PROFILER_VARIANT_RESULT_BYTES_V1,
+    AGENT_PROFILER_VARIANT_COMPARISON_SCHEMA_V1, AGENT_PROFILER_VARIANT_COMPARISON_SCHEMA_V2,
+    AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V1, AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V2,
+    AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V1, AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V2,
+    MAX_AGENT_PROFILER_REQUEST_BYTES_V1, MAX_AGENT_PROFILER_RESPONSE_BYTES_V1,
+    MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V1, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V2,
+    MAX_AGENT_PROFILER_VARIANT_REQUESTS_V2, MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V1,
+    MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V2, MAX_PROFILER_VARIANT_RESULT_BYTES_V1,
     MAX_PROFILER_VARIANT_TREATMENT_BYTES_V1, ProfilerCursorV4, ProfilerDispatchSummaryV4,
     ProfilerListKindV4, ProfilerPageRequestV4, ProfilerPageV4, ProfilerQueryContextV4,
     ProfilerQueryItemV4, ProfilerQueryLimitsV4, ProfilerQueryRequestV4, ProfilerQueryResponseV4,
-    ProfilerQuerySessionV4, ProfilerVariantComparisonV1, ProfilerVariantTreatmentInputV1,
-    ProfilerVariantUnavailableKindV1, build_profiler_variant_request_v1,
-    compare_profiler_variants_v1, decode_profiler_variant_comparison_v1,
-    validate_agent_profiler_variant_response_line_v1,
+    ProfilerQuerySessionV4, ProfilerVariantComparisonV1, ProfilerVariantComparisonV2,
+    ProfilerVariantTreatmentInputV1, ProfilerVariantTreatmentInputV2,
+    ProfilerVariantUnavailableKindV1, ProfilerVariantUnavailableKindV2,
+    build_profiler_variant_request_v1, build_profiler_variant_request_v2,
+    compare_profiler_variants_v1, compare_profiler_variants_v2,
+    decode_profiler_variant_comparison_v1, validate_agent_profiler_variant_response_line_v1,
+    validate_agent_profiler_variant_response_line_v2,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -72,6 +78,12 @@ const REQUIRED_VARIANT_GAPS_V1: [ProfilerVariantUnavailableKindV1; 6] = [
     ProfilerVariantUnavailableKindV1::PcToSemanticOrIsaCorrelation,
     ProfilerVariantUnavailableKindV1::SemanticIrIsaChangeLocalization,
     ProfilerVariantUnavailableKindV1::CausalRegressionAttribution,
+];
+const REQUIRED_VARIANT_GAPS_V2: [ProfilerVariantUnavailableKindV2; 4] = [
+    ProfilerVariantUnavailableKindV2::BaselineCorrelationEvidenceMissing,
+    ProfilerVariantUnavailableKindV2::CandidateCorrelationEvidenceMissing,
+    ProfilerVariantUnavailableKindV2::ProfilerKirToCharacteristicKirBridgeUnavailable,
+    ProfilerVariantUnavailableKindV2::CausalAttribution,
 ];
 
 #[cfg(test)]
@@ -149,6 +161,7 @@ struct ReferenceReportV1 {
     out_of_bounds: SimulatorDiagnosisReportV1,
     barrier_divergence: SimulatorDiagnosisReportV1,
     variant: VariantReportV1,
+    variant_v2: VariantReportV2,
     next_capture: CapturePlanReportV1,
 }
 
@@ -207,6 +220,17 @@ struct VariantReportV1 {
     candidate_manifest: Value,
     ranked_explanations: Value,
     unavailable: Value,
+    response_identity: Value,
+}
+
+#[derive(Serialize)]
+struct VariantReportV2 {
+    claim_truth: &'static str,
+    authority: &'static str,
+    comparison_schema: &'static str,
+    service_contract: Value,
+    capability_response_identity: Value,
+    comparison: ProfilerVariantComparisonV2,
     response_identity: Value,
 }
 
@@ -304,7 +328,12 @@ fn run_loaded(loaded: LoadedWorkflowV1) -> Result<ReferenceReportV1, String> {
         DiagnosisClassV2::WorkgroupBarrierDivergence,
         "workgroup_barrier_divergence",
     )?;
-    let variant = compare_variants(
+    let variant_v2 = compare_variants_v2(
+        &loaded.profiler_service_executable,
+        &loaded.baseline,
+        &loaded.candidate,
+    )?;
+    let variant = compare_variants_v1(
         &loaded.profiler_service_executable,
         &loaded.baseline,
         &loaded.candidate,
@@ -321,6 +350,7 @@ fn run_loaded(loaded: LoadedWorkflowV1) -> Result<ReferenceReportV1, String> {
         out_of_bounds,
         barrier_divergence,
         variant,
+        variant_v2,
         next_capture,
     })
 }
@@ -430,6 +460,14 @@ impl LoadedTreatmentV1 {
             isa_projection: self.isa_projection.as_deref(),
             counters: self.counters.as_deref(),
             pc_samples: self.pc_samples.as_deref(),
+        }
+    }
+
+    fn input_v2(&self) -> ProfilerVariantTreatmentInputV2<'_> {
+        ProfilerVariantTreatmentInputV2 {
+            treatment: self.input(),
+            pc_source_isa: None,
+            decoded_att_source_isa: None,
         }
     }
 
@@ -899,6 +937,46 @@ struct VariantComparisonValueWireV1 {
     comparison: ProfilerVariantComparisonV1,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VariantCapabilitiesValueWireV2 {
+    result: String,
+    capabilities: VariantCapabilitiesWireV2,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VariantCapabilitiesWireV2 {
+    service_contract: ContentIdentityRecordV1,
+    operations: Vec<VariantOperationWireV2>,
+    authority: VariantAuthorityWireV2,
+    exact_input_encoding: String,
+    comparison_semantics: String,
+    maximum_requests: u32,
+    maximum_request_bytes: u64,
+    maximum_response_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum VariantOperationWireV2 {
+    DiscoverCapabilities,
+    CompareVariants,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum VariantAuthorityWireV2 {
+    ReadOnlyNoExecutionAttachSchedulingCollectionOrDecoderAuthority,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VariantComparisonValueWireV2 {
+    result: String,
+    comparison: Value,
+}
+
 fn validate_agent_ok_envelope<T>(
     response: &AgentOkWireV1<T>,
     request_id: u64,
@@ -1040,7 +1118,147 @@ fn exchange_encoded_variant_v1<T: DeserializeOwned>(
     validate_variant_response_v1(&line, request_id, response_revision)
 }
 
-fn compare_variants(
+fn validate_variant_response_v2<T: DeserializeOwned>(
+    line: &[u8],
+    request_id: u64,
+    response_revision: u64,
+) -> Result<VariantOkWireV1<T>, String> {
+    validate_agent_profiler_variant_response_line_v2(line)
+        .map_err(|_| "profiler Variant V2 response identity mismatch")?;
+    let response: VariantOkWireV1<T> =
+        serde_json::from_slice(line).map_err(|_| "invalid Variant V2 response wire")?;
+    if response.status != "ok"
+        || response.schema != AGENT_PROFILER_VARIANT_RESPONSE_SCHEMA_V2
+        || response.request_id != request_id
+        || response.response_revision != response_revision
+    {
+        return Err("Variant V2 response association mismatch".into());
+    }
+    Ok(response)
+}
+
+fn exchange_variant_v2<T: DeserializeOwned>(
+    session: &mut JsonlChildV1<'_>,
+    request: &Value,
+    request_id: u64,
+    response_revision: u64,
+) -> Result<VariantOkWireV1<T>, String> {
+    if request["schema"] != AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V2
+        || request["request_id"] != request_id
+        || request["expected_revision"] != response_revision - 1
+    {
+        return Err("issued Variant V2 request association is invalid".into());
+    }
+    let line = session.exchange_line(request, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V2)?;
+    validate_variant_response_v2(&line, request_id, response_revision)
+}
+
+fn exchange_encoded_variant_v2<T: DeserializeOwned>(
+    session: &mut JsonlChildV1<'_>,
+    request: Vec<u8>,
+    request_id: u64,
+    response_revision: u64,
+) -> Result<VariantOkWireV1<T>, String> {
+    let line =
+        session.exchange_encoded_line(request, MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V2)?;
+    validate_variant_response_v2(&line, request_id, response_revision)
+}
+
+fn compare_variants_v2(
+    executable: &PinnedExecutableV1,
+    baseline: &LoadedTreatmentV1,
+    candidate: &LoadedTreatmentV1,
+) -> Result<VariantReportV2, String> {
+    let mut session = JsonlChildV1::spawn(
+        executable,
+        "variant-v2-jsonl",
+        MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V2,
+        2,
+    )?;
+    let capabilities_request = json!({
+        "operation":"discover_capabilities",
+        "schema":AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V2,
+        "request_id":1,
+        "expected_revision":0
+    });
+    let capabilities: VariantOkWireV1<VariantCapabilitiesValueWireV2> =
+        exchange_variant_v2(&mut session, &capabilities_request, 1, 1)?;
+    if capabilities.value.result != "capabilities" {
+        return Err("Variant V2 capability result kind mismatch".into());
+    }
+    let discovered = &capabilities.value.capabilities;
+    if discovered.authority
+        != VariantAuthorityWireV2::ReadOnlyNoExecutionAttachSchedulingCollectionOrDecoderAuthority
+        || discovered.exact_input_encoding != "canonical_lowercase_hex_of_exact_bytes"
+        || discovered.comparison_semantics
+            != "positive_exact_source_mir_pairs_only;sampled_or_incomplete_absence_never_means_added_removed_or_causal"
+        || discovered.operations
+            != [
+                VariantOperationWireV2::DiscoverCapabilities,
+                VariantOperationWireV2::CompareVariants,
+            ]
+        || discovered.maximum_requests != MAX_AGENT_PROFILER_VARIANT_REQUESTS_V2
+        || discovered.maximum_request_bytes != MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V2
+        || discovered.maximum_response_bytes != MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V2
+    {
+        return Err("Variant V2 discovered capabilities cannot serve this workflow".into());
+    }
+    let service_contract = serde_json::to_value(discovered.service_contract)
+        .map_err(|_| "encode Variant V2 service contract identity")?;
+    let capability_response_identity = serde_json::to_value(capabilities.response_identity)
+        .map_err(|_| "encode Variant V2 capability response identity")?;
+
+    let comparison_request = build_profiler_variant_request_v2(
+        &baseline.semantic_workload,
+        baseline.input_v2(),
+        candidate.input_v2(),
+    )
+    .map_err(|_| "could not build retained Variant V2 request")?;
+    let expected = compare_profiler_variants_v2(
+        comparison_request,
+        baseline.input_v2(),
+        candidate.input_v2(),
+    )
+    .map_err(|_| "retained Variant V2 inputs failed production comparison")?;
+    let request = encode_variant_comparison_request_v2(baseline, candidate)?;
+    let compared: VariantOkWireV1<VariantComparisonValueWireV2> =
+        exchange_encoded_variant_v2(&mut session, request, 2, 2)?;
+    session.finish()?;
+    if compared.value.result != "comparison" {
+        return Err("Variant V2 comparison result kind mismatch".into());
+    }
+    let expected_value =
+        serde_json::to_value(&expected).map_err(|_| "encode expected Variant V2 comparison")?;
+    if compared.value.comparison != expected_value {
+        return Err("Variant V2 comparison differs from independent production output".into());
+    }
+    if expected.schema_version != 2 || expected.comparison_v1.schema_version != 1 {
+        return Err("Variant V2 comparison identity or version changed".into());
+    }
+    let unavailable = expected
+        .unavailable
+        .iter()
+        .map(|entry| entry.kind)
+        .collect::<BTreeSet<_>>();
+    if REQUIRED_VARIANT_GAPS_V2
+        .iter()
+        .any(|kind| !unavailable.contains(kind))
+    {
+        return Err("Variant V2 truth-boundary gaps are incomplete".into());
+    }
+    Ok(VariantReportV2 {
+        claim_truth: "exact_variant_v2_comparison_with_typed_unavailable_correlation",
+        authority: "read_only_no_execution_replay_file_network_patch_attach_scheduling_collection_decoder_or_launch_authority",
+        comparison_schema: AGENT_PROFILER_VARIANT_COMPARISON_SCHEMA_V2,
+        service_contract,
+        capability_response_identity,
+        comparison: expected,
+        response_identity: serde_json::to_value(compared.response_identity)
+            .map_err(|_| "encode Variant V2 response identity")?,
+    })
+}
+
+fn compare_variants_v1(
     executable: &PinnedExecutableV1,
     baseline: &LoadedTreatmentV1,
     candidate: &LoadedTreatmentV1,
@@ -2167,6 +2385,21 @@ fn write_variant_treatment_v1(
     writer: &mut BoundedVecWriterV1,
     treatment: &LoadedTreatmentV1,
 ) -> Result<(), String> {
+    write_variant_treatment(writer, treatment, false)
+}
+
+fn write_variant_treatment_v2(
+    writer: &mut BoundedVecWriterV1,
+    treatment: &LoadedTreatmentV1,
+) -> Result<(), String> {
+    write_variant_treatment(writer, treatment, true)
+}
+
+fn write_variant_treatment(
+    writer: &mut BoundedVecWriterV1,
+    treatment: &LoadedTreatmentV1,
+    include_v2_evidence: bool,
+) -> Result<(), String> {
     writer
         .write_all(b"{\"manifest_hex\":")
         .map_err(|error| error.to_string())?;
@@ -2203,6 +2436,11 @@ fn write_variant_treatment_v1(
         .write_all(b",\"pc_samples_hex\":")
         .map_err(|error| error.to_string())?;
     write_optional_lower_hex_json_string_v1(writer, treatment.pc_samples.as_deref())?;
+    if include_v2_evidence {
+        writer
+            .write_all(b",\"pc_source_isa\":null,\"decoded_att_source_isa\":null")
+            .map_err(|error| error.to_string())?;
+    }
     writer.write_all(b"}").map_err(|error| error.to_string())
 }
 
@@ -2219,6 +2457,25 @@ fn encode_variant_comparison_request_v1(
         .write_all(b",\"candidate\":")
         .map_err(|error| error.to_string())?;
     write_variant_treatment_v1(&mut writer, candidate)?;
+    writer
+        .write_all(b"}\n")
+        .map_err(|error| error.to_string())?;
+    Ok(writer.into_inner())
+}
+
+fn encode_variant_comparison_request_v2(
+    baseline: &LoadedTreatmentV1,
+    candidate: &LoadedTreatmentV1,
+) -> Result<Vec<u8>, String> {
+    let mut writer = BoundedVecWriterV1::new(MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V2)?;
+    writer
+        .write_all(b"{\"operation\":\"compare_variants\",\"schema\":\"fe2o3-agent-profiler-variant-request-v2\",\"request_id\":2,\"expected_revision\":1,\"baseline\":")
+        .map_err(|error| error.to_string())?;
+    write_variant_treatment_v2(&mut writer, baseline)?;
+    writer
+        .write_all(b",\"candidate\":")
+        .map_err(|error| error.to_string())?;
+    write_variant_treatment_v2(&mut writer, candidate)?;
     writer
         .write_all(b"}\n")
         .map_err(|error| error.to_string())?;
