@@ -17,7 +17,7 @@ unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
 identifies V7, V9, and V10 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,746,086 bytes and its regression test rejects
+compact V1 document is fixed at 4,751,390 bytes and its regression test rejects
 any unreviewed schema-size change.
 
 The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
@@ -45,6 +45,7 @@ after that decode; it is not a pre-decode allocator cap.
 The execution profile supports integer, boolean, and F16/BF16/F32/F64 scalar
 operations, structured control flow, internal helper calls, private
 allocations, global buffer arguments, ordinary and guarded scalar loads, static scalar
+workgroup-memory declarations, explicitly sized canonical dynamic
 workgroup-memory declarations, convergent workgroup barriers, and one-, two-,
 or three-dimensional launch hierarchy intrinsics. V10 additionally executes
 scalar pointer distance, Rust-allocation volatile load/store, and
@@ -59,6 +60,22 @@ arrives at the same site with identical barrier semantics. Padded local slots
 are included in admission and execution accounting but never become barrier
 participants. The target profile enforces its legal workgroup volume before
 scheduling begins.
+
+Dynamic LDS is an additive request contract. Callers use
+`DynamicWorkgroupMemoryRequestV1` through the corresponding
+`*_with_dynamic_workgroup_memory` preflight, execution, schedule, exploration,
+debug, or reducer API. Admission requires exactly one canonical `Dynamic`
+declaration across the selected kernel's complete reachable call graph. The
+byte extent must be divisible by the scalar element width and declared
+alignment; it participates in allocation and residency limits and is bound into
+schedule, replay, reduction, and virtual-dispatch identities. Each workgroup
+receives a distinct segment with the normal generation, initialization,
+barrier-publication, race, debug, and lifetime semantics. Legacy
+`SimulationRequestV1` calls remain byte-stable and continue to reject dynamic
+LDS instead of inferring launch state. Zero or multiple reachable bases and
+`DynamicAtLeast` are typed unavailable because KIR does not encode the
+offset/alias/lifetime or authenticated-minimum authority needed for those
+forms.
 
 The V7 core wave profile executes `LaneId`, `Ballot`, `Any`, `All`, and
 integer `ShuffleIndex` with an explicit Wave32 or Wave64 contract. Logical lane
@@ -223,7 +240,8 @@ are never implemented with host `f32`/`f64` arithmetic and are never implicitly
 contracted.
 
 Float atomics, generic-address-space atomics, external calls, generic barriers,
-dynamic or non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
+legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
+non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
 operations, V7 memory intrinsics,
 V10 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
 volatile access, target-layout mismatches, and inline assembly remain typed

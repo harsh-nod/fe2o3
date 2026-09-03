@@ -10,12 +10,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::resident::reserved_vec_bytes;
-use crate::schedule::{ReductionScheduleSourceV1, schedule_context_identity};
+use crate::schedule::{
+    ReductionScheduleSourceV1, schedule_context_identity, schedule_context_identity_with_dynamic,
+};
 use crate::{
-    AdmittedSimulationModuleV1, IndexWidthV1, SimulationDataRaceV1, SimulationErrorV1,
-    SimulationExecutionErrorKindV1, SimulationExecutionErrorV1, SimulationInvocationV1,
-    SimulationLimitsV1, SimulationRaceAssessmentV1, SimulationRequestV1,
-    SimulationScheduleDecisionV1, SimulationSiteV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, IndexWidthV1,
+    SimulationDataRaceV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
+    SimulationExecutionErrorV1, SimulationInvocationV1, SimulationLimitsV1,
+    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleDecisionV1,
+    SimulationSiteV1, SimulationTargetV1,
 };
 
 /// Hard bound on executions performed by one failure-reduction request.
@@ -349,6 +352,47 @@ impl AdmittedSimulationModuleV1 {
         schedule: SimulationFailureScheduleV1,
         reduction_limits: SimulationFailureReductionLimitsV1,
     ) -> Result<SimulationFailureReductionReportV1, SimulationFailureReductionErrorV1> {
+        self.reduce_simulation_failure_configured(
+            simulation,
+            None,
+            target,
+            limits,
+            schedule,
+            reduction_limits,
+        )
+    }
+
+    /// Reduces a failure under one explicit runtime-sized LDS contract.
+    #[allow(clippy::result_large_err)]
+    pub fn reduce_simulation_failure_with_dynamic_workgroup_memory(
+        &self,
+        simulation: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationFailureScheduleV1,
+        reduction_limits: SimulationFailureReductionLimitsV1,
+    ) -> Result<SimulationFailureReductionReportV1, SimulationFailureReductionErrorV1> {
+        self.reduce_simulation_failure_configured(
+            simulation,
+            Some(dynamic),
+            target,
+            limits,
+            schedule,
+            reduction_limits,
+        )
+    }
+
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn reduce_simulation_failure_configured(
+        &self,
+        simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationFailureScheduleV1,
+        reduction_limits: SimulationFailureReductionLimitsV1,
+    ) -> Result<SimulationFailureReductionReportV1, SimulationFailureReductionErrorV1> {
         let required_attempts = reduction_limits.max_decisions_per_schedule + 2;
         if reduction_limits.max_attempts < required_attempts {
             return Err(SimulationFailureReductionErrorV1::InvalidRequest(
@@ -382,8 +426,9 @@ impl AdmittedSimulationModuleV1 {
             SimulationFailureScheduleV1::Canonical => ReductionScheduleSourceV1::Canonical,
             SimulationFailureScheduleV1::Seeded { seed } => ReductionScheduleSourceV1::Seeded(seed),
         };
-        let original_result = self.simulate_reduction_attempt(
+        let original_result = self.simulate_reduction_attempt_configured(
             simulation,
+            dynamic,
             target,
             limits,
             source,
@@ -415,8 +460,9 @@ impl AdmittedSimulationModuleV1 {
         while let Some(removed) = minimized.pop() {
             attempts += 1;
             scratch.clear();
-            let result = self.simulate_reduction_attempt(
+            let result = self.simulate_reduction_attempt_configured(
                 simulation,
+                dynamic,
                 target,
                 limits,
                 ReductionScheduleSourceV1::PrefixThenCanonical(&minimized),
@@ -439,8 +485,9 @@ impl AdmittedSimulationModuleV1 {
         }
         attempts += 1;
         scratch.clear();
-        let replay_result = self.simulate_reduction_attempt(
+        let replay_result = self.simulate_reduction_attempt_configured(
             simulation,
+            dynamic,
             target,
             limits,
             ReductionScheduleSourceV1::PrefixThenCanonical(&minimized),
@@ -454,8 +501,16 @@ impl AdmittedSimulationModuleV1 {
         let original = original.into_boxed_slice().into_vec();
         let minimized = minimized.into_boxed_slice().into_vec();
         let reproducer = scratch.into_boxed_slice().into_vec();
-        let context_identity =
-            schedule_context_identity(*self.identity(), simulation, target, limits);
+        let context_identity = match dynamic {
+            Some(dynamic) => schedule_context_identity_with_dynamic(
+                *self.identity(),
+                simulation,
+                dynamic,
+                target,
+                limits,
+            ),
+            None => schedule_context_identity(*self.identity(), simulation, target, limits),
+        };
         let reproducer_identity = reproducer_identity(context_identity, &fingerprint, &reproducer);
         let coverage = SimulationFailureReductionCoverageV1 {
             attempts,
@@ -494,8 +549,50 @@ impl AdmittedSimulationModuleV1 {
         limits: SimulationLimitsV1,
         report: &SimulationFailureReductionReportV1,
     ) -> Result<SimulationFailureFingerprintV1, SimulationFailureReductionErrorV1> {
+        self.replay_simulation_failure_reduction_configured(
+            simulation, None, target, limits, report,
+        )
+    }
+
+    /// Replays a persisted reduction under one exact dynamic LDS byte extent.
+    #[allow(clippy::result_large_err)]
+    pub fn replay_simulation_failure_reduction_with_dynamic_workgroup_memory(
+        &self,
+        simulation: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        report: &SimulationFailureReductionReportV1,
+    ) -> Result<SimulationFailureFingerprintV1, SimulationFailureReductionErrorV1> {
+        self.replay_simulation_failure_reduction_configured(
+            simulation,
+            Some(dynamic),
+            target,
+            limits,
+            report,
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn replay_simulation_failure_reduction_configured(
+        &self,
+        simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        report: &SimulationFailureReductionReportV1,
+    ) -> Result<SimulationFailureFingerprintV1, SimulationFailureReductionErrorV1> {
         validate_report(report).map_err(SimulationFailureReductionErrorV1::InvalidReport)?;
-        let context = schedule_context_identity(*self.identity(), simulation, target, limits);
+        let context = match dynamic {
+            Some(dynamic) => schedule_context_identity_with_dynamic(
+                *self.identity(),
+                simulation,
+                dynamic,
+                target,
+                limits,
+            ),
+            None => schedule_context_identity(*self.identity(), simulation, target, limits),
+        };
         if report.kir_wire_version != self.identity().wire_version()
             || report.kir_sha256 != *self.identity().digest()
             || report.kir_canonical_bytes != self.identity().canonical_length()
@@ -533,8 +630,9 @@ impl AdmittedSimulationModuleV1 {
             SimulationFailureScheduleV1::Canonical => ReductionScheduleSourceV1::Canonical,
             SimulationFailureScheduleV1::Seeded { seed } => ReductionScheduleSourceV1::Seeded(seed),
         };
-        let original_result = self.simulate_reduction_attempt(
+        let original_result = self.simulate_reduction_attempt_configured(
             simulation,
+            dynamic,
             target,
             limits,
             original_source,
@@ -549,8 +647,9 @@ impl AdmittedSimulationModuleV1 {
         }
         drop(original_observed);
         decisions.clear();
-        let result = self.simulate_reduction_attempt(
+        let result = self.simulate_reduction_attempt_configured(
             simulation,
+            dynamic,
             target,
             limits,
             ReductionScheduleSourceV1::PrefixThenCanonical(&report.reproducer_schedule),

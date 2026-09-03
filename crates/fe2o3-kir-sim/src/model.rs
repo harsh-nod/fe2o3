@@ -637,6 +637,25 @@ pub enum EventPolicyV1 {
     Enabled,
 }
 
+/// Explicit launch-provided byte extent for one reachable dynamic LDS base.
+///
+/// This is deliberately separate from [`SimulationRequestV1`]. Legacy requests
+/// retain their exact semantics and do not acquire dynamic-memory authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DynamicWorkgroupMemoryRequestV1 {
+    byte_extent: u32,
+}
+
+impl DynamicWorkgroupMemoryRequestV1 {
+    pub const fn new(byte_extent: u32) -> Self {
+        Self { byte_extent }
+    }
+
+    pub const fn byte_extent(self) -> u32 {
+        self.byte_extent
+    }
+}
+
 /// One immutable simulation request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationRequestV1 {

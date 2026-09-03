@@ -34,6 +34,11 @@ simulation only, not compiler-execution, KFD, or GPU launch authority.
 
 Embedded pointers, adjusted, cast, or indirect ABIs, ambiguous storage,
 unsupported wrapper regions, and layouts without exact slots fail typed
-admission. Dynamic shared memory, peer copy, multiple devices, and host runtime
-collectives are not advertised. KIR wave operations remain simulated kernel
-semantics; they do not constitute a host collective primitive.
+admission. For a kernel with exactly one reachable canonical
+dynamic LDS declaration, the normal launch geometry's `dynamic_shared_bytes`
+is propagated as the explicit simulator byte extent, including zero. A nonzero
+extent supplied to a kernel without such a declaration fails typed preflight
+instead of being ignored. Multiple bases and `DynamicAtLeast` remain
+unavailable. Peer copy, multiple devices, and host runtime collectives are not
+advertised. KIR wave operations remain simulated kernel semantics; they do not
+constitute a host collective primitive.

@@ -49,13 +49,14 @@ pub use explore::{
 };
 pub use model::{
     AdmittedSimulationModuleV1, BufferArgumentErrorV1, BufferArgumentV1, BufferBackingIdV1,
-    BufferViewArgumentV1, EventPolicyV1, GridShapeV1, IndexWidthV1, ScalarBitsErrorV1,
-    ScalarBitsV1, SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
-    SimulationInvocationV1, SimulationKernelIrIdentityV1, SimulationLimitsErrorV1,
-    SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1, SimulationTargetV1,
-    WorkgroupShapeV1,
+    BufferViewArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, GridShapeV1,
+    IndexWidthV1, ScalarBitsErrorV1, ScalarBitsV1, SharedBufferV1, SimulationAdmissionErrorV1,
+    SimulationArgumentV1, SimulationInvocationV1, SimulationKernelIrIdentityV1,
+    SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1,
+    SimulationTargetV1, WorkgroupShapeV1,
 };
 pub use preflight::{
+    DynamicWorkgroupMemorySiteV1, DynamicWorkgroupMemoryUnavailableV1,
     MAX_REPORTED_UNSUPPORTED_FINDINGS_V1, MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1,
     SimulationPlanV1, SimulationPreflightErrorV1, UnsupportedFeatureV1,
     UnsupportedSimulationReportV1, UnsupportedSimulationSiteV1,

@@ -32,18 +32,18 @@ use crate::schedule::{
 };
 use crate::soft_float::{SoftFloatErrorV1, SoftFloatOperationV1};
 use crate::{
-    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1, IndexWidthV1,
-    NoopSimulationDebugSinkV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
-    SimulationDebugAllocationV1, SimulationDebugBarrierActionV1, SimulationDebugBindingV1,
-    SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1,
-    SimulationDebugFrameV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
-    SimulationDebugRecordV1, SimulationDebugScheduleV1, SimulationDebugSinkControlV1,
-    SimulationDebugSinkV1, SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1,
-    SimulationDebugValueV1, SimulationInvocationV1, SimulationKernelIrIdentityV1,
-    SimulationLimitsV1, SimulationPlanV1, SimulationPreflightErrorV1, SimulationRequestV1,
-    SimulationScheduleCoverageV1, SimulationScheduleIdentityV1, SimulationScheduleRecordV1,
-    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationSiteV1,
-    SimulationTargetV1,
+    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1,
+    DynamicWorkgroupMemoryRequestV1, EventPolicyV1, IndexWidthV1, NoopSimulationDebugSinkV1,
+    ScalarBitsV1, SharedBufferV1, SimulationArgumentV1, SimulationDebugAllocationV1,
+    SimulationDebugBarrierActionV1, SimulationDebugBindingV1, SimulationDebugCaptureLimitsV1,
+    SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1, SimulationDebugFrameV1,
+    SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1, SimulationDebugRecordV1,
+    SimulationDebugScheduleV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
+    SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+    SimulationInvocationV1, SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationPlanV1,
+    SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleCoverageV1,
+    SimulationScheduleIdentityV1, SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1,
+    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
@@ -290,6 +290,7 @@ impl SimulationEventSinkV1 for NoopSimulationEventSinkV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationExecutionV1 {
     identity: SimulationKernelIrIdentityV1,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     arguments: Vec<SimulationArgumentV1>,
     shared_buffers: Vec<SharedBufferV1>,
     invocations_executed: u64,
@@ -314,6 +315,11 @@ impl SimulationExecutionV1 {
     /// Returns the exact canonical KIR identity that was simulated.
     pub const fn identity(&self) -> &SimulationKernelIrIdentityV1 {
         &self.identity
+    }
+
+    /// Returns the explicit runtime-sized LDS contract bound to this execution.
+    pub const fn dynamic_workgroup_memory(&self) -> Option<DynamicWorkgroupMemoryRequestV1> {
+        self.dynamic_workgroup_memory
     }
 
     /// Returns copied-back scalar and buffer arguments in entry-ABI order.
@@ -798,6 +804,37 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_with_sink(request, target, limits, &mut sink)
     }
 
+    /// Runs with one explicit runtime-sized LDS segment and no event delivery.
+    pub fn simulate_with_dynamic_workgroup_memory(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let mut event_sink = NoopSimulationEventSinkV1;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: None,
+                resident_offset: 0,
+            },
+            &mut event_sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     /// Runs with an explicit bounded schedule recording or exact replay policy.
     ///
     /// This controls deterministic CPU semantic ordering only. It does not model
@@ -812,6 +849,25 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_scheduled_with_resident_offset(request, target, limits, schedule, 0)
     }
 
+    /// Runs a scheduled simulation bound to one explicit runtime-sized LDS segment.
+    pub fn simulate_scheduled_with_dynamic_workgroup_memory(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.simulate_scheduled_configured_with_resident_offset(
+            request,
+            Some(dynamic),
+            target,
+            limits,
+            schedule,
+            0,
+        )
+    }
+
     pub(crate) fn simulate_scheduled_with_resident_offset(
         &self,
         request: &SimulationRequestV1,
@@ -820,9 +876,32 @@ impl AdmittedSimulationModuleV1 {
         schedule: SimulationScheduleRequestV1<'_>,
         resident_offset: usize,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
-        let plan = self
-            .preflight(request, target, limits)
-            .map_err(SimulationErrorV1::Preflight)?;
+        self.simulate_scheduled_configured_with_resident_offset(
+            request,
+            None,
+            target,
+            limits,
+            schedule,
+            resident_offset,
+        )
+    }
+
+    pub(crate) fn simulate_scheduled_configured_with_resident_offset(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+        resident_offset: usize,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = match dynamic {
+            Some(dynamic) => {
+                self.preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            }
+            None => self.preflight(request, target, limits),
+        }
+        .map_err(SimulationErrorV1::Preflight)?;
         let mut event_sink = NoopSimulationEventSinkV1;
         let mut debug_sink = NoopSimulationDebugSinkV1;
         execute(
@@ -847,9 +926,10 @@ impl AdmittedSimulationModuleV1 {
         clippy::too_many_arguments,
         reason = "internal reduction execution keeps every exact simulator context input explicit"
     )]
-    pub(crate) fn simulate_reduction_attempt(
+    pub(crate) fn simulate_reduction_attempt_configured(
         &self,
         request: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
         source: ReductionScheduleSourceV1<'_>,
@@ -857,9 +937,13 @@ impl AdmittedSimulationModuleV1 {
         decisions: &mut Vec<crate::SimulationScheduleDecisionV1>,
         resident_offset: usize,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
-        let plan = self
-            .preflight(request, target, limits)
-            .map_err(SimulationErrorV1::Preflight)?;
+        let plan = match dynamic {
+            Some(dynamic) => {
+                self.preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            }
+            None => self.preflight(request, target, limits),
+        }
+        .map_err(SimulationErrorV1::Preflight)?;
         let mut event_sink = NoopSimulationEventSinkV1;
         let mut debug_sink = NoopSimulationDebugSinkV1;
         execute(
@@ -908,6 +992,37 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_with_event_policy(request, target, limits, EventPolicyV1::Enabled, sink)
     }
 
+    /// Runs explicit dynamic LDS semantics with bounded event delivery enabled.
+    pub fn simulate_observed_with_dynamic_workgroup_memory_and_sink(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        sink: &mut impl SimulationEventSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: EventPolicyV1::Enabled,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: None,
+                resident_offset: 0,
+            },
+            sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     /// Runs the ordinary simulator while recording an independent bounded debug observation.
     ///
     /// Debug records are derived from live interpreter state and do not alter the stable
@@ -943,6 +1058,38 @@ impl AdmittedSimulationModuleV1 {
         .map_err(SimulationErrorV1::Execution)
     }
 
+    /// Runs explicit dynamic LDS semantics with independent bounded debug snapshots.
+    pub fn simulate_debugged_with_dynamic_workgroup_memory_and_sink(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        capture: SimulationDebugCaptureLimitsV1,
+        debug_sink: &mut impl SimulationDebugSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: capture,
+                schedule: None,
+                resident_offset: 0,
+            },
+            &mut event_sink,
+            debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     /// Runs a scheduled simulation with independent bounded debug snapshots.
     pub fn simulate_debugged_scheduled_with_sink(
         &self,
@@ -955,6 +1102,40 @@ impl AdmittedSimulationModuleV1 {
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
         let plan = self
             .preflight(request, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: capture,
+                schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
+                resident_offset: 0,
+            },
+            &mut event_sink,
+            debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
+    /// Runs scheduled explicit dynamic LDS semantics with bounded debug snapshots.
+    #[allow(clippy::too_many_arguments)]
+    pub fn simulate_debugged_scheduled_with_dynamic_workgroup_memory_and_sink(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+        capture: SimulationDebugCaptureLimitsV1,
+        debug_sink: &mut impl SimulationDebugSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
         let mut event_sink = NoopSimulationEventSinkV1;
         execute(
@@ -1603,6 +1784,7 @@ struct Engine<'a, S> {
     call_targets: Vec<Vec<Vec<CallTarget>>>,
     switch_targets: Vec<Vec<SwitchLookup>>,
     target: SimulationTargetV1,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     limits: SimulationLimitsV1,
     policy: EventPolicyV1,
     memory: Memory,
@@ -2415,14 +2597,6 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 ),
             ));
         };
-        let WorkgroupMemoryExtent::Static(elements) = memory.extent else {
-            return Err(self.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "preflighted static workgroup memory",
-                ),
-            ));
-        };
         let element_bytes = self.target.scalar_bytes(element).ok_or_else(|| {
             self.at(
                 site,
@@ -2431,18 +2605,23 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 ),
             )
         })?;
-        let bytes = usize::try_from(elements)
-            .ok()
-            .and_then(|elements| elements.checked_mul(element_bytes))
-            .ok_or_else(|| {
-                self.at(
-                    site,
-                    SimulationExecutionErrorKindV1::AllocationBytesLimit {
-                        actual: usize::MAX,
-                        limit: self.limits.max_allocation_bytes,
-                    },
-                )
-            })?;
+        let bytes = match memory.extent {
+            WorkgroupMemoryExtent::Static(elements) => usize::try_from(elements)
+                .ok()
+                .and_then(|elements| elements.checked_mul(element_bytes)),
+            WorkgroupMemoryExtent::Dynamic => self
+                .dynamic_workgroup_memory
+                .and_then(|dynamic| usize::try_from(dynamic.byte_extent()).ok()),
+            WorkgroupMemoryExtent::DynamicAtLeast(_) => None,
+        }
+        .ok_or_else(|| {
+            self.at(
+                site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "preflighted workgroup memory extent",
+                ),
+            )
+        })?;
         if let Some(existing) = self
             .workgroup_allocations
             .iter()
@@ -3145,6 +3324,7 @@ fn execute(
         schedule,
         admitted.identity,
         request,
+        plan.dynamic_workgroup_memory,
         target,
         limits,
         &plan,
@@ -3209,6 +3389,7 @@ fn execute(
         call_targets,
         switch_targets,
         target,
+        dynamic_workgroup_memory: plan.dynamic_workgroup_memory,
         limits,
         policy,
         memory,
@@ -3362,11 +3543,19 @@ fn execute(
     let shared_buffers = copy_back_shared_buffers(&engine.memory, &request.shared_buffers)?;
     let conflict_assessment = engine.conflict_assessment();
     let schedule = schedule
-        .finish(plan.workgroups, admitted.identity, request, target, limits)
+        .finish(
+            plan.workgroups,
+            admitted.identity,
+            request,
+            plan.dynamic_workgroup_memory,
+            target,
+            limits,
+        )
         .map_err(|error| engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error)))?;
     let supplemental = collect_supplemental_observations(&engine, schedule.records)?;
     Ok(SimulationExecutionV1 {
         identity: admitted.identity,
+        dynamic_workgroup_memory: plan.dynamic_workgroup_memory,
         arguments,
         shared_buffers,
         invocations_executed: invocations,
@@ -8334,6 +8523,7 @@ mod tests {
             call_targets: vec![vec![]],
             switch_targets: vec![vec![]],
             target: SimulationTargetV1::amdgpu_64(),
+            dynamic_workgroup_memory: None,
             limits: SimulationLimitsV1::default(),
             policy: EventPolicyV1::Disabled,
             memory: Memory {

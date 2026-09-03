@@ -2,14 +2,14 @@
 #![doc = include_str!("../README.md")]
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V4, ScalarType,
-    SemanticArgumentOwnershipV1, SemanticComponentStorageBindingV2, SemanticKernargSlotV2,
-    SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
+    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V4,
+    OperationKind, ScalarType, SemanticArgumentOwnershipV1, SemanticComponentStorageBindingV2,
+    SemanticKernargSlotV2, SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
     SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
     SemanticStorageMapV2, SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7,
     VerifiedSimulationBundleV3, VerifiedSimulationBundleV4,
 };
-use fe2o3_kir_sim::{AdmittedSimulationModuleV1, ScalarBitsV1};
+use fe2o3_kir_sim::{AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentV1, SemanticAbiPassModeV1,
     SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticEnumEncodingV1, SemanticLocalRoleV1,
@@ -208,6 +208,7 @@ struct KernelRecordV1 {
     signature: [u8; 32],
     explicit_byte_len: usize,
     arguments: Vec<ArgumentRecordV1>,
+    requires_dynamic_workgroup_memory: bool,
     unsupported: Option<String>,
 }
 
@@ -348,6 +349,7 @@ struct PreparedRequestV1 {
     grid: [u64; 3],
     workgroup: [u32; 3],
     arguments: Vec<VirtualArgumentV1>,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
 }
 
 /// Explicit CPU semantic simulator behind the normal runtime facade.
@@ -778,14 +780,6 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         if launch.explicit_kernarg.len() > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
             return Err(rejected_arguments("explicit kernarg length"));
         }
-        if launch.geometry.dynamic_shared_bytes != 0 {
-            return Err(RuntimeBackendFailureV1::Rejected(
-                SimRuntimeBackendErrorV1::UnsupportedBundle(
-                    "dynamic shared memory is not represented by RuntimeBackendV1 simulation arguments"
-                        .to_owned(),
-                ),
-            ));
-        }
         let queue = *self
             .streams
             .get(&launch.stream)
@@ -831,6 +825,10 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
                 grid: launch.geometry.grid.map(u64::from),
                 workgroup: launch.geometry.workgroup,
                 arguments,
+                dynamic_workgroup_memory: dynamic_workgroup_memory_request(
+                    kernel.requires_dynamic_workgroup_memory,
+                    launch.geometry.dynamic_shared_bytes,
+                ),
             },
             dependencies,
             completion: completion.clone(),
@@ -1175,6 +1173,10 @@ fn parse_bundle(
                     signature: *root.abi().identity().as_bytes(),
                     explicit_byte_len,
                     arguments,
+                    requires_dynamic_workgroup_memory: kernel_reaches_dynamic_workgroup_memory(
+                        &module,
+                        &kernel.entry,
+                    )?,
                     unsupported,
                 },
             )
@@ -1213,6 +1215,70 @@ fn copy_bundle_image_v2(image: &[u8]) -> Result<Vec<u8>, SimRuntimeBackendErrorV
     })?;
     copy.extend_from_slice(image);
     Ok(copy)
+}
+
+fn dynamic_workgroup_memory_request(
+    kernel_requires_dynamic_workgroup_memory: bool,
+    dynamic_shared_bytes: u32,
+) -> Option<DynamicWorkgroupMemoryRequestV1> {
+    (kernel_requires_dynamic_workgroup_memory || dynamic_shared_bytes != 0)
+        .then(|| DynamicWorkgroupMemoryRequestV1::new(dynamic_shared_bytes))
+}
+
+fn kernel_reaches_dynamic_workgroup_memory(
+    module: &fe2o3_kernel_ir::Module,
+    entry: &fe2o3_kernel_ir::FunctionId,
+) -> Result<bool, SimRuntimeBackendErrorV1> {
+    let entry = module
+        .functions
+        .iter()
+        .position(|function| &function.id == entry)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle("kernel entry missing".to_owned())
+        })?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(module.functions.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "dynamic LDS reachability allocation failed".to_owned(),
+            )
+        })?;
+    seen.resize(module.functions.len(), false);
+    let mut pending = Vec::new();
+    pending
+        .try_reserve_exact(module.functions.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "dynamic LDS reachability allocation failed".to_owned(),
+            )
+        })?;
+    seen[entry] = true;
+    pending.push(entry);
+    while let Some(index) = pending.pop() {
+        let Some(body) = module.functions[index].body.as_ref() else {
+            continue;
+        };
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            match &operation.kind {
+                OperationKind::WorkgroupMemory(memory) if memory.extent.is_dynamic() => {
+                    return Ok(true);
+                }
+                OperationKind::Call { callee, .. } => {
+                    if let Some(index) = module
+                        .functions
+                        .iter()
+                        .position(|function| function.id == *callee)
+                        && !seen[index]
+                    {
+                        seen[index] = true;
+                        pending.push(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn argument_layout(
@@ -3327,41 +3393,50 @@ fn worker_main(
                     .collect::<Result<Vec<_>, _>>();
                 let outcome = match dependencies {
                     Err(()) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
-                    Ok(dependencies) => match runtime.submit(
-                        queue,
-                        module,
-                        VirtualDispatchRequestV1 {
+                    Ok(dependencies) => {
+                        let virtual_request = VirtualDispatchRequestV1 {
                             kernel: request.kernel,
                             grid: request.grid,
                             workgroup: request.workgroup,
                             arguments: request.arguments,
                             dependencies,
-                        },
-                    ) {
-                        Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
-                        Ok(handle) => {
-                            completions.insert(id, handle);
-                            match runtime.run_next() {
-                                Ok(VirtualRunProgressV1::Completed { completion, .. })
-                                    if completion == handle =>
-                                {
-                                    CompletionOutcomeV1::Succeeded
+                        };
+                        let submitted = match request.dynamic_workgroup_memory {
+                            Some(dynamic) => runtime.submit_with_dynamic_workgroup_memory(
+                                queue,
+                                module,
+                                virtual_request,
+                                dynamic,
+                            ),
+                            None => runtime.submit(queue, module, virtual_request),
+                        };
+                        match submitted {
+                            Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
+                            Ok(handle) => {
+                                completions.insert(id, handle);
+                                match runtime.run_next() {
+                                    Ok(VirtualRunProgressV1::Completed { completion, .. })
+                                        if completion == handle =>
+                                    {
+                                        CompletionOutcomeV1::Succeeded
+                                    }
+                                    Ok(VirtualRunProgressV1::AbortedDependency {
+                                        completion,
+                                        ..
+                                    }) if completion == handle => {
+                                        CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE)
+                                    }
+                                    Ok(
+                                        VirtualRunProgressV1::Blocked
+                                        | VirtualRunProgressV1::Idle
+                                        | VirtualRunProgressV1::Completed { .. }
+                                        | VirtualRunProgressV1::AbortedDependency { .. },
+                                    )
+                                    | Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
                                 }
-                                Ok(VirtualRunProgressV1::AbortedDependency {
-                                    completion, ..
-                                }) if completion == handle => {
-                                    CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE)
-                                }
-                                Ok(
-                                    VirtualRunProgressV1::Blocked
-                                    | VirtualRunProgressV1::Idle
-                                    | VirtualRunProgressV1::Completed { .. }
-                                    | VirtualRunProgressV1::AbortedDependency { .. },
-                                )
-                                | Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
                             }
                         }
-                    },
+                    }
                 };
                 completion.finish(outcome);
             }
@@ -3432,11 +3507,97 @@ fn require_capacity(
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::SemanticArgumentStorageV2;
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, Function, FunctionId, Module, Operation, Signature, Terminator,
+        ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
+    };
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAbiValueAttributesV1, SemanticAbiValueV1, SemanticAggregateLayoutV1,
         SemanticAggregateTypeV1, SemanticBackendScalarV1, SemanticLayoutIdentityV1,
         SemanticTypeIdentityV1, SemanticTypeLayoutV1,
     };
+
+    fn runtime_dynamic_reachability_module(call_helper: bool) -> (Module, FunctionId) {
+        let entry_id = FunctionId::new("entry");
+        let mut entry_block = BasicBlock::new(BlockId(0));
+        if call_helper {
+            entry_block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: "dynamic_helper".into(),
+                    arguments: vec![],
+                },
+            ));
+        }
+        entry_block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::kernel_entry(
+            entry_id.clone(),
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![entry_block],
+        );
+        let scalar = Type::Scalar(ScalarType::U32);
+        let mut helper_block = BasicBlock::new(BlockId(0));
+        helper_block.operations.push(Operation::effect_free(
+            ValueDef::new(
+                ValueId(0),
+                Type::pointer(
+                    scalar.clone(),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+            ),
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: scalar,
+                extent: WorkgroupMemoryExtent::Dynamic,
+                alignment: 4,
+            }),
+        ));
+        helper_block.terminator = Some(Terminator::Return { values: vec![] });
+        let helper = Function::internal_helper(
+            "dynamic_helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![helper_block],
+        );
+        let mut module = Module::new("sim-runtime-dynamic-reachability");
+        module.functions.extend([entry, helper]);
+        (module, entry_id)
+    }
+
+    #[test]
+    fn runtime_dynamic_lds_detection_follows_only_reachable_calls() {
+        let (reachable, entry) = runtime_dynamic_reachability_module(true);
+        assert!(kernel_reaches_dynamic_workgroup_memory(&reachable, &entry).unwrap());
+
+        let (unreachable, entry) = runtime_dynamic_reachability_module(false);
+        assert!(!kernel_reaches_dynamic_workgroup_memory(&unreachable, &entry).unwrap());
+        assert!(matches!(
+            kernel_reaches_dynamic_workgroup_memory(
+                &unreachable,
+                &FunctionId::new("substituted_entry")
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail == "kernel entry missing"
+        ));
+    }
+
+    #[test]
+    fn runtime_dynamic_lds_launch_mapping_preserves_zero_and_hostile_extents() {
+        assert_eq!(dynamic_workgroup_memory_request(false, 0), None);
+        assert_eq!(
+            dynamic_workgroup_memory_request(true, 0),
+            Some(DynamicWorkgroupMemoryRequestV1::new(0))
+        );
+        assert_eq!(
+            dynamic_workgroup_memory_request(false, 64),
+            Some(DynamicWorkgroupMemoryRequestV1::new(64))
+        );
+        assert_eq!(
+            dynamic_workgroup_memory_request(true, 96),
+            Some(DynamicWorkgroupMemoryRequestV1::new(96))
+        );
+    }
 
     #[test]
     fn short_and_foreign_v4_prefixes_keep_the_v3_decode_error() {
@@ -3732,6 +3893,7 @@ mod tests {
             signature: [1; 32],
             explicit_byte_len: bytes,
             arguments,
+            requires_dynamic_workgroup_memory: false,
             unsupported: None,
         }
     }

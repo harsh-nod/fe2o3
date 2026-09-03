@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_746_898;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_751_390;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -155,10 +155,12 @@ pub enum SimulationOperationSurfaceV1 {
     IntegerSwitch = 29,
     Return = 30,
     Unreachable = 31,
+    /// Additive launch surface for one exact reachable dynamic LDS base.
+    DynamicWorkgroupMemoryRequest = 32,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 32] = [
+    const ALL: [Self; 33] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -191,8 +193,9 @@ impl SimulationOperationSurfaceV1 {
         Self::IntegerSwitch,
         Self::Return,
         Self::Unreachable,
+        Self::DynamicWorkgroupMemoryRequest,
     ];
-    const COUNT: usize = Self::Unreachable as usize + 1;
+    const COUNT: usize = Self::DynamicWorkgroupMemoryRequest as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -240,6 +243,10 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     InlineAssembly,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
+    DynamicWorkgroupMemoryMissingBase,
+    DynamicWorkgroupMemoryAmbiguousBases,
+    DynamicWorkgroupMemoryAuthenticatedMinimum,
+    DynamicWorkgroupMemoryExtentLayout,
 }
 
 impl UnsupportedFeatureV1 {
@@ -556,6 +563,16 @@ fn top_level_capability(
         Surface::WorkgroupMemory => owned(
             Owner::WorkgroupCooperative,
             &[Reason::DynamicWorkgroupMemory, Reason::NonScalarMemory],
+        ),
+        Surface::DynamicWorkgroupMemoryRequest => owned(
+            Owner::WorkgroupCooperative,
+            &[
+                Reason::DynamicWorkgroupMemoryMissingBase,
+                Reason::DynamicWorkgroupMemoryAmbiguousBases,
+                Reason::DynamicWorkgroupMemoryAuthenticatedMinimum,
+                Reason::DynamicWorkgroupMemoryExtentLayout,
+                Reason::NonScalarMemory,
+            ],
         ),
         Surface::Matrix => owned(
             Owner::WaveCooperative,

@@ -67,7 +67,7 @@ equivalence or race freedom.
 | F16, BF16, F32, F64 scalar operations | Qualified simulator/compiler subsets | Simulator uses pinned software IEEE evaluation; unsupported transcendental operations fail closed |
 | 1D/2D/3D launch indices | Qualified subsets | Typed logical indices; target layout is explicit |
 | Checked global buffers and views | Qualified subsets | Allocation-relative bounds, access, initialization, and provenance checks |
-| Workgroup memory and barriers | Qualified subsets | Static scalar LDS and convergent workgroup barriers within defined limits |
+| Workgroup memory and barriers | Qualified subsets | Static scalar LDS plus one explicitly sized reachable canonical dynamic LDS base, with convergent barriers and exact initialization/publication/lifetime checks within defined limits; multiple bases and `DynamicAtLeast` fail typed |
 | Integer atomics and fences | Qualified simulator subsets | Exact supported width/operation/ordering/scope combinations only |
 | Wave32/Wave64 collectives | Qualified simulator subsets | Logical collective semantics, not physical `EXEC` emulation |
 | Helpers and structured control flow | Qualified simulator/compiler subsets | Bounded call depth and explicit unsupported diagnostics |

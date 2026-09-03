@@ -3,10 +3,11 @@ use std::fmt;
 use std::mem::size_of;
 
 use crate::{
-    AdmittedSimulationModuleV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionErrorV1, SimulationInvocationV1, SimulationLimitsV1,
-    SimulationMemoryConflictV1, SimulationRaceAssessmentV1, SimulationRequestV1,
-    SimulationScheduleRecordV1, SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, SimulationErrorV1,
+    SimulationExecutionErrorKindV1, SimulationExecutionErrorV1, SimulationInvocationV1,
+    SimulationLimitsV1, SimulationMemoryConflictV1, SimulationRaceAssessmentV1,
+    SimulationRequestV1, SimulationScheduleRecordV1, SimulationScheduleRequestV1, SimulationSiteV1,
+    SimulationTargetV1,
 };
 
 /// Hard upper bound on schedules attempted by one exploration call.
@@ -204,6 +205,31 @@ impl AdmittedSimulationModuleV1 {
         limits: SimulationLimitsV1,
         request: SimulationExplorationRequestV1,
     ) -> Result<SimulationExplorationV1, SimulationErrorV1> {
+        self.explore_seeded_schedules_configured(simulation, None, target, limits, request)
+    }
+
+    /// Sweeps seeded interleavings with one explicit runtime-sized LDS segment.
+    #[allow(clippy::result_large_err)]
+    pub fn explore_seeded_schedules_with_dynamic_workgroup_memory(
+        &self,
+        simulation: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        request: SimulationExplorationRequestV1,
+    ) -> Result<SimulationExplorationV1, SimulationErrorV1> {
+        self.explore_seeded_schedules_configured(simulation, Some(dynamic), target, limits, request)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn explore_seeded_schedules_configured(
+        &self,
+        simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        request: SimulationExplorationRequestV1,
+    ) -> Result<SimulationExplorationV1, SimulationErrorV1> {
         let mut result = SimulationExplorationV1 {
             attempted: 0,
             completed: 0,
@@ -226,8 +252,9 @@ impl AdmittedSimulationModuleV1 {
         for offset in 0..request.max_schedules {
             let seed = request.first_seed.wrapping_add(offset as u64);
             result.attempted += 1;
-            match self.simulate_scheduled_with_resident_offset(
+            match self.simulate_scheduled_configured_with_resident_offset(
                 simulation,
+                dynamic,
                 target,
                 limits,
                 SimulationScheduleRequestV1::RecordSeeded {

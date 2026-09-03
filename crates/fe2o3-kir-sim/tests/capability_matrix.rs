@@ -188,6 +188,58 @@ fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
 }
 
 #[test]
+fn explicit_dynamic_lds_request_is_owned_without_changing_legacy_lds_admission() {
+    let matrix = semantic_capability_matrix_v1();
+    for profile in matrix
+        .top_level_rows
+        .iter()
+        .map(|row| row.profile)
+        .collect::<BTreeSet<_>>()
+    {
+        for version in [
+            SimulationKirWireVersionV1::V7,
+            SimulationKirWireVersionV1::V9,
+            SimulationKirWireVersionV1::V10,
+        ] {
+            let capability = |operation| {
+                &matrix
+                    .top_level_rows
+                    .iter()
+                    .find(|row| {
+                        row.profile == profile
+                            && row.kir_wire_version == version
+                            && row.operation == operation
+                    })
+                    .unwrap()
+                    .capability
+            };
+            assert!(matches!(
+                capability(SimulationOperationSurfaceV1::WorkgroupMemory),
+                SimulationCapabilityDispositionV1::Owned {
+                    typed_rejections,
+                    ..
+                } if typed_rejections.contains(
+                    &SimulationUnsupportedReasonCodeV1::DynamicWorkgroupMemory
+                )
+            ));
+            assert!(matches!(
+                capability(SimulationOperationSurfaceV1::DynamicWorkgroupMemoryRequest),
+                SimulationCapabilityDispositionV1::Owned {
+                    typed_rejections,
+                    ..
+                } if *typed_rejections == [
+                    SimulationUnsupportedReasonCodeV1::DynamicWorkgroupMemoryMissingBase,
+                    SimulationUnsupportedReasonCodeV1::DynamicWorkgroupMemoryAmbiguousBases,
+                    SimulationUnsupportedReasonCodeV1::DynamicWorkgroupMemoryAuthenticatedMinimum,
+                    SimulationUnsupportedReasonCodeV1::DynamicWorkgroupMemoryExtentLayout,
+                    SimulationUnsupportedReasonCodeV1::NonScalarMemory,
+                ]
+            ));
+        }
+    }
+}
+
+#[test]
 fn json_command_emits_the_same_stable_matrix() {
     let first = Command::new(env!("CARGO_BIN_EXE_fe2o3-kir-sim-capabilities"))
         .output()
