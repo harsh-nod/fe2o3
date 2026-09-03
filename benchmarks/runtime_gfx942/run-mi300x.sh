@@ -10,6 +10,7 @@ readonly warmups="${FE2O3_RUNTIME_WARMUPS:-10}"
 readonly samples="${FE2O3_RUNTIME_SAMPLES:-30}"
 readonly launches="${FE2O3_RUNTIME_LAUNCHES_PER_SAMPLE:-10}"
 readonly gpu_index="${FE2O3_RUNTIME_GPU_INDEX:-0}"
+readonly max_busy="${FE2O3_RUNTIME_MAX_BUSY_PERCENT:-5}"
 readonly rocm_path="${ROCM_PATH:-/opt/rocm}"
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-runtime-gfx942.XXXXXX")"
 readonly build_dir
@@ -24,6 +25,21 @@ trap 'exit 143' TERM
 gpu_busy_percent() {
   "${rocm_path}/bin/rocm-smi" --showuse 2>/dev/null |
     awk -v gpu="GPU[${gpu_index}]" '$1 == gpu { value = $NF } END { if (value != "") print value }'
+}
+
+require_idle_gpu() {
+  local observed
+  observed="$(gpu_busy_percent)"
+  [[ "${observed}" =~ ^[0-9]+$ ]] || {
+    printf 'could not observe GPU busy percentage\n' >&2
+    exit 2
+  }
+  ((observed <= max_busy)) || {
+    printf 'GPU %s is %s%% busy; release limit is %s%%\n' \
+      "${gpu_index}" "${observed}" "${max_busy}" >&2
+    exit 2
+  }
+  printf '%s' "${observed}"
 }
 
 [[ -c /dev/kfd ]] || {
@@ -56,6 +72,10 @@ for value in "${warmups}" "${samples}" "${launches}"; do
     exit 2
   }
 done
+if ! [[ "${max_busy}" =~ ^[0-9]+$ ]] || ((max_busy > 100)); then
+  printf 'FE2O3_RUNTIME_MAX_BUSY_PERCENT must be an integer from 0 through 100\n' >&2
+  exit 2
+fi
 
 rustc_release="$(rustc --version | awk '{ print $2 }')"
 IFS=. read -r rustc_major rustc_minor _ <<<"${rustc_release}"
@@ -87,8 +107,7 @@ rocm_version="unknown"
 if [[ -r "${rocm_path}/.info/version" ]]; then
   IFS= read -r rocm_version < "${rocm_path}/.info/version"
 fi
-gpu_busy_before="$(gpu_busy_percent)"
-gpu_busy_before="${gpu_busy_before:-unknown}"
+gpu_busy_before="$(require_idle_gpu)"
 rustc_version="$(rustc --version | tr ' ' '_')"
 cargo_version="$(cargo --version | tr ' ' '_')"
 
@@ -105,15 +124,16 @@ cargo test --locked --release -p fe2o3-hsa-runtime \
   "${repo_root}/benchmarks/runtime_gfx942/vecadd_module_hip.cpp" \
   -o "${build_dir}/vecadd-module-hip"
 
-printf 'context schema=fe2o3.runtime-gfx942-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_index=%s unique_id=%s fixture_sha256=%s rocm_version=%s rustc=%s cargo=%s gpu_busy_before_percent=%s n=%s warmups=%s samples=%s launches_per_sample=%s\n' \
+printf 'context schema=fe2o3.runtime-gfx942-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_index=%s unique_id=%s fixture_sha256=%s rocm_version=%s rustc=%s cargo=%s gpu_busy_before_percent=%s max_busy_percent=%s n=%s warmups=%s samples=%s launches_per_sample=%s\n' \
   "$(git rev-parse HEAD)" "${gpu_index}" "${unique_id}" "${fixture_sha256}" \
-  "${rocm_version}" "${rustc_version}" "${cargo_version}" "${gpu_busy_before}" \
+  "${rocm_version}" "${rustc_version}" "${cargo_version}" "${gpu_busy_before}" "${max_busy}" \
   "${element_count}" "${warmups}" "${samples}" "${launches}"
 
-printf 'context phase=kfd gpu_busy_start_percent=%s\n' "$(gpu_busy_percent)"
+printf 'context phase=kfd gpu_busy_start_percent=%s\n' "$(require_idle_gpu)"
 "${build_dir}/target/release/examples/gfx942-runtime-vecadd-benchmark" \
   "${unique_id}" "${warmups}" "${samples}" "${launches}"
-printf 'context phase=hsa gpu_busy_start_percent=%s\n' "$(gpu_busy_percent)"
+printf 'context phase=kfd gpu_busy_end_percent=%s\n' "$(require_idle_gpu)"
+printf 'context phase=hsa gpu_busy_start_percent=%s\n' "$(require_idle_gpu)"
 HIP_VISIBLE_DEVICES=0 \
 ROCR_VISIBLE_DEVICES="${gpu_index}" \
 FE2O3_RUN_GFX942_RUNTIME_HSA_QUALIFICATION=1 \
@@ -125,8 +145,10 @@ FE2O3_RUNTIME_LAUNCHES_PER_SAMPLE="${launches}" \
     --test gfx942_runtime_context_hardware \
     qualification::gfx942_runtime_context_exact_fixture_executes_dependencies_wraps_and_times \
     -- --ignored --exact --nocapture --test-threads=1
-printf 'context phase=hip gpu_busy_start_percent=%s\n' "$(gpu_busy_percent)"
+printf 'context phase=hsa gpu_busy_end_percent=%s\n' "$(require_idle_gpu)"
+printf 'context phase=hip gpu_busy_start_percent=%s\n' "$(require_idle_gpu)"
 HIP_VISIBLE_DEVICES="${gpu_index}" "${build_dir}/vecadd-module-hip" \
   "${fixture}" "${element_count}" "${warmups}" "${samples}" "${launches}"
-gpu_busy_after="$(gpu_busy_percent)"
-printf 'context gpu_busy_after_percent=%s\n' "${gpu_busy_after:-unknown}"
+printf 'context phase=hip gpu_busy_end_percent=%s\n' "$(require_idle_gpu)"
+gpu_busy_after="$(require_idle_gpu)"
+printf 'context gpu_busy_after_percent=%s\n' "${gpu_busy_after}"

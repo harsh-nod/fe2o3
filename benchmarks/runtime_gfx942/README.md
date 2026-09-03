@@ -21,6 +21,10 @@ script resolves the same device's KFD unique ID. The defaults are 10 warmups,
 30 samples, and 10
 launches per sample. `FE2O3_RUNTIME_WARMUPS`, `FE2O3_RUNTIME_SAMPLES`, and
 `FE2O3_RUNTIME_LAUNCHES_PER_SAMPLE` may change only those statistical controls.
+`FE2O3_RUNTIME_MAX_BUSY_PERCENT` sets the fail-closed preexisting-load ceiling
+and defaults to 5. The runner checks that ceiling before and after every KFD,
+HSA, and HIP phase; exceeding it invalidates the run instead of emitting a
+qualification record.
 Every temporary build artifact is placed under one unique directory and
 removed by an exit and signal trap. The runner requires a clean checkout so the
 printed Git commit identifies every host source and checked fixture byte.
