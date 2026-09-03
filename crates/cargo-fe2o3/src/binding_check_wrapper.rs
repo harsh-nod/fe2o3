@@ -25,6 +25,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
 pub(crate) const MODE_ENV_V1: &str = "FE2O3_BINDING_CHECK_WRAPPER_MODE_V1";
+pub(crate) const CLIPPY_DRIVER_ENV_V1: &str = "FE2O3_BINDING_HOST_CLIPPY_DRIVER_V1";
 
 const PROHIBITED_ENVIRONMENT: &[&str] = &[
     "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
@@ -79,6 +80,7 @@ pub(crate) enum BindingCheckWrapperError {
     ProhibitedEnvironment(&'static str),
     PreexistingCodegenBackend { argument_index: usize },
     Projection(String),
+    InvalidClippyDriver,
     UnsupportedInvocation,
     Spawn(std::io::Error),
 }
@@ -106,6 +108,8 @@ impl fmt::Display for BindingCheckWrapperError {
                 "binding-only check argv[{argument_index}] contains a codegen-backend selector"
             ),
             Self::Projection(error) => write!(formatter, "invalid binding projection: {error}"),
+            Self::InvalidClippyDriver => formatter
+                .write_str("binding-aware Clippy requires its exact inherited driver descriptor"),
             Self::UnsupportedInvocation => formatter.write_str(
                 "binding-only check wrapper rejects this rustc invocation classification",
             ),
@@ -126,6 +130,7 @@ impl Error for BindingCheckWrapperError {
             | Self::ProhibitedEnvironment(_)
             | Self::PreexistingCodegenBackend { .. }
             | Self::Projection(_)
+            | Self::InvalidClippyDriver
             | Self::UnsupportedInvocation => None,
         }
     }
@@ -155,11 +160,20 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingCheckWrapper
     let invocation = classify_rustc_invocation_v2(&argv)?;
     let projection = crate::binding_check_projection::consume_inherited()
         .map_err(BindingCheckWrapperError::Projection)?;
-    let mut command = Command::new(invocation.executable());
+    let clippy = std::env::var_os(CLIPPY_DRIVER_ENV_V1);
+    if clippy.as_deref().is_some_and(|value| value != "1") {
+        return Err(BindingCheckWrapperError::InvalidClippyDriver);
+    }
+    let mut command = if clippy.is_some() {
+        Command::new(format!("/proc/self/fd/{}", crate::CLIPPY_DRIVER_CHILD_FD))
+    } else {
+        Command::new(invocation.executable())
+    };
     command
         .args(invocation.forwarded_args())
         .stdin(Stdio::null())
-        .env_remove(MODE_ENV_V1);
+        .env_remove(MODE_ENV_V1)
+        .env_remove(CLIPPY_DRIVER_ENV_V1);
     crate::remove_dynamic_loader_environment(&mut command);
     command.env(
         "LD_LIBRARY_PATH",

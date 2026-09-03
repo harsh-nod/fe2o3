@@ -56,6 +56,12 @@ exclusions. This route admits no codegen backend, artifact directory,
 publication action, worker, or GPU authority; it is not compiler qualification
 or artifact production.
 
+The same projection owns `cargo fe2o3 clippy --workspace --all-targets` and
+`cargo fe2o3 test --workspace --all-targets`. Public source uses only
+`#[kernel(typed)]`; crate and kernel binding hashes are derived outputs. An
+explicit namespace is reserved for compatibility and adversarial compiler
+fixtures and MUST NOT appear in public example kernels.
+
 Generic CPU testing partitions the manifest entries with `rustc_check=true` and
 `artifact_qualification=none` by that same structural projection. Artifact
 qualification is a separate, closed route classification and does not erase

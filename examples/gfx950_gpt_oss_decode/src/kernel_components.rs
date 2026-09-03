@@ -23,7 +23,6 @@ const ROUTER_FLOOR: f32 = -1.0e30;
 ))]
 #[kernel(
     typed,
-    namespace = "8ea858c2d33346948501917b2a613d3e4844622372e15b43fb2e2d092e3f336d",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(2880, 64))
 )]
@@ -210,7 +209,6 @@ pub fn gfx950_gpt_oss_120b_router_v1(
 ))]
 #[kernel(
     typed,
-    namespace = "35a1574b42e18b024498807f2e7dd4bde031da33b5b588652fc699cdebb7bb6a",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(16))
 )]
@@ -353,7 +351,6 @@ pub fn gfx950_gpt_oss_120b_attention_v1(
 ))]
 #[kernel(
     typed,
-    namespace = "d3675e464d34094297c8b0033dc08d278cc17baf15ed6fd5f53bd382421f8c99",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
 pub fn gfx950_gpt_oss_120b_expert_v1(

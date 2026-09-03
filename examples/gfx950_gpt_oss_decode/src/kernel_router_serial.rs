@@ -23,7 +23,6 @@ const ROUTER_FLOOR: f32 = -1.0e30;
 ))]
 #[kernel(
     typed,
-    namespace = "39eaa839d327564ce8ea4ba0e28cac0be8dfa374a979571b4cc0e53473768e28",
     launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
     control_flow(loop_bounds(368640, 16))
 )]

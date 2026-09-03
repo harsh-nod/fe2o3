@@ -18,6 +18,39 @@ instead of being joined by filenames or convention.
 > `gfx942:xnack-` lanes. See [What works](#what-works) and
 > [Known limitations](#known-limitations) before evaluating it.
 
+## Typed kernel authoring
+
+Kernel authors write `#[kernel(typed)]`; they do not choose or maintain a
+namespace hash:
+
+```rust
+#[kernel(typed)]
+pub fn saxpy(x: &[f32], mut y: DisjointSlice<f32>, alpha: f32) {
+    let index = thread::index_1d();
+    if index < x.len() && index < y.len() {
+        let output = y.get_mut(index);
+        *output = alpha * x[index] + *output;
+    }
+}
+```
+
+Run the package through `cargo-fe2o3` so the compiler can derive its binding
+from Cargo's crate name and ordered rustc metadata:
+
+```text
+cargo fe2o3 check --all-targets
+cargo fe2o3 clippy --all-targets -- -D warnings
+cargo fe2o3 test --all-targets
+cargo fe2o3 build
+```
+
+The first three commands are authority-free host workflows. `build` enters the
+production GPU compiler path. Binding hashes shown in compiler evidence are
+outputs for reproducibility and cross-stage identity joins, not source syntax
+for an author to invent or copy. An explicit namespace remains accepted only
+for compiler compatibility and adversarial fixtures; public kernels must use
+the compiler-derived form.
+
 The project currently ships only from a source checkout and makes no crates.io
 installation promise. The first developer-preview release remains blocked on
 the conditions in the [release process](docs/release-process.md) and
@@ -62,7 +95,6 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[kernel(
     typed,
-    namespace = "3f959016b22cc527afdf32bf2ed9b043947c2147348f1ab939488dab760220e5",
     launch(required = [64, 1, 1], max = [64, 1, 1]),
 )]
 pub fn fill(mut out: DisjointSlice<f32>) {

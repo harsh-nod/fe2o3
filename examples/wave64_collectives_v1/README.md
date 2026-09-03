@@ -119,7 +119,8 @@ versus `-0.0` is abstracted to integer zero; inactive publication remains
 bit-exact positive zero.
 
 ```sh
-cargo test --locked --manifest-path examples/wave64_collectives_v1/Cargo.toml
+cargo fe2o3 test --locked --all-targets \
+  --manifest-path examples/wave64_collectives_v1/Cargo.toml
 VERUS=/absolute/path/to/verus examples/wave64_collectives_v1/run-verus.sh
 ```
 

@@ -189,6 +189,72 @@ fn binding_test(workspace: &TestWorkspace) -> Command {
     command
 }
 
+fn binding_clippy(workspace: &TestWorkspace) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .args(["clippy", "--locked", "--all-targets", "-p", "managed"])
+        .env("CARGO", cargo())
+        .current_dir(&workspace.0);
+    command
+}
+
+#[test]
+fn binding_host_clippy_runs_lints_with_the_compiler_derived_binding() {
+    let workspace = fixture();
+    write(
+        &workspace.0,
+        "managed/src/lib.rs",
+        r#"#[cfg(any())] #[kernel(typed)] pub fn managed() {}
+const _: () = assert!(option_env!("FE2O3_CRATE_BINDING_ID_V1").is_some());
+
+#[deny(clippy::identity_op)]
+pub fn clippy_probe(value: usize) -> usize {
+    value + 0
+}
+"#,
+    );
+    let output = binding_clippy(&workspace)
+        .env(
+            "CARGO_TARGET_DIR",
+            workspace.0.join("target-binding-clippy"),
+        )
+        .output()
+        .expect("run binding-aware host clippy");
+    assert!(
+        !output.status.success(),
+        "binding-aware Clippy did not run its lint driver"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("clippy::identity_op"),
+        "binding-aware Clippy failed for the wrong reason: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    write(
+        &workspace.0,
+        "managed/src/lib.rs",
+        r#"#[cfg(any())] #[kernel(typed)] pub fn managed() {}
+const _: () = assert!(option_env!("FE2O3_CRATE_BINDING_ID_V1").is_some());
+
+pub fn clippy_probe(value: usize) -> usize {
+    value
+}
+"#,
+    );
+    let output = binding_clippy(&workspace)
+        .env(
+            "CARGO_TARGET_DIR",
+            workspace.0.join("target-binding-clippy-clean"),
+        )
+        .output()
+        .expect("run clean binding-aware host clippy");
+    assert!(
+        output.status.success(),
+        "clean binding-aware Clippy failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn internal_binding_host_runner_rejects_missing_pinned_toolchain_descriptors() {
     let workspace = TestWorkspace::new();

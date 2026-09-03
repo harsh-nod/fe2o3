@@ -984,10 +984,46 @@ run_tests() {
 }
 
 run_workspace_tests() {
+  local -a rustc_examples wrapper_managed_packages wrapper_examples
+  local -a loader_environment_removals
+  local -a workspace_args=(
+    test --locked --workspace --all-targets
+    --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}"
+    --exclude fe2o3-artifact-transaction
+  )
+  local -a wrapper_args=(test --locked --all-targets)
+  local -A rustc_example_set=()
+  local package
+
+  ensure_production_cargo_fe2o3_driver workspace-tests
+  load_example_packages rustc-check rustc_examples "${CARGO_FE2O3_BINARY}"
+  load_example_packages wrapper-managed wrapper_managed_packages \
+    "${CARGO_FE2O3_BINARY}"
+  for package in "${rustc_examples[@]}"; do
+    rustc_example_set["${package}"]=1
+  done
+  for package in "${wrapper_managed_packages[@]}"; do
+    if [[ -n "${rustc_example_set[${package}]:-}" ]]; then
+      wrapper_examples+=("${package}")
+      workspace_args+=(--exclude "${package}")
+      wrapper_args+=(-p "${package}")
+    fi
+  done
+  ((${#wrapper_examples[@]} > 0)) || {
+    printf '%s\n' 'workspace contains no binding-managed test example' >&2
+    return 2
+  }
+
   run_step workspace-tests \
-    cargo test --locked --workspace --all-targets \
-      --exclude "${RUSTC_CODEGEN_TEST_PACKAGE}" \
-      --exclude fe2o3-artifact-transaction
+    cargo "${workspace_args[@]}"
+  load_dynamic_loader_environment_removals loader_environment_removals
+  run_step workspace-binding-example-tests \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" "${wrapper_args[@]}"
+  run_step workspace-binding-example-revalidation \
+    env "${loader_environment_removals[@]}" \
+    "${CARGO_FE2O3_BINARY}" examples check-wrapper-managed \
+      "${wrapper_managed_packages[@]}"
   run_artifact_transaction_tests
   run_rustc_codegen_tests
 }
