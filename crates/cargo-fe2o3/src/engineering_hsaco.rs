@@ -28,6 +28,8 @@ const CARGO_TARGET: &str = PROFILE.rustc_target();
 const CODE_OBJECT_VERSION: u8 = 6;
 const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAX_CARGO_GIT_SOURCES: usize = 64;
 const EXTRACTOR_CHILD_FD: std::os::fd::RawFd = 205;
 const VENDOR_CHILD_FD: std::os::fd::RawFd = 206;
 const HOST_LINKER_CHILD_FD: std::os::fd::RawFd = 207;
@@ -372,6 +374,19 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     reject_cargo_override_args(&cargo_args)?;
     if cargo_vendor.is_none() && !cargo_git_sources.is_empty() {
         return Err("--cargo-git-source requires --cargo-vendor".to_owned());
+    }
+    if cargo_git_sources.len() > MAX_CARGO_GIT_SOURCES {
+        return Err(format!(
+            "at most {MAX_CARGO_GIT_SOURCES} --cargo-git-source values are allowed"
+        ));
+    }
+    for pair in cargo_git_sources.windows(2) {
+        if (&pair[0].url, &pair[0].rev) >= (&pair[1].url, &pair[1].rev) {
+            return Err(
+                "--cargo-git-source values must be unique and strictly sorted by URL then revision"
+                    .to_owned(),
+            );
+        }
     }
     validate_build_identity(
         worker_build_identity
@@ -1189,6 +1204,11 @@ fn canonical_manifest(
     };
     let mut bytes = serde_json::to_vec(&manifest)
         .map_err(|error| format!("cannot encode engineering observation: {error}"))?;
+    if bytes.len() >= MAX_MANIFEST_BYTES {
+        return Err(format!(
+            "engineering observation manifest exceeds {MAX_MANIFEST_BYTES} bytes"
+        ));
+    }
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -1740,6 +1760,50 @@ mod tests {
         ] {
             assert!(parse_cargo_git_source(OsStr::new(hostile)).is_err());
         }
+
+        let root = env::temp_dir();
+        let insert = base_args(&root)
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap();
+        for sources in [
+            [
+                "https://example.com/z.git@0123456789012345678901234567890123456789",
+                "https://example.com/a.git@0123456789012345678901234567890123456789",
+            ],
+            [
+                "https://example.com/a.git@0123456789012345678901234567890123456789",
+                "https://example.com/a.git@0123456789012345678901234567890123456789",
+            ],
+        ] {
+            let mut args = base_args(&root);
+            args.splice(
+                insert..insert,
+                [
+                    "--cargo-vendor".into(),
+                    root.clone().into_os_string(),
+                    "--cargo-git-source".into(),
+                    sources[0].into(),
+                    "--cargo-git-source".into(),
+                    sources[1].into(),
+                ],
+            );
+            assert!(parse(&args, &root).is_err());
+        }
+
+        let mut too_many = base_args(&root);
+        let mut inserted = vec!["--cargo-vendor".into(), root.clone().into_os_string()];
+        for index in 0..=MAX_CARGO_GIT_SOURCES {
+            inserted.push("--cargo-git-source".into());
+            inserted.push(
+                format!(
+                    "https://example.com/{index:03}.git@0123456789012345678901234567890123456789"
+                )
+                .into(),
+            );
+        }
+        too_many.splice(insert..insert, inserted);
+        assert!(parse(&too_many, &root).is_err());
     }
 
     #[test]
