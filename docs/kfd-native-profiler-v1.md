@@ -117,8 +117,13 @@ the 5-warmup/30-repetition profiler-overhead protocol.
 admission. A successful rocprofv3 process with no schema-valid artifact remains
 typed unavailable; it is never replaced with inferred dispatch records. The
 direct-KFD capture provides separately identified runtime evidence that can be
-queried today. Joining it to rocprof counters, PC samples, or decoded ATT will
-require an independently observed common identity and a new additive schema.
+queried today. The additive
+[`runtime-causality-jsonl`](runtime-causality-v1.md) service pages exact runtime
+events, queue/stream/allocation membership, host staging, and inferred
+publication/completion/release lifecycle edges. It also content-binds an
+optional Bundle V4 as a juxtaposed input. It does not join records across the
+collectors: rocprof counters, PC samples, decoded ATT, and dispatch clocks still
+require an independently observed common identity and clock relation.
 
 The PC/Source-ISA V1 query now handles a narrower, independently admitted
 rocprof PC-sample case: exact rocprof source, Capture V3, HSACO, code-object

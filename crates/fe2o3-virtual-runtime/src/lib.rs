@@ -15,10 +15,11 @@ use std::mem::size_of;
 use fe2o3_kernel_ir::{AccessMode, KernelId, ScalarType};
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
-    EventPolicyV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
-    SimulationConflictAssessmentV1, SimulationErrorV1, SimulationKernelIrIdentityV1,
-    SimulationLimitsV1, SimulationRaceAssessmentV1, SimulationRequestV1,
-    SimulationScheduleIdentityV1, SimulationScheduleRequestV1, SimulationTargetV1,
+    DynamicWorkgroupMemoryRequestV1, EventPolicyV1, ScalarBitsV1, SharedBufferV1,
+    SimulationArgumentV1, SimulationConflictAssessmentV1, SimulationErrorV1,
+    SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationRaceAssessmentV1,
+    SimulationRequestV1, SimulationScheduleIdentityV1, SimulationScheduleRequestV1,
+    SimulationTargetV1,
 };
 use fe2o3_runtime_model::{
     AQL_PACKET_BYTES_V1, AllocationIdV1, AllocationKeyV1, CodeLoadPlanIdV1, CompletionIdV1,
@@ -274,6 +275,7 @@ pub enum VirtualCompletionAmbiguityV1 {
 pub struct VirtualSimulationSummaryV1 {
     pub kir_identity: SimulationKernelIrIdentityV1,
     pub target: VirtualTargetProfileV1,
+    pub dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     pub invocations_executed: u64,
     pub workgroups_visited: u64,
     pub scheduled_slots_visited: u64,
@@ -525,6 +527,7 @@ struct DispatchRecordLocalV1 {
     queue: VirtualQueueHandleV1,
     module: VirtualModuleHandleV1,
     request: VirtualDispatchRequestV1,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     retained_buffers: Vec<usize>,
     state: VirtualCompletionStateV1,
     ambiguity: Option<VirtualCompletionAmbiguityV1>,
@@ -869,7 +872,28 @@ impl VirtualRuntimeV1 {
         &mut self,
         queue: VirtualQueueHandleV1,
         module: VirtualModuleHandleV1,
+        request: VirtualDispatchRequestV1,
+    ) -> Result<VirtualCompletionHandleV1, VirtualRuntimeErrorV1> {
+        self.submit_configured(queue, module, request, None)
+    }
+
+    /// Submits a virtual dispatch with one explicit runtime-sized LDS segment.
+    pub fn submit_with_dynamic_workgroup_memory(
+        &mut self,
+        queue: VirtualQueueHandleV1,
+        module: VirtualModuleHandleV1,
+        request: VirtualDispatchRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+    ) -> Result<VirtualCompletionHandleV1, VirtualRuntimeErrorV1> {
+        self.submit_configured(queue, module, request, Some(dynamic))
+    }
+
+    fn submit_configured(
+        &mut self,
+        queue: VirtualQueueHandleV1,
+        module: VirtualModuleHandleV1,
         mut request: VirtualDispatchRequestV1,
+        dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     ) -> Result<VirtualCompletionHandleV1, VirtualRuntimeErrorV1> {
         if self.dispatches.len() >= self.config.runtime_limits.max_dispatches {
             return Err(VirtualRuntimeErrorV1::CapacityExceeded("dispatch"));
@@ -955,6 +979,7 @@ impl VirtualRuntimeV1 {
             queue,
             module,
             request,
+            dynamic_workgroup_memory,
             retained_buffers,
             state: VirtualCompletionStateV1::Prepared,
             ambiguity: None,
@@ -1317,14 +1342,27 @@ impl VirtualRuntimeV1 {
                 return Err(error);
             }
         };
-        let execution = self.modules[module_index].module.simulate_scheduled(
-            &request,
-            self.config.target.simulation_target(),
-            self.config.simulation_limits,
-            SimulationScheduleRequestV1::RecordCanonical {
-                max_decisions: self.config.runtime_limits.max_schedule_decisions,
-            },
-        );
+        let schedule = SimulationScheduleRequestV1::RecordCanonical {
+            max_decisions: self.config.runtime_limits.max_schedule_decisions,
+        };
+        let dynamic_workgroup_memory = self.dispatches[index].dynamic_workgroup_memory;
+        let execution = match dynamic_workgroup_memory {
+            Some(dynamic) => self.modules[module_index]
+                .module
+                .simulate_scheduled_with_dynamic_workgroup_memory(
+                    &request,
+                    dynamic,
+                    self.config.target.simulation_target(),
+                    self.config.simulation_limits,
+                    schedule,
+                ),
+            None => self.modules[module_index].module.simulate_scheduled(
+                &request,
+                self.config.target.simulation_target(),
+                self.config.simulation_limits,
+                schedule,
+            ),
+        };
         let execution = match execution {
             Ok(execution) => execution,
             Err(source) => {
@@ -1339,6 +1377,7 @@ impl VirtualRuntimeV1 {
         let summary = VirtualSimulationSummaryV1 {
             kir_identity: *execution.identity(),
             target: self.config.target,
+            dynamic_workgroup_memory,
             invocations_executed: execution.invocations_executed(),
             workgroups_visited: execution.workgroups_visited(),
             scheduled_slots_visited: execution.scheduled_slots_visited(),

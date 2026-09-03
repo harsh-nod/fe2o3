@@ -9,6 +9,13 @@ views are validated and storage-bounded before preparation. Host access remains
 blocked while a dispatch retains an allocation, and ambiguous writable ranges
 remain uninitialized after quiesced settlement.
 
+`submit_with_dynamic_workgroup_memory` carries an explicit
+`DynamicWorkgroupMemoryRequestV1` alongside the otherwise unchanged virtual
+dispatch. Its byte extent is included in the simulator schedule transcript and
+successful completion summary. Admission still requires exactly one reachable
+canonical dynamic LDS base; missing, ambiguous, misaligned, and
+`DynamicAtLeast` contracts fail through the simulator's typed boundary.
+
 An expired completion wait records a typed ambiguity reason. It never claims
 that virtual or physical execution stopped and never releases retained storage
 until the queue is explicitly quiescent.

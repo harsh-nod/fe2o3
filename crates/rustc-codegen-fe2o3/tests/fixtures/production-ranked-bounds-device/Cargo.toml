@@ -31,6 +31,13 @@ barrier_loop = []
 barrier_helper = []
 device_math_sqrt = []
 typed_layout_corpus = []
+aggregate_pair_struct = []
+aggregate_pair_tuple = []
+aggregate_pair_array = []
+aggregate_zst = []
+aggregate_nested = []
+aggregate_enum = []
+aggregate_pointer = []
 
 [dependencies]
 fe2o3-device.workspace = true

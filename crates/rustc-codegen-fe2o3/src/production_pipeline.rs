@@ -50,6 +50,7 @@ pub(crate) enum ProductionPipelineError {
     SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
     SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
     SimulationBundleV3(fe2o3_kernel_ir::SimulationBundleErrorV3),
+    SimulationBundleV4(fe2o3_kernel_ir::SimulationBundleErrorV4),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
@@ -123,6 +124,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationBundleV3(error) => write!(
                 formatter,
                 "production compilation simulation bundle V3 failed: {error}"
+            ),
+            Self::SimulationBundleV4(error) => write!(
+                formatter,
+                "production compilation simulation bundle V4 failed: {error}"
             ),
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
@@ -229,6 +234,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationDebugMap(error) => Some(error),
             Self::SimulationBundleV2(error) => Some(error),
             Self::SimulationBundleV3(error) => Some(error),
+            Self::SimulationBundleV4(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
             Self::SemanticDebugMap(error) => Some(error),
             Self::SemanticDebugFragment(error) => Some(error),
@@ -592,10 +598,17 @@ impl TargetNeutralProductionCompilation {
             .map_err(ProductionPipelineError::SimulationBundleV2)
     }
 
-    fn into_simulation_bundle_v3(
+    fn into_prepared_simulation_bundle_v3(
         self,
         compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
-    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV3, ProductionPipelineError> {
+    ) -> Result<
+        (
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+            AuthenticatedProductionBindings,
+            fe2o3_kernel_ir::VerifiedSimulationBundleV3,
+        ),
+        ProductionPipelineError,
+    > {
         let (lowered, bindings, prepared) =
             self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
         require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
@@ -626,8 +639,29 @@ impl TargetNeutralProductionCompilation {
             &bindings.debug_source_variables,
             &inner_v2,
         )?;
-        fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner_v2, semantic_mir, storage_map)
-            .map_err(ProductionPipelineError::SimulationBundleV3)
+        let bundle =
+            fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner_v2, semantic_mir, storage_map)
+                .map_err(ProductionPipelineError::SimulationBundleV3)?;
+        Ok((lowered, bindings, bundle))
+    }
+
+    fn into_simulation_bundle_v3(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV3, ProductionPipelineError> {
+        let (_, _, bundle) = self.into_prepared_simulation_bundle_v3(compiler_execution_binding)?;
+        Ok(bundle)
+    }
+
+    fn into_simulation_bundle_v4(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV4, ProductionPipelineError> {
+        let (lowered, _, inner) =
+            self.into_prepared_simulation_bundle_v3(compiler_execution_binding)?;
+        let storage_map = compiler_semantic_storage_map_v2(&lowered, &inner)?;
+        fe2o3_kernel_ir::VerifiedSimulationBundleV4::new(inner, storage_map)
+            .map_err(ProductionPipelineError::SimulationBundleV4)
     }
 
     fn admit_formal_memory(
@@ -1921,6 +1955,317 @@ fn compiler_semantic_storage_map_v1(
     .map_err(ProductionPipelineError::SimulationBundleV3)
 }
 
+fn compiler_semantic_storage_map_v2(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV3,
+) -> Result<fe2o3_kernel_ir::SemanticStorageMapV2, ProductionPipelineError> {
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticAbiPassModeV1, SemanticLocalRoleV1};
+
+    const MAP_ERROR: &str = "aggregate storage map is not exact";
+    let semantic = lowered.semantic().semantic();
+    let selection = semantic.select_kernel_body_v1().ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ))?;
+    let (kir_function_ordinal, kir_body) = sole_debug_map_body_v1(lowered.module())?;
+    let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+    if kir_body.parameters.len() != kir_function.signature.parameters.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ));
+    }
+
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(kir_function.signature.parameters.len())
+        .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+    let mut next = 0_u32;
+    let mut kernarg_alignment = 1_u32;
+    for ty in &kir_function.signature.parameters {
+        let (width, alignment, metadata_relative) = match ty {
+            fe2o3_kernel_ir::Type::Scalar(scalar) => {
+                let width = match scalar {
+                    fe2o3_kernel_ir::ScalarType::Bool
+                    | fe2o3_kernel_ir::ScalarType::I8
+                    | fe2o3_kernel_ir::ScalarType::U8 => 1,
+                    fe2o3_kernel_ir::ScalarType::I16
+                    | fe2o3_kernel_ir::ScalarType::U16
+                    | fe2o3_kernel_ir::ScalarType::F16
+                    | fe2o3_kernel_ir::ScalarType::Bf16 => 2,
+                    fe2o3_kernel_ir::ScalarType::I32
+                    | fe2o3_kernel_ir::ScalarType::U32
+                    | fe2o3_kernel_ir::ScalarType::F32 => 4,
+                    fe2o3_kernel_ir::ScalarType::I64
+                    | fe2o3_kernel_ir::ScalarType::U64
+                    | fe2o3_kernel_ir::ScalarType::F64
+                    | fe2o3_kernel_ir::ScalarType::Index => 8,
+                    fe2o3_kernel_ir::ScalarType::I128 | fe2o3_kernel_ir::ScalarType::U128 => 16,
+                };
+                (width, width, None)
+            }
+            fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
+            fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
+            fe2o3_kernel_ir::Type::Unit => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "unit KIR parameters have no physical simulator slot",
+                ));
+            }
+        };
+        next = align_up_u32_v1(next, alignment).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+        )?;
+        let value = fe2o3_kernel_ir::SemanticKernargSlotV2::new(next, width, alignment);
+        let metadata = metadata_relative
+            .map(|relative| {
+                next.checked_add(relative)
+                    .map(|offset| {
+                        fe2o3_kernel_ir::SemanticKernargSlotV2::new(offset, width, alignment)
+                    })
+                    .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        MAP_ERROR,
+                    ))
+            })
+            .transpose()?;
+        let total_width = metadata_relative.map_or(width, |relative| relative + width);
+        next = next.checked_add(total_width).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+        )?;
+        kernarg_alignment = kernarg_alignment.max(alignment);
+        slots.push((value, metadata));
+    }
+    let explicit_kernarg_bytes = align_up_u32_v1(next, kernarg_alignment).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+
+    let source_types = function.abi().source_input_types();
+    let ownership = function.abi().source_argument_ownership();
+    if source_types.len() != ownership.len()
+        || source_types.len() != function.abi().adjusted_arguments().len()
+    {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ));
+    }
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve_exact(source_types.len())
+        .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+    for (source_ordinal, ((&semantic_type, &source_ownership), abi)) in source_types
+        .iter()
+        .zip(ownership)
+        .zip(function.abi().adjusted_arguments())
+        .enumerate()
+    {
+        let source_ordinal = u32::try_from(source_ordinal)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+        let semantic_local = function
+            .locals()
+            .iter()
+            .enumerate()
+            .find_map(|(local, declaration)| {
+                (declaration.role() == SemanticLocalRoleV1::Argument(source_ordinal))
+                    .then_some(local)
+            })
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                MAP_ERROR,
+            ))?;
+        let semantic_local_u32 = u32::try_from(semantic_local)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+        let direct_matches = lowered
+            .correspondence()
+            .parameter_bindings()
+            .iter()
+            .filter(|binding| {
+                binding.semantic_function() == selection.body()
+                    && binding.semantic_local().index() == semantic_local_u32
+            })
+            .copied();
+        let mut direct_probe = direct_matches.clone();
+        let direct = direct_probe.next();
+        let direct_is_unique = direct.is_some() && direct_probe.next().is_none();
+        let component_matches = lowered
+            .correspondence()
+            .parameter_component_bindings()
+            .iter()
+            .filter(|binding| {
+                binding.semantic_function() == selection.body()
+                    && binding.semantic_local().index() == semantic_local_u32
+            });
+        let component_count = component_matches.clone().count();
+        let ignored_matches = lowered
+            .correspondence()
+            .ignored_parameter_bindings()
+            .iter()
+            .filter(|binding| {
+                binding.semantic_function() == selection.body()
+                    && binding.semantic_local().index() == semantic_local_u32
+            })
+            .copied();
+        let mut ignored_probe = ignored_matches.clone();
+        let ignored = ignored_probe.next();
+        let ignored_is_unique = ignored.is_some() && ignored_probe.next().is_none();
+        let storage =
+            if direct_is_unique {
+                let binding = direct.expect("unique direct binding is present");
+                if component_count != 0 || ignored.is_some() {
+                    return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        MAP_ERROR,
+                    ));
+                }
+                let mut retained = Vec::new();
+                retained.try_reserve_exact(1).map_err(|_| {
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR)
+                })?;
+                retained.push(compiler_component_storage_v2(
+                    Vec::new(),
+                    binding.kernel_ir_value(),
+                    kir_body,
+                    &kir_function.signature.parameters,
+                    &slots,
+                )?);
+                fe2o3_kernel_ir::SemanticComponentStorageBindingV2::exact(retained)
+            } else if direct.is_none() && component_count != 0 && ignored.is_none() {
+                let mut retained = Vec::new();
+                retained.try_reserve_exact(component_count).map_err(|_| {
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR)
+                })?;
+                for component in component_matches {
+                    let mut path = Vec::new();
+                    path.try_reserve_exact(component.projection().len())
+                        .map_err(|_| {
+                            ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR)
+                        })?;
+                    path.extend(
+                        component.projection().iter().map(|projection| {
+                            match projection {
+                    fe2o3_lower_mir_kernel::SemanticKirParameterProjectionV1::Field(index) => {
+                        fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: *index }
+                    }
+                    fe2o3_lower_mir_kernel::SemanticKirParameterProjectionV1::ArrayIndex(index) => {
+                        fe2o3_kernel_ir::SemanticStorageProjectionV2::ArrayElement {
+                            index: u64::from(*index),
+                        }
+                    }
+                }
+                        }),
+                    );
+                    retained.push(compiler_component_storage_v2(
+                        path,
+                        component.kernel_ir_value(),
+                        kir_body,
+                        &kir_function.signature.parameters,
+                        &slots,
+                    )?);
+                }
+                fe2o3_kernel_ir::SemanticComponentStorageBindingV2::exact(retained)
+            } else if direct.is_none()
+                && component_count == 0
+                && ignored_is_unique
+                && matches!(abi.mode(), SemanticAbiPassModeV1::Ignore)
+            {
+                fe2o3_kernel_ir::SemanticComponentStorageBindingV2::exact(Vec::new())
+            } else {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    MAP_ERROR,
+                ));
+            };
+        arguments.push(fe2o3_kernel_ir::SemanticArgumentStorageV2::new(
+            source_ordinal,
+            semantic_local_u32,
+            semantic_type.index(),
+            compiler_ownership_v1(source_ownership)?,
+            storage,
+        ));
+    }
+
+    let mut kernels = Vec::new();
+    kernels
+        .try_reserve_exact(1)
+        .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+    kernels.push(fe2o3_kernel_ir::SemanticKernelStorageV2::new(
+        selection.root().index(),
+        selection.body().index(),
+        u32::try_from(kir_function_ordinal)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?,
+        explicit_kernarg_bytes,
+        kernarg_alignment,
+        arguments,
+    ));
+    fe2o3_kernel_ir::SemanticStorageMapV2::new(*bundle.identity().as_bytes(), kernels)
+        .map_err(ProductionPipelineError::SimulationBundleV4)
+}
+
+fn compiler_component_storage_v2(
+    path: Vec<fe2o3_kernel_ir::SemanticStorageProjectionV2>,
+    value: fe2o3_kernel_ir::ValueId,
+    body: &fe2o3_kernel_ir::FunctionBody,
+    parameter_types: &[fe2o3_kernel_ir::Type],
+    slots: &[(
+        fe2o3_kernel_ir::SemanticKernargSlotV2,
+        Option<fe2o3_kernel_ir::SemanticKernargSlotV2>,
+    )],
+) -> Result<fe2o3_kernel_ir::SemanticKirComponentStorageV2, ProductionPipelineError> {
+    const MAP_ERROR: &str = "aggregate component has no exact KIR physical slot";
+    let ordinal = body
+        .parameters
+        .iter()
+        .position(|candidate| *candidate == value)
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ))?;
+    let (representation, expected_metadata) = match parameter_types.get(ordinal) {
+        Some(fe2o3_kernel_ir::Type::Scalar(_)) => (
+            fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::ScalarValue,
+            false,
+        ),
+        Some(fe2o3_kernel_ir::Type::Pointer(_)) => (
+            fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionPointer,
+            false,
+        ),
+        Some(fe2o3_kernel_ir::Type::Slice(_)) => (
+            fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionSlice,
+            true,
+        ),
+        Some(fe2o3_kernel_ir::Type::Unit) | None => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                MAP_ERROR,
+            ));
+        }
+    };
+    let (value_slot, metadata_slot) = slots.get(ordinal).copied().ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+    if metadata_slot.is_some() != expected_metadata {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ));
+    }
+    Ok(fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+        path,
+        u32::try_from(ordinal)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?,
+        value.0,
+        representation,
+        value_slot,
+        metadata_slot,
+    ))
+}
+
+const fn align_up_u32_v1(value: u32, alignment: u32) -> Option<u32> {
+    let mask = alignment - 1;
+    match value.checked_add(mask) {
+        Some(value) => Some(value & !mask),
+        None => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compiler_parameter_storage_v1(
     semantic_local: u32,
@@ -2417,6 +2762,22 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v3(
+                fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+            )
+    }
+
+    /// Emits V4 with compiler-rederived one-to-many aggregate component and
+    /// physical simulator-kernarg correspondence. The KFD descriptor path is
+    /// intentionally not entered.
+    pub(crate) fn export_simulation_bundle_v4(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV4, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v4(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
     }

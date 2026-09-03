@@ -9,6 +9,7 @@ use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 const OUTPUT_ENV: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
 const OUTPUT_ENV_V2: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2";
 const OUTPUT_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3";
+const OUTPUT_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4";
 const CRATE_ENV: &str = "FE2O3_EXTRACT_CRATE_V1";
 const MAX_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 
@@ -94,7 +95,8 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
                     "1" => 1,
                     "2" => 2,
                     "3" => 3,
-                    _ => return Err("--bundle-version must be exactly 1, 2, or 3".to_owned()),
+                    "4" => 4,
+                    _ => return Err("--bundle-version must be exactly 1, 2, 3, or 4".to_owned()),
                 };
                 if bundle_version.replace(value).is_some() {
                     return Err("--bundle-version may be specified only once".to_owned());
@@ -210,6 +212,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let output_env = match options.bundle_version {
+        4 => OUTPUT_ENV_V4,
         3 => OUTPUT_ENV_V3,
         2 => OUTPUT_ENV_V2,
         _ => OUTPUT_ENV,
@@ -243,6 +246,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .env_remove(OUTPUT_ENV)
         .env_remove(OUTPUT_ENV_V2)
         .env_remove(OUTPUT_ENV_V3)
+        .env_remove(OUTPUT_ENV_V4)
         .env(CRATE_ENV, &options.crate_name)
         .env(output_env, &options.output);
     let status = command
@@ -313,11 +317,12 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 8] {
+const fn conflicting_extraction_environment() -> [&'static str; 9] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,
         OUTPUT_ENV_V3,
+        OUTPUT_ENV_V4,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
@@ -348,7 +353,7 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
 }
 
 #[cfg(test)]

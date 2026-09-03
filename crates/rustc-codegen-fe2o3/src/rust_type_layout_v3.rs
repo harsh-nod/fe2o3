@@ -31,16 +31,18 @@ pub(crate) enum GeneralTypedArgumentKindV3 {
     WriteOnlyDisjointSlice(RustScalarElementTypeV1),
     DisjointSlice(RustScalarElementTypeV1),
     GlobalMutPointer(RustScalarElementTypeV1),
+    CompilerLaidOutByValue,
 }
 
 impl GeneralTypedArgumentKindV3 {
-    pub(crate) const fn scalar(self) -> RustScalarElementTypeV1 {
+    pub(crate) const fn scalar(self) -> Option<RustScalarElementTypeV1> {
         match self {
             Self::Scalar(scalar)
             | Self::SharedSlice(scalar)
             | Self::WriteOnlyDisjointSlice(scalar)
             | Self::DisjointSlice(scalar)
-            | Self::GlobalMutPointer(scalar) => scalar,
+            | Self::GlobalMutPointer(scalar) => Some(scalar),
+            Self::CompilerLaidOutByValue => None,
         }
     }
 }
@@ -48,20 +50,47 @@ impl GeneralTypedArgumentKindV3 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralTypedArgumentV3 {
     kind: GeneralTypedArgumentKindV3,
-    layout: RustLayoutEvidenceV1,
+    layout: Option<RustLayoutEvidenceV1>,
+    size: u64,
+    alignment: u32,
+    abi_class: RustcAbiClassV1,
 }
 
 impl GeneralTypedArgumentV3 {
+    fn from_layout(kind: GeneralTypedArgumentKindV3, layout: RustLayoutEvidenceV1) -> Self {
+        Self {
+            kind,
+            size: layout.size(),
+            alignment: layout.abi_alignment(),
+            abi_class: layout.abi_class(),
+            layout: Some(layout),
+        }
+    }
+
     pub(crate) const fn kind(&self) -> GeneralTypedArgumentKindV3 {
         self.kind
     }
 
-    pub(crate) const fn layout(&self) -> &RustLayoutEvidenceV1 {
-        &self.layout
+    pub(crate) const fn layout(&self) -> Option<&RustLayoutEvidenceV1> {
+        self.layout.as_ref()
     }
 
-    pub(crate) fn type_identity(&self) -> TypeIdentity {
-        self.layout.type_identity()
+    pub(crate) const fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub(crate) const fn alignment(&self) -> u32 {
+        self.alignment
+    }
+
+    pub(crate) const fn abi_class(&self) -> RustcAbiClassV1 {
+        self.abi_class
+    }
+
+    pub(crate) fn type_identity(&self) -> Option<TypeIdentity> {
+        self.layout
+            .as_ref()
+            .map(RustLayoutEvidenceV1::type_identity)
     }
 }
 
@@ -83,6 +112,12 @@ impl GeneralTypedKernelContractV3 {
 
     pub(crate) const fn launch(&self) -> &LaunchContract {
         &self.launch
+    }
+
+    pub(crate) fn layout_deferred(&self) -> bool {
+        self.arguments
+            .iter()
+            .any(|argument| argument.kind == GeneralTypedArgumentKindV3::CompilerLaidOutByValue)
     }
 }
 
@@ -172,7 +207,18 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
         arguments.push(extract_argument(tcx, &layout_cx, ty, trusted_index, index)?);
     }
     validate_general_typed_launch_v3(launch)?;
-    let abi = build_abi(&arguments)?;
+    let abi = if arguments
+        .iter()
+        .any(|argument| argument.kind == GeneralTypedArgumentKindV3::CompilerLaidOutByValue)
+    {
+        AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new()).map_err(|error| {
+            GeneralTypedExtractError::new(format!(
+                "invalid layout-deferred registration ABI: {error}"
+            ))
+        })?
+    } else {
+        build_abi(&arguments)?
+    };
     Ok(GeneralTypedKernelContractV3 {
         arguments,
         abi,
@@ -215,10 +261,10 @@ fn extract_argument<'tcx>(
     let argument = || format!("argument {}", index + 1);
     if let Some(scalar) = scalar_type(ty) {
         let layout = scalar_layout(layout_cx, ty, scalar, &argument())?;
-        return Ok(GeneralTypedArgumentV3 {
-            kind: GeneralTypedArgumentKindV3::Scalar(scalar),
+        return Ok(GeneralTypedArgumentV3::from_layout(
+            GeneralTypedArgumentKindV3::Scalar(scalar),
             layout,
-        });
+        ));
     }
 
     if let TyKind::Ref(_, pointee, HirMutability::Not) = *ty.kind()
@@ -238,10 +284,10 @@ fn extract_argument<'tcx>(
             RustSourceTypeShapeV1::shared_slice(scalar),
             &argument(),
         )?;
-        return Ok(GeneralTypedArgumentV3 {
-            kind: GeneralTypedArgumentKindV3::SharedSlice(scalar),
+        return Ok(GeneralTypedArgumentV3::from_layout(
+            GeneralTypedArgumentKindV3::SharedSlice(scalar),
             layout,
-        });
+        ));
     }
 
     if let TyKind::Adt(definition, args) = *ty.kind() {
@@ -266,17 +312,14 @@ fn extract_argument<'tcx>(
                 ))
             })?;
             let layout = global_mut_pointer_layout(layout_cx, ty, scalar, &argument())?;
-            return Ok(GeneralTypedArgumentV3 {
-                kind: GeneralTypedArgumentKindV3::GlobalMutPointer(scalar),
+            return Ok(GeneralTypedArgumentV3::from_layout(
+                GeneralTypedArgumentKindV3::GlobalMutPointer(scalar),
                 layout,
-            });
+            ));
         }
         let write_only = trusted == Some(TrustedDeviceItem::WriteOnlyDisjointSlice);
         if !write_only && trusted != Some(TrustedDeviceItem::DisjointSlice) {
-            return Err(GeneralTypedExtractError::new(format!(
-                "{} uses untrusted or unsupported aggregate type `{ty}`",
-                argument()
-            )));
+            return compiler_laid_out_by_value_argument(tcx, layout_cx, ty, &argument());
         }
         let [Some(element), Some(index_space)] = [
             args.first().and_then(|arg| arg.as_type()),
@@ -308,20 +351,128 @@ fn extract_argument<'tcx>(
             RustSourceTypeShapeV1::disjoint_slice(scalar, index_space),
             &argument(),
         )?;
-        return Ok(GeneralTypedArgumentV3 {
-            kind: if write_only {
+        return Ok(GeneralTypedArgumentV3::from_layout(
+            if write_only {
                 GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(scalar)
             } else {
                 GeneralTypedArgumentKindV3::DisjointSlice(scalar)
             },
             layout,
-        });
+        ));
+    }
+
+    if matches!(ty.kind(), TyKind::Tuple(_) | TyKind::Array(..)) {
+        return compiler_laid_out_by_value_argument(tcx, layout_cx, ty, &argument());
     }
 
     Err(GeneralTypedExtractError::new(format!(
         "{} has unsupported type `{ty}`; only bounded scalars, shared slices, genuine DisjointSlice or WriteOnlyDisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
         argument()
     )))
+}
+
+fn compiler_laid_out_by_value_argument<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    layout_cx: &LayoutCx<'tcx>,
+    ty: Ty<'tcx>,
+    argument: &str,
+) -> Result<GeneralTypedArgumentV3, GeneralTypedExtractError> {
+    fn validate<'tcx>(
+        tcx: TyCtxt<'tcx>,
+        ty: Ty<'tcx>,
+        nodes: &mut usize,
+    ) -> Result<(), GeneralTypedExtractError> {
+        *nodes = nodes.checked_add(1).ok_or_else(|| {
+            GeneralTypedExtractError::new("by-value aggregate type graph overflows")
+        })?;
+        if *nodes > MAX_ABI_FIELDS.saturating_mul(4) {
+            return Err(GeneralTypedExtractError::new(
+                "by-value aggregate type graph exceeds the bounded component domain",
+            ));
+        }
+        if scalar_type(ty).is_some() || matches!(ty.kind(), TyKind::Bool | TyKind::Char) {
+            return Ok(());
+        }
+        match ty.kind() {
+            TyKind::Tuple(fields) => {
+                for field in fields.iter() {
+                    validate(tcx, field, nodes)?;
+                }
+                Ok(())
+            }
+            TyKind::Array(element, length) => {
+                let length = length.try_to_target_usize(tcx).ok_or_else(|| {
+                    GeneralTypedExtractError::new(
+                        "by-value array length is not an exact target usize",
+                    )
+                })?;
+                if length > (MAX_ABI_FIELDS * 4) as u64 {
+                    return Err(GeneralTypedExtractError::new(
+                        "by-value array exceeds the bounded component domain",
+                    ));
+                }
+                for _ in 0..length {
+                    validate(tcx, *element, nodes)?;
+                }
+                Ok(())
+            }
+            TyKind::Adt(definition, arguments) if definition.is_struct() => {
+                let variant = definition.non_enum_variant();
+                for field in &variant.fields {
+                    validate(tcx, field.ty(tcx, arguments), nodes)?;
+                }
+                Ok(())
+            }
+            TyKind::Adt(definition, _) if definition.is_enum() => {
+                Err(GeneralTypedExtractError::new(
+                    "by-value enum arguments require variant-aware packing evidence",
+                ))
+            }
+            TyKind::Adt(definition, _) if definition.is_union() => Err(
+                GeneralTypedExtractError::new("by-value union arguments are unsupported"),
+            ),
+            TyKind::Ref(..) | TyKind::RawPtr(..) => Err(GeneralTypedExtractError::new(
+                "by-value aggregate contains a pointer or reference",
+            )),
+            _ => Err(GeneralTypedExtractError::new(format!(
+                "by-value aggregate contains unsupported field type `{ty}`"
+            ))),
+        }
+    }
+
+    if ty.needs_drop(tcx, TypingEnv::fully_monomorphized()) {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} requires drop and cannot be scalarized as inert by-value input"
+        )));
+    }
+    let mut nodes = 0;
+    validate(tcx, ty, &mut nodes).map_err(|error| {
+        GeneralTypedExtractError::new(format!("{argument} is not admitted: {error}"))
+    })?;
+    let layout = layout_cx.layout_of(ty).map_err(|error| {
+        GeneralTypedExtractError::new(format!("failed to lay out {argument}: {error}"))
+    })?;
+    let abi_class = match layout.backend_repr {
+        BackendRepr::Scalar(_) => RustcAbiClassV1::Scalar,
+        BackendRepr::ScalarPair(..) => RustcAbiClassV1::ScalarPair,
+        BackendRepr::Memory { sized: true } if layout.size.bytes() == 0 => {
+            RustcAbiClassV1::Aggregate
+        }
+        _ => {
+            return Err(GeneralTypedExtractError::new(format!(
+                "{argument} requires an unsupported cast or indirect aggregate ABI"
+            )));
+        }
+    };
+    let alignment = u32::try_from(layout.align.abi.bytes())
+        .map_err(|_| GeneralTypedExtractError::new(format!("{argument} alignment exceeds u32")))?;
+    Ok(GeneralTypedArgumentV3 {
+        kind: GeneralTypedArgumentKindV3::CompilerLaidOutByValue,
+        layout: None,
+        size: layout.size.bytes(),
+        alignment,
+        abi_class,
+    })
 }
 
 fn global_mut_pointer_layout<'tcx>(
@@ -706,7 +857,9 @@ fn build_abi_field(
     offset: u64,
     argument: &GeneralTypedArgumentV3,
 ) -> Result<AbiField, GeneralTypedExtractError> {
-    let scalar = argument.kind.scalar();
+    let scalar = argument.kind.scalar().ok_or_else(|| {
+        GeneralTypedExtractError::new("compiler-laid-out argument reached macro ABI construction")
+    })?;
     let (size, alignment, kind, mutability, access, address_space, ownership, alias) =
         match argument.kind {
             GeneralTypedArgumentKindV3::Scalar(_) => (
@@ -771,6 +924,7 @@ fn build_abi_field(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
+            GeneralTypedArgumentKindV3::CompilerLaidOutByValue => unreachable!(),
         };
     AbiField::new(
         Name::new(name).map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
@@ -781,7 +935,9 @@ fn build_abi_field(
         mutability,
         access,
         address_space,
-        argument.type_identity(),
+        argument.type_identity().ok_or_else(|| {
+            GeneralTypedExtractError::new("argument has no macro-authored type identity")
+        })?,
         ownership,
         alias,
     )
@@ -814,6 +970,7 @@ fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
         | GeneralTypedArgumentKindV3::WriteOnlyDisjointSlice(_)
         | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
         GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (POINTER_BYTES, POINTER_ALIGNMENT),
+        GeneralTypedArgumentKindV3::CompilerLaidOutByValue => (0, 1),
     }
 }
 
@@ -904,7 +1061,9 @@ mod tests {
     };
 
     fn argument(kind: GeneralTypedArgumentKindV3) -> GeneralTypedArgumentV3 {
-        let scalar = kind.scalar();
+        let scalar = kind
+            .scalar()
+            .expect("test helper accepts concrete ABI kinds");
         let (source_type, abi_class, size, alignment, components) = match kind {
             GeneralTypedArgumentKindV3::Scalar(_) => (
                 RustSourceTypeShapeV1::scalar(scalar),
@@ -954,10 +1113,11 @@ mod tests {
                     .unwrap(),
                 ],
             ),
+            GeneralTypedArgumentKindV3::CompilerLaidOutByValue => unreachable!(),
         };
-        GeneralTypedArgumentV3 {
+        GeneralTypedArgumentV3::from_layout(
             kind,
-            layout: RustLayoutEvidenceV1::new(
+            RustLayoutEvidenceV1::new(
                 RustTypeEvidenceV1::new(source_type),
                 abi_class,
                 PointerWidth::Bits64,
@@ -966,7 +1126,7 @@ mod tests {
                 components,
             )
             .unwrap(),
-        }
+        )
     }
 
     fn slice_components(
@@ -1113,12 +1273,13 @@ mod tests {
         assert_eq!(field.address_space(), AddressSpace::Global);
         assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
         assert_eq!(field.alias_class(), AliasClass::Exclusive);
-        assert_eq!(pointer.layout.abi_class(), RustcAbiClassV1::Scalar);
-        assert_eq!(pointer.layout.size(), 8);
-        assert_eq!(pointer.layout.abi_alignment(), 8);
-        assert_eq!(pointer.layout.components().len(), 1);
+        let pointer_layout = pointer.layout.as_ref().unwrap();
+        assert_eq!(pointer_layout.abi_class(), RustcAbiClassV1::Scalar);
+        assert_eq!(pointer_layout.size(), 8);
+        assert_eq!(pointer_layout.abi_alignment(), 8);
+        assert_eq!(pointer_layout.components().len(), 1);
         assert_eq!(
-            pointer.layout.components()[0].kind(),
+            pointer_layout.components()[0].kind(),
             RustPhysicalComponentKindV1::Pointer {
                 mutability: RustPointerMutabilityV1::Mut,
                 pointee: RustScalarElementTypeV1::U32,

@@ -17,8 +17,9 @@ use crate::resident::{
 };
 use crate::soft_float::SoftFloatOperationV1;
 use crate::{
-    AdmittedSimulationModuleV1, IndexWidthV1, SimulationArgumentV1, SimulationLimitsErrorV1,
-    SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, IndexWidthV1,
+    SimulationArgumentV1, SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1,
+    SimulationTargetV1,
 };
 
 /// Maximum unsupported-site occurrences retained in one preflight diagnostic.
@@ -186,6 +187,7 @@ pub struct SimulationPlanV1 {
     pub(crate) reachable_operations: usize,
     pub(crate) execution_index_resident_bytes: usize,
     pub(crate) workgroup_allocation_sites: usize,
+    pub(crate) dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     pub(crate) resident_bytes: usize,
 }
 
@@ -245,7 +247,52 @@ impl SimulationPlanV1 {
     pub const fn resident_bytes(&self) -> usize {
         self.resident_bytes
     }
+
+    /// Returns the explicit dynamic LDS launch contract, when present.
+    pub const fn dynamic_workgroup_memory(&self) -> Option<DynamicWorkgroupMemoryRequestV1> {
+        self.dynamic_workgroup_memory
+    }
 }
+
+/// Typed reason an explicit runtime-sized LDS request cannot be admitted.
+#[derive(Debug, Eq, PartialEq)]
+pub enum DynamicWorkgroupMemoryUnavailableV1 {
+    MissingReachableBase,
+    AmbiguousReachableBases {
+        first: DynamicWorkgroupMemorySiteV1,
+        related: DynamicWorkgroupMemorySiteV1,
+    },
+    AuthenticatedMinimumUnavailable {
+        site: DynamicWorkgroupMemorySiteV1,
+        minimum_elements: u32,
+    },
+    ByteExtentNotDivisible {
+        site: DynamicWorkgroupMemorySiteV1,
+        byte_extent: u32,
+        element_bytes: u32,
+    },
+    ByteExtentNotAligned {
+        site: DynamicWorkgroupMemorySiteV1,
+        byte_extent: u32,
+        alignment: u32,
+    },
+}
+
+/// Allocation-free canonical KIR coordinate for a dynamic LDS declaration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DynamicWorkgroupMemorySiteV1 {
+    pub function_ordinal: usize,
+    pub block: BlockId,
+    pub operation: u32,
+}
+
+impl fmt::Display for DynamicWorkgroupMemoryUnavailableV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "dynamic workgroup memory unavailable: {self:?}")
+    }
+}
+
+impl Error for DynamicWorkgroupMemoryUnavailableV1 {}
 
 /// Fail-closed launch and reachable-program preflight failure.
 #[derive(Debug, Eq, PartialEq)]
@@ -268,6 +315,7 @@ pub enum SimulationPreflightErrorV1 {
         actual: u64,
         limit: u64,
     },
+    DynamicWorkgroupMemory(DynamicWorkgroupMemoryUnavailableV1),
     Unsupported(UnsupportedSimulationReportV1),
     ArgumentCount {
         expected: usize,
@@ -329,6 +377,7 @@ impl fmt::Display for SimulationPreflightErrorV1 {
                     "simulation {resource} {actual} exceeds limit {limit}"
                 )
             }
+            Self::DynamicWorkgroupMemory(error) => error.fmt(formatter),
             Self::Unsupported(report) => write!(
                 formatter,
                 "selected kernel has {} unsupported reachable site occurrence(s); {} retained",
@@ -385,6 +434,7 @@ impl Error for SimulationPreflightErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidLimits(error) => Some(error),
+            Self::DynamicWorkgroupMemory(error) => Some(error),
             _ => None,
         }
     }
@@ -402,6 +452,25 @@ impl AdmittedSimulationModuleV1 {
             &self.module,
             self.admitted_resident_bytes,
             request,
+            None,
+            target,
+            limits,
+        )
+    }
+
+    /// Validates a launch carrying an explicit runtime-sized LDS byte extent.
+    pub fn preflight_with_dynamic_workgroup_memory(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+    ) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
+        preflight(
+            &self.module,
+            self.admitted_resident_bytes,
+            request,
+            Some(dynamic),
             target,
             limits,
         )
@@ -412,6 +481,7 @@ pub(crate) fn preflight(
     module: &Module,
     admitted_resident_bytes: usize,
     request: &SimulationRequestV1,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> Result<SimulationPlanV1, SimulationPreflightErrorV1> {
@@ -460,7 +530,7 @@ pub(crate) fn preflight(
     let (grid, workgroup, workgroup_count, invocations, workgroups, scheduled_slots) =
         validate_launch(kernel, request, target, limits)?;
     let (unsupported, reachable_function_indices, reachable_operations, reachable_ssa_values) =
-        scan_reachable(module, entry, target, limits)?;
+        scan_reachable(module, entry, dynamic.is_some(), target, limits)?;
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
     }
@@ -470,6 +540,7 @@ pub(crate) fn preflight(
         module,
         &reachable_function_indices,
         request,
+        dynamic,
         target,
         workgroup,
         workgroups,
@@ -542,6 +613,7 @@ pub(crate) fn preflight(
         reachable_operations,
         execution_index_resident_bytes,
         workgroup_allocation_sites: workgroup_resources.allocation_sites,
+        dynamic_workgroup_memory: dynamic,
         resident_bytes,
     })
 }
@@ -553,10 +625,15 @@ struct WorkgroupResourcePlan {
     static_bytes: usize,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "resource admission keeps the exact launch, target, and limit inputs explicit"
+)]
 fn validate_workgroup_resources(
     module: &Module,
     reachable: &[usize],
     request: &SimulationRequestV1,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
     target: SimulationTargetV1,
     workgroup: [u32; 3],
     workgroups: u64,
@@ -575,72 +652,152 @@ fn validate_workgroup_resources(
         })?;
     let mut allocation_sites = 0usize;
     let mut static_bytes = 0usize;
+    let mut dynamic_site = None;
     for function_index in reachable {
-        let Some(body) = module
-            .functions
-            .get(*function_index)
-            .and_then(|function| function.body.as_ref())
-        else {
+        let Some(function) = module.functions.get(*function_index) else {
             continue;
         };
-        for (element, elements) in body
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .filter_map(|operation| match &operation.kind {
-                OperationKind::WorkgroupMemory(memory) => {
-                    let (Type::Scalar(element), fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements)) =
-                        (&memory.element, memory.extent)
-                    else {
-                        return None;
-                    };
-                    Some((*element, elements))
-                }
-                OperationKind::Gfx950LdsTranspose(
-                    fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1 {
-                        kind:
-                            fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current {
-                                format,
-                            },
-                        ..
-                    },
-                ) => Some((ScalarType::U8, format.lds_bytes())),
-                _ => None,
-            })
-        {
-            let bytes = usize::try_from(elements)
-                .ok()
-                .and_then(|elements| {
-                    target
-                        .scalar_bytes(element)
-                        .and_then(|width| elements.checked_mul(width))
-                })
-                .ok_or(SimulationPreflightErrorV1::ResourceLimit {
-                    resource: "static workgroup allocation bytes",
+        let Some(body) = function.body.as_ref() else {
+            continue;
+        };
+        for block in &body.blocks {
+            for (ordinal, operation) in block.operations.iter().enumerate() {
+                let site = || DynamicWorkgroupMemorySiteV1 {
+                    function_ordinal: *function_index,
+                    block: block.id,
+                    operation: u32::try_from(ordinal).unwrap_or(u32::MAX),
+                };
+                let (bytes, allocation_resource) = match &operation.kind {
+                    OperationKind::WorkgroupMemory(memory) => {
+                        let Type::Scalar(element) = memory.element else {
+                            continue;
+                        };
+                        match memory.extent {
+                            fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(elements) => {
+                                let bytes = usize::try_from(elements).ok().and_then(|elements| {
+                                    target
+                                        .scalar_bytes(element)
+                                        .and_then(|width| elements.checked_mul(width))
+                                });
+                                (bytes, "static workgroup allocation bytes")
+                            }
+                            fe2o3_kernel_ir::WorkgroupMemoryExtent::Dynamic => {
+                                let Some(dynamic) = dynamic else {
+                                    continue;
+                                };
+                                let current = site();
+                                if let Some(first) = dynamic_site {
+                                    return Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+                                        DynamicWorkgroupMemoryUnavailableV1::AmbiguousReachableBases {
+                                            first,
+                                            related: current,
+                                        },
+                                    ));
+                                }
+                                let element_bytes = target.scalar_bytes(element).ok_or(
+                                    SimulationPreflightErrorV1::ResourceLimit {
+                                        resource: "dynamic workgroup element bytes",
+                                        actual: u64::MAX,
+                                        limit: limits.max_allocation_bytes as u64,
+                                    },
+                                )?;
+                                let element_bytes_u32 =
+                                    u32::try_from(element_bytes).map_err(|_| {
+                                        SimulationPreflightErrorV1::ResourceLimit {
+                                            resource: "dynamic workgroup element bytes",
+                                            actual: u64::MAX,
+                                            limit: limits.max_allocation_bytes as u64,
+                                        }
+                                    })?;
+                                if dynamic.byte_extent() % element_bytes_u32 != 0 {
+                                    return Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+                                        DynamicWorkgroupMemoryUnavailableV1::ByteExtentNotDivisible {
+                                            site: current,
+                                            byte_extent: dynamic.byte_extent(),
+                                            element_bytes: element_bytes_u32,
+                                        },
+                                    ));
+                                }
+                                if dynamic.byte_extent() % memory.alignment != 0 {
+                                    return Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+                                        DynamicWorkgroupMemoryUnavailableV1::ByteExtentNotAligned {
+                                            site: current,
+                                            byte_extent: dynamic.byte_extent(),
+                                            alignment: memory.alignment,
+                                        },
+                                    ));
+                                }
+                                dynamic_site = Some(current);
+                                (
+                                    usize::try_from(dynamic.byte_extent()).ok(),
+                                    "dynamic workgroup allocation bytes",
+                                )
+                            }
+                            fe2o3_kernel_ir::WorkgroupMemoryExtent::DynamicAtLeast(
+                                minimum_elements,
+                            ) => {
+                                return Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+                                    DynamicWorkgroupMemoryUnavailableV1::AuthenticatedMinimumUnavailable {
+                                        site: site(),
+                                        minimum_elements,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    OperationKind::Gfx950LdsTranspose(
+                        fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1 {
+                            kind:
+                                fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { format },
+                            ..
+                        },
+                    ) => (
+                        usize::try_from(format.lds_bytes()).ok(),
+                        "static workgroup allocation bytes",
+                    ),
+                    _ => continue,
+                };
+                let bytes = bytes.ok_or(SimulationPreflightErrorV1::ResourceLimit {
+                    resource: allocation_resource,
                     actual: u64::MAX,
                     limit: limits.max_allocation_bytes as u64,
                 })?;
-            check_limit(
-                "static workgroup allocation bytes",
-                bytes as u64,
-                limits.max_allocation_bytes as u64,
-            )?;
-            allocation_sites = allocation_sites.checked_add(1).ok_or(
-                SimulationPreflightErrorV1::ResourceLimit {
-                    resource: "workgroup allocation sites",
-                    actual: u64::MAX,
-                    limit: limits.max_allocations as u64,
-                },
-            )?;
-            static_bytes = static_bytes.checked_add(bytes).ok_or(
-                SimulationPreflightErrorV1::ResourceLimit {
-                    resource: "static workgroup bytes",
-                    actual: u64::MAX,
-                    limit: limits.max_total_bytes as u64,
-                },
-            )?;
+                check_limit(
+                    allocation_resource,
+                    bytes as u64,
+                    limits.max_allocation_bytes as u64,
+                )?;
+                allocation_sites = allocation_sites.checked_add(1).ok_or(
+                    SimulationPreflightErrorV1::ResourceLimit {
+                        resource: "workgroup allocation sites",
+                        actual: u64::MAX,
+                        limit: limits.max_allocations as u64,
+                    },
+                )?;
+                static_bytes = static_bytes.checked_add(bytes).ok_or(
+                    SimulationPreflightErrorV1::ResourceLimit {
+                        resource: if dynamic.is_some() {
+                            "workgroup bytes including dynamic memory"
+                        } else {
+                            "static workgroup bytes"
+                        },
+                        actual: u64::MAX,
+                        limit: limits.max_total_bytes as u64,
+                    },
+                )?;
+            }
         }
     }
+    if dynamic.is_some() && dynamic_site.is_none() {
+        return Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+            DynamicWorkgroupMemoryUnavailableV1::MissingReachableBase,
+        ));
+    }
+    let live_bytes_resource = if dynamic.is_some() {
+        "live bytes with dynamic workgroup memory"
+    } else {
+        "live bytes with static workgroup memory"
+    };
     let argument_bytes = request
         .arguments
         .iter()
@@ -656,19 +813,19 @@ fn validate_workgroup_resources(
         )
         .try_fold(0usize, |total, bytes| total.checked_add(bytes))
         .ok_or(SimulationPreflightErrorV1::ResourceLimit {
-            resource: "live bytes with static workgroup memory",
+            resource: live_bytes_resource,
             actual: u64::MAX,
             limit: limits.max_total_bytes as u64,
         })?;
     let live_bytes = argument_bytes.checked_add(static_bytes).ok_or(
         SimulationPreflightErrorV1::ResourceLimit {
-            resource: "live bytes with static workgroup memory",
+            resource: live_bytes_resource,
             actual: u64::MAX,
             limit: limits.max_total_bytes as u64,
         },
     )?;
     check_limit(
-        "live bytes with static workgroup memory",
+        live_bytes_resource,
         live_bytes as u64,
         limits.max_total_bytes as u64,
     )?;
@@ -952,6 +1109,7 @@ fn check_limit(
 fn scan_reachable(
     module: &Module,
     entry: &Function,
+    allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> Result<(UnsupportedSimulationReportV1, Vec<usize>, usize, usize), SimulationPreflightErrorV1> {
@@ -1028,6 +1186,7 @@ fn scan_reachable(
                     &mut discovered_count,
                     limits.max_reachable_functions,
                     &mut findings,
+                    allow_dynamic_workgroup_memory,
                     target,
                 )?;
             }
@@ -1420,6 +1579,7 @@ fn scan_operation(
     discovered_count: &mut usize,
     max_reachable_functions: usize,
     findings: &mut UnsupportedCollectorV1,
+    allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
 ) -> Result<(), SimulationPreflightErrorV1> {
     let _surface = crate::capability::operation_surface_v1(&operation.kind);
@@ -1605,7 +1765,7 @@ fn scan_operation(
         OperationKind::Fence(_) => {}
         OperationKind::WorkgroupBarrier(_) => {}
         OperationKind::WorkgroupMemory(memory) => {
-            if memory.extent.is_dynamic() {
+            if memory.extent.is_dynamic() && !allow_dynamic_workgroup_memory {
                 reject!(UnsupportedFeatureV1::DynamicWorkgroupMemory);
             }
             if !matches!(&memory.element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some())
@@ -2098,6 +2258,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dynamic_at_least_reports_its_exact_unrepresented_authority_boundary() {
+        let scalar = Type::Scalar(ScalarType::U32);
+        let mut block = fe2o3_kernel_ir::BasicBlock::new(BlockId(7));
+        block.operations.push(Operation::effect_free(
+            fe2o3_kernel_ir::ValueDef::new(
+                ValueId(0),
+                Type::pointer(
+                    scalar.clone(),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+            ),
+            OperationKind::WorkgroupMemory(fe2o3_kernel_ir::WorkgroupMemory {
+                element: scalar,
+                extent: fe2o3_kernel_ir::WorkgroupMemoryExtent::DynamicAtLeast(13),
+                alignment: 4,
+            }),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::kernel_entry(
+            "dynamic_at_least_impl",
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        );
+        let mut module = Module::new("dynamic-at-least-test");
+        module.functions.push(function);
+        let request = SimulationRequestV1::new("dynamic_at_least", [1, 1, 1], [1, 1, 1], vec![]);
+
+        let error = match validate_workgroup_resources(
+            &module,
+            &[0],
+            &request,
+            Some(DynamicWorkgroupMemoryRequestV1::new(52)),
+            SimulationTargetV1::amdgpu_64(),
+            [1, 1, 1],
+            1,
+            SimulationLimitsV1::default(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("DynamicAtLeast must remain unavailable"),
+        };
+        assert!(matches!(
+            error,
+            SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+                DynamicWorkgroupMemoryUnavailableV1::AuthenticatedMinimumUnavailable {
+                    site: DynamicWorkgroupMemorySiteV1 {
+                        block: BlockId(7),
+                        operation: 0,
+                        ..
+                    },
+                    minimum_elements: 13,
+                }
+            )
+        ));
+    }
+
+    #[test]
     fn boolean_zero_extension_is_exact_for_fixed_and_target_width_integers() {
         for target in [
             SimulationTargetV1::little_endian(IndexWidthV1::Bits32),
@@ -2167,6 +2385,7 @@ mod tests {
             &mut discovered_count,
             1,
             &mut findings,
+            false,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();
@@ -2218,6 +2437,7 @@ mod tests {
             &mut discovered_count,
             1,
             &mut findings,
+            false,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();
@@ -2274,6 +2494,7 @@ mod tests {
             &mut discovered_count,
             1,
             &mut findings,
+            false,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();
@@ -2313,6 +2534,7 @@ mod tests {
             &mut 1,
             1,
             &mut findings,
+            false,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();

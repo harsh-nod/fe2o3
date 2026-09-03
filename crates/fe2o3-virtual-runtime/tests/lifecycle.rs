@@ -2,9 +2,12 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, Constant, Function, IntrinsicOperation, Kernel,
     LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
     Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7,
-    WorkgroupSize, gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, gfx942_xnack_minus_target_capability,
+    gfx950_xnack_minus_target_capability,
 };
-use fe2o3_kir_sim::{AdmittedSimulationModuleV1, ScalarBitsV1, SimulationLimitsV1};
+use fe2o3_kir_sim::{
+    AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1, SimulationLimitsV1,
+};
 use fe2o3_runtime_model::{IdentityDigestV1, TransitionErrorV1};
 use fe2o3_virtual_runtime::{
     VirtualArgumentV1, VirtualBufferAccessV1, VirtualCompletionAmbiguityV1,
@@ -19,6 +22,41 @@ fn operation(result: u32, ty: Type, kind: OperationKind) -> Operation {
 
 fn admitted_fill() -> AdmittedSimulationModuleV1 {
     admitted_fill_with_capabilities([])
+}
+
+fn admitted_dynamic_fill() -> AdmittedSimulationModuleV1 {
+    let mut module = admitted_fill().module().clone();
+    let scalar = Type::Scalar(ScalarType::U32);
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .insert(
+            0,
+            operation(
+                10,
+                Type::pointer(
+                    scalar.clone(),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+                OperationKind::WorkgroupMemory(WorkgroupMemory {
+                    element: scalar,
+                    extent: WorkgroupMemoryExtent::Dynamic,
+                    alignment: 4,
+                }),
+            ),
+        );
+    for capabilities in [
+        &mut module.required_capabilities,
+        &mut module.functions[0].required_capabilities,
+        &mut module.kernels[0].required_capabilities,
+    ] {
+        capabilities.extend([
+            TargetCapability::WorkgroupMemory,
+            TargetCapability::DynamicWorkgroupMemory,
+        ]);
+    }
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
+    AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default()).unwrap()
 }
 
 fn admitted_fill_with_capabilities(
@@ -214,6 +252,65 @@ fn serial_dependencies_execute_and_copy_back_typed_bytes() {
     assert_eq!(summary.invocations_executed, 4);
     assert!(!runtime.grants_hardware_authority());
     assert!(!runtime.predicts_performance());
+}
+
+#[test]
+fn explicit_dynamic_lds_is_bound_through_virtual_dispatch_and_summary() {
+    let mut virtual_runtime = runtime(31);
+    let module = virtual_runtime
+        .register_module(admitted_dynamic_fill())
+        .unwrap();
+    let queue = virtual_runtime.create_queue(8).unwrap();
+    let buffer = virtual_runtime
+        .allocate_buffer(16, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    virtual_runtime.copy_from_host(buffer, 0, &[0; 16]).unwrap();
+    let dynamic = DynamicWorkgroupMemoryRequestV1::new(16);
+    let completion = virtual_runtime
+        .submit_with_dynamic_workgroup_memory(
+            queue,
+            module,
+            fill_request(buffer, 4, vec![]),
+            dynamic,
+        )
+        .unwrap();
+    let VirtualRunProgressV1::Completed {
+        completion: observed,
+        summary,
+    } = virtual_runtime.run_next().unwrap()
+    else {
+        panic!("dynamic virtual dispatch did not complete")
+    };
+    assert_eq!(observed, completion);
+    assert_eq!(summary.dynamic_workgroup_memory, Some(dynamic));
+    assert_eq!(
+        virtual_runtime
+            .completion_summary(completion)
+            .unwrap()
+            .unwrap()
+            .dynamic_workgroup_memory,
+        Some(dynamic)
+    );
+
+    let mut hostile = runtime(32);
+    let module = hostile.register_module(admitted_fill()).unwrap();
+    let queue = hostile.create_queue(8).unwrap();
+    let buffer = hostile
+        .allocate_buffer(4, VirtualBufferAccessV1::ReadWrite)
+        .unwrap();
+    hostile.copy_from_host(buffer, 0, &[0; 4]).unwrap();
+    hostile
+        .submit_with_dynamic_workgroup_memory(
+            queue,
+            module,
+            fill_request(buffer, 1, vec![]),
+            dynamic,
+        )
+        .unwrap();
+    assert!(matches!(
+        hostile.run_next(),
+        Err(VirtualRuntimeErrorV1::Simulation { .. })
+    ));
 }
 
 #[test]

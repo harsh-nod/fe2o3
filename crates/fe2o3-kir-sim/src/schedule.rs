@@ -5,9 +5,9 @@ use sha2::{Digest, Sha256};
 
 use crate::resident::reserved_vec_bytes;
 use crate::{
-    BufferArgumentV1, EventPolicyV1, IndexWidthV1, SimulationArgumentV1, SimulationInvocationV1,
-    SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationPlanV1, SimulationRequestV1,
-    SimulationTargetV1,
+    BufferArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, IndexWidthV1,
+    SimulationArgumentV1, SimulationInvocationV1, SimulationKernelIrIdentityV1, SimulationLimitsV1,
+    SimulationPlanV1, SimulationRequestV1, SimulationTargetV1,
 };
 
 mod persisted;
@@ -25,6 +25,7 @@ const CONTEXT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V1\0";
 const CONTEXT_DOMAIN_V2: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V2\0";
 const CONTEXT_DOMAIN_V3: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V3\0";
 const CONTEXT_DOMAIN_V4: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V4\0";
+const DYNAMIC_CONTEXT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/DYNAMIC-LDS-SCHEDULE-CONTEXT/V1\0";
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-TRANSCRIPT/V1\0";
 const RECORD_INTEGRITY_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-RECORD/V1\0";
 
@@ -233,6 +234,7 @@ impl<'a> PreparedScheduleV1<'a> {
         request: Option<ExecutionScheduleRequestV1<'a>>,
         identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
         plan: &SimulationPlanV1,
@@ -248,7 +250,8 @@ impl<'a> PreparedScheduleV1<'a> {
                 reduction_decisions: None,
             });
         };
-        let context_identity = schedule_context_identity(identity, simulation, target, limits);
+        let context_identity =
+            schedule_context_identity_configured(identity, simulation, dynamic, target, limits);
         let (
             mode,
             schedule,
@@ -615,6 +618,7 @@ impl<'a> PreparedScheduleV1<'a> {
         expected_workgroups: u64,
         identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
     ) -> Result<PreparedScheduleResultV1, SimulationScheduleReplayErrorV1> {
@@ -656,7 +660,7 @@ impl<'a> PreparedScheduleV1<'a> {
         );
         let seed = state.as_ref().and_then(|state| state.seed);
         let context_identity = state.as_ref().map_or_else(
-            || schedule_context_identity(identity, simulation, target, limits),
+            || schedule_context_identity_configured(identity, simulation, dynamic, target, limits),
             |state| state.context_identity,
         );
         let transcript_identity = transcript_identity(context_identity, schedule, seed, coverage);
@@ -785,6 +789,26 @@ pub(crate) fn schedule_context_identity(
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> [u8; 32] {
+    schedule_context_identity_configured(identity, request, None, target, limits)
+}
+
+pub(crate) fn schedule_context_identity_with_dynamic(
+    identity: SimulationKernelIrIdentityV1,
+    request: &SimulationRequestV1,
+    dynamic: DynamicWorkgroupMemoryRequestV1,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> [u8; 32] {
+    schedule_context_identity_configured(identity, request, Some(dynamic), target, limits)
+}
+
+fn schedule_context_identity_configured(
+    identity: SimulationKernelIrIdentityV1,
+    request: &SimulationRequestV1,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> [u8; 32] {
     let mut hash = Sha256::new();
     let write_only = request.arguments.iter().any(|argument| match argument {
         SimulationArgumentV1::Scalar(_) => false,
@@ -795,13 +819,20 @@ pub(crate) fn schedule_context_identity(
         .iter()
         .any(|shared| shared.buffer.access() == AccessMode::WriteOnly);
     let versioned_context = identity.wire_version() != 7;
-    hash.update(match (versioned_context, write_only) {
-        (false, false) => CONTEXT_DOMAIN_V1,
-        (false, true) => CONTEXT_DOMAIN_V2,
-        (true, false) => CONTEXT_DOMAIN_V3,
-        (true, true) => CONTEXT_DOMAIN_V4,
-    });
-    if versioned_context {
+    if let Some(dynamic) = dynamic {
+        hash.update(DYNAMIC_CONTEXT_DOMAIN_V1);
+        hash.update(identity.wire_version().to_le_bytes());
+        hash.update([u8::from(write_only)]);
+        hash.update(dynamic.byte_extent().to_le_bytes());
+    } else {
+        hash.update(match (versioned_context, write_only) {
+            (false, false) => CONTEXT_DOMAIN_V1,
+            (false, true) => CONTEXT_DOMAIN_V2,
+            (true, false) => CONTEXT_DOMAIN_V3,
+            (true, true) => CONTEXT_DOMAIN_V4,
+        });
+    }
+    if dynamic.is_none() && versioned_context {
         hash.update(identity.wire_version().to_le_bytes());
     }
     hash.update(identity.digest());

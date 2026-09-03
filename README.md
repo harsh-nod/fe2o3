@@ -167,7 +167,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
-| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, plus opt-in direct-KFD runtime lifecycle, host-staging, AQL publication/completion observations, and agent queries; protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, cross-run site comparison, and direct-KFD cross-collector correlation remain incomplete |
+| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, plus opt-in direct-KFD runtime lifecycle, host-staging, queue/stream membership, completion, and evidence-cited lifecycle causality queries; protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, device-copy/dependency producers, cross-run site comparison, and direct-KFD cross-collector correlation remain incomplete |
 | Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
 | Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
 
@@ -194,9 +194,10 @@ milestones are retained in the [project status archive](docs/project-status.md).
   round trip. Supplied PC evidence can be joined exactly to sparse
   characteristic source/IR/ISA coordinates, but that archive remains a
   self-claim without producer readmission and does not enable cross-run site
-  deltas. Direct-KFD runtime observations do not imply rocprof correlation,
-  device timing, counters, PC samples, or copy-engine events. ATT decoding is
-  unavailable without a mutation-proof decoder.
+  deltas. Direct-KFD runtime observations now expose bounded local lifecycle
+  causality, but do not imply rocprof correlation, device timing, counters, PC
+  samples, dependency edges, or copy-engine events. ATT decoding is unavailable
+  without a mutation-proof decoder.
 - Multi-GPU distributed kernels and communication/computation overlap are not
   a supported execution surface.
 - The compiler and protocols are evolving. Do not treat crate APIs, KIR, bundle,

@@ -2,14 +2,14 @@
 #![doc = include_str!("../README.md")]
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V4, ScalarType,
-    SemanticArgumentOwnershipV1, SemanticArgumentStorageV2, SemanticComponentStorageBindingV2,
+    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V4,
+    OperationKind, ScalarType, SemanticArgumentOwnershipV1, SemanticComponentStorageBindingV2,
     SemanticKernargSlotV2, SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
     SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
     SemanticStorageMapV2, SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7,
     VerifiedSimulationBundleV3, VerifiedSimulationBundleV4,
 };
-use fe2o3_kir_sim::{AdmittedSimulationModuleV1, ScalarBitsV1};
+use fe2o3_kir_sim::{AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentV1, SemanticAbiPassModeV1,
     SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticEnumEncodingV1, SemanticLocalRoleV1,
@@ -208,6 +208,7 @@ struct KernelRecordV1 {
     signature: [u8; 32],
     explicit_byte_len: usize,
     arguments: Vec<ArgumentRecordV1>,
+    requires_dynamic_workgroup_memory: bool,
     unsupported: Option<String>,
 }
 
@@ -348,6 +349,7 @@ struct PreparedRequestV1 {
     grid: [u64; 3],
     workgroup: [u32; 3],
     arguments: Vec<VirtualArgumentV1>,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
 }
 
 /// Explicit CPU semantic simulator behind the normal runtime facade.
@@ -778,14 +780,6 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         if launch.explicit_kernarg.len() > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
             return Err(rejected_arguments("explicit kernarg length"));
         }
-        if launch.geometry.dynamic_shared_bytes != 0 {
-            return Err(RuntimeBackendFailureV1::Rejected(
-                SimRuntimeBackendErrorV1::UnsupportedBundle(
-                    "dynamic shared memory is not represented by RuntimeBackendV1 simulation arguments"
-                        .to_owned(),
-                ),
-            ));
-        }
         let queue = *self
             .streams
             .get(&launch.stream)
@@ -831,6 +825,10 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
                 grid: launch.geometry.grid.map(u64::from),
                 workgroup: launch.geometry.workgroup,
                 arguments,
+                dynamic_workgroup_memory: dynamic_workgroup_memory_request(
+                    kernel.requires_dynamic_workgroup_memory,
+                    launch.geometry.dynamic_shared_bytes,
+                ),
             },
             dependencies,
             completion: completion.clone(),
@@ -1175,6 +1173,10 @@ fn parse_bundle(
                     signature: *root.abi().identity().as_bytes(),
                     explicit_byte_len,
                     arguments,
+                    requires_dynamic_workgroup_memory: kernel_reaches_dynamic_workgroup_memory(
+                        &module,
+                        &kernel.entry,
+                    )?,
                     unsupported,
                 },
             )
@@ -1213,6 +1215,70 @@ fn copy_bundle_image_v2(image: &[u8]) -> Result<Vec<u8>, SimRuntimeBackendErrorV
     })?;
     copy.extend_from_slice(image);
     Ok(copy)
+}
+
+fn dynamic_workgroup_memory_request(
+    kernel_requires_dynamic_workgroup_memory: bool,
+    dynamic_shared_bytes: u32,
+) -> Option<DynamicWorkgroupMemoryRequestV1> {
+    (kernel_requires_dynamic_workgroup_memory || dynamic_shared_bytes != 0)
+        .then(|| DynamicWorkgroupMemoryRequestV1::new(dynamic_shared_bytes))
+}
+
+fn kernel_reaches_dynamic_workgroup_memory(
+    module: &fe2o3_kernel_ir::Module,
+    entry: &fe2o3_kernel_ir::FunctionId,
+) -> Result<bool, SimRuntimeBackendErrorV1> {
+    let entry = module
+        .functions
+        .iter()
+        .position(|function| &function.id == entry)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle("kernel entry missing".to_owned())
+        })?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(module.functions.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "dynamic LDS reachability allocation failed".to_owned(),
+            )
+        })?;
+    seen.resize(module.functions.len(), false);
+    let mut pending = Vec::new();
+    pending
+        .try_reserve_exact(module.functions.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "dynamic LDS reachability allocation failed".to_owned(),
+            )
+        })?;
+    seen[entry] = true;
+    pending.push(entry);
+    while let Some(index) = pending.pop() {
+        let Some(body) = module.functions[index].body.as_ref() else {
+            continue;
+        };
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            match &operation.kind {
+                OperationKind::WorkgroupMemory(memory) if memory.extent.is_dynamic() => {
+                    return Ok(true);
+                }
+                OperationKind::Call { callee, .. } => {
+                    if let Some(index) = module
+                        .functions
+                        .iter()
+                        .position(|function| function.id == *callee)
+                        && !seen[index]
+                    {
+                        seen[index] = true;
+                        pending.push(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn argument_layout(
@@ -1437,6 +1503,7 @@ fn argument_layout_v2(
             "V2 physical kernarg exceeds the runtime byte limit".to_owned(),
         ));
     }
+    validate_compiler_packing_plan_v2(kernel_storage, kir_types)?;
 
     for (source, item) in storage.iter().enumerate() {
         let legacy = legacy.get(source).ok_or_else(|| {
@@ -1487,10 +1554,7 @@ fn argument_layout_v2(
         )
     })?;
     arguments.resize_with(kir_types.len(), || None);
-    let mut unsupported = requires_producer_authenticated_packing_v2(storage).then(|| {
-        "V4 aggregate execution requires a compiler-authenticated physical host packing plan"
-            .to_owned()
-    });
+    let mut unsupported = None;
     for (source, item) in storage.iter().enumerate() {
         let source_type = SemanticTypeIdV1::from_index(item.semantic_type());
         let source_declaration = semantic_types
@@ -1543,12 +1607,32 @@ fn argument_layout_v2(
         let has_pointer = components.iter().any(|component| {
             component.representation() == SemanticKirComponentRepresentationV2::RegionPointer
         });
+        if matches!(
+            source_declaration.shape(),
+            SemanticTypeShapeV1::Unit
+                | SemanticTypeShapeV1::Array { .. }
+                | SemanticTypeShapeV1::Tuple(_)
+                | SemanticTypeShapeV1::Aggregate(_)
+        ) && !has_slice
+            && !has_pointer
+        {
+            validate_scalar_aggregate_abi_v2(
+                semantic_types,
+                source_type,
+                physical,
+                components,
+                kir_types,
+                source,
+            )?;
+        }
         match physical.mode() {
             SemanticAbiPassModeV1::Ignore if source_size == 0 && components.is_empty() => {}
             SemanticAbiPassModeV1::Direct(_)
                 if !has_slice && (!has_pointer || components.len() == 1) => {}
             SemanticAbiPassModeV1::Pair { .. }
                 if has_slice && !has_pointer && components.len() == 1 => {}
+            SemanticAbiPassModeV1::Pair { .. }
+                if !has_slice && !has_pointer && components.len() == 2 => {}
             SemanticAbiPassModeV1::Ignore => {
                 unsupported.get_or_insert_with(|| {
                     format!("source argument {source} is ABI-ignored but has retained storage")
@@ -1708,12 +1792,293 @@ fn argument_layout_v2(
     Ok((materialized, explicit_byte_len, unsupported))
 }
 
-fn requires_producer_authenticated_packing_v2(storage: &[SemanticArgumentStorageV2]) -> bool {
-    storage
+fn validate_compiler_packing_plan_v2(
+    kernel: &SemanticKernelStorageV2,
+    kir_types: &[Type],
+) -> Result<(), SimRuntimeBackendErrorV1> {
+    let mut components_by_ordinal = Vec::new();
+    components_by_ordinal
+        .try_reserve_exact(kir_types.len())
+        .map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "compiler packing-plan index allocation failed".to_owned(),
+            )
+        })?;
+    components_by_ordinal.resize_with(kir_types.len(), || None);
+    for component in kernel
+        .arguments()
         .iter()
         .filter_map(|argument| argument.storage().components())
         .flatten()
-        .any(|component| !component.path().is_empty())
+    {
+        let ordinal = usize::try_from(component.kir_parameter_ordinal()).map_err(|_| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "compiler packing plan references an absent KIR parameter".to_owned(),
+            )
+        })?;
+        let slot = components_by_ordinal.get_mut(ordinal).ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "compiler packing plan references an absent KIR parameter".to_owned(),
+            )
+        })?;
+        if slot.replace(component).is_some() {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                "compiler packing plan assigns a KIR parameter more than once".to_owned(),
+            ));
+        }
+    }
+
+    let mut next = 0_usize;
+    let mut maximum_alignment = 1_usize;
+    for (ordinal, ty) in kir_types.iter().enumerate() {
+        let component = components_by_ordinal[ordinal].ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(
+                "compiler packing plan does not cover every KIR parameter".to_owned(),
+            )
+        })?;
+        let (width, alignment, metadata_relative) = match ty {
+            Type::Scalar(scalar) => {
+                let width = scalar_bytes(Some(*scalar)).ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::UnsupportedBundle(
+                        "KIR scalar has no exact physical width".to_owned(),
+                    )
+                })?;
+                (width, width.next_power_of_two(), None)
+            }
+            Type::Pointer(_) => (8, 8, None),
+            Type::Slice(_) => (8, 8, Some(8)),
+            Type::Unit => {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "unit KIR parameters have no exact physical slot".to_owned(),
+                ));
+            }
+        };
+        next = align_up(next, alignment)?;
+        let expected_value = SemanticKernargSlotV2::new(
+            u32::try_from(next).map_err(|_| {
+                SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "compiler packing offset does not fit the V4 wire".to_owned(),
+                )
+            })?,
+            u32::try_from(width).expect("supported scalar widths fit u32"),
+            u32::try_from(alignment).expect("supported scalar alignments fit u32"),
+        );
+        let expected_metadata = metadata_relative
+            .map(|relative| {
+                Ok(SemanticKernargSlotV2::new(
+                    u32::try_from(next.checked_add(relative).ok_or_else(|| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "compiler packing metadata offset overflows".to_owned(),
+                        )
+                    })?)
+                    .map_err(|_| {
+                        SimRuntimeBackendErrorV1::UnsupportedBundle(
+                            "compiler packing metadata offset does not fit the V4 wire".to_owned(),
+                        )
+                    })?,
+                    u32::try_from(width).expect("supported metadata widths fit u32"),
+                    u32::try_from(alignment).expect("supported metadata alignments fit u32"),
+                ))
+            })
+            .transpose()?;
+        if component.value_slot() != expected_value
+            || component.metadata_slot() != expected_metadata
+        {
+            return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                "V4 physical slots differ from the compiler-rederived canonical KIR packing plan"
+                    .to_owned(),
+            ));
+        }
+        next = next
+            .checked_add(metadata_relative.map_or(width, |relative| relative + width))
+            .ok_or_else(|| {
+                SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "compiler packing size overflows".to_owned(),
+                )
+            })?;
+        maximum_alignment = maximum_alignment.max(alignment);
+    }
+    let total = align_up(next, maximum_alignment)?;
+    if usize::try_from(kernel.explicit_kernarg_bytes()) != Ok(total)
+        || usize::try_from(kernel.explicit_kernarg_alignment()) != Ok(maximum_alignment)
+    {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+            "V4 explicit kernarg extent differs from the compiler-rederived canonical plan"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_scalar_aggregate_abi_v2(
+    semantic_types: &[SemanticTypeDeclV1],
+    source_type: SemanticTypeIdV1,
+    physical: &SemanticAbiArgumentV1,
+    components: &[fe2o3_kernel_ir::SemanticKirComponentStorageV2],
+    kir_types: &[Type],
+    source: usize,
+) -> Result<(), SimRuntimeBackendErrorV1> {
+    let source_declaration = semantic_types
+        .get(source_type.index() as usize)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} aggregate type is absent"
+            ))
+        })?;
+    let source_size = source_declaration.layout().size_bytes();
+    match (
+        physical.mode(),
+        source_declaration.layout().backend_repr(),
+        components,
+    ) {
+        (SemanticAbiPassModeV1::Ignore, SemanticBackendReprV1::Memory { sized: true }, [])
+            if source_size == Some(0) =>
+        {
+            Ok(())
+        }
+        (
+            SemanticAbiPassModeV1::Direct(_),
+            SemanticBackendReprV1::Scalar(expected),
+            [component],
+        ) if component.representation() == SemanticKirComponentRepresentationV2::ScalarValue => {
+            let projected = project_semantic_component_v2(
+                semantic_types,
+                source_type,
+                component.path(),
+                0,
+                components,
+                component,
+                source,
+            )?;
+            if projected.is_enum_discriminant || projected.byte_offset != 0 {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                    "source argument {source} direct aggregate projection differs from the compiler ABI"
+                )));
+            }
+            validate_aggregate_abi_leaf_v2(
+                semantic_types,
+                projected.semantic_type,
+                *expected,
+                component,
+                kir_types,
+                source,
+            )
+        }
+        (
+            SemanticAbiPassModeV1::Pair { .. },
+            SemanticBackendReprV1::ScalarPair { first, second },
+            [first_component, second_component],
+        ) if first_component.representation()
+            == SemanticKirComponentRepresentationV2::ScalarValue
+            && second_component.representation()
+                == SemanticKirComponentRepresentationV2::ScalarValue =>
+        {
+            let first_projected = project_semantic_component_v2(
+                semantic_types,
+                source_type,
+                first_component.path(),
+                0,
+                components,
+                first_component,
+                source,
+            )?;
+            let second_projected = project_semantic_component_v2(
+                semantic_types,
+                source_type,
+                second_component.path(),
+                0,
+                components,
+                second_component,
+                source,
+            )?;
+            let second_offset =
+                usize::try_from(first.primitive().size_bytes().ok_or_else(|| {
+                    SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                        "source argument {source} first pair component has no exact ABI width"
+                    ))
+                })?)
+                .map_err(|_| {
+                    SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                        "source argument {source} pair component width does not fit this host"
+                    ))
+                })?;
+            let second_alignment =
+                usize::try_from(second.primitive().alignment_bytes()).map_err(|_| {
+                    SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                        "source argument {source} pair component alignment does not fit this host"
+                    ))
+                })?;
+            let second_offset = align_up(second_offset, second_alignment)?;
+            if first_projected.is_enum_discriminant
+                || second_projected.is_enum_discriminant
+                || first_projected.byte_offset != 0
+                || second_projected.byte_offset != second_offset
+                || second_component.kir_parameter_ordinal()
+                    != first_component
+                        .kir_parameter_ordinal()
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                                "source argument {source} pair KIR ordinal overflows"
+                            ))
+                        })?
+            {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                    "source argument {source} pair projection order differs from the compiler ABI"
+                )));
+            }
+            validate_aggregate_abi_leaf_v2(
+                semantic_types,
+                first_projected.semantic_type,
+                *first,
+                first_component,
+                kir_types,
+                source,
+            )?;
+            validate_aggregate_abi_leaf_v2(
+                semantic_types,
+                second_projected.semantic_type,
+                *second,
+                second_component,
+                kir_types,
+                source,
+            )
+        }
+        _ => Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+            "source argument {source} aggregate ABI is not an exact Direct, Pair, or zero-sized Ignore"
+        ))),
+    }
+}
+
+fn validate_aggregate_abi_leaf_v2(
+    semantic_types: &[SemanticTypeDeclV1],
+    semantic_type: SemanticTypeIdV1,
+    expected: fe2o3_mir_model::semantic_mir_v1::SemanticBackendScalarV1,
+    component: &fe2o3_kernel_ir::SemanticKirComponentStorageV2,
+    kir_types: &[Type],
+    source: usize,
+) -> Result<(), SimRuntimeBackendErrorV1> {
+    let declaration = semantic_types
+        .get(semantic_type.index() as usize)
+        .ok_or_else(|| {
+            SimRuntimeBackendErrorV1::InvalidBundle(format!(
+                "source argument {source} aggregate leaf type is absent"
+            ))
+        })?;
+    let SemanticBackendReprV1::Scalar(actual) = declaration.layout().backend_repr() else {
+        return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+            "source argument {source} aggregate ABI leaf is not a scalar"
+        )));
+    };
+    let ordinal = component.kir_parameter_ordinal() as usize;
+    let expected_kir = scalar_type_for_semantic_component_v2(semantic_types, semantic_type, false)?;
+    if actual != &expected || kir_types.get(ordinal).and_then(Type::as_scalar) != Some(expected_kir)
+    {
+        return Err(SimRuntimeBackendErrorV1::InvalidBundle(format!(
+            "source argument {source} aggregate leaf differs from the compiler ABI component"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_region_component_v2(
@@ -3028,41 +3393,50 @@ fn worker_main(
                     .collect::<Result<Vec<_>, _>>();
                 let outcome = match dependencies {
                     Err(()) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
-                    Ok(dependencies) => match runtime.submit(
-                        queue,
-                        module,
-                        VirtualDispatchRequestV1 {
+                    Ok(dependencies) => {
+                        let virtual_request = VirtualDispatchRequestV1 {
                             kernel: request.kernel,
                             grid: request.grid,
                             workgroup: request.workgroup,
                             arguments: request.arguments,
                             dependencies,
-                        },
-                    ) {
-                        Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
-                        Ok(handle) => {
-                            completions.insert(id, handle);
-                            match runtime.run_next() {
-                                Ok(VirtualRunProgressV1::Completed { completion, .. })
-                                    if completion == handle =>
-                                {
-                                    CompletionOutcomeV1::Succeeded
+                        };
+                        let submitted = match request.dynamic_workgroup_memory {
+                            Some(dynamic) => runtime.submit_with_dynamic_workgroup_memory(
+                                queue,
+                                module,
+                                virtual_request,
+                                dynamic,
+                            ),
+                            None => runtime.submit(queue, module, virtual_request),
+                        };
+                        match submitted {
+                            Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
+                            Ok(handle) => {
+                                completions.insert(id, handle);
+                                match runtime.run_next() {
+                                    Ok(VirtualRunProgressV1::Completed { completion, .. })
+                                        if completion == handle =>
+                                    {
+                                        CompletionOutcomeV1::Succeeded
+                                    }
+                                    Ok(VirtualRunProgressV1::AbortedDependency {
+                                        completion,
+                                        ..
+                                    }) if completion == handle => {
+                                        CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE)
+                                    }
+                                    Ok(
+                                        VirtualRunProgressV1::Blocked
+                                        | VirtualRunProgressV1::Idle
+                                        | VirtualRunProgressV1::Completed { .. }
+                                        | VirtualRunProgressV1::AbortedDependency { .. },
+                                    )
+                                    | Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
                                 }
-                                Ok(VirtualRunProgressV1::AbortedDependency {
-                                    completion, ..
-                                }) if completion == handle => {
-                                    CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE)
-                                }
-                                Ok(
-                                    VirtualRunProgressV1::Blocked
-                                    | VirtualRunProgressV1::Idle
-                                    | VirtualRunProgressV1::Completed { .. }
-                                    | VirtualRunProgressV1::AbortedDependency { .. },
-                                )
-                                | Err(_) => CompletionOutcomeV1::Failed(FAILED_SIMULATION_CODE),
                             }
                         }
-                    },
+                    }
                 };
                 completion.finish(outcome);
             }
@@ -3132,6 +3506,98 @@ fn require_capacity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_kernel_ir::SemanticArgumentStorageV2;
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, Function, FunctionId, Module, Operation, Signature, Terminator,
+        ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
+    };
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiValueAttributesV1, SemanticAbiValueV1, SemanticAggregateLayoutV1,
+        SemanticAggregateTypeV1, SemanticBackendScalarV1, SemanticLayoutIdentityV1,
+        SemanticTypeIdentityV1, SemanticTypeLayoutV1,
+    };
+
+    fn runtime_dynamic_reachability_module(call_helper: bool) -> (Module, FunctionId) {
+        let entry_id = FunctionId::new("entry");
+        let mut entry_block = BasicBlock::new(BlockId(0));
+        if call_helper {
+            entry_block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: "dynamic_helper".into(),
+                    arguments: vec![],
+                },
+            ));
+        }
+        entry_block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::kernel_entry(
+            entry_id.clone(),
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![entry_block],
+        );
+        let scalar = Type::Scalar(ScalarType::U32);
+        let mut helper_block = BasicBlock::new(BlockId(0));
+        helper_block.operations.push(Operation::effect_free(
+            ValueDef::new(
+                ValueId(0),
+                Type::pointer(
+                    scalar.clone(),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+            ),
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: scalar,
+                extent: WorkgroupMemoryExtent::Dynamic,
+                alignment: 4,
+            }),
+        ));
+        helper_block.terminator = Some(Terminator::Return { values: vec![] });
+        let helper = Function::internal_helper(
+            "dynamic_helper",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![helper_block],
+        );
+        let mut module = Module::new("sim-runtime-dynamic-reachability");
+        module.functions.extend([entry, helper]);
+        (module, entry_id)
+    }
+
+    #[test]
+    fn runtime_dynamic_lds_detection_follows_only_reachable_calls() {
+        let (reachable, entry) = runtime_dynamic_reachability_module(true);
+        assert!(kernel_reaches_dynamic_workgroup_memory(&reachable, &entry).unwrap());
+
+        let (unreachable, entry) = runtime_dynamic_reachability_module(false);
+        assert!(!kernel_reaches_dynamic_workgroup_memory(&unreachable, &entry).unwrap());
+        assert!(matches!(
+            kernel_reaches_dynamic_workgroup_memory(
+                &unreachable,
+                &FunctionId::new("substituted_entry")
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail == "kernel entry missing"
+        ));
+    }
+
+    #[test]
+    fn runtime_dynamic_lds_launch_mapping_preserves_zero_and_hostile_extents() {
+        assert_eq!(dynamic_workgroup_memory_request(false, 0), None);
+        assert_eq!(
+            dynamic_workgroup_memory_request(true, 0),
+            Some(DynamicWorkgroupMemoryRequestV1::new(0))
+        );
+        assert_eq!(
+            dynamic_workgroup_memory_request(false, 64),
+            Some(DynamicWorkgroupMemoryRequestV1::new(64))
+        );
+        assert_eq!(
+            dynamic_workgroup_memory_request(true, 96),
+            Some(DynamicWorkgroupMemoryRequestV1::new(96))
+        );
+    }
 
     #[test]
     fn short_and_foreign_v4_prefixes_keep_the_v3_decode_error() {
@@ -3427,6 +3893,7 @@ mod tests {
             signature: [1; 32],
             explicit_byte_len: bytes,
             arguments,
+            requires_dynamic_workgroup_memory: false,
             unsupported: None,
         }
     }
@@ -3557,6 +4024,25 @@ mod tests {
         assert!(
             matches!(&arguments[3], VirtualArgumentV1::Scalar(value) if value.bits() == 0xaabb_ccdd)
         );
+        let mut noncanonical_padding = encoded.clone();
+        noncanonical_padding[2..8].fill(0x5a);
+        noncanonical_padding[36..40].fill(0xa5);
+        let materialized_with_padding = prepare_arguments(
+            &kernel,
+            &noncanonical_padding,
+            &[BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: backend_allocation,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 16,
+                },
+                kernarg_byte_offset: fixture_bindings[0].kernarg_byte_offset,
+            }],
+            &backend.allocations,
+        )
+        .unwrap();
+        assert_eq!(materialized_with_padding, arguments);
         backend.release_allocation_v1(backend_allocation).unwrap();
     }
 
@@ -3581,8 +4067,27 @@ mod tests {
     }
 
     #[test]
-    fn projected_components_require_producer_authenticated_packing() {
-        let projected = [SemanticArgumentStorageV2::new(
+    fn projected_components_require_compiler_rederived_canonical_packing() {
+        let projected = SemanticArgumentStorageV2::new(
+            0,
+            1,
+            0,
+            SemanticArgumentOwnershipV1::ByValue,
+            SemanticComponentStorageBindingV2::exact(vec![
+                fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+                    vec![SemanticStorageProjectionV2::Field { index: 0 }],
+                    0,
+                    7,
+                    SemanticKirComponentRepresentationV2::ScalarValue,
+                    SemanticKernargSlotV2::new(0, 8, 8),
+                    None,
+                ),
+            ]),
+        );
+        let exact = SemanticKernelStorageV2::new(0, 0, 0, 8, 8, vec![projected.clone()]);
+        validate_compiler_packing_plan_v2(&exact, &[Type::Scalar(ScalarType::U64)]).unwrap();
+
+        let substituted = SemanticArgumentStorageV2::new(
             0,
             1,
             0,
@@ -3597,26 +4102,325 @@ mod tests {
                     None,
                 ),
             ]),
-        )];
-        assert!(requires_producer_authenticated_packing_v2(&projected));
+        );
+        let wrong_offset = SemanticKernelStorageV2::new(0, 0, 0, 16, 8, vec![substituted]);
+        assert!(matches!(
+            validate_compiler_packing_plan_v2(
+                &wrong_offset,
+                &[Type::Scalar(ScalarType::U64)]
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("canonical KIR packing plan")
+        ));
 
-        let unprojected = [SemanticArgumentStorageV2::new(
+        let wrong_total = SemanticKernelStorageV2::new(0, 0, 0, 16, 8, vec![projected]);
+        assert!(matches!(
+            validate_compiler_packing_plan_v2(
+                &wrong_total,
+                &[Type::Scalar(ScalarType::U64)]
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("extent")
+        ));
+
+        let wrong_type = SemanticKernelStorageV2::new(
             0,
-            1,
             0,
-            SemanticArgumentOwnershipV1::ByValue,
-            SemanticComponentStorageBindingV2::exact(vec![
-                fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
-                    Vec::new(),
-                    0,
-                    7,
-                    SemanticKirComponentRepresentationV2::ScalarValue,
-                    SemanticKernargSlotV2::new(0, 8, 8),
-                    None,
-                ),
-            ]),
-        )];
-        assert!(!requires_producer_authenticated_packing_v2(&unprojected));
+            0,
+            8,
+            8,
+            vec![SemanticArgumentStorageV2::new(
+                0,
+                1,
+                0,
+                SemanticArgumentOwnershipV1::ByValue,
+                SemanticComponentStorageBindingV2::exact(vec![
+                    fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+                        vec![SemanticStorageProjectionV2::Field { index: 0 }],
+                        0,
+                        7,
+                        SemanticKirComponentRepresentationV2::ScalarValue,
+                        SemanticKernargSlotV2::new(0, 8, 8),
+                        None,
+                    ),
+                ]),
+            )],
+        );
+        assert!(matches!(
+            validate_compiler_packing_plan_v2(
+                &wrong_type,
+                &[Type::Scalar(ScalarType::U32)]
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("canonical KIR packing plan")
+        ));
+
+        let wrong_ordinal = SemanticKernelStorageV2::new(
+            0,
+            0,
+            0,
+            8,
+            8,
+            vec![SemanticArgumentStorageV2::new(
+                0,
+                1,
+                0,
+                SemanticArgumentOwnershipV1::ByValue,
+                SemanticComponentStorageBindingV2::exact(vec![
+                    fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+                        vec![SemanticStorageProjectionV2::Field { index: 0 }],
+                        1,
+                        7,
+                        SemanticKirComponentRepresentationV2::ScalarValue,
+                        SemanticKernargSlotV2::new(0, 8, 8),
+                        None,
+                    ),
+                ]),
+            )],
+        );
+        assert!(matches!(
+            validate_compiler_packing_plan_v2(
+                &wrong_ordinal,
+                &[Type::Scalar(ScalarType::U64)]
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("absent KIR parameter")
+        ));
+    }
+
+    fn scalar_semantic_type(tag: u8, bits: u16, alignment: u64) -> SemanticTypeDeclV1 {
+        let primitive = SemanticBackendPrimitiveV1::integer(false, bits, alignment);
+        let maximum = if bits == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << bits) - 1
+        };
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([tag; 32]),
+            SemanticLayoutIdentityV1::from_sha256([tag.wrapping_add(1); 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(u64::from(bits / 8)),
+                alignment,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    primitive,
+                    SemanticScalarValidityRangeV1::new(0, maximum),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits,
+            }),
+        )
+    }
+
+    fn aggregate_component(
+        field: u32,
+        ordinal: u32,
+        slot: SemanticKernargSlotV2,
+    ) -> fe2o3_kernel_ir::SemanticKirComponentStorageV2 {
+        fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+            vec![SemanticStorageProjectionV2::Field { index: field }],
+            ordinal,
+            ordinal,
+            SemanticKirComponentRepresentationV2::ScalarValue,
+            slot,
+            None,
+        )
+    }
+
+    #[test]
+    fn aggregate_pair_projection_order_is_proven_against_rustc_backend_repr() {
+        let u32_scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 32, 4),
+            SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+        );
+        let u64_scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        let aggregate = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x73; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x74; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(16),
+                8,
+                SemanticBackendReprV1::ScalarPair {
+                    first: u32_scalar,
+                    second: u64_scalar,
+                },
+                false,
+                SemanticAggregateLayoutV1::new(vec![0, 8], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![
+                    SemanticTypeIdV1::from_index(0),
+                    SemanticTypeIdV1::from_index(1),
+                ])
+                .unwrap(),
+            ),
+        );
+        let types = [
+            scalar_semantic_type(0x70, 32, 4),
+            scalar_semantic_type(0x71, 64, 8),
+            aggregate,
+        ];
+        let physical = SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+            SemanticTypeIdV1::from_index(2),
+            SemanticAbiPassModeV1::Pair {
+                first: SemanticAbiValueAttributesV1::plain(),
+                second: SemanticAbiValueAttributesV1::plain(),
+            },
+        ));
+        let exact = [
+            aggregate_component(0, 0, SemanticKernargSlotV2::new(0, 4, 4)),
+            aggregate_component(1, 1, SemanticKernargSlotV2::new(8, 8, 8)),
+        ];
+        validate_scalar_aggregate_abi_v2(
+            &types,
+            SemanticTypeIdV1::from_index(2),
+            &physical,
+            &exact,
+            &[Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U64)],
+            0,
+        )
+        .unwrap();
+
+        let reordered = [
+            aggregate_component(1, 0, SemanticKernargSlotV2::new(0, 8, 8)),
+            aggregate_component(0, 1, SemanticKernargSlotV2::new(8, 4, 4)),
+        ];
+        assert!(matches!(
+            validate_scalar_aggregate_abi_v2(
+                &types,
+                SemanticTypeIdV1::from_index(2),
+                &physical,
+                &reordered,
+                &[
+                    Type::Scalar(ScalarType::U64),
+                    Type::Scalar(ScalarType::U32),
+                ],
+                0,
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("projection order")
+        ));
+
+        let wrong_type = [Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64)];
+        assert!(matches!(
+            validate_scalar_aggregate_abi_v2(
+                &types,
+                SemanticTypeIdV1::from_index(2),
+                &physical,
+                &exact,
+                &wrong_type,
+                0,
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("aggregate leaf")
+        ));
+
+        let wrong_ordinal = [
+            aggregate_component(0, 0, SemanticKernargSlotV2::new(0, 4, 4)),
+            aggregate_component(1, 2, SemanticKernargSlotV2::new(8, 8, 8)),
+        ];
+        assert!(matches!(
+            validate_scalar_aggregate_abi_v2(
+                &types,
+                SemanticTypeIdV1::from_index(2),
+                &physical,
+                &wrong_ordinal,
+                &[
+                    Type::Scalar(ScalarType::U32),
+                    Type::Scalar(ScalarType::U64),
+                    Type::Scalar(ScalarType::U64),
+                ],
+                0,
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("projection order")
+        ));
+    }
+
+    #[test]
+    fn aggregate_direct_and_zero_sized_ignore_are_explicit() {
+        let u64_scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        let direct = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x76; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x77; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::Scalar(u64_scalar),
+                false,
+                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![SemanticTypeIdV1::from_index(0)]).unwrap(),
+            ),
+        );
+        let direct_types = [scalar_semantic_type(0x75, 64, 8), direct];
+        let direct_abi = SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+            SemanticTypeIdV1::from_index(1),
+            SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain()),
+        ));
+        validate_scalar_aggregate_abi_v2(
+            &direct_types,
+            SemanticTypeIdV1::from_index(1),
+            &direct_abi,
+            &[aggregate_component(
+                0,
+                0,
+                SemanticKernargSlotV2::new(0, 8, 8),
+            )],
+            &[Type::Scalar(ScalarType::U64)],
+            0,
+        )
+        .unwrap();
+
+        let unit = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x78; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x79; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(0),
+                1,
+                SemanticBackendReprV1::Memory { sized: true },
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Unit,
+        );
+        let ignore_abi = SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+            SemanticTypeIdV1::from_index(0),
+            SemanticAbiPassModeV1::Ignore,
+        ));
+        validate_scalar_aggregate_abi_v2(
+            &[unit],
+            SemanticTypeIdV1::from_index(0),
+            &ignore_abi,
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_scalar_aggregate_abi_v2(
+                &direct_types,
+                SemanticTypeIdV1::from_index(1),
+                &ignore_abi,
+                &[],
+                &[],
+                0,
+            ),
+            Err(SimRuntimeBackendErrorV1::UnsupportedBundle(detail))
+                if detail.contains("zero-sized Ignore")
+        ));
     }
 
     fn direct_enum_decoder() -> EnumDecoderV1 {

@@ -2867,6 +2867,7 @@ fn preflight_kind(error: &SimulationPreflightErrorV1) -> ErrorKind {
             ErrorKind::PreflightWorkgroupMismatch
         }
         SimulationPreflightErrorV1::ResourceLimit { .. } => ErrorKind::PreflightResourceLimit,
+        SimulationPreflightErrorV1::DynamicWorkgroupMemory(_) => ErrorKind::PreflightUnsupported,
         SimulationPreflightErrorV1::Unsupported(_) => ErrorKind::PreflightUnsupported,
         SimulationPreflightErrorV1::ArgumentCount { .. } => ErrorKind::PreflightArgumentCount,
         SimulationPreflightErrorV1::ArgumentType { .. } => ErrorKind::PreflightArgumentType,
@@ -4684,6 +4685,12 @@ mod tests {
         assert_eq!(
             preflight_kind(&SimulationPreflightErrorV1::BufferViewBounds { argument: 0 }),
             ErrorKind::PreflightBufferViewBounds
+        );
+        assert_eq!(
+            preflight_kind(&SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+                fe2o3_kir_sim::DynamicWorkgroupMemoryUnavailableV1::MissingReachableBase,
+            )),
+            ErrorKind::PreflightUnsupported
         );
     }
 

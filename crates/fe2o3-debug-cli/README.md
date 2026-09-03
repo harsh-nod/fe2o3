@@ -68,8 +68,10 @@ observational and grants no compiler or execution authority.
 
 Bundle V4 retains the complete V3 payload byte-for-byte and adds a separately
 content-bound one-to-many component map with explicit physical kernarg size,
-alignment, and slots. This proves internal content association, not that the
-production compiler generated the physical plan. Use
+alignment, and slots. The production V4 exporter derives that map from the
+sole rustc-to-KIR lowering correspondence. `fe2o3-debug sim --bundle-v4 ...`
+runs the nested canonical KIR with the flattened compiler parameter order; no
+GPU, KFD, or physical-host ABI authority is implied. Use
 `fe2o3-debug typed-layout --bundle-v4 KERNEL.fe2sim --request REQUEST.json` to
 associate each observed KIR argument with its source argument, semantic type,
 and nested struct, tuple, array, or enum projection path. This emits

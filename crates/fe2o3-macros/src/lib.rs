@@ -8,7 +8,7 @@ use fe2o3_artifacts::{
     RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
     RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
     RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
-    derive_generated_host_contract_identity_v1,
+    derive_compiler_layout_registration_identity_v1, derive_generated_host_contract_identity_v1,
 };
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -1961,6 +1961,7 @@ enum GeneralTypedArgumentKindV1 {
     MappedWriteOnlyExclusiveSlice(GeneralTypedScalarV1, RustDisjointIndexSpaceV1),
     MappedExclusiveSlice(GeneralTypedScalarV1, RustDisjointIndexSpaceV1),
     GlobalMutPointer(GeneralTypedScalarV1),
+    CompilerLaidOutByValue,
 }
 
 #[allow(dead_code)]
@@ -2006,10 +2007,15 @@ fn generated_general_typed_arguments_v1(
             .then(|| format_ident!("__Fe2o3MemoryArgument{index}"))
         })
         .collect::<Vec<_>>();
+    let source_types = input.sig.inputs.iter().map(|argument| match argument {
+        FnArg::Typed(argument) => argument.ty.as_ref(),
+        FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
+    });
     let field_types = arguments
         .iter()
         .zip(&memory_type_parameters)
-        .map(|(argument, type_parameter)| match argument {
+        .zip(source_types)
+        .map(|((argument, type_parameter), source_type)| match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
             | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
@@ -2025,6 +2031,7 @@ fn generated_general_typed_arguments_v1(
                 let scalar = scalar.rust_type_tokens();
                 quote!(GlobalMut<'allocation, #scalar>)
             }
+            GeneralTypedArgumentKindV1::CompilerLaidOutByValue => quote!(#source_type),
         })
         .collect::<Vec<_>>();
     let generic_parameters = memory_type_parameters.iter().flatten().collect::<Vec<_>>();
@@ -2298,11 +2305,13 @@ fn generated_worker_v3_adapter_v1(
     input: &ItemFn,
     model: &GeneralTypedSignatureModelV1,
 ) -> proc_macro2::TokenStream {
-    if model
-        .arguments
-        .iter()
-        .any(|argument| matches!(argument, GeneralTypedArgumentKindV1::GlobalMutPointer(_)))
-    {
+    if model.arguments.iter().any(|argument| {
+        matches!(
+            argument,
+            GeneralTypedArgumentKindV1::GlobalMutPointer(_)
+                | GeneralTypedArgumentKindV1::CompilerLaidOutByValue
+        )
+    }) {
         // Worker V3 Descriptor V1 still has no generated global-pointer capability adapter.
         return quote! {};
     }
@@ -2353,7 +2362,8 @@ fn generated_worker_v3_adapter_v1(
                 ))
             }
             GeneralTypedArgumentKindV1::Scalar(_)
-            | GeneralTypedArgumentKindV1::GlobalMutPointer(_) => None,
+            | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
+            | GeneralTypedArgumentKindV1::CompilerLaidOutByValue => None,
         })
         .collect::<Vec<_>>();
     let kfd_memory_types = model
@@ -2473,7 +2483,8 @@ fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_m
                 }
                 GeneralTypedArgumentKindV1::Scalar(_)
                 | GeneralTypedArgumentKindV1::SharedSlice(_)
-                | GeneralTypedArgumentKindV1::GlobalMutPointer(_) => quote!(None),
+                | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
+                | GeneralTypedArgumentKindV1::CompilerLaidOutByValue => quote!(None),
             })
             .collect::<Vec<_>>();
         quote! {
@@ -2519,7 +2530,8 @@ fn generated_worker_v3_field_v1(
         GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, index_space) => {
             (scalar, false, false, true, Some(index_space))
         }
-        GeneralTypedArgumentKindV1::GlobalMutPointer(_) => {
+        GeneralTypedArgumentKindV1::GlobalMutPointer(_)
+        | GeneralTypedArgumentKindV1::CompilerLaidOutByValue => {
             unreachable!("unsupported V3 descriptor kinds do not generate an adapter")
         }
     };
@@ -2638,17 +2650,35 @@ fn model_general_typed_signature_v1(
         .enumerate()
         .map(|(index, argument)| parse_general_typed_argument_v1(argument, index + 1))
         .collect::<syn::Result<Vec<_>>>()?;
-    let abi = general_typed_abi_v1(&arguments, &input.sig)?;
     let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
     let logical_name = input.sig.ident.to_string();
-    let generated_host_contract_identity = derive_generated_host_contract_identity_v1(
-        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-        kernel_binding,
-        &logical_name,
-        &logical_name,
-        &abi,
-        &launch,
-    );
+    let layout_deferred = arguments
+        .iter()
+        .any(|argument| matches!(argument, GeneralTypedArgumentKindV1::CompilerLaidOutByValue));
+    let abi = if layout_deferred {
+        AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new())
+            .expect("layout-deferred registration ABI is empty")
+    } else {
+        general_typed_abi_v1(&arguments, &input.sig)?
+    };
+    let generated_host_contract_identity = if layout_deferred {
+        derive_compiler_layout_registration_identity_v1(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            kernel_binding,
+            &logical_name,
+            &logical_name,
+            &launch,
+        )
+    } else {
+        derive_generated_host_contract_identity_v1(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            kernel_binding,
+            &logical_name,
+            &logical_name,
+            &abi,
+            &launch,
+        )
+    };
     Ok(GeneralTypedSignatureModelV1 {
         arguments,
         abi,
@@ -2730,7 +2760,7 @@ fn parse_general_typed_argument_v1(
         syn::Error::new_spanned(
             &argument.ty,
             format!(
-                "general typed V1 argument {position} must be a supported scalar, `&[T]`, a supported branded `fe2o3_device::DisjointSlice<T, IndexSpace>` or `fe2o3_device::WriteOnlyDisjointSlice<T, IndexSpace>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
+                "general typed V1 argument {position} must be a supported scalar, pointer-free by-value struct/tuple/array, `&[T]`, a supported branded `fe2o3_device::DisjointSlice<T, IndexSpace>` or `fe2o3_device::WriteOnlyDisjointSlice<T, IndexSpace>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
             ),
         )
     })
@@ -2752,6 +2782,9 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
             .ok_or(());
     }
 
+    if matches!(ty, Type::Tuple(_) | Type::Array(_)) {
+        return Ok(GeneralTypedArgumentKindV1::CompilerLaidOutByValue);
+    }
     let Type::Path(path) = ty else {
         return Err(());
     };
@@ -2790,7 +2823,7 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         {
             (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
         }
-        _ => return Err(()),
+        _ => return Ok(GeneralTypedArgumentKindV1::CompilerLaidOutByValue),
     };
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(());
@@ -3032,6 +3065,12 @@ fn general_typed_abi_v1(
                 GENERAL_TYPED_POINTER_SIZE_V1,
                 GENERAL_TYPED_POINTER_ALIGNMENT_V1,
             ),
+            GeneralTypedArgumentKindV1::CompilerLaidOutByValue => {
+                return Err(syn::Error::new_spanned(
+                    &span,
+                    "compiler-laid-out arguments have no macro-authored ABI",
+                ));
+            }
         };
         offset = align_up_v1(offset, alignment).ok_or_else(|| {
             syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
@@ -3136,6 +3175,9 @@ fn general_typed_abi_field_v1(
                     AliasClass::Exclusive,
                 )
             }
+            GeneralTypedArgumentKindV1::CompilerLaidOutByValue => {
+                unreachable!("compiler-laid-out arguments have no macro-authored ABI field")
+            }
         };
     AbiField::new(
         name,
@@ -3180,6 +3222,9 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
         }
         GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
             general_typed_global_mut_pointer_type_identity_v1(scalar)
+        }
+        GeneralTypedArgumentKindV1::CompilerLaidOutByValue => {
+            unreachable!("compiler-laid-out arguments have no macro-authored type identity")
         }
     }
 }
@@ -6758,25 +6803,10 @@ mod tests {
                 pub fn mutable(value: &mut [u32]) {}
             ),
             parse_quote!(
-                pub fn aggregate(value: (u32, u32)) {}
-            ),
-            parse_quote!(
-                pub fn named(value: UserAggregate) {}
-            ),
-            parse_quote!(
-                pub fn alias(value: ScalarAlias) {}
-            ),
-            parse_quote!(
-                pub fn primitive_f16(value: f16) {}
-            ),
-            parse_quote!(
                 pub fn array(value: &[UserElement]) {}
             ),
             parse_quote!(
                 pub fn wrong_index(value: DisjointSlice<u32, Index2D>) {}
-            ),
-            parse_quote!(
-                pub fn aliased_slice(value: gpu::DisjointSlice<u32>) {}
             ),
             parse_quote!(
                 pub fn receiver(self: Box<Self>) {}
@@ -6795,6 +6825,51 @@ mod tests {
                 input.sig.ident,
             );
         }
+    }
+
+    #[test]
+    fn compiler_laid_out_arguments_defer_layout_without_claiming_a_macro_abi() {
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        for input in [
+            parse_quote!(
+                pub fn aggregate(value: (u32, u32)) {}
+            ),
+            parse_quote!(
+                pub fn named(value: UserAggregate) {}
+            ),
+            parse_quote!(
+                pub fn alias(value: ScalarAlias) {}
+            ),
+            parse_quote!(
+                pub fn primitive_f16(value: f16) {}
+            ),
+            parse_quote!(
+                pub fn aliased_slice(value: gpu::DisjointSlice<u32>) {}
+            ),
+        ] {
+            let model = model_general_typed_signature_v1(&input, &options, [0x72; 32])
+                .expect("rustc, not the macro, validates a named or aggregate layout");
+            assert_eq!(
+                model.arguments,
+                vec![GeneralTypedArgumentKindV1::CompilerLaidOutByValue]
+            );
+            assert_eq!(model.abi.size(), 0);
+            assert!(model.abi.fields().is_empty());
+        }
+
+        let aggregate: ItemFn = parse_quote!(
+            pub fn aggregate(value: (u32, u32)) {}
+        );
+        let first = model_general_typed_signature_v1(&aggregate, &options, [0x72; 32])
+            .unwrap()
+            .generated_host_contract_identity;
+        let second = model_general_typed_signature_v1(&aggregate, &options, [0x73; 32])
+            .unwrap()
+            .generated_host_contract_identity;
+        assert_ne!(
+            first, second,
+            "the compiler marker retains source binding identity"
+        );
     }
 
     #[test]
