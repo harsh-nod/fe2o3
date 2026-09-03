@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::hardware_v2::{
     HardwareBackendV2, HardwareDebugTransportV2, HardwareTransportErrorV2,
-    NativeStoppedQueueContextSaveV2, NativeStoppedQueueEnvelopeV2,
+    NativeOpaqueCheckpointV2, NativeStoppedQueueContextSaveV2, NativeStoppedQueueEnvelopeV2,
     NativeStoppedQueueRelativeRangeV2, StoppedQueueEnvelopeCaptureV2,
 };
 
@@ -125,7 +125,7 @@ fn convert_stopped_queue_capture<T: HardwareDebugTransportV2>(
             envelope,
         } => {
             let session = live_session(session, binding.binding_identity);
-            let Ok(envelope) = project_stopped_queue_envelope(envelope, queue, device) else {
+            let Ok(envelope) = project_stopped_queue_envelope(*envelope, queue, device) else {
                 return backend_protocol_error(
                     request_id,
                     operation,
@@ -197,6 +197,32 @@ fn project_stopped_queue_envelope(
             LiveGpuStoppedQueueOwnershipV3::SessionRetainedSuspension
         }
     };
+    let opaque_checkpoint = match value.opaque_checkpoint {
+        NativeOpaqueCheckpointV2::Complete {
+            identity,
+            content_identity,
+            captured_bytes,
+            segment_count,
+        } => LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
+            checkpoint_identity: opaque_stopped_identity(identity)?,
+            content_identity: opaque_stopped_identity(content_identity)?,
+            captured_bytes,
+            segment_count,
+            private_bytes_exposed: false,
+        },
+        NativeOpaqueCheckpointV2::Truncated {
+            required_bytes,
+            capture_limit_bytes,
+        } => LiveGpuStoppedQueueOpaqueCheckpointV3::Truncated {
+            required_bytes,
+            capture_limit_bytes,
+        },
+        NativeOpaqueCheckpointV2::Unavailable(reason) => {
+            LiveGpuStoppedQueueOpaqueCheckpointV3::Unavailable {
+                reason: stopped_reason(reason),
+            }
+        }
+    };
     Ok(LiveGpuStoppedQueueEnvelopeV3 {
         envelope_identity,
         queue,
@@ -211,10 +237,7 @@ fn project_stopped_queue_envelope(
         ownership,
         resume_required: true,
         context_save,
-        hardware_checkpoint_bytes: stopped_unavailable(
-            value.hardware_checkpoint_bytes,
-            KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible,
-        )?,
+        opaque_checkpoint,
         waves: stopped_unavailable(
             value.waves,
             KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi,
@@ -317,6 +340,18 @@ fn stopped_reason(reason: KfdStoppedUnavailableReasonV1) -> LiveGpuStoppedQueueU
         }
         KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible => {
             LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible
+        }
+        KfdStoppedUnavailableReasonV1::TargetCheckpointReadDenied => {
+            LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadDenied
+        }
+        KfdStoppedUnavailableReasonV1::TargetCheckpointReadPartial => {
+            LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadPartial
+        }
+        KfdStoppedUnavailableReasonV1::CheckpointContentChanged => {
+            LiveGpuStoppedQueueUnavailableReasonV3::CheckpointContentChanged
+        }
+        KfdStoppedUnavailableReasonV1::CheckpointByteLimitExceeded => {
+            LiveGpuStoppedQueueUnavailableReasonV3::CheckpointByteLimitExceeded
         }
         KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi => {
             LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
@@ -792,6 +827,11 @@ fn live_capabilities(
         stopped_queue_envelope_available,
         Some(LiveGpuUnavailableReasonV3::Unsupported),
     ));
+    capabilities.push(live_capability(
+        Live::OpaqueCheckpointCapture,
+        stopped_queue_envelope_available,
+        Some(LiveGpuUnavailableReasonV3::Unsupported),
+    ));
     for name in [
         Live::StoppedDispatch,
         Live::StoppedWorkgroups,
@@ -835,6 +875,7 @@ mod capability_tests {
                 | LiveGpuCapabilityNameV3::QueueSuspend
                 | LiveGpuCapabilityNameV3::QueueResume
                 | LiveGpuCapabilityNameV3::StoppedQueueEnvelope
+                | LiveGpuCapabilityNameV3::OpaqueCheckpointCapture
                 | LiveGpuCapabilityNameV3::Terminate
                 | LiveGpuCapabilityNameV3::StoppedDispatch
                 | LiveGpuCapabilityNameV3::StoppedWorkgroups
@@ -864,6 +905,7 @@ mod capability_tests {
             LiveGpuCapabilityNameV3::QueueSuspend,
             LiveGpuCapabilityNameV3::QueueResume,
             LiveGpuCapabilityNameV3::StoppedQueueEnvelope,
+            LiveGpuCapabilityNameV3::OpaqueCheckpointCapture,
             LiveGpuCapabilityNameV3::Terminate,
             LiveGpuCapabilityNameV3::StoppedDispatch,
             LiveGpuCapabilityNameV3::StoppedWorkgroups,
@@ -1075,8 +1117,8 @@ mod tests {
             context_save: NativeStoppedQueueContextSaveV2::Unavailable(
                 KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied,
             ),
-            hardware_checkpoint_bytes: native_unavailable(
-                KfdStoppedUnavailableReasonV1::HardwareCheckpointBytesNotCpuVisible,
+            opaque_checkpoint: NativeOpaqueCheckpointV2::Unavailable(
+                KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied,
             ),
             waves: native_unavailable(KfdStoppedUnavailableReasonV1::WaveRecordLayoutNotInKfdUapi),
             lanes: native_unavailable(KfdStoppedUnavailableReasonV1::LaneStateRequiresWaveRecords),
@@ -1088,6 +1130,37 @@ mod tests {
             ),
             source: native_unavailable(KfdStoppedUnavailableReasonV1::SourceMapNotBound),
             memory: native_unavailable(KfdStoppedUnavailableReasonV1::MemoryValuesNotCaptured),
+        }
+    }
+
+    fn native_available_context() -> NativeStoppedQueueContextSaveV2 {
+        const CONTEXT_BYTES: u32 = 0x162_1000;
+        const DEBUG_BYTES: u32 = 0x5_f000;
+        NativeStoppedQueueContextSaveV2::Available {
+            identity: [64; 32],
+            context_bytes_per_xcc: CONTEXT_BYTES,
+            total_allocation_bytes: u64::from(CONTEXT_BYTES) * 8 + u64::from(DEBUG_BYTES),
+            headers: (0_u32..8)
+                .map(
+                    |xcc_ordinal| crate::hardware_v2::NativeStoppedQueueXccHeaderV2 {
+                        xcc_ordinal,
+                        identity: [65 + u8::try_from(xcc_ordinal).unwrap(); 32],
+                        control_stack: NativeStoppedQueueRelativeRangeV2 {
+                            offset: 0x3000,
+                            bytes: 0,
+                        },
+                        wave_state: NativeStoppedQueueRelativeRangeV2 {
+                            offset: 0x3000,
+                            bytes: 0,
+                        },
+                        debug: NativeStoppedQueueRelativeRangeV2 {
+                            offset: CONTEXT_BYTES * (8 - xcc_ordinal),
+                            bytes: DEBUG_BYTES,
+                        },
+                        error_binding_present: true,
+                    },
+                )
+                .collect(),
         }
     }
 
@@ -1134,6 +1207,62 @@ mod tests {
     }
 
     #[test]
+    fn final_header_reread_failures_remain_typed_facade_results() {
+        let queue = HardwareQueueIdV2 {
+            generation: 1,
+            ordinal: 2,
+        };
+        let device = HardwareDeviceIdV2 {
+            generation: 1,
+            ordinal: 3,
+        };
+        for reason in [
+            KfdStoppedUnavailableReasonV1::TargetAddressNotRepresentable,
+            KfdStoppedUnavailableReasonV1::TargetHeaderReadDenied,
+            KfdStoppedUnavailableReasonV1::TargetHeaderReadPartial,
+            KfdStoppedUnavailableReasonV1::ContextHeaderBindingSubstituted,
+        ] {
+            let mut native = native_stopped_envelope();
+            native.context_save = native_available_context();
+            native.opaque_checkpoint = NativeOpaqueCheckpointV2::Unavailable(reason);
+            let projected = project_stopped_queue_envelope(native, queue, device).unwrap();
+            assert!(matches!(
+                projected.opaque_checkpoint,
+                LiveGpuStoppedQueueOpaqueCheckpointV3::Unavailable {
+                    reason: projected_reason,
+                } if projected_reason == stopped_reason(reason)
+            ));
+            let response = LiveGpuDebugResponseV3::Ok {
+                schema: LiveGpuResponseSchemaV3::V3,
+                request_id: 1,
+                operation: LiveGpuOperationV3::CaptureStoppedQueueEnvelope,
+                session: live_session(
+                    HardwareSessionViewV2 {
+                        state: HardwareSessionStateV2::Running,
+                        commands_processed: 1,
+                        control_revision: 0,
+                        observation_sequence: 0,
+                        identity_generation: 1,
+                        runtime_enabled: true,
+                        hardware_observed: true,
+                        simulated: false,
+                        performance_prediction: false,
+                    },
+                    binding().binding_identity,
+                ),
+                result: Box::new(LiveGpuDebugResultV3::StoppedQueueEnvelope {
+                    envelope: projected,
+                }),
+            };
+            assert!(
+                response
+                    .validate(LiveGpuProtocolLimitsV3::default())
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
     fn stopped_scopes_are_fresh_private_and_not_binding_derived() {
         let first = generate_live_kfd_stopped_scope_v3().unwrap();
         let second = generate_live_kfd_stopped_scope_v3().unwrap();
@@ -1177,7 +1306,7 @@ mod tests {
                     generation: 1,
                     ordinal: 1,
                 },
-                envelope,
+                envelope: Box::new(envelope),
             },
             1,
             &backend.binding,
@@ -1221,7 +1350,7 @@ mod tests {
     }
 
     #[test]
-    fn running_kfd_capabilities_do_not_claim_stopped_state() {
+    fn running_kfd_capabilities_separate_opaque_capture_from_decoded_state() {
         let mut backend = LiveKfdBackendV3::new(EmptyTransportV3, binding(), test_scope(71));
         let response = backend.handle(LiveGpuDebugRequestV3::DiscoverCapabilities {
             schema: LiveGpuRequestSchemaV3::V3,
@@ -1241,6 +1370,10 @@ mod tests {
         };
         assert!(capabilities.iter().any(|capability| {
             capability.name == LiveGpuCapabilityNameV3::HardwareQueueSnapshot
+                && capability.availability == LiveGpuCapabilityAvailabilityV3::Available
+        }));
+        assert!(capabilities.iter().any(|capability| {
+            capability.name == LiveGpuCapabilityNameV3::OpaqueCheckpointCapture
                 && capability.availability == LiveGpuCapabilityAvailabilityV3::Available
         }));
         assert!(capabilities.iter().any(|capability| {

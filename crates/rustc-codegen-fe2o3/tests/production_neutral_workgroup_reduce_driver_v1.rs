@@ -43,8 +43,11 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
         "src/kernel_u32.rs",
         "src/kernel_f32.rs",
         "src/kernel_scan_u32.rs",
+        "src/kernel_scan_u32_exclusive.rs",
         "src/kernel_scan_i32.rs",
+        "src/kernel_scan_i32_inclusive.rs",
         "src/kernel_scan_f32.rs",
+        "src/kernel_scan_f32_exclusive.rs",
     ]
     .map(|relative| {
         let path = example.join(relative);
@@ -53,32 +56,60 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
     });
 
     for (cpu, target) in [("gfx942", "gfx942:xnack-"), ("gfx950", "gfx950:xnack-")] {
-        for (feature, symbol, arithmetic) in [
-            ("lds-kernel", "lds_publish_read_reduce_i32_v1", "add i32"),
+        for (feature, symbol, arithmetic, barriers) in [
+            (
+                "lds-kernel",
+                "lds_publish_read_reduce_i32_v1",
+                "add i32",
+                14,
+            ),
             (
                 "lds-u32-kernel",
                 "lds_publish_read_reduce_u32_v1",
                 "add i32",
+                14,
             ),
             (
                 "lds-f32-kernel",
                 "lds_publish_read_reduce_f32_v1",
                 "fadd float",
+                14,
             ),
             (
                 "lds-scan-u32-kernel",
                 "lds_inclusive_scan_u32_v1",
                 "add i32",
+                6,
+            ),
+            (
+                "lds-scan-u32-exclusive-kernel",
+                "lds_exclusive_scan_u32_v1",
+                "add i32",
+                18,
             ),
             (
                 "lds-scan-i32-kernel",
                 "lds_exclusive_scan_i32_v1",
                 "add i32",
+                16,
+            ),
+            (
+                "lds-scan-i32-inclusive-kernel",
+                "lds_inclusive_scan_i32_v1",
+                "add i32",
+                6,
             ),
             (
                 "lds-scan-f32-kernel",
                 "lds_inclusive_scan_f32_v1",
                 "fadd float",
+                18,
+            ),
+            (
+                "lds-scan-f32-exclusive-kernel",
+                "lds_exclusive_scan_f32_v1",
+                "fadd float",
+                16,
             ),
         ] {
             let scratch = ScratchDirectory::new(&format!("{cpu}-{feature}"));
@@ -156,19 +187,19 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
             assert_eq!(
                 llvm.matches("call void asm sideeffect \"s_barrier\", \"\"()")
                     .count(),
-                14,
-                "{feature} {target} LLVM changed the exact six-level barrier recipe:\n{llvm}",
+                barriers,
+                "{feature} {target} LLVM changed the exact collective barrier recipe:\n{llvm}",
             );
             assert_eq!(
                 llvm.matches("fence syncscope(\"workgroup\") release")
                     .count(),
-                14,
+                barriers,
                 "{feature} {target} LLVM changed the release side of the barrier recipe",
             );
             assert_eq!(
                 llvm.matches("fence syncscope(\"workgroup\") acquire")
                     .count(),
-                14,
+                barriers,
                 "{feature} {target} LLVM changed the acquire side of the barrier recipe",
             );
             let binding = std::fs::read_to_string(&binding_path).expect("crate binding handoff");

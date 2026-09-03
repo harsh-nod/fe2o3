@@ -574,7 +574,7 @@ fn general_typed_launch_v3(
     registration_path: &str,
 ) -> Result<LaunchContract, RegistrationError> {
     const DEFAULT: [u32; 3] = [256, 1, 1];
-    const WAVE64: [u32; 3] = [64, 1, 1];
+    const MAX_THREADS: u32 = 256;
 
     let (dimensions, max_grid) = match frontend.and_then(|frontend| frontend.contract().launch()) {
         None => (DEFAULT, [u32::MAX, 1, 1]),
@@ -601,10 +601,11 @@ fn general_typed_launch_v3(
                     "general typed V3 explicit launch requires identical required and maximum dimensions",
                 ));
             }
-            if required != DEFAULT && required != WAVE64 {
+            if required[0] == 0 || required[0] > MAX_THREADS || required[1] != 1 || required[2] != 1
+            {
                 return Err(RegistrationError::new(
                     registration_path,
-                    "general typed V3 supports only exact 64x1x1 or 256x1x1 launch dimensions",
+                    "general typed V3 requires exact [N, 1, 1] launch dimensions with N in 1..=256",
                 ));
             }
             (
@@ -4001,7 +4002,14 @@ mod tests {
             default.block_size(),
             BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap())
         );
-        for dimensions in [[64, 1, 1], [256, 1, 1]] {
+        for dimensions in [
+            [1, 1, 1],
+            [3, 1, 1],
+            [64, 1, 1],
+            [65, 1, 1],
+            [255, 1, 1],
+            [256, 1, 1],
+        ] {
             let frontend = authenticated(Some(dimensions), None, None);
             let launch = general_typed_launch_v3(Some(&frontend), "registration").unwrap();
             assert_eq!(
@@ -4053,7 +4061,7 @@ mod tests {
             authenticated(Some([64, 1, 1]), Some([256, 1, 1]), None),
             authenticated(Some([256, 1, 1]), Some([256, 1, 1]), Some(2)),
             authenticated(Some([32, 2, 1]), None, None),
-            authenticated(Some([128, 1, 1]), None, None),
+            authenticated(Some([257, 1, 1]), None, None),
         ] {
             assert!(general_typed_launch_v3(Some(&frontend), "registration").is_err());
         }

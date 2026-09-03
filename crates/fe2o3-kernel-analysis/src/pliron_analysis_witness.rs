@@ -1243,7 +1243,7 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
         let context = &mut setup();
         let source =
             affine_source_with_execution_layout("bounds_witness_malformed_layout", [8, 1, 1])
-                .replace("gpu.subgroup_size 4", "gpu.subgroup_size 3");
+                .replace("gpu.subgroup_size 4", "gpu.subgroup_size 0");
 
         expect_incomplete_bounds_replay(
             replay_with_clean_bounds_report(context, &source),

@@ -399,9 +399,14 @@ session-owned queue envelope without granting new authority:
 The response deliberately keeps the overall session `running`; only the named
 logical queue has retained session-owned suspension. It contains address-free
 queue/device/save-area/header identities, exception bits, ring and queue shape,
-gfx target, XCC count, relative header ranges, and error-binding presence. It
-contains no PID, native queue/device ID, descriptor, virtual address, PC,
-register, checkpoint bytes, source path, or target-memory value. The response
+gfx target, XCC count, relative header ranges, error-binding presence, and an
+`opaque_checkpoint` status. A complete checkpoint exposes only its scoped
+checkpoint/content correlation identities, byte and segment counts, and
+`private_bytes_exposed: false`; truncation exposes only the required and
+configured byte bounds and retains no prefix. The outer session separately
+carries its declared artifact binding, which is not observed execution. It contains no PID,
+native queue/device ID, descriptor, virtual address, PC, register, checkpoint
+bytes, source path, or target-memory value. The response
 identities use a fresh private random per-session correlation scope, not the
 public artifact binding, so repeated sessions are not intentionally linkable.
 The scope itself is never serialized or logged. The response
@@ -412,20 +417,29 @@ substitution invalidates the logical generation, terminally poisons the public
 session, and immediately enters the existing KFD session-finish cleanup; the
 facade never discards suspension ownership while the KFD engine still owns it.
 
-The CPU-visible context header envelope is a bounded, sequential, non-atomic
-observation: KFD queue/device snapshots and the eight XCC VMA header reads occur
-in order with binding checks before and after; they are not one simultaneous
-hardware checkpoint. The envelope is not decoded hardware checkpoint state.
-Hardware checkpoint bytes, wave records, lane state, registers, PC, source,
-and memory remain separately typed unavailable with exact KFD reasons.
+The CPU-visible capture is bounded, sequential, and non-atomic: direct-KFD
+queue/device snapshots bracket eight XCC header reads; each header-bounded
+control-stack and wave-state segment is read twice adjacently; and all headers
+are reread before the queue/device binding checks. A content change inside an
+adjacent pair, partial/denied read, header change, or queue/device substitution
+fails closed. `complete` means every announced extent was captured, not that
+all segments describe one coherent instant. Runtime and suspension are local
+session invariants here, not capture-time hardware reobservations. The private
+Rust checkpoint segments are zeroized on drop and cannot appear through
+`Debug` or the agent protocol. This is identity-bound opaque capture, not
+decoded or authenticated hardware state.
+Wave records, lane state, registers, PC, source, and memory remain separately
+typed unavailable because KFD 1.18 publishes no stable inner gfx942 decoder.
 The generic stopped anchor remains `session_not_stopped`, and stopped
 dispatch/workgroup/wave/lane queries remain `unsupported`. The MI300X
 live-validation test creates a real target KFD queue, observes it, suspends it,
 captures the bounded envelope, explicitly resumes it, then finishes
 debugger-side KFD state and sends `SIGKILL` to and reaps the directly launched
-leader. This is forced leader teardown, not graceful target queue/runtime
-shutdown or descendant containment; the test deliberately does not load or
-execute its declared fixture HSACO.
+leader. The existing live case proves only a complete zero-byte idle
+checkpoint; non-empty hardware-written segment capture remains unqualified.
+This is forced leader teardown, not graceful target queue/runtime shutdown or
+descendant containment; the test deliberately does not load or execute its
+declared fixture HSACO.
 
 ## Qualification assessment
 

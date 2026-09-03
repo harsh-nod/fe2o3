@@ -6467,7 +6467,7 @@ const NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
 const NEUTRAL_WORKGROUP_SCAN_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/NEUTRAL-WORKGROUP-SCAN-ALLOCATION/V1\0";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum NeutralWorkgroupRecipeKindV1 {
     Reduction,
     InclusiveScan,
@@ -6683,6 +6683,9 @@ fn project_generated_terminator_effects_v1(
             Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })) => 3,
             _ => 0,
         };
+        let extent_is_supported = elements != 0
+            && elements <= 256
+            && (kind != NeutralWorkgroupRecipeKindV1::Reduction || elements.is_power_of_two());
         if *producer_dynamic_lds != *dynamic_lds
             || *producer_element_storage != *element_storage
             || !matches!(
@@ -6692,9 +6695,7 @@ fn project_generated_terminator_effects_v1(
             )
             || *producer_block == consumer_block
             || !dominance.block_dominates(*producer_block, consumer_block)?
-            || elements == 0
-            || elements > 256
-            || !elements.is_power_of_two()
+            || !extent_is_supported
             || type_width(types, *element_storage)? != 32
             || type_width(types, *element)? != 32
             || scalar_tag == 0
@@ -6760,15 +6761,27 @@ fn project_generated_terminator_effects_v1(
         };
         push(memory(AccessKindAttr::Write))?;
         push(barrier())?;
-        let mut offset = elements >> 1;
-        while offset != 0 {
+        let mut offset = match kind {
+            NeutralWorkgroupRecipeKindV1::Reduction => elements >> 1,
+            NeutralWorkgroupRecipeKindV1::InclusiveScan
+            | NeutralWorkgroupRecipeKindV1::ExclusiveScan => 1,
+        };
+        while match kind {
+            NeutralWorkgroupRecipeKindV1::Reduction => offset != 0,
+            NeutralWorkgroupRecipeKindV1::InclusiveScan
+            | NeutralWorkgroupRecipeKindV1::ExclusiveScan => offset < elements,
+        } {
             for access in [AccessKindAttr::Read, AccessKindAttr::Read] {
                 push(memory(access))?;
             }
             push(barrier())?;
             push(memory(AccessKindAttr::Write))?;
             push(barrier())?;
-            offset >>= 1;
+            match kind {
+                NeutralWorkgroupRecipeKindV1::Reduction => offset >>= 1,
+                NeutralWorkgroupRecipeKindV1::InclusiveScan
+                | NeutralWorkgroupRecipeKindV1::ExclusiveScan => offset <<= 1,
+            }
         }
         push(memory(AccessKindAttr::Read))?;
         push(barrier())?;
@@ -21944,6 +21957,18 @@ mod tests {
         ProductionRankedRootInputV1::new(name, bytes(binding), &launch)
     }
 
+    fn ranked_root_input_1d(name: &str, binding: u8, size: u32) -> ProductionRankedRootInputV1 {
+        let launch = LaunchContract::new(
+            1,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(size, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        ProductionRankedRootInputV1::new(name, bytes(binding), &launch)
+    }
+
     const NEUTRAL_UNIT_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
     const NEUTRAL_LDS_SCOPE_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
     const NEUTRAL_LDS_SCOPE_REFERENCE_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
@@ -22349,6 +22374,7 @@ mod tests {
 
     fn neutral_ranked_program_for_operation_v1(
         operation: SemanticCompilerIntrinsicOperationV1,
+        elements: u32,
     ) -> ProductionRankedSemanticProgramV1 {
         let scope_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
             neutral_test_place_v1(2, NEUTRAL_LDS_SCOPE_REFERENCE_TYPE),
@@ -22448,7 +22474,7 @@ mod tests {
         .enumerate()
         .map(|(index, (ty, role))| local(235 + index as u8, ty, role))
         .collect::<Vec<_>>();
-        let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+        let dimensions = SemanticWorkgroupDimensionsV1::new([elements, 1, 1]).unwrap();
         let source_contract = SemanticKernelSourceContractV1::new(
             Some(
                 SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
@@ -22490,7 +22516,7 @@ mod tests {
                     scope: NEUTRAL_LDS_SCOPE_TYPE,
                     dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
                     element_storage: NEUTRAL_ELEMENT_TYPE,
-                    elements: 64,
+                    elements: u64::from(elements),
                 },
             ),
             neutral_compiler_intrinsic_callable_v1(
@@ -22532,7 +22558,11 @@ mod tests {
         .unwrap();
         project_and_verify_ranked_semantic_mir_v1(
             owner,
-            &[ranked_root_input("neutral_generated_hostile", 247, 1)],
+            &[ranked_root_input_1d(
+                "neutral_generated_hostile",
+                247,
+                elements,
+            )],
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
         )
         .unwrap()
@@ -22546,11 +22576,13 @@ mod tests {
                 element_storage: NEUTRAL_ELEMENT_TYPE,
                 element: NEUTRAL_ELEMENT_TYPE,
             },
+            64,
         )
     }
 
     fn neutral_scan_ranked_program_v1(
         kind: SemanticWorkgroupScanKindV1,
+        elements: u32,
     ) -> ProductionRankedSemanticProgramV1 {
         neutral_ranked_program_for_operation_v1(
             SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
@@ -22560,56 +22592,71 @@ mod tests {
                 element: NEUTRAL_ELEMENT_TYPE,
                 kind,
             },
+            elements,
         )
+    }
+
+    fn scan_rounds_v1(elements: u32) -> u32 {
+        if elements <= 1 {
+            0
+        } else {
+            u32::BITS - (elements - 1).leading_zeros()
+        }
     }
 
     #[test]
     fn neutral_scan_projection_and_lowering_bind_kind_and_complete_effect_stream() {
         let mut recipe_identities = Vec::new();
-        for kind in [
-            SemanticWorkgroupScanKindV1::Inclusive,
-            SemanticWorkgroupScanKindV1::Exclusive,
-        ] {
-            let program = neutral_scan_ranked_program_v1(kind);
-            let sources = &program.roots[0].executable_effect_sources;
-            assert_eq!(sources.len(), 34);
-            let recipe = sources[0].recipe_identity();
-            assert_ne!(recipe, [0; 32]);
-            assert!(
-                sources
-                    .iter()
-                    .all(|source| source.recipe_identity() == recipe)
-            );
-            recipe_identities.push(recipe);
+        for elements in [1_u32, 3, 65, 255] {
+            for kind in [
+                SemanticWorkgroupScanKindV1::Inclusive,
+                SemanticWorkgroupScanKindV1::Exclusive,
+            ] {
+                let program = neutral_scan_ranked_program_v1(kind, elements);
+                let sources = &program.roots[0].executable_effect_sources;
+                assert_eq!(sources.len(), (5 * scan_rounds_v1(elements) + 4) as usize);
+                let recipe = sources[0].recipe_identity();
+                assert_ne!(recipe, [0; 32]);
+                assert!(
+                    sources
+                        .iter()
+                        .all(|source| source.recipe_identity() == recipe)
+                );
+                recipe_identities.push(recipe);
 
-            let ProductionRankedSemanticProgramV1 {
-                semantic_owner,
-                roots,
-            } = program;
-            let root = roots.into_vec().into_iter().next().unwrap();
-            let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
-                semantic_owner,
-                root.lowering,
-                root.ranked_ir,
-                root.access_sources,
-                root.executable_effect_sources,
-            )
-            .unwrap();
-            let _ = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-                receipt,
-                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                1,
-            )
-            .expect("the exact scan projection and generated KIR recipe must validate");
+                let ProductionRankedSemanticProgramV1 {
+                    semantic_owner,
+                    roots,
+                } = program;
+                let root = roots.into_vec().into_iter().next().unwrap();
+                let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+                    semantic_owner,
+                    root.lowering,
+                    root.ranked_ir,
+                    root.access_sources,
+                    root.executable_effect_sources,
+                )
+                .unwrap();
+                let _ = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+                    receipt,
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                    1,
+                )
+                .expect("the exact scan projection and generated KIR recipe must validate");
+            }
         }
-        assert_ne!(recipe_identities[0], recipe_identities[1]);
+        assert_eq!(
+            recipe_identities.iter().collect::<BTreeSet<_>>().len(),
+            recipe_identities.len(),
+            "kind and exact extent must both contribute to recipe identity"
+        );
     }
 
     #[test]
     fn neutral_scan_full_path_rejects_kind_recipe_and_partial_effect_substitution() {
-        let exclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive);
+        let exclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive, 65);
         let exclusive_recipe = exclusive.roots[0].executable_effect_sources[0].recipe_identity();
-        let inclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Inclusive);
+        let inclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Inclusive, 65);
         let ProductionRankedSemanticProgramV1 {
             semantic_owner,
             roots,
@@ -22642,7 +22689,7 @@ mod tests {
         let ProductionRankedSemanticProgramV1 {
             semantic_owner,
             roots,
-        } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive);
+        } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive, 255);
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources
             .pop()

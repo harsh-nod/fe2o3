@@ -247,3 +247,11 @@ Requests remain bounded to 64 KiB, responses to 2 MiB, pages to 256 items,
 memory reads to 1 MiB, and cooperative target telemetry to 4,096 records.
 Program counters are code-object-relative, memory is allocation-relative, and
 the schema has no native process, descriptor, queue, or address authority.
+For direct KFD, `opaque_checkpoint_capture` reports whether a stopped queue's
+header-bounded CWSR segments were captured completely, truncated before any
+segment read, or unavailable. Complete metadata exposes nonzero checkpoint and
+content correlation identities plus byte and segment counts. The outer session
+separately carries its declared artifact binding; the checkpoint does not claim
+that artifact executed. The 185,630,720-byte and 16-segment hard bounds are
+fixed, and private bytes are never serialized. This does not make wave, lane,
+register, PC, source, or memory capabilities available.

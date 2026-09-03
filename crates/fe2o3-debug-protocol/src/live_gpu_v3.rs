@@ -37,6 +37,8 @@ pub const MAX_LIVE_GPU_TEXT_BYTES_V3: usize = 128;
 pub const MAX_LIVE_GPU_VALUE_BITS_V3: u16 = 4_096;
 pub const MAX_LIVE_GPU_TARGET_TELEMETRY_RECORDS_V3: u64 = 4_096;
 pub const MAX_LIVE_GPU_STOPPED_QUEUE_XCC_HEADERS_V3: usize = 64;
+pub const MAX_LIVE_GPU_OPAQUE_CHECKPOINT_BYTES_V3: u64 = 185_630_720;
+pub const MAX_LIVE_GPU_OPAQUE_CHECKPOINT_SEGMENTS_V3: u32 = 16;
 const LIVE_GPU_STOPPED_QUEUE_GFX942_TARGET_V3: u32 = 90_402;
 const LIVE_GPU_STOPPED_QUEUE_GFX942_XCCS_V3: u32 = 8;
 const LIVE_GPU_STOPPED_QUEUE_GFX942_CONTEXT_BYTES_V3: u32 = 0x162_1000;
@@ -130,6 +132,7 @@ pub enum LiveGpuCapabilityNameV3 {
     QueueSuspend,
     QueueResume,
     StoppedQueueEnvelope,
+    OpaqueCheckpointCapture,
     Terminate,
     StoppedDispatch,
     StoppedWorkgroups,
@@ -1002,6 +1005,10 @@ pub enum LiveGpuStoppedQueueUnavailableReasonV3 {
     Gfx942DebugRangeMismatch,
     ContextHeaderBindingSubstituted,
     HardwareCheckpointBytesNotCpuVisible,
+    TargetCheckpointReadDenied,
+    TargetCheckpointReadPartial,
+    CheckpointContentChanged,
+    CheckpointByteLimitExceeded,
     WaveRecordLayoutNotInKfdUapi,
     LaneStateRequiresWaveRecords,
     RegisterRecordLayoutNotInKfdUapi,
@@ -1016,6 +1023,30 @@ pub struct LiveGpuStoppedQueueUnavailableV3 {
     pub reason: LiveGpuStoppedQueueUnavailableReasonV3,
 }
 
+/// Address-free metadata for private, opaque direct-KFD checkpoint bytes.
+///
+/// The bytes themselves are deliberately absent. `Complete` states that every
+/// announced byte extent was captured; it does not claim one coherent instant,
+/// observed artifact execution, or interpretation of the private gfx942 layout.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LiveGpuStoppedQueueOpaqueCheckpointV3 {
+    Complete {
+        checkpoint_identity: OpaqueIdentityV1,
+        content_identity: OpaqueIdentityV1,
+        captured_bytes: u64,
+        segment_count: u32,
+        private_bytes_exposed: bool,
+    },
+    Truncated {
+        required_bytes: u64,
+        capture_limit_bytes: u64,
+    },
+    Unavailable {
+        reason: LiveGpuStoppedQueueUnavailableReasonV3,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LiveGpuStoppedQueueRelativeRangeV3 {
@@ -1026,7 +1057,7 @@ pub struct LiveGpuStoppedQueueRelativeRangeV3 {
 impl LiveGpuStoppedQueueRelativeRangeV3 {
     fn validate(self, limit: u32, minimum_offset: u32) -> Result<(), LiveGpuValidationErrorV3> {
         if self.bytes == 0 {
-            return if self.offset == 0 {
+            return if self.offset == 0 || (self.offset >= minimum_offset && self.offset <= limit) {
                 Ok(())
             } else {
                 Err(LiveGpuValidationErrorV3::InvalidRange(
@@ -1191,6 +1222,10 @@ impl LiveGpuStoppedQueueContextSaveV3 {
                             && xcc_count == LIVE_GPU_STOPPED_QUEUE_GFX942_XCCS_V3
                     }
                     LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible
+                    | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadDenied
+                    | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadPartial
+                    | LiveGpuStoppedQueueUnavailableReasonV3::CheckpointContentChanged
+                    | LiveGpuStoppedQueueUnavailableReasonV3::CheckpointByteLimitExceeded
                     | LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
                     | LiveGpuStoppedQueueUnavailableReasonV3::LaneStateRequiresWaveRecords
                     | LiveGpuStoppedQueueUnavailableReasonV3::RegisterRecordLayoutNotInKfdUapi
@@ -1250,7 +1285,7 @@ pub struct LiveGpuStoppedQueueEnvelopeV3 {
     pub ownership: LiveGpuStoppedQueueOwnershipV3,
     pub resume_required: bool,
     pub context_save: LiveGpuStoppedQueueContextSaveV3,
-    pub hardware_checkpoint_bytes: LiveGpuStoppedQueueUnavailableV3,
+    pub opaque_checkpoint: LiveGpuStoppedQueueOpaqueCheckpointV3,
     pub waves: LiveGpuStoppedQueueUnavailableV3,
     pub lanes: LiveGpuStoppedQueueUnavailableV3,
     pub registers: LiveGpuStoppedQueueUnavailableV3,
@@ -1315,10 +1350,63 @@ impl LiveGpuStoppedQueueEnvelopeV3 {
                 "stopped queue identity domain",
             ));
         }
-        if self.hardware_checkpoint_bytes.reason
-            != LiveGpuStoppedQueueUnavailableReasonV3::HardwareCheckpointBytesNotCpuVisible
-            || self.waves.reason
-                != LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
+        match &self.opaque_checkpoint {
+            LiveGpuStoppedQueueOpaqueCheckpointV3::Complete {
+                checkpoint_identity,
+                content_identity,
+                captured_bytes,
+                segment_count,
+                private_bytes_exposed,
+            } => {
+                if !matches!(
+                    &self.context_save,
+                    LiveGpuStoppedQueueContextSaveV3::Available { .. }
+                ) || *private_bytes_exposed
+                    || *captured_bytes > MAX_LIVE_GPU_OPAQUE_CHECKPOINT_BYTES_V3
+                    || *segment_count > MAX_LIVE_GPU_OPAQUE_CHECKPOINT_SEGMENTS_V3
+                    || (*captured_bytes == 0) != (*segment_count == 0)
+                    || !identities.insert(*checkpoint_identity)
+                    || !identities.insert(*content_identity)
+                {
+                    return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+                }
+            }
+            LiveGpuStoppedQueueOpaqueCheckpointV3::Truncated {
+                required_bytes,
+                capture_limit_bytes,
+            } => {
+                if !matches!(
+                    &self.context_save,
+                    LiveGpuStoppedQueueContextSaveV3::Available { .. }
+                ) || *required_bytes <= *capture_limit_bytes
+                    || *required_bytes > MAX_LIVE_GPU_OPAQUE_CHECKPOINT_BYTES_V3
+                    || *capture_limit_bytes > MAX_LIVE_GPU_OPAQUE_CHECKPOINT_BYTES_V3
+                {
+                    return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+                }
+            }
+            LiveGpuStoppedQueueOpaqueCheckpointV3::Unavailable { reason } => {
+                let valid = match &self.context_save {
+                    LiveGpuStoppedQueueContextSaveV3::Unavailable {
+                        reason: context_reason,
+                    } => reason == context_reason,
+                    LiveGpuStoppedQueueContextSaveV3::Available { .. } => matches!(
+                        reason,
+                        LiveGpuStoppedQueueUnavailableReasonV3::TargetAddressNotRepresentable
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadDenied
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetHeaderReadPartial
+                            | LiveGpuStoppedQueueUnavailableReasonV3::ContextHeaderBindingSubstituted
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadDenied
+                            | LiveGpuStoppedQueueUnavailableReasonV3::TargetCheckpointReadPartial
+                            | LiveGpuStoppedQueueUnavailableReasonV3::CheckpointContentChanged
+                    ),
+                };
+                if !valid {
+                    return Err(LiveGpuValidationErrorV3::InvalidAvailability);
+                }
+            }
+        }
+        if self.waves.reason != LiveGpuStoppedQueueUnavailableReasonV3::WaveRecordLayoutNotInKfdUapi
             || self.lanes.reason
                 != LiveGpuStoppedQueueUnavailableReasonV3::LaneStateRequiresWaveRecords
             || self.registers.reason

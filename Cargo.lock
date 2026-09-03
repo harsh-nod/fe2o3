@@ -1312,6 +1312,7 @@ dependencies = [
  "libc",
  "rustix",
  "sha2 0.11.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -1680,9 +1681,12 @@ dependencies = [
  "fe2o3-host-api",
  "fe2o3-hsaco",
  "fe2o3-kfd",
+ "fe2o3-kfd-uapi",
  "fe2o3-profiler-protocol",
  "fe2o3-runtime-model",
+ "libc",
  "rmpv",
+ "rustix",
  "sha2 0.11.0",
 ]
 

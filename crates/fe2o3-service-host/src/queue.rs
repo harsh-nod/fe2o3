@@ -27,8 +27,8 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r18-v1\n",
-    "source.compute_aql_session_sha256=61db3e72cbb07d40bd721bb33e5d9a1235c5f227da08bb2b7808b9530c42fb24\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r19-v1\n",
+    "source.compute_aql_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
@@ -47,7 +47,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "a5f75233c3b13e62a6b58e7928001a6123564b87e5e2f60b3c47a973a870c0c2";
+    "91395aed1e056439f2c8762c7f4b1e1fd6b125b7de537edfc0bdeee5a5b0f709";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]

@@ -44,6 +44,10 @@ aggregate_nested = []
 aggregate_enum = []
 aggregate_pointer = []
 aggregate_drop = []
+aggregate_pointer_name_collision = []
+aggregate_device_pointer_import = []
+aggregate_device_pointer_alias = []
+aggregate_device_pointer_qualified = []
 
 [dependencies]
 fe2o3-device.workspace = true
