@@ -30,11 +30,29 @@ const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
 const EXTRACTOR_CHILD_FD: std::os::fd::RawFd = 205;
 const VENDOR_CHILD_FD: std::os::fd::RawFd = 206;
+const HOST_LINKER_CHILD_FD: std::os::fd::RawFd = 207;
+const HOST_LLD_CHILD_FD: std::os::fd::RawFd = 208;
+const HOST_LLD_PROXY_CHILD_FD: std::os::fd::RawFd = 209;
 const _: () = assert!(EXTRACTOR_CHILD_FD != VENDOR_CHILD_FD);
 const _: () = assert!(EXTRACTOR_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
 const _: () = assert!(EXTRACTOR_CHILD_FD != crate::RUSTC_CHILD_FD);
 const _: () = assert!(VENDOR_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
 const _: () = assert!(VENDOR_CHILD_FD != crate::RUSTC_CHILD_FD);
+const _: () = assert!(HOST_LINKER_CHILD_FD != HOST_LLD_CHILD_FD);
+const _: () = assert!(HOST_LINKER_CHILD_FD != EXTRACTOR_CHILD_FD);
+const _: () = assert!(HOST_LINKER_CHILD_FD != VENDOR_CHILD_FD);
+const _: () = assert!(HOST_LINKER_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(HOST_LINKER_CHILD_FD != crate::RUSTC_CHILD_FD);
+const _: () = assert!(HOST_LLD_CHILD_FD != EXTRACTOR_CHILD_FD);
+const _: () = assert!(HOST_LLD_CHILD_FD != VENDOR_CHILD_FD);
+const _: () = assert!(HOST_LLD_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(HOST_LLD_CHILD_FD != crate::RUSTC_CHILD_FD);
+const _: () = assert!(HOST_LLD_PROXY_CHILD_FD != HOST_LINKER_CHILD_FD);
+const _: () = assert!(HOST_LLD_PROXY_CHILD_FD != HOST_LLD_CHILD_FD);
+const _: () = assert!(HOST_LLD_PROXY_CHILD_FD != EXTRACTOR_CHILD_FD);
+const _: () = assert!(HOST_LLD_PROXY_CHILD_FD != VENDOR_CHILD_FD);
+const _: () = assert!(HOST_LLD_PROXY_CHILD_FD != crate::RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(HOST_LLD_PROXY_CHILD_FD != crate::RUSTC_CHILD_FD);
 const CONTENT_ID_DOMAIN: &[u8] = b"FE2O3/ENGINEERING-HSACO-OBSERVATION-CONTENT/V1\0";
 
 pub(crate) fn command(args: &[OsString]) -> ExitCode {
@@ -62,6 +80,9 @@ struct Options {
     worker: FileClaim,
     cargo: FileClaim,
     rustc: FileClaim,
+    host_linker: FileClaim,
+    host_lld: FileClaim,
+    host_lld_proxy: FileClaim,
     cargo_vendor: Option<PathBuf>,
     cargo_git_sources: Vec<CargoGitSource>,
     worker_build_identity: String,
@@ -109,6 +130,9 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         executable: pinned_rustc_source,
         lib_tree: crate::RustcLibTree::Authority(rustc_lib_tree),
     };
+    let pinned_host_linker = pin_claimed_executable("host linker", &options.host_linker)?;
+    let pinned_host_lld = pin_claimed_executable("host lld", &options.host_lld)?;
+    let pinned_host_lld_proxy = pin_claimed_executable("host lld proxy", &options.host_lld_proxy)?;
     let cargo_vendor = options
         .cargo_vendor
         .as_ref()
@@ -155,6 +179,9 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         &options,
         &pinned_cargo,
         &pinned_rustc,
+        &pinned_host_linker,
+        &pinned_host_lld,
+        &pinned_host_lld_proxy,
         cargo_vendor.as_ref(),
         &pinned_extractor,
         &handoff_path,
@@ -209,6 +236,12 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
             *pinned_rustc.executable.sha256(),
             pinned_rustc.executable.size(),
         ),
+        ContentIdentityV1::from_parts(*pinned_host_linker.sha256(), pinned_host_linker.size()),
+        ContentIdentityV1::from_parts(*pinned_host_lld.sha256(), pinned_host_lld.size()),
+        ContentIdentityV1::from_parts(
+            *pinned_host_lld_proxy.sha256(),
+            pinned_host_lld_proxy.size(),
+        ),
         rustc_lib_tree_sha256,
         cargo_vendor.as_ref().map(|vendor| *vendor.sha256()),
         &extractor_bytes,
@@ -233,6 +266,12 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     let mut cargo_sha256 = None;
     let mut rustc = None;
     let mut rustc_sha256 = None;
+    let mut host_linker = None;
+    let mut host_linker_sha256 = None;
+    let mut host_lld = None;
+    let mut host_lld_sha256 = None;
+    let mut host_lld_proxy = None;
+    let mut host_lld_proxy_sha256 = None;
     let mut cargo_vendor = None;
     let mut cargo_git_sources = Vec::new();
     let mut worker_build_identity = None;
@@ -273,6 +312,14 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--cargo-sha256" => set_once_digest(&mut cargo_sha256, value, argument)?,
             "--rustc" => set_once_path(&mut rustc, value, argument)?,
             "--rustc-sha256" => set_once_digest(&mut rustc_sha256, value, argument)?,
+            "--host-linker" => set_once_path(&mut host_linker, value, argument)?,
+            "--host-linker-sha256" => set_once_digest(&mut host_linker_sha256, value, argument)?,
+            "--host-lld" => set_once_path(&mut host_lld, value, argument)?,
+            "--host-lld-sha256" => set_once_digest(&mut host_lld_sha256, value, argument)?,
+            "--host-lld-proxy" => set_once_path(&mut host_lld_proxy, value, argument)?,
+            "--host-lld-proxy-sha256" => {
+                set_once_digest(&mut host_lld_proxy_sha256, value, argument)?
+            }
             "--cargo-vendor" => set_once_path(&mut cargo_vendor, value, argument)?,
             "--cargo-git-source" => cargo_git_sources.push(parse_cargo_git_source(value)?),
             "--worker-build-id" => set_once_string(&mut worker_build_identity, value, argument)?,
@@ -376,6 +423,27 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             rustc_sha256,
             "--rustc",
             "--rustc-sha256",
+        )?,
+        host_linker: required_file_claim(
+            current_dir,
+            host_linker,
+            host_linker_sha256,
+            "--host-linker",
+            "--host-linker-sha256",
+        )?,
+        host_lld: required_file_claim(
+            current_dir,
+            host_lld,
+            host_lld_sha256,
+            "--host-lld",
+            "--host-lld-sha256",
+        )?,
+        host_lld_proxy: required_file_claim(
+            current_dir,
+            host_lld_proxy,
+            host_lld_proxy_sha256,
+            "--host-lld-proxy",
+            "--host-lld-proxy-sha256",
         )?,
         cargo_vendor: cargo_vendor.map(|path| absolute_path(current_dir, path)),
         cargo_git_sources,
@@ -507,8 +575,14 @@ fn set_once_u64(slot: &mut Option<u64>, value: &OsStr, option: &str) -> Result<(
 }
 
 fn parse_sha256(value: &str, label: &str) -> Result<[u8; 32], String> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!("{label} must be exactly 64 hexadecimal characters"));
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(format!(
+            "{label} must be exactly 64 lowercase hexadecimal characters"
+        ));
     }
     let mut digest = [0_u8; 32];
     for (index, byte) in digest.iter_mut().enumerate() {
@@ -654,6 +728,9 @@ fn run_extraction(
     options: &Options,
     cargo: &crate::pinned_executable::PinnedExecutable,
     rustc: &crate::PinnedRustc,
+    host_linker: &crate::pinned_executable::PinnedExecutable,
+    host_lld: &crate::pinned_executable::PinnedExecutable,
+    host_lld_proxy: &crate::pinned_executable::PinnedExecutable,
     cargo_vendor: Option<&crate::rustc_lib_tree::PinnedRustcLibTree>,
     extractor: &crate::pinned_executable::PinnedExecutable,
     handoff: &Path,
@@ -689,6 +766,24 @@ fn run_extraction(
     extractor
         .inherit_for_child_at(command.as_command_mut(), EXTRACTOR_CHILD_FD)
         .map_err(|error| format!("cannot inherit sealed extractor: {error}"))?;
+    let host_linker_path = host_linker
+        .fixed_child_path(HOST_LINKER_CHILD_FD)
+        .map_err(|error| format!("cannot allocate host-linker child descriptor: {error}"))?;
+    host_linker
+        .inherit_for_child_at(command.as_command_mut(), HOST_LINKER_CHILD_FD)
+        .map_err(|error| format!("cannot inherit sealed host linker: {error}"))?;
+    let _host_lld_path = host_lld
+        .fixed_child_path(HOST_LLD_CHILD_FD)
+        .map_err(|error| format!("cannot allocate host-lld child descriptor: {error}"))?;
+    host_lld
+        .inherit_for_child_at(command.as_command_mut(), HOST_LLD_CHILD_FD)
+        .map_err(|error| format!("cannot inherit sealed host lld: {error}"))?;
+    let host_lld_proxy_path = host_lld_proxy
+        .fixed_child_path(HOST_LLD_PROXY_CHILD_FD)
+        .map_err(|error| format!("cannot allocate host-lld-proxy child descriptor: {error}"))?;
+    host_lld_proxy
+        .inherit_for_child_at(command.as_command_mut(), HOST_LLD_PROXY_CHILD_FD)
+        .map_err(|error| format!("cannot inherit sealed host lld proxy: {error}"))?;
     if let Some(vendor) = cargo_vendor {
         vendor
             .directory()
@@ -715,6 +810,14 @@ fn run_extraction(
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", &extractor_path)
         .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &extractor_path)
+        .env(
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            &host_linker_path,
+        )
+        .env(
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+            format!("-Clink-arg=-fuse-ld={}", host_lld_proxy_path.display()),
+        )
         .env("FE2O3_HIP_SYS_DISABLE", "1")
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
         .env("FE2O3_EXTRACT_CRATE_V1", &options.crate_name)
@@ -948,6 +1051,9 @@ struct Tools<'a> {
     cargo: Identity,
     rustc: Identity,
     rustc_lib_tree_sha256: String,
+    host_linker: Identity,
+    host_lld: Identity,
+    host_lld_proxy: Identity,
     cargo_vendor: Option<CargoVendor<'a>>,
     extractor: Identity,
     extractor_backend: Identity,
@@ -1010,6 +1116,9 @@ fn canonical_manifest(
     observation: &EngineeringHsacoObservationV1,
     cargo: ContentIdentityV1,
     rustc: ContentIdentityV1,
+    host_linker: ContentIdentityV1,
+    host_lld: ContentIdentityV1,
+    host_lld_proxy: ContentIdentityV1,
     rustc_lib_tree_sha256: [u8; 32],
     cargo_vendor_sha256: Option<[u8; 32]>,
     extractor: &[u8],
@@ -1037,6 +1146,9 @@ fn canonical_manifest(
             cargo: identity(cargo),
             rustc: identity(rustc),
             rustc_lib_tree_sha256: hex(&rustc_lib_tree_sha256),
+            host_linker: identity(host_linker),
+            host_lld: identity(host_lld),
+            host_lld_proxy: identity(host_lld_proxy),
             cargo_vendor: cargo_vendor_sha256.map(|tree| CargoVendor {
                 tree_sha256: hex(&tree),
                 git_sources: &options.cargo_git_sources,
@@ -1411,7 +1523,7 @@ fn remove_retained_directory_contents(directory: &File) -> Result<(), String> {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> [--cargo-vendor <absolute-directory> [--cargo-git-source <https://URL@40-hex-rev>]...] [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> [--cargo-vendor <absolute-directory> [--cargo-git-source <https://URL@40-hex-rev>]...] [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
 }
 
 #[cfg(test)]
@@ -1453,6 +1565,18 @@ mod tests {
             "--rustc".into(),
             "/tools/rustc".into(),
             "--rustc-sha256".into(),
+            digest.clone().into(),
+            "--host-linker".into(),
+            "/tools/clang".into(),
+            "--host-linker-sha256".into(),
+            digest.clone().into(),
+            "--host-lld".into(),
+            "/tools/lld".into(),
+            "--host-lld-sha256".into(),
+            digest.clone().into(),
+            "--host-lld-proxy".into(),
+            "/tools/lld-proxy".into(),
+            "--host-lld-proxy-sha256".into(),
             digest.into(),
             "--".into(),
             "--manifest-path".into(),
@@ -1469,6 +1593,9 @@ mod tests {
         assert_eq!(options.crate_name, "aggregate_device");
         assert_eq!(options.output_root, root.join(NAMESPACE));
         assert_eq!(options.max_output_bytes, MAX_WORKER_OUTPUT_BYTES as u64);
+        assert_eq!(options.host_linker.path, Path::new("/tools/clang"));
+        assert_eq!(options.host_lld.path, Path::new("/tools/lld"));
+        assert_eq!(options.host_lld_proxy.path, Path::new("/tools/lld-proxy"));
 
         let mut wrong_target = base_args(&root);
         let index = wrong_target
@@ -1517,6 +1644,15 @@ mod tests {
             + 1;
         bad_digest[index] = "00".into();
         assert!(parse(&bad_digest, &root).is_err());
+
+        let mut uppercase_digest = base_args(&root);
+        let index = uppercase_digest
+            .iter()
+            .position(|value| value == "--host-linker-sha256")
+            .unwrap()
+            + 1;
+        uppercase_digest[index] = "AA".repeat(32).into();
+        assert!(parse(&uppercase_digest, &root).is_err());
 
         let mut bad_provider = base_args(&root);
         bad_provider.splice(
@@ -1607,7 +1743,7 @@ mod tests {
     }
 
     #[test]
-    fn claimed_executable_path_swap_cannot_change_executed_bytes() {
+    fn claimed_host_linker_path_swap_cannot_change_executed_bytes() {
         let root = env::temp_dir().join(format!(
             "fe2o3-engineering-executable-swap-{}",
             std::process::id()
