@@ -1396,6 +1396,43 @@ mod tests {
     }
 
     #[test]
+    fn variant_v3_replays_v2_and_types_missing_production_bridge_evidence() {
+        let baseline = pc_treatment(CorrelationFixtureV1::UniqueSource, b"schedule-a");
+        let candidate = pc_treatment(CorrelationFixtureV1::UniqueSourceShifted, b"schedule-b");
+        let baseline_input = crate::ProfilerVariantTreatmentInputV3 {
+            treatment: baseline.input(0),
+            production_kir: None,
+        };
+        let candidate_input = crate::ProfilerVariantTreatmentInputV3 {
+            treatment: candidate.input(1),
+            production_kir: None,
+        };
+        let request = crate::build_profiler_variant_request_v3(
+            b"pc-variant-v2-workload",
+            baseline_input,
+            candidate_input,
+        )
+        .unwrap();
+        let result =
+            crate::compare_profiler_variants_v3(request, baseline_input, candidate_input).unwrap();
+
+        assert_eq!(result.schema_version, 3);
+        assert_eq!(result.comparison_v2.changed_occurrences.len(), 1);
+        assert!(result.structural_bindings.is_empty());
+        assert!(result.structural_changes.is_empty());
+        assert!(result.resolved_v2_unavailable.is_empty());
+        for kind in [
+            crate::ProfilerVariantUnavailableKindV3::BaselineProductionStructuralEvidenceMissing,
+            crate::ProfilerVariantUnavailableKindV3::CandidateProductionStructuralEvidenceMissing,
+            crate::ProfilerVariantUnavailableKindV3::IncompleteEvidenceCannotEstablishAdditionOrRemoval,
+            crate::ProfilerVariantUnavailableKindV3::ScheduleExecution,
+            crate::ProfilerVariantUnavailableKindV3::CausalAttribution,
+        ] {
+            assert!(result.unavailable.iter().any(|fact| fact.kind == kind));
+        }
+    }
+
+    #[test]
     fn foreign_pc_selector_and_overlapping_characteristic_fail_closed() {
         let valid = pc_treatment(CorrelationFixtureV1::UniqueSource, b"schedule");
         let foreign = id(99);

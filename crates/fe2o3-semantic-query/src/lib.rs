@@ -25,6 +25,8 @@ mod profiler_variant_v1;
 pub use profiler_variant_v1::*;
 mod profiler_variant_v2;
 pub use profiler_variant_v2::*;
+mod profiler_variant_v3;
+pub use profiler_variant_v3::*;
 mod kfd_source_isa_v1;
 pub use kfd_source_isa_v1::*;
 mod distributed_overlap_v1;

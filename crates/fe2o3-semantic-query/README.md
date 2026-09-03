@@ -459,6 +459,31 @@ ranked Variant V1 co-observation is never promoted to causal attribution.
 See [`docs/profiler-variant-v2.md`](../../docs/profiler-variant-v2.md) for the
 wire inputs, bounds, rejection policy, and remaining T3 limitations.
 
+## Additive Variant V3 production KIR bridge
+
+The library-only `ProfilerVariantTreatmentInputV3` extends Variant V2 with an
+optional already-admitted production V7-to-V8 structural bridge, its exact
+Source/ISA catalog, and the corresponding production Characteristic
+projection. The comparator recomputes V2, requires every Bundle V4 dispatch KIR
+claim to match the bridge's exact V7 identity, and resolves each positive PC or
+decoded-ATT occurrence through the bridge's exact function/block/operation and
+catalog queries. It accepts one unique catalog record only and binds the V7,
+neutral/target V8, source-map, artifact, structural, catalog, correlation, and
+semantic-map identities in the result.
+
+Complete Characteristic input is re-admitted against producer evidence.
+Partial input can contribute only a uniquely catalog-matched positive
+structural occurrence and remains typed incomplete. Structural changes are
+positive co-observations, not causality, schedule execution, superiority, or
+complete add/remove deltas. The API grants no execution or collection
+authority.
+
+There is intentionally no `variant-v3-jsonl` mode yet. Canonical bridge and
+catalog bytes decode to inert claims and cannot be promoted to admitted
+production evidence by a read-only service. See
+[`docs/profiler-variant-v3.md`](../../docs/profiler-variant-v3.md) for the trust
+boundary and exact behavior.
+
 ## Distributed-overlap extension
 
 `AgentProfilerDistributedOverlapServiceV1` and
