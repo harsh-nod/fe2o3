@@ -30564,9 +30564,7 @@ mod tests {
         .unwrap();
 
         assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
-        assert!(summaries.is_exact_empty_deterministic_scalar(
-            SemanticFunctionIdV1::from_index(0)
-        ));
+        assert!(summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0)));
     }
 
     #[test]
