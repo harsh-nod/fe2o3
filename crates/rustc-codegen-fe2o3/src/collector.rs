@@ -2909,6 +2909,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ) {
                         continue;
                     }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_f32_is_finite_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
                     if crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                         self.tcx,
                         function.instance,
