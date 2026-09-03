@@ -2077,6 +2077,35 @@ pub(crate) fn authenticate_reviewed_safe_core_scalar_bitcast_helper_v1<'tcx>(
     )
 }
 
+/// Recognizes the pinned safe `f32::abs` wrapper while retaining its MIR so
+/// the nested exact `core::intrinsics::fabs::<f32>` call is still classified.
+pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let Some(core_lang_item) = tcx.lang_items().sized_trait() else {
+        return false;
+    };
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || instance.def_id().krate != core_lang_item.krate
+        || tcx.crate_name(core_lang_item.krate).as_str() != "core"
+        || !instance.args.is_empty()
+        || !tcx.is_mir_available(instance.def_id())
+        || tcx.def_path_str(instance.def_id()) != "core::f32::<impl f32>::abs"
+    {
+        return false;
+    }
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    signature.safety == Safety::Safe
+        && signature.abi == ExternAbi::Rust
+        && !signature.c_variadic
+        && matches!(signature.inputs(), [input] if matches!(input.kind(), TyKind::Float(FloatTy::F32)))
+        && matches!(signature.output().kind(), TyKind::Float(FloatTy::F32))
+}
+
 fn reviewed_provider_semantic_definition_from_source_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
