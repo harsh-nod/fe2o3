@@ -11930,6 +11930,30 @@ fn consume_dynamic_lds_operand_v1(
     }
 }
 
+fn consume_dynamic_lds_call_operand_v1(
+    function: &SemanticFunctionDeclV1,
+    dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
+    live: &mut BTreeMap<SemanticLocalIdV1, DynamicLdsOwnerV1>,
+    operand: &SemanticOperandV1,
+    location: SemanticMirLocationV1,
+) -> Result<Option<DynamicLdsOwnerV1>, SemanticMirErrorV1> {
+    let place = match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
+        SemanticOperandV1::Constant(_) => return Ok(None),
+    };
+    let Some((local, ty, is_whole)) = dynamic_lds_place_v1(function, dynamic_lds_types, place)
+    else {
+        return Ok(None);
+    };
+    let Some(owner) = live.remove(&local) else {
+        return invalid_dynamic_lds_linearity(location);
+    };
+    if !is_whole || owner.ty != ty {
+        return invalid_dynamic_lds_linearity(location);
+    }
+    Ok(Some(owner))
+}
+
 fn reject_dynamic_lds_rvalue_v1(
     function: &SemanticFunctionDeclV1,
     dynamic_lds_types: &BTreeSet<SemanticTypeIdV1>,
@@ -12158,7 +12182,13 @@ fn transfer_dynamic_lds_terminator_v1(
                 DynamicLdsCallRoleV1::Consumer(expected_ty) => {
                     let mut consumed = None;
                     for argument in &call.arguments {
-                        if consume_dynamic_lds_operand_v1(
+                        // Post-borrow-check rustc MIR may spell a move of a
+                        // non-Copy, no-drop value as `Copy` once its source
+                        // move semantics are no longer observable. A
+                        // recognized terminal consumer still transfers the
+                        // unique capability: removing it from the path state
+                        // rejects every later reuse and every second argument.
+                        if consume_dynamic_lds_call_operand_v1(
                             function,
                             dynamic_lds_types,
                             &mut state,
@@ -19809,6 +19839,10 @@ mod private_tests {
         SemanticOperandV1::Move(linear_place(local, LINEAR_DYNAMIC_LDS_TY))
     }
 
+    fn linear_copy(local: u32) -> SemanticOperandV1 {
+        SemanticOperandV1::Copy(linear_place(local, LINEAR_DYNAMIC_LDS_TY))
+    }
+
     fn linear_goto_block(tag: u8, target: u32) -> SemanticBasicBlockV1 {
         linear_block(
             tag,
@@ -19958,22 +19992,53 @@ mod private_tests {
     }
 
     #[test]
-    fn dynamic_lds_copy_is_rejected() {
+    fn dynamic_lds_terminal_consumer_treats_rustc_copy_as_one_transfer() {
         let request = linear_request();
         let function = linear_function(
             vec![
                 linear_producer_block(30, 1),
-                linear_consumer_block(
-                    31,
-                    vec![SemanticOperandV1::Copy(linear_place(
-                        1,
-                        LINEAR_DYNAMIC_LDS_TY,
-                    ))],
-                    2,
-                ),
+                linear_consumer_block(31, vec![linear_copy(1)], 2),
                 linear_return_block(32),
             ],
             1,
+        );
+        assert_eq!(validate_linear_function(&request, &function), Ok(()));
+    }
+
+    #[test]
+    fn dynamic_lds_terminal_consumer_copy_cannot_be_reused() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(33, 1),
+                linear_consumer_block(34, vec![linear_copy(1)], 2),
+                linear_consumer_block(35, vec![linear_move(1)], 3),
+                linear_return_block(36),
+            ],
+            1,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
+    }
+
+    #[test]
+    fn dynamic_lds_copy_assignment_is_rejected() {
+        let request = linear_request();
+        let transfer = SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                linear_place(2, LINEAR_DYNAMIC_LDS_TY),
+                SemanticRvalueV1::new(
+                    LINEAR_DYNAMIC_LDS_TY,
+                    SemanticRvalueKindV1::Use(linear_copy(1)),
+                ),
+            )),
+        );
+        let function = linear_function(
+            vec![
+                linear_producer_block(37, 1),
+                linear_block(38, vec![transfer], SemanticTerminatorKindV1::Unreachable),
+            ],
+            2,
         );
         assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
     }
@@ -19986,6 +20051,20 @@ mod private_tests {
                 linear_producer_block(40, 1),
                 linear_consumer_block(41, vec![linear_move(1), linear_move(1)], 2),
                 linear_return_block(42),
+            ],
+            1,
+        );
+        assert_linear_capability_error(validate_linear_function(&request, &function).unwrap_err());
+    }
+
+    #[test]
+    fn dynamic_lds_two_rustc_copies_in_one_call_are_rejected() {
+        let request = linear_request();
+        let function = linear_function(
+            vec![
+                linear_producer_block(43, 1),
+                linear_consumer_block(44, vec![linear_copy(1), linear_copy(1)], 2),
+                linear_return_block(45),
             ],
             1,
         );

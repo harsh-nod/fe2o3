@@ -651,22 +651,30 @@ fn persisted_artifact_kind_must_match_the_admitted_wire_identity() {
         .is_err()
     );
 
-    let bundle_binding = PersistedSimulationScheduleBindingV1::new(
+    for artifact in [
         PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
             bundle_sha256: [2; 32],
             subject_sha256: [3; 32],
         },
-        *module.identity(),
-        [1; 32],
-        1,
-        TARGET,
-        SimulationLimitsV1::default(),
-    );
-    assert!(
-        PersistedSimulationScheduleDocumentV1::new(
-            bundle_binding,
-            execution.schedule_record().unwrap().clone(),
-        )
-        .is_err()
-    );
+        PersistedSimulationScheduleArtifactV1::SimulationBundleV5 {
+            bundle_sha256: [4; 32],
+            subject_sha256: [5; 32],
+        },
+    ] {
+        let bundle_binding = PersistedSimulationScheduleBindingV1::new(
+            artifact,
+            *module.identity(),
+            [1; 32],
+            1,
+            TARGET,
+            SimulationLimitsV1::default(),
+        );
+        assert!(
+            PersistedSimulationScheduleDocumentV1::new(
+                bundle_binding,
+                execution.schedule_record().unwrap().clone(),
+            )
+            .is_err()
+        );
+    }
 }

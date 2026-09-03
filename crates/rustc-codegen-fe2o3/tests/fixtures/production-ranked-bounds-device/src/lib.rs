@@ -51,6 +51,12 @@ use fe2o3_device::sync::syncthreads;
 ))]
 use fe2o3_device::{Blocked, Index1D};
 use fe2o3_device::{DisjointSlice, kernel, thread};
+#[cfg(any(
+    feature = "workgroup_reduce_u32",
+    feature = "workgroup_reduce_i32",
+    feature = "workgroup_reduce_f32"
+))]
+use fe2o3_device::{DynamicLds, WorkgroupCollectives, WorkgroupLdsScope};
 
 #[kernel(
     typed,
@@ -81,6 +87,9 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "barrier_helper",
     feature = "device_math_sqrt",
     feature = "wave_reduce_f32",
+    feature = "workgroup_reduce_u32",
+    feature = "workgroup_reduce_i32",
+    feature = "workgroup_reduce_f32",
     feature = "typed_layout_corpus",
     feature = "aggregate_pair_struct",
     feature = "aggregate_pair_tuple",
@@ -288,6 +297,63 @@ pub fn wave_reduce_f32(value: f32, mut output: DisjointSlice<f32>) {
     let subgroup = Gfx950Subgroup::current();
     let reduced = subgroup.reduce_sum_f32::<64>(value);
     if let Some(element) = output.get_mut(lane) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 256
+    ),
+)]
+#[cfg(feature = "workgroup_reduce_u32")]
+pub fn workgroup_reduce_u32(value: u32, mut output: DisjointSlice<u32>) {
+    let mut lds_scope = WorkgroupLdsScope::current();
+    let scratch = DynamicLds::<u32>::exact_current::<64>(&mut lds_scope);
+    let context = WorkgroupCollectives::current();
+    let reduced = context.reduce_sum_portable(scratch, value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 256
+    ),
+)]
+#[cfg(feature = "workgroup_reduce_i32")]
+pub fn workgroup_reduce_i32(value: i32, mut output: DisjointSlice<i32>) {
+    let mut lds_scope = WorkgroupLdsScope::current();
+    let scratch = DynamicLds::<i32>::exact_current::<64>(&mut lds_scope);
+    let context = WorkgroupCollectives::current();
+    let reduced = context.reduce_sum_portable(scratch, value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 256
+    ),
+)]
+#[cfg(feature = "workgroup_reduce_f32")]
+pub fn workgroup_reduce_f32(value: f32, mut output: DisjointSlice<f32>) {
+    let mut lds_scope = WorkgroupLdsScope::current();
+    let scratch = DynamicLds::<f32>::exact_current::<64>(&mut lds_scope);
+    let context = WorkgroupCollectives::current();
+    let reduced = context.reduce_sum_portable(scratch, value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = reduced;
     }
 }

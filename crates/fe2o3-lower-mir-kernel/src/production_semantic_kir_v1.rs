@@ -4120,11 +4120,16 @@ fn neutral_workgroup_recipe_contracts_v1(
         else {
             continue;
         };
-        let [
-            context_argument,
-            SemanticOperandV1::Move(dynamic_place),
-            value,
-        ] = call.arguments()
+        let [context_argument, dynamic_argument, value] = call.arguments() else {
+            return Err(
+                ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch {
+                    semantic_block: consumer_block as u32,
+                    semantic_effect_ordinal: 0,
+                },
+            );
+        };
+        let (SemanticOperandV1::Copy(dynamic_place) | SemanticOperandV1::Move(dynamic_place)) =
+            dynamic_argument
         else {
             return Err(
                 ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch {
@@ -8818,10 +8823,10 @@ fn direct_scalar_helper_plan_v1(
     }
     let result_types = match abi.return_value().mode() {
         SemanticAbiPassModeV1::Ignore
-            if matches!(
-                types[abi.source_output_type().index() as usize].shape(),
-                SemanticTypeShapeV1::Unit
-            ) =>
+            if types[abi.source_output_type().index() as usize]
+                .layout()
+                .size_bytes()
+                == Some(0) =>
         {
             Vec::new()
         }
@@ -8833,7 +8838,7 @@ fn direct_scalar_helper_plan_v1(
                 function_id.index(),
                 None,
                 None,
-                "helper return is not unit or one direct scalar",
+                "helper return is not one ignored zero-sized value or one direct scalar",
             ));
         }
     };
@@ -14764,12 +14769,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ..
             } => {
                 self.require_call_argument_count(block, call, 1)?;
-                let SemanticOperandV1::Move(scope_place) = &call.arguments()[0] else {
+                // Post-borrow-check rustc MIR may reclassify this final use of
+                // a non-Copy authority reference as `Copy`. Taking its local
+                // binding below still consumes the compiler-issued authority.
+                let (SemanticOperandV1::Copy(scope_place) | SemanticOperandV1::Move(scope_place)) =
+                    &call.arguments()[0]
+                else {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
                         None,
-                        "exact LDS scope authority must be moved exactly once",
+                        "exact LDS scope authority must be transferred exactly once",
                     ));
                 };
                 if !scope_place.projections().is_empty() {
@@ -20625,7 +20635,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "target-neutral workgroup reduction lacks compiler-issued collective authority",
             ));
         }
-        let SemanticOperandV1::Move(dynamic_lds_place) = &call.arguments()[1] else {
+        // Semantic MIR linearity has already authenticated this as the sole
+        // path-local transfer. rustc may spell that final use as `Copy` after
+        // borrow checking because DynamicLds has no destructor.
+        let (SemanticOperandV1::Copy(dynamic_lds_place)
+        | SemanticOperandV1::Move(dynamic_lds_place)) = &call.arguments()[1]
+        else {
             return Err(unsupported(
                 0,
                 Some(block.index()),

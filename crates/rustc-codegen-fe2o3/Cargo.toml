@@ -51,6 +51,7 @@ fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-host.workspace = true
 fe2o3-kir-sim-cli.workspace = true
+fe2o3-kir-sim.workspace = true
 fe2o3-runtime.workspace = true
 fe2o3-sim-differential.workspace = true
 fe2o3-sim-runtime.workspace = true

@@ -1843,6 +1843,171 @@ fn scalar_or_checked_carrier_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticT
         || checked_scalar_carrier_type_v1(types, ty).is_some()
 }
 
+fn zero_sized_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    fn visit(
+        types: &[SemanticTypeDeclV1],
+        ty: SemanticTypeIdV1,
+        visiting: &mut BTreeSet<SemanticTypeIdV1>,
+        admitted: &mut BTreeSet<SemanticTypeIdV1>,
+    ) -> bool {
+        if admitted.contains(&ty) {
+            return true;
+        }
+        if !visiting.insert(ty) {
+            return false;
+        }
+        let Some(declaration) = types.get(ty.index() as usize) else {
+            return false;
+        };
+        if declaration.layout().size_bytes() != Some(0) {
+            return false;
+        }
+        let pointer_free = match declaration.shape() {
+            SemanticTypeShapeV1::Unit | SemanticTypeShapeV1::Never => true,
+            SemanticTypeShapeV1::Array { element, .. } => {
+                visit(types, *element, visiting, admitted)
+            }
+            SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => fields
+                .fields()
+                .iter()
+                .copied()
+                .all(|field| visit(types, field, visiting, admitted)),
+            SemanticTypeShapeV1::Scalar(_)
+            | SemanticTypeShapeV1::ValidityScalar(_)
+            | SemanticTypeShapeV1::Pointer(_)
+            | SemanticTypeShapeV1::Slice { .. }
+            | SemanticTypeShapeV1::Enum { .. }
+            | SemanticTypeShapeV1::Union(_)
+            | SemanticTypeShapeV1::FunctionPointer { .. }
+            | SemanticTypeShapeV1::Opaque => false,
+        };
+        visiting.remove(&ty);
+        if pointer_free {
+            admitted.insert(ty);
+        }
+        pointer_free
+    }
+
+    visit(types, ty, &mut BTreeSet::new(), &mut BTreeSet::new())
+}
+
+fn zero_sized_defined_callable_place_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
+    Ok(place.projections().is_empty()
+        && zero_sized_defined_callable_type_v1(types, place.ty())
+        && function
+            .locals()
+            .get(place.local().index() as usize)
+            .is_some_and(|local| local.ty() == place.ty()))
+}
+
+fn zero_sized_defined_callable_operand_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    operand: &SemanticOperandV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+            zero_sized_defined_callable_place_v1(types, function, place, work)
+        }
+        SemanticOperandV1::Constant(constant) => {
+            Ok(zero_sized_defined_callable_type_v1(types, constant.ty())
+                && matches!(constant.value(), SemanticConstantValueV1::ZeroSized))
+        }
+    }
+}
+
+fn zero_sized_defined_callable_statement_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match statement.kind() {
+        SemanticStatementKindV1::Assign(assignment) => {
+            if !zero_sized_defined_callable_place_v1(
+                types,
+                function,
+                assignment.destination(),
+                work,
+            )? || !zero_sized_defined_callable_type_v1(types, assignment.value().result_type())
+            {
+                return Ok(false);
+            }
+            match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => {
+                    zero_sized_defined_callable_operand_v1(types, function, operand, work)
+                }
+                SemanticRvalueKindV1::Aggregate(aggregate) => {
+                    for operand in aggregate.operands() {
+                        if !zero_sized_defined_callable_operand_v1(types, function, operand, work)?
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+                SemanticRvalueKindV1::Unary { .. }
+                | SemanticRvalueKindV1::Binary { .. }
+                | SemanticRvalueKindV1::CheckedBinary(_)
+                | SemanticRvalueKindV1::UncheckedBinary(_)
+                | SemanticRvalueKindV1::Cast { .. }
+                | SemanticRvalueKindV1::Borrow { .. }
+                | SemanticRvalueKindV1::AddressOf { .. }
+                | SemanticRvalueKindV1::Length(_)
+                | SemanticRvalueKindV1::Discriminant(_)
+                | SemanticRvalueKindV1::Load(_) => Ok(false),
+            }
+        }
+        SemanticStatementKindV1::StorageLive(local)
+        | SemanticStatementKindV1::StorageDead(local) => Ok(function
+            .locals()
+            .get(local.index() as usize)
+            .is_some_and(|local| zero_sized_defined_callable_type_v1(types, local.ty()))),
+        SemanticStatementKindV1::Nop => Ok(true),
+        SemanticStatementKindV1::Store(_)
+        | SemanticStatementKindV1::AtomicRmw(_)
+        | SemanticStatementKindV1::AtomicCompareExchange(_)
+        | SemanticStatementKindV1::SetDiscriminant { .. }
+        | SemanticStatementKindV1::Deinitialize(_)
+        | SemanticStatementKindV1::Assume(_) => Ok(false),
+    }
+}
+
+fn zero_sized_direct_defined_callable_abi_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> bool {
+    let abi = function.abi();
+    !abi.c_variadic()
+        && abi.hidden_arguments().is_empty()
+        && abi.arguments().iter().all(|argument| {
+            let value = argument.value();
+            zero_sized_defined_callable_type_v1(types, value.source_ty())
+                && value.adjusted().is_none()
+                && value.pointee_override().is_none()
+                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
+        })
+        && zero_sized_defined_callable_type_v1(types, abi.return_value().source_ty())
+        && abi.return_value().adjusted().is_none()
+        && abi.return_value().pointee_override().is_none()
+        && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+        && abi
+            .source_input_types()
+            .iter()
+            .copied()
+            .all(|ty| zero_sized_defined_callable_type_v1(types, ty))
+        && zero_sized_defined_callable_type_v1(types, abi.source_output_type())
+}
+
 fn scalar_direct_abi_value_v1(
     types: &[SemanticTypeDeclV1],
     value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
@@ -2265,14 +2430,20 @@ fn direct_defined_callable_summary_v1(
     work: &mut usize,
 ) -> Result<DefinedCallableDirectSummaryV1, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1 + function.locals().len())?;
-    let base_eligible = scalar_direct_defined_callable_abi_v1(types, function)
+    let scalar_base_eligible = scalar_direct_defined_callable_abi_v1(types, function)
         && function
             .locals()
             .iter()
             .all(|local| scalar_or_checked_carrier_type_v1(types, local.ty()));
+    let zero_sized_base_eligible = zero_sized_direct_defined_callable_abi_v1(types, function)
+        && function
+            .locals()
+            .iter()
+            .all(|local| zero_sized_defined_callable_type_v1(types, local.ty()));
+    let base_eligible = scalar_base_eligible || zero_sized_base_eligible;
     let mut empty_eligible = base_eligible;
-    let mut deterministic_scalar_eligible = base_eligible;
-    let assert_proofs = if base_eligible
+    let mut deterministic_scalar_eligible = scalar_base_eligible;
+    let assert_proofs = if scalar_base_eligible
         && function.blocks().iter().any(|block| {
             matches!(
                 block.terminator().kind(),
@@ -2289,27 +2460,40 @@ fn direct_defined_callable_summary_v1(
     for (block_index, block) in function.blocks().iter().enumerate() {
         charge_defined_callable_summary_work_v1(work, 1)?;
         for statement in block.statements() {
-            let statement_eligible =
-                scalar_defined_callable_statement_v1(types, function, statement, work)?;
+            let statement_eligible = if scalar_base_eligible {
+                scalar_defined_callable_statement_v1(types, function, statement, work)?
+            } else {
+                zero_sized_defined_callable_statement_v1(types, function, statement, work)?
+            };
             empty_eligible &= statement_eligible;
             deterministic_scalar_eligible &=
                 statement_eligible && deterministic_scalar_defined_callable_statement_v1(statement);
         }
-        let terminator_eligible = scalar_defined_callable_terminator_v1(
-            types,
-            function,
-            function_count,
-            callables,
-            assert_proofs
-                .as_deref()
-                .and_then(|proved| proved.get(block_index))
-                .copied()
-                .unwrap_or(false),
-            block.terminator().kind(),
-            &mut callees,
-            call_edges,
-            work,
-        )?;
+        let terminator_eligible = if scalar_base_eligible {
+            scalar_defined_callable_terminator_v1(
+                types,
+                function,
+                function_count,
+                callables,
+                assert_proofs
+                    .as_deref()
+                    .and_then(|proved| proved.get(block_index))
+                    .copied()
+                    .unwrap_or(false),
+                block.terminator().kind(),
+                &mut callees,
+                call_edges,
+                work,
+            )?
+        } else {
+            charge_defined_callable_summary_work_v1(work, 1)?;
+            matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Goto(_)
+                    | SemanticTerminatorKindV1::Return
+                    | SemanticTerminatorKindV1::Unreachable
+            )
+        };
         empty_eligible &= terminator_eligible;
         deterministic_scalar_eligible &= terminator_eligible;
     }
@@ -6187,9 +6371,15 @@ fn project_generated_terminator_effects_v1(
                 "target-neutral reduction argument arity changed",
             ));
         };
-        let SemanticOperandV1::Move(dynamic_place) = dynamic_argument else {
+        // The semantic linearity pass has already authenticated exactly one
+        // path-local transfer into this terminal consumer. Post-borrow-check
+        // rustc MIR may encode that transfer as `Copy` for a non-Copy,
+        // no-drop value when move semantics are no longer observable.
+        let (SemanticOperandV1::Copy(dynamic_place) | SemanticOperandV1::Move(dynamic_place)) =
+            dynamic_argument
+        else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "target-neutral reduction must move its affine DynamicLds authority",
+                "target-neutral reduction must transfer its affine DynamicLds authority",
             ));
         };
         if !is_exact_shared_reference_to_v1(types, context_argument.ty(), *context)
@@ -6266,7 +6456,8 @@ fn project_generated_terminator_effects_v1(
             || *producer_element_storage != *element_storage
             || !matches!(
                 producer_call.arguments(),
-                [SemanticOperandV1::Move(place)] if place.projections().is_empty()
+                [SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)]
+                    if place.projections().is_empty()
             )
             || *producer_block == consumer_block
             || !dominance.block_dominates(*producer_block, consumer_block)?
@@ -20391,6 +20582,77 @@ mod tests {
         ]
     }
 
+    fn zero_sized_summary_helper_v1(
+        tag: u8,
+        blocks: Vec<SemanticBasicBlockV1>,
+    ) -> SemanticFunctionDeclV1 {
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            Vec::new(),
+            SemanticAbiValueV1::new(NEUTRAL_LDS_SCOPE_TYPE, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(tag.wrapping_add(1))),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag.wrapping_add(2))),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag.wrapping_add(3))),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(4))),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(5))),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![
+                local(
+                    tag.wrapping_add(6),
+                    NEUTRAL_LDS_SCOPE_TYPE,
+                    SemanticLocalRoleV1::Return,
+                ),
+                local(
+                    tag.wrapping_add(7),
+                    NEUTRAL_UNIT_TYPE,
+                    SemanticLocalRoleV1::Temporary,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
+    fn exact_zero_sized_summary_helper_v1(tag: u8) -> SemanticFunctionDeclV1 {
+        zero_sized_summary_helper_v1(
+            tag,
+            vec![block(
+                tag,
+                vec![statement(SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(
+                        neutral_test_place_v1(0, NEUTRAL_LDS_SCOPE_TYPE),
+                        SemanticRvalueV1::new(
+                            NEUTRAL_LDS_SCOPE_TYPE,
+                            SemanticRvalueKindV1::Aggregate(
+                                SemanticAggregateRvalueV1::new(
+                                    SemanticAggregateKindV1::Aggregate,
+                                    vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                        NEUTRAL_UNIT_TYPE,
+                                        SemanticConstantValueV1::ZeroSized,
+                                    ))],
+                                )
+                                .unwrap(),
+                            ),
+                        ),
+                    ),
+                ))],
+                SemanticTerminatorKindV1::Return,
+            )],
+        )
+    }
+
     fn neutral_plain_direct_abi_value_v1(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
         SemanticAbiValueV1::new(
             ty,
@@ -20541,7 +20803,7 @@ mod tests {
                 vec![scope_borrow],
                 neutral_test_call_v1(
                     1,
-                    vec![SemanticOperandV1::Move(neutral_test_place_v1(
+                    vec![SemanticOperandV1::Copy(neutral_test_place_v1(
                         2,
                         NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
                     ))],
@@ -20565,7 +20827,9 @@ mod tests {
                             5,
                             NEUTRAL_CONTEXT_REFERENCE_TYPE,
                         )),
-                        SemanticOperandV1::Move(neutral_test_place_v1(3, NEUTRAL_DYNAMIC_LDS_TYPE)),
+                        // Match the post-borrow-check encoding produced by
+                        // ordinary Rust for this non-Copy, no-drop value.
+                        SemanticOperandV1::Copy(neutral_test_place_v1(3, NEUTRAL_DYNAMIC_LDS_TYPE)),
                         SemanticOperandV1::Constant(SemanticConstantV1::new(
                             NEUTRAL_ELEMENT_TYPE,
                             SemanticConstantValueV1::Scalar(
@@ -30180,6 +30444,77 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn defined_zero_sized_helper_requires_recursive_pointer_free_no_effect_body() {
+        let types = neutral_semantic_types_v1();
+        assert!(zero_sized_defined_callable_type_v1(
+            &types,
+            NEUTRAL_UNIT_TYPE
+        ));
+        assert!(zero_sized_defined_callable_type_v1(
+            &types,
+            NEUTRAL_LDS_SCOPE_TYPE
+        ));
+        for rejected in [
+            NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
+            NEUTRAL_DYNAMIC_LDS_TYPE,
+            NEUTRAL_CONTEXT_TYPE,
+            NEUTRAL_CONTEXT_REFERENCE_TYPE,
+        ] {
+            assert!(!zero_sized_defined_callable_type_v1(&types, rejected));
+        }
+
+        let callable = [SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let exact = [exact_zero_sized_summary_helper_v1(180)];
+        let summaries =
+            derive_defined_callable_empty_effect_summaries_v1(&types, &exact, &callable).unwrap();
+        assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(
+            !summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+
+        let store = statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            neutral_test_place_v1(1, NEUTRAL_UNIT_TYPE),
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                NEUTRAL_UNIT_TYPE,
+                SemanticConstantValueV1::ZeroSized,
+            )),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )));
+        let effectful = [zero_sized_summary_helper_v1(
+            190,
+            vec![block(190, vec![store], SemanticTerminatorKindV1::Return)],
+        )];
+        let summaries =
+            derive_defined_callable_empty_effect_summaries_v1(&types, &effectful, &callable)
+                .unwrap();
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            Vec::new(),
+            Some(SemanticCallDestinationV1::new(
+                neutral_test_place_v1(0, NEUTRAL_LDS_SCOPE_TYPE),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let calling = [zero_sized_summary_helper_v1(
+            200,
+            vec![
+                block(200, Vec::new(), SemanticTerminatorKindV1::Call(call)),
+                block(201, Vec::new(), SemanticTerminatorKindV1::Return),
+            ],
+        )];
+        let summaries =
+            derive_defined_callable_empty_effect_summaries_v1(&types, &calling, &callable).unwrap();
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
     }
 
     #[test]

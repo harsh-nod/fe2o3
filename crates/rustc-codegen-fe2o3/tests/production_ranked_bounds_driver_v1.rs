@@ -858,6 +858,562 @@ fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
     fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, backend_module).unwrap();
 }
 
+struct ScalarSliceRuntimeCaseV1<'a> {
+    kernel_name: &'a str,
+    signature: [u8; 32],
+    scalar_slot: u32,
+    scalar_bits: [u8; 4],
+    output_pointer_slot: u32,
+    output_length_slot: u32,
+    explicit_kernarg_bytes: u32,
+    expected_bits: [u8; 4],
+}
+
+fn execute_scalar_slice_bundle_v5_through_sim_runtime(
+    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV5,
+    case: ScalarSliceRuntimeCaseV1<'_>,
+) {
+    use fe2o3_runtime::RuntimeBackendV1 as _;
+
+    let mut explicit_kernarg = vec![0; case.explicit_kernarg_bytes as usize];
+    let scalar_slot = case.scalar_slot as usize;
+    explicit_kernarg[scalar_slot..scalar_slot + 4].copy_from_slice(&case.scalar_bits);
+    let output_length_slot = case.output_length_slot as usize;
+    explicit_kernarg[output_length_slot..output_length_slot + 8]
+        .copy_from_slice(&64_u64.to_le_bytes());
+
+    let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xc3; 32]).unwrap();
+    assert!(!backend.uses_gpu());
+    assert!(!backend.evidence().hardware);
+    assert!(!backend.evidence().performance_prediction);
+    let stream = backend.create_stream_v1(1).unwrap();
+    let allocation = backend
+        .allocate_v1(
+            1,
+            fe2o3_runtime::RuntimeMemoryKindV1::HostVisible,
+            64 * 4,
+            4,
+        )
+        .unwrap();
+    backend
+        .write_allocation_v1(allocation, 0, &[0; 64 * 4])
+        .unwrap();
+    let module = backend.load_module_v1(1, bundle.canonical_bytes()).unwrap();
+    let kernel = backend
+        .resolve_kernel_v1(module, case.kernel_name, case.signature)
+        .unwrap();
+    let bindings = [fe2o3_runtime::BackendBindingV1 {
+        region: fe2o3_runtime::BackendMemoryRegionV1 {
+            allocation,
+            access: fe2o3_runtime::RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 64 * 4,
+        },
+        kernarg_byte_offset: case.output_pointer_slot,
+    }];
+    let submission = backend
+        .submit_v1(fe2o3_runtime::BackendLaunchV1 {
+            stream,
+            kernel,
+            explicit_kernarg: &explicit_kernarg,
+            bindings: &bindings,
+            dependencies: &[],
+            geometry: fe2o3_runtime::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        backend
+            .wait_v1(
+                submission,
+                std::time::Instant::now() + std::time::Duration::from_secs(10),
+            )
+            .unwrap(),
+        fe2o3_runtime::BackendPollV1::Succeeded
+    );
+    let mut output = vec![0; 64 * 4];
+    backend
+        .read_allocation_v1(allocation, 0, &mut output)
+        .unwrap();
+    assert!(
+        output
+            .chunks_exact(4)
+            .all(|bytes| bytes == case.expected_bits.as_slice())
+    );
+    backend.release_submission_v1(submission).unwrap();
+    backend.destroy_stream_v1(stream).unwrap();
+    backend.unload_module_v1(module).unwrap();
+    backend.release_allocation_v1(allocation).unwrap();
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
+    use fe2o3_kernel_ir::{
+        AddressSpace, MemoryOrdering, OperationKind, SemanticKirComponentRepresentationV2,
+        SynchronizationScope, WorkgroupMemoryExtent,
+    };
+    use fe2o3_kir_sim::{PersistedSimulationScheduleDocumentV1, SimulationScheduleRequestV1};
+
+    let target = ScratchTarget::new();
+    let debug_target = target.path().join("workgroup-reduce-debug-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production workgroup reduction integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+
+    let cases = [
+        (
+            "workgroup_reduce_u32",
+            "u32",
+            2_u32.to_le_bytes(),
+            128_u32.to_le_bytes(),
+        ),
+        (
+            "workgroup_reduce_i32",
+            "i32",
+            (-3_i32).to_le_bytes(),
+            (-192_i32).to_le_bytes(),
+        ),
+        (
+            "workgroup_reduce_f32",
+            "f32",
+            1.5_f32.to_bits().to_le_bytes(),
+            96.0_f32.to_bits().to_le_bytes(),
+        ),
+    ];
+    let mut first_bundle_path = None;
+    let mut first_request_path = None;
+    let mut first_schedule_path = None;
+
+    for (case_index, (feature, scalar_name, scalar_bits, expected_bits)) in
+        cases.into_iter().enumerate()
+    {
+        let bundle_path = target.path().join(format!("{feature}-v5.fe2sim"));
+        let result = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &bundle_path,
+                &target.path().join(format!("{feature}-export-target")),
+                Some(5),
+                feature,
+            ),
+            "export ordinary attributed Rust workgroup reduction as Bundle V5",
+        );
+        assert!(
+            result.status.success()
+                && result.stderr.contains("production KIR V8")
+                && result.stderr.contains("exact same-module KIR V10")
+                && result.stderr.contains("authority false"),
+            "{feature} V5 export failed or overclaimed authority:\n{}",
+            result.stderr
+        );
+
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV5::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bundle.production_kir_identity().version(), 8);
+        assert_eq!(bundle.target(), "gfx942:xnack-");
+        assert!(!bundle.authenticates_compiler_execution());
+        assert!(!bundle.grants_compiler_authority());
+        assert!(!bundle.grants_hardware_authority());
+        assert!(!bundle.grants_load_authority());
+        assert!(!bundle.grants_launch_authority());
+
+        let (_, module) =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
+                bundle.canonical_kir_v10().to_vec(),
+            )
+            .unwrap();
+        let kernel = module
+            .kernels
+            .iter()
+            .find(|kernel| kernel.id.as_str() == feature)
+            .unwrap();
+        let function = module.function(&kernel.entry).unwrap();
+        let body = function.body.as_ref().unwrap();
+        assert!(
+            module
+                .functions
+                .iter()
+                .filter(|function| function.body.is_some())
+                .count()
+                >= 2,
+            "the ordinary source must retain the reviewed WorkgroupLdsScope constructor"
+        );
+        let operations = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|operation| matches!(
+                    operation.kind,
+                    OperationKind::WorkgroupMemory(ref memory)
+                        if memory.extent == WorkgroupMemoryExtent::Static(64)
+                            && memory.element
+                                == fe2o3_kernel_ir::Type::Scalar(match scalar_name {
+                                    "u32" => fe2o3_kernel_ir::ScalarType::U32,
+                                    "i32" => fe2o3_kernel_ir::ScalarType::I32,
+                                    "f32" => fe2o3_kernel_ir::ScalarType::F32,
+                                    _ => unreachable!(),
+                                })
+                ))
+                .count(),
+            1
+        );
+        let barriers = operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::WorkgroupBarrier(barrier) => Some(barrier),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(barriers.len(), 14);
+        assert!(barriers.iter().all(|barrier| {
+            barrier.memory_scope == SynchronizationScope::Workgroup
+                && barrier.semantics.ordering == MemoryOrdering::AcquireRelease
+                && barrier.semantics.address_spaces.len() == 1
+                && barrier
+                    .semantics
+                    .address_spaces
+                    .contains(&AddressSpace::Workgroup)
+                && barrier.convergence.scope() == SynchronizationScope::Workgroup
+        }));
+        assert!(operations.iter().any(|operation| matches!(
+            operation.kind,
+            OperationKind::Load { access, .. }
+                if access.address_space == AddressSpace::Workgroup && access.alignment == 4
+        )));
+        assert!(operations.iter().any(|operation| matches!(
+            operation.kind,
+            OperationKind::Store { access, .. }
+                if access.address_space == AddressSpace::Workgroup && access.alignment == 4
+        )));
+
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV5::from_canonical_json_bytes(
+            bundle.aggregate_storage_map(),
+        )
+        .unwrap();
+        assert_eq!(
+            aggregate.bundle_subject_identity(),
+            bundle.subject_identity()
+        );
+        assert_eq!(aggregate.canonical_kir_version(), 10);
+        let [kernel_map] = aggregate.kernels() else {
+            panic!("compiler must emit one exact workgroup reduction storage map")
+        };
+        let [scalar_argument, output_argument] = kernel_map.arguments() else {
+            panic!("workgroup reduction must retain scalar and output arguments")
+        };
+        let [scalar_component] = scalar_argument.storage().components().unwrap() else {
+            panic!("scalar argument must retain one exact component")
+        };
+        let [output_component] = output_argument.storage().components().unwrap() else {
+            panic!("output argument must retain one exact region component")
+        };
+        assert_eq!(
+            scalar_component.representation(),
+            SemanticKirComponentRepresentationV2::ScalarValue
+        );
+        assert_eq!(scalar_component.value_slot().byte_width(), 4);
+        assert_eq!(
+            output_component.representation(),
+            SemanticKirComponentRepresentationV2::RegionSlice
+        );
+        assert_eq!(output_component.value_slot().byte_width(), 8);
+        assert_eq!(output_component.metadata_slot().unwrap().byte_width(), 8);
+
+        let request_path = target.path().join(format!("{feature}-request.json"));
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec(&json!({
+                "schema": "fe2o3-simulation-request-v1",
+                "kernel": feature,
+                "grid": [64, 1, 1],
+                "workgroup": [64, 1, 1],
+                "arguments": [
+                    {
+                        "kind": "scalar",
+                        "type": scalar_name,
+                        "bits": format!("0x{:08x}", u32::from_le_bytes(scalar_bits)),
+                    },
+                    {
+                        "kind": "buffer",
+                        "element": scalar_name,
+                        "access": "read_write",
+                        "alignment": 4,
+                        "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                    },
+                ],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let admitted =
+            fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle_path, &request_path)
+                .unwrap();
+        assert_eq!(
+            admitted.input().simulation_bundle_subject(),
+            Some(*bundle.subject_identity())
+        );
+        let canonical = admitted
+            .input()
+            .module
+            .simulate_scheduled(
+                &admitted.input().request,
+                admitted.input().simulation_target(),
+                admitted.input().simulation_limits,
+                SimulationScheduleRequestV1::RecordCanonical {
+                    max_decisions: 100_000,
+                },
+            )
+            .unwrap();
+        let seeded = admitted
+            .input()
+            .module
+            .simulate_scheduled(
+                &admitted.input().request,
+                admitted.input().simulation_target(),
+                admitted.input().simulation_limits,
+                SimulationScheduleRequestV1::RecordSeeded {
+                    seed: 0xc300 + case_index as u64,
+                    max_decisions: 100_000,
+                },
+            )
+            .unwrap();
+        for execution in [&canonical, &seeded] {
+            assert_eq!(execution.invocations_executed(), 64);
+            assert_eq!(execution.workgroups_visited(), 1);
+            assert!(execution.dynamic_workgroup_memory().is_none());
+            let output = execution.buffer(1).unwrap().bytes();
+            assert!(
+                output
+                    .chunks_exact(4)
+                    .all(|bytes| bytes == expected_bits.as_slice()),
+                "{feature} produced unexpected scalar words: {:?}",
+                output
+                    .chunks_exact(4)
+                    .take(8)
+                    .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_ne!(canonical.schedule(), seeded.schedule());
+        let record = seeded.schedule_record().unwrap().clone();
+        let replay = admitted
+            .input()
+            .module
+            .simulate_scheduled(
+                &admitted.input().request,
+                admitted.input().simulation_target(),
+                admitted.input().simulation_limits,
+                SimulationScheduleRequestV1::Replay(&record),
+            )
+            .unwrap();
+        assert_eq!(
+            replay.schedule_transcript_identity(),
+            seeded.schedule_transcript_identity()
+        );
+        assert!(
+            replay
+                .buffer(1)
+                .unwrap()
+                .bytes()
+                .chunks_exact(4)
+                .all(|bytes| bytes == expected_bits.as_slice())
+        );
+
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let signature = *semantic.functions()[kernel_map.semantic_root() as usize]
+            .abi()
+            .identity()
+            .as_bytes();
+        execute_scalar_slice_bundle_v5_through_sim_runtime(
+            &bundle,
+            ScalarSliceRuntimeCaseV1 {
+                kernel_name: feature,
+                signature,
+                scalar_slot: scalar_component.value_slot().byte_offset(),
+                scalar_bits,
+                output_pointer_slot: output_component.value_slot().byte_offset(),
+                output_length_slot: output_component.metadata_slot().unwrap().byte_offset(),
+                explicit_kernarg_bytes: kernel_map.explicit_kernarg_bytes(),
+                expected_bits,
+            },
+        );
+
+        let mut debugger = Command::new(debug_target.join("debug/fe2o3-debug"));
+        debugger
+            .args(["sim", "--bundle-v5"])
+            .arg(&bundle_path)
+            .arg("--request")
+            .arg(&request_path)
+            .args(["--protocol", "jsonl", "--wave-width", "64"]);
+        let schedule_path = target.path().join(format!("{feature}-schedule.json"));
+        let schedule_bytes = PersistedSimulationScheduleDocumentV1::encode_record(
+            admitted.input().persisted_schedule_binding(),
+            &record,
+        )
+        .unwrap();
+        let schedule =
+            PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&schedule_bytes).unwrap();
+        assert_eq!(
+            schedule.binding().artifact(),
+            fe2o3_kir_sim::PersistedSimulationScheduleArtifactV1::SimulationBundleV5 {
+                bundle_sha256: admitted.input().simulation_bundle_identity().unwrap(),
+                subject_sha256: *bundle.subject_identity(),
+            }
+        );
+        assert_eq!(schedule.binding().kir_wire_version(), 10);
+        assert_eq!(schedule.to_canonical_bytes().unwrap(), schedule_bytes);
+        std::fs::write(&schedule_path, schedule_bytes).unwrap();
+        if case_index == 0 {
+            debugger.arg("--replay-schedule").arg(&schedule_path);
+        }
+        let mut debugger = debugger
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        debugger
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(concat!(
+                "{\"operation\":\"continue\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"max_events\":1000000}\n",
+                "{\"operation\":\"inspect_scope\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":2,\"expected_revision\":1,\"scope\":{\"level\":\"workgroup\",\"workgroup\":[0,0,0]},\"include_children\":true,\"page\":{\"limit\":128}}\n",
+                "{\"operation\":\"query_events\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":3,\"expected_revision\":1,\"filter\":{\"scope\":{\"level\":\"workgroup\",\"workgroup\":[0,0,0]},\"category\":\"memory\"},\"page\":{\"limit\":128}}\n",
+                "{\"operation\":\"query_events\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":4,\"expected_revision\":1,\"filter\":{\"scope\":{\"level\":\"workgroup\",\"workgroup\":[0,0,0]},\"category\":\"operation\"},\"page\":{\"limit\":128}}\n",
+                "{\"operation\":\"inspect_scope\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":5,\"expected_revision\":1,\"scope\":{\"level\":\"wave\",\"workgroup\":[0,0,0],\"wave\":0},\"include_children\":true,\"page\":{\"limit\":128}}\n",
+            ).as_bytes())
+            .unwrap();
+        let debugged = debugger.wait_with_output().unwrap();
+        assert!(
+            debugged.status.success(),
+            "{feature} debugger execution failed:\n{}",
+            String::from_utf8_lossy(&debugged.stderr)
+        );
+        let responses = debugged
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 5);
+        assert_eq!(responses[0]["status"], "ok");
+        assert_eq!(responses[0]["result"]["stop"]["reason"], "completed");
+        assert_eq!(responses[0]["session"]["simulated"], true);
+        assert_eq!(responses[0]["session"]["hardware_observed"], false);
+        assert_eq!(responses[0]["session"]["performance_prediction"], false);
+        assert_eq!(responses[1]["status"], "ok");
+        assert_eq!(responses[2]["status"], "ok");
+        assert_eq!(responses[3]["status"], "ok");
+        assert!(
+            !responses[1]["result"]["scopes"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !responses[2]["result"]["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !responses[3]["result"]["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(responses[4]["status"], "ok");
+        assert!(responses[4]["result"]["scopes"].as_array().unwrap().len() >= 64);
+
+        if case_index == 0 {
+            first_bundle_path = Some(bundle_path);
+            first_request_path = Some(request_path);
+            first_schedule_path = Some(schedule_path);
+        }
+    }
+
+    let wrong_roster_path = target.path().join("workgroup-reduce-wrong-roster.json");
+    let mut wrong_roster: Value =
+        serde_json::from_slice(&std::fs::read(first_request_path.as_ref().unwrap()).unwrap())
+            .unwrap();
+    wrong_roster["workgroup"] = json!([32, 1, 1]);
+    std::fs::write(
+        &wrong_roster_path,
+        serde_json::to_vec(&wrong_roster).unwrap(),
+    )
+    .unwrap();
+    let wrong_roster = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(
+        first_bundle_path.as_ref().unwrap(),
+        &wrong_roster_path,
+    )
+    .unwrap();
+    let error = wrong_roster
+        .input()
+        .module
+        .simulate(
+            &wrong_roster.input().request,
+            wrong_roster.input().simulation_target(),
+            wrong_roster.input().simulation_limits,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_kir_sim::SimulationErrorV1::Preflight(
+            fe2o3_kir_sim::SimulationPreflightErrorV1::WorkgroupMismatch {
+                expected: [64, 1, 1],
+                actual: [32, 1, 1],
+            }
+        )
+    ));
+
+    let substituted = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["sim", "--bundle-v5"])
+        .arg(target.path().join("workgroup_reduce_i32-v5.fe2sim"))
+        .arg("--request")
+        .arg(target.path().join("workgroup_reduce_i32-request.json"))
+        .arg("--replay-schedule")
+        .arg(first_schedule_path.unwrap())
+        .args(["--protocol", "jsonl", "--wave-width", "64"])
+        .output()
+        .unwrap();
+    assert!(!substituted.status.success());
+    let error: Value = serde_json::from_slice(&substituted.stderr).unwrap();
+    assert_eq!(error["stage"], "input");
+    assert_eq!(error["code"], "schedule_binding_mismatch");
+}
+
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
