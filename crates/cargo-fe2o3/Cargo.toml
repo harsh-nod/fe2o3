@@ -81,6 +81,10 @@ name = "fe2o3-rustc-wrapper"
 path = "src/bin/fe2o3-rustc-wrapper.rs"
 
 [[bin]]
+name = "fe2o3-engineering-lld-proxy"
+path = "src/bin/fe2o3-engineering-lld-proxy.rs"
+
+[[bin]]
 name = "fe2o3-worker-v3-hsaco-fixture"
 path = "tests/fixtures/worker_v3_hsaco_fixture.rs"
 test = false
