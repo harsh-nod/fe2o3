@@ -28,6 +28,15 @@ inspect this V2 metadata. See the production tests
 `ordinary_kernel_sources_export_and_query_exact_v2_source_variables` and
 `v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1`.
 
+`--bundle-version 5` selects an independent self-contained envelope rather
+than nesting or changing V1-V4. V5 binds exact production KIR V8 or V9 bytes,
+an exact structural same-module KIR V10 re-encoding, Source Map V2, semantic
+MIR, and both storage maps. V8/V9 normalization must round-trip through its
+original encoder byte-for-byte. Any version-specific or lossy drift rejects
+export or admission. The ordinary-Rust gfx950 f32 wave collective path is the
+first production V9 case on this route. Production lowering does not yet emit
+V10-only memory intrinsics, so they remain typed producer-unavailable.
+
 The command requires the repository's pinned nightly toolchain, its `rust-src`
 component, and the AMDGPU Rust target. `--crate` is rustc's crate name, which
 normally replaces package-name hyphens with underscores. Arguments after `--`
@@ -45,8 +54,9 @@ admitted rustc collection
   -> semantic MIR owner
   -> ranked generic checks
   -> target-neutral KIR lowering
-  -> exact verified KIR V7 projection
-  -> simulation bundle
+  -> exact verified KIR V7 projection (Bundle V1-V4)
+     or exact same-module KIR V10 encoding (Bundle V5)
+  -> authority-free simulation bundle
 ```
 
 The exporter owns a semantic extraction Rust flag profile. It preserves the
@@ -63,7 +73,7 @@ linking, loading, or launch. It is not a protected publication occurrence. The
 output is created new with mode `0600`; an existing path, including a symlink,
 is rejected.
 
-Both bundle versions are content-bound, authority-free simulation inputs.
+Every bundle version is a content-bound, authority-free simulation input.
 Source Map V2 does not authenticate compiler execution or establish source
 refinement, proof, artifact, hardware, load, launch, or performance authority.
 
@@ -83,9 +93,13 @@ fe2o3-debug sim \
   --protocol jsonl
 ```
 
+For Bundle V5, use `--bundle-v5` in both commands. That spelling is a distinct
+admission route and does not reinterpret `--bundle` or raw `--kir-v7`.
+
 Both commands use the existing hardened regular-file boundary, reject
 oversize/change/substitution, strictly decode and revalidate the complete
-bundle, map its exact target, and admit only its embedded verified KIR V7. They
+bundle, map its exact target, and admit only its embedded verified KIR version:
+V7 for legacy bundles and V10 for Bundle V5. They
 do not recompile, re-lower, load, launch, or fall back to a different route.
 `--bundle` is mutually exclusive with raw `--kir-v7`.
 
@@ -166,6 +180,11 @@ the gfx950 attention surface. Simulator bundle V1 projects the already-lowered
 V8 module through the frozen V7 encoder. If any semantic field cannot round
 trip through V7, export fails. V9 is rejected with a typed diagnostic; it is
 never silently downgraded.
+
+Bundle V5 instead retains the exact V8/V9 production identity and embeds its
+exact verified V10 same-module encoding. Its independent header and section
+identities bind the target, ABI, source lineage, source map, semantic MIR, and
+storage correspondence. V1-V4 canonical bytes and decoders remain unchanged.
 
 The bundle reserves a separately bounded `fe2o3-debug-source-map-v1` payload
 and exposes a non-circular simulation bundle subject identity for that map to

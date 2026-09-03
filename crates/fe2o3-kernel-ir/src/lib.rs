@@ -32,6 +32,10 @@
 //! [`VerifiedSimulationBundleV4`] is an additive aggregate-materialization
 //! envelope. It retains the complete V3 bytes and binds a separately versioned
 //! one-to-many semantic-component storage map without changing any earlier wire.
+//! [`VerifiedSimulationBundleV5`] is an independently self-contained envelope
+//! binding exact production KIR V8 or V9 to an exact same-module KIR V10
+//! execution encoding and the matching debug and storage metadata. It changes
+//! no V1-V4 bytes and grants no compiler, load, launch, or hardware authority.
 //!
 //! [`SemanticDebugMapDocumentV1`] is a separate, finalized-artifact-bound sidecar for exact
 //! bidirectional source/MIR/KIR/schedule/LLVM/ISA correlation. It represents optimization shape
@@ -68,6 +72,7 @@ mod simulation_bundle_v1;
 mod simulation_bundle_v2;
 mod simulation_bundle_v3;
 mod simulation_bundle_v4;
+mod simulation_bundle_v5;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -115,6 +120,7 @@ pub use simulation_bundle_v1::*;
 pub use simulation_bundle_v2::*;
 pub use simulation_bundle_v3::*;
 pub use simulation_bundle_v4::*;
+pub use simulation_bundle_v5::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;

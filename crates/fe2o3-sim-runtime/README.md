@@ -1,9 +1,10 @@
 # fe2o3-sim-runtime
 
 `fe2o3-sim-runtime` is an explicitly selected, no-GPU implementation of
-`fe2o3_runtime::RuntimeBackendV1`. It executes exact admitted `.fe2sim` V3 or
-V4 Kernel IR through `fe2o3-virtual-runtime`; it never probes for or falls back
-to GPU execution.
+`fe2o3_runtime::RuntimeBackendV1`. It executes exact admitted `.fe2sim` V3,
+V4, or V5 Kernel IR through `fe2o3-virtual-runtime`; it never probes for or
+falls back to GPU execution. V5 revalidates an exact production V8/V9 to
+same-module V10 bridge and admits the V10 execution bytes directly.
 
 The backend reports `hardware = false` and `performance_prediction = false`.
 Its results are deterministic semantic-simulation evidence within the admitted
@@ -32,9 +33,14 @@ discriminants, inactive-payload poison, region metadata, and physical slot
 bounds without reading padding or host pointer bytes. This grants semantic CPU
 simulation only, not compiler-execution, KFD, or GPU launch authority.
 
-Embedded pointers, adjusted, cast, or indirect ABIs, ambiguous storage,
-unsupported wrapper regions, and layouts without exact slots fail typed
-admission. For a kernel with exactly one reachable canonical
+An owned RegionSlice wrapper is admitted only when retained compiler facts show
+the exact ordinary three-field pointer/usize/ZST layout, initialized pointer and
+integer scalar-pair ABI, raw mutable pointer evidence, whole-value component
+correspondence, ownership/access, and canonical pointer/extent slots. Structural
+lookalikes, reordered fields or slots, and ownership/access substitutions fail
+typed admission. Other embedded pointers, adjusted, cast, or indirect ABIs,
+ambiguous storage, unsupported wrapper regions, and layouts without exact slots
+also fail typed admission. For a kernel with exactly one reachable canonical
 dynamic LDS declaration, the normal launch geometry's `dynamic_shared_bytes`
 is propagated as the explicit simulator byte extent, including zero. A nonzero
 extent supplied to a kernel without such a declaration fails typed preflight

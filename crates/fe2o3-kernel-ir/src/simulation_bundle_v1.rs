@@ -893,7 +893,7 @@ fn subject_identity(
     digest.finalize().into()
 }
 
-fn kernel_abi_identity(module: &Module) -> Result<[u8; 32], SimulationBundleErrorV1> {
+pub(crate) fn kernel_abi_identity(module: &Module) -> Result<[u8; 32], SimulationBundleErrorV1> {
     let mut digest = domain_hasher(KERNEL_ABI_IDENTITY_DOMAIN_V1);
     let count = u32::try_from(module.kernels.len())
         .map_err(|_| SimulationBundleErrorV1::KernelCountOverflow)?;

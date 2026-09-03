@@ -163,9 +163,11 @@ milestones are retained in the [project status archive](docs/project-status.md).
   MI300X `gfx942:xnack-` profile. Other AMD targets are not implied.
 - An ordinary external project cannot yet compile and dispatch a general Rust
   kernel through one supported public command.
-- The simulator accepts defined KIR V7/V9/V10 semantic subsets. The current
-  ordinary-Rust bundle and raw CLI routes still carry V7. Unsupported types and
-  operations fail closed; CPU results are not timing or performance predictions.
+- The simulator accepts defined KIR V7/V9/V10 semantic subsets. Legacy bundles
+  and raw CLI inputs carry V7; explicit authority-free Bundle V5 carries an
+  exact production V8/V9 module re-encoded losslessly as V10. Unsupported types
+  and operations fail closed; CPU results are not timing or performance
+  predictions.
 - CPU logical waves model semantic collectives and visualization partitions,
   not physical GPU wave scheduling or `EXEC` state.
 - Live KFD debugging does not yet expose general wave/lane PC, registers,

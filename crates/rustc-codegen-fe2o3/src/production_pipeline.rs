@@ -51,6 +51,7 @@ pub(crate) enum ProductionPipelineError {
     SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
     SimulationBundleV3(fe2o3_kernel_ir::SimulationBundleErrorV3),
     SimulationBundleV4(fe2o3_kernel_ir::SimulationBundleErrorV4),
+    SimulationBundleV5(fe2o3_kernel_ir::SimulationBundleErrorV5),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
@@ -128,6 +129,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationBundleV4(error) => write!(
                 formatter,
                 "production compilation simulation bundle V4 failed: {error}"
+            ),
+            Self::SimulationBundleV5(error) => write!(
+                formatter,
+                "production compilation simulation bundle V5 failed: {error}"
             ),
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
@@ -235,6 +240,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationBundleV2(error) => Some(error),
             Self::SimulationBundleV3(error) => Some(error),
             Self::SimulationBundleV4(error) => Some(error),
+            Self::SimulationBundleV5(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
             Self::SemanticDebugMap(error) => Some(error),
             Self::SemanticDebugFragment(error) => Some(error),
@@ -570,8 +576,11 @@ impl TargetNeutralProductionCompilation {
     ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
         let (lowered, bindings, prepared) =
             self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
-        let debug_map =
-            compiler_debug_source_map_v1(&lowered, &bindings.debug_source_files, &prepared)?;
+        let debug_map = compiler_debug_source_map_v1(
+            &lowered,
+            &bindings.debug_source_files,
+            prepared.debug_source_map_binding(),
+        )?;
         prepared
             .finalize_with_source_map(debug_map)
             .map_err(ProductionPipelineError::SimulationBundle)
@@ -589,7 +598,7 @@ impl TargetNeutralProductionCompilation {
             &bindings.debug_source_files,
             &bindings.debug_source_scopes,
             &bindings.debug_source_variables,
-            &prepared,
+            prepared.debug_source_map_binding(),
         )?;
         let inner = prepared
             .finalize_without_source_map()
@@ -617,7 +626,7 @@ impl TargetNeutralProductionCompilation {
             &bindings.debug_source_files,
             &bindings.debug_source_scopes,
             &bindings.debug_source_variables,
-            &prepared,
+            prepared.debug_source_map_binding(),
         )?;
         let inner_v1 = prepared
             .finalize_without_source_map()
@@ -637,7 +646,12 @@ impl TargetNeutralProductionCompilation {
         let storage_map = compiler_semantic_storage_map_v1(
             &lowered,
             &bindings.debug_source_variables,
-            &inner_v2,
+            SemanticStorageMapBindingInputV1 {
+                container_identity: *inner_v2.identity().as_bytes(),
+                subject_identity: *inner_v2.subject_identity(),
+                canonical_kir_digest: *inner_v2.canonical_kir_v7_identity().digest(),
+                canonical_kir_bytes: inner_v2.canonical_kir_v7_identity().canonical_length(),
+            },
         )?;
         let bundle =
             fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner_v2, semantic_mir, storage_map)
@@ -659,9 +673,126 @@ impl TargetNeutralProductionCompilation {
     ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV4, ProductionPipelineError> {
         let (lowered, _, inner) =
             self.into_prepared_simulation_bundle_v3(compiler_execution_binding)?;
-        let storage_map = compiler_semantic_storage_map_v2(&lowered, &inner)?;
+        let storage_map = compiler_semantic_storage_map_v2(&lowered, *inner.identity().as_bytes())?;
         fe2o3_kernel_ir::VerifiedSimulationBundleV4::new(inner, storage_map)
             .map_err(ProductionPipelineError::SimulationBundleV4)
+    }
+
+    fn into_simulation_bundle_v5(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV5, ProductionPipelineError> {
+        let Self {
+            lowered,
+            ranked_verification: _,
+            bindings,
+        } = self;
+        lowered
+            .verify_equivalence()
+            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
+        if bindings
+            .rustc_preflight_plan
+            .rustc_identity_inventory_sha256()
+            != bindings.rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        let production = lowered.canonical_kernel_ir_identity();
+        let production = fe2o3_kernel_ir::SimulationProductionKirIdentityV5::new(
+            match production.version() {
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
+            },
+            *production.digest(),
+            production.canonical_length(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        let canonical_v10 =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_module(lowered.module().clone())
+                .map_err(|error| {
+                    ProductionPipelineError::SimulationBundleV5(
+                        fe2o3_kernel_ir::SimulationBundleErrorV5::CanonicalKir(error),
+                    )
+                })?;
+        let inventory_receipt =
+            fe2o3_compiler_lineage::InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+                bindings.rustc_identity_inventory.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let preflight_receipt =
+            fe2o3_compiler_lineage::InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+                bindings.rustc_preflight_plan.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let inventory_identity = inventory_receipt.identity();
+        let preflight_identity = preflight_receipt.identity();
+        let lineage = fe2o3_kernel_ir::SimulationSourceLineageV1::new(
+            *inventory_identity.sha256(),
+            inventory_identity.byte_len(),
+            *preflight_identity.sha256(),
+            preflight_identity.byte_len(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundle)?;
+        let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV5::new(
+            lineage,
+            production,
+            bindings.rustc_target.profile().device_target(),
+            canonical_v10,
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        let debug_map = compiler_debug_source_map_v2(
+            &lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            prepared.debug_source_map_binding(),
+        )?;
+        let semantic = lowered.semantic().semantic();
+        let mut semantic_mir = Vec::new();
+        semantic_mir
+            .try_reserve_exact(semantic.canonical_encoding().len())
+            .map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic MIR V5 bundle allocation failed",
+                )
+            })?;
+        semantic_mir.extend_from_slice(semantic.canonical_encoding());
+        let subject = *prepared.subject_identity();
+        let kir_digest = *prepared.canonical_kir_v10_digest();
+        let kir_bytes = prepared.canonical_kir_v10_length();
+        let legacy_storage = compiler_semantic_storage_map_v1(
+            &lowered,
+            &bindings.debug_source_variables,
+            SemanticStorageMapBindingInputV1 {
+                container_identity: subject,
+                subject_identity: subject,
+                canonical_kir_digest: kir_digest,
+                canonical_kir_bytes: kir_bytes,
+            },
+        )?;
+        let storage = fe2o3_kernel_ir::SemanticStorageMapV5::new(
+            subject,
+            semantic.wire_version().as_u16(),
+            *semantic.semantic_sha256().as_bytes(),
+            semantic.canonical_encoding().len() as u64,
+            *semantic.target_layout_identity().as_bytes(),
+            kir_digest,
+            kir_bytes,
+            legacy_storage.kernels().to_vec(),
+            legacy_storage.variables().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        let legacy_aggregate = compiler_semantic_storage_map_v2(&lowered, subject)?;
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV5::new(
+            subject,
+            kir_digest,
+            kir_bytes,
+            legacy_aggregate.kernels().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        prepared
+            .finalize(debug_map, semantic_mir, storage, aggregate)
+            .map_err(ProductionPipelineError::SimulationBundleV5)
     }
 
     fn admit_formal_memory(
@@ -1394,7 +1525,7 @@ fn compiler_production_semantic_debug_source_map_v1(
         captured_files,
         captured_scopes,
         captured_variables,
-        &prepared,
+        prepared.debug_source_map_binding(),
     )?;
     Ok((source_map, canonical_kir))
 }
@@ -1402,7 +1533,7 @@ fn compiler_production_semantic_debug_source_map_v1(
 fn compiler_debug_source_map_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
-    prepared: &fe2o3_kernel_ir::PreparedSimulationBundleV1,
+    binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV1, ProductionPipelineError> {
     let (function_ordinal, body) = sole_debug_map_body_v1(lowered.module())?;
     let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
@@ -1548,7 +1679,7 @@ fn compiler_debug_source_map_v1(
         })
         .collect::<Result<Vec<_>, _>>()?;
     fe2o3_kernel_ir::DebugSourceMapDocumentV1::new(
-        prepared.debug_source_map_binding(),
+        binding,
         files,
         sites,
         eliminated.into_iter().collect(),
@@ -1561,9 +1692,9 @@ fn compiler_debug_source_map_v2(
     captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
     captured_scopes: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2],
     captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
-    prepared: &fe2o3_kernel_ir::PreparedSimulationBundleV1,
+    binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV2, ProductionPipelineError> {
-    let base = compiler_debug_source_map_v1(lowered, captured_files, prepared)?;
+    let base = compiler_debug_source_map_v1(lowered, captured_files, binding)?;
     let (function_ordinal, _) = sole_debug_map_body_v1(lowered.module())?;
     let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
         ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -1759,10 +1890,18 @@ fn compiler_debug_source_map_v2(
     .map_err(ProductionPipelineError::SimulationDebugMapV2)
 }
 
+#[derive(Clone, Copy)]
+struct SemanticStorageMapBindingInputV1 {
+    container_identity: [u8; 32],
+    subject_identity: [u8; 32],
+    canonical_kir_digest: [u8; 32],
+    canonical_kir_bytes: u64,
+}
+
 fn compiler_semantic_storage_map_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
-    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV2,
+    binding: SemanticStorageMapBindingInputV1,
 ) -> Result<fe2o3_kernel_ir::SemanticStorageMapV1, ProductionPipelineError> {
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAbiPassModeV1, SemanticLocalRoleV1, SemanticSourceArgumentOwnershipV1,
@@ -1930,16 +2069,15 @@ fn compiler_semantic_storage_map_v1(
         ));
     }
 
-    let inner = bundle.inner_v1();
     fe2o3_kernel_ir::SemanticStorageMapV1::new(
-        *bundle.identity().as_bytes(),
-        *inner.subject_identity(),
+        binding.container_identity,
+        binding.subject_identity,
         semantic.wire_version().as_u16(),
         *semantic.semantic_sha256().as_bytes(),
         semantic.canonical_encoding().len() as u64,
         *semantic.target_layout_identity().as_bytes(),
-        *inner.canonical_kir_v7_identity().digest(),
-        inner.canonical_kir_v7_identity().canonical_length(),
+        binding.canonical_kir_digest,
+        binding.canonical_kir_bytes,
         vec![fe2o3_kernel_ir::SemanticKernelStorageV1::new(
             selection.root().index(),
             selection.body().index(),
@@ -1957,7 +2095,7 @@ fn compiler_semantic_storage_map_v1(
 
 fn compiler_semantic_storage_map_v2(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
-    bundle: &fe2o3_kernel_ir::VerifiedSimulationBundleV3,
+    container_identity: [u8; 32],
 ) -> Result<fe2o3_kernel_ir::SemanticStorageMapV2, ProductionPipelineError> {
     use fe2o3_mir_model::semantic_mir_v1::{SemanticAbiPassModeV1, SemanticLocalRoleV1};
 
@@ -2198,7 +2336,7 @@ fn compiler_semantic_storage_map_v2(
         kernarg_alignment,
         arguments,
     ));
-    fe2o3_kernel_ir::SemanticStorageMapV2::new(*bundle.identity().as_bytes(), kernels)
+    fe2o3_kernel_ir::SemanticStorageMapV2::new(container_identity, kernels)
         .map_err(ProductionPipelineError::SimulationBundleV4)
 }
 
@@ -2780,6 +2918,21 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .into_simulation_bundle_v4(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
+    }
+
+    /// Emits self-contained V5 with the exact V10 re-encoding of the same
+    /// producer-owned V8/V9 module and independently bound debug/storage data.
+    /// This extraction-only path grants no compiler, artifact, load, launch,
+    /// proof, or hardware authority.
+    pub(crate) fn export_simulation_bundle_v5(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV5, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v5()
     }
 
     /// Publishes the exact production compiler module into the managed,
