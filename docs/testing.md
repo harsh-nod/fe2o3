@@ -29,6 +29,8 @@ The issue #216 virtual-runtime slice has focused no-GPU coverage:
 ```text
 cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
 cargo test --locked -p fe2o3-sim-differential
+cargo test --locked -p fe2o3-kernel-ir simulation_bundle_v3
+cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
 cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0
 cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-differential --all-targets -- -D warnings
@@ -42,6 +44,14 @@ scalar differential command's closure and ELF. They must remain independent of
 HIP, HSA, DRM, KFD device nodes, and GPU libraries. These tests establish model
 and semantic CPU behavior only; they do not increase a hardware or parity pass
 count.
+
+The ignored V3 production test requires the pinned AMD target. It exports an
+ordinary Rust kernel through the production rustc transaction, decodes the
+exact semantic-MIR and storage-map sections, queries structured type layout and
+request-region state through `fe2o3-debug`, runs the same V3 bundle in the CPU
+debugger, and rejects a re-signed hostile target-layout substitution. This is
+source/unit evidence only. It neither adds aggregate execution semantics to
+KIR V7 nor claims GPU or compiler-authentication authority.
 
 The generic lane also runs the focused `kir-sim-capability-matrix` test before
 the broader CPU package set. It checks the stable JSON command and requires an

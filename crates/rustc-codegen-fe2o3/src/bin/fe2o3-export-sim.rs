@@ -8,6 +8,7 @@ use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 
 const OUTPUT_ENV: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
 const OUTPUT_ENV_V2: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2";
+const OUTPUT_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3";
 const CRATE_ENV: &str = "FE2O3_EXTRACT_CRATE_V1";
 const MAX_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 
@@ -92,7 +93,8 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
                 let value = match value {
                     "1" => 1,
                     "2" => 2,
-                    _ => return Err("--bundle-version must be exactly 1 or 2".to_owned()),
+                    "3" => 3,
+                    _ => return Err("--bundle-version must be exactly 1, 2, or 3".to_owned()),
                 };
                 if bundle_version.replace(value).is_some() {
                     return Err("--bundle-version may be specified only once".to_owned());
@@ -207,10 +209,10 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     let loader_path = env::join_paths([wrapper_dir, rustc_lib.as_path()])
         .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let output_env = if options.bundle_version == 2 {
-        OUTPUT_ENV_V2
-    } else {
-        OUTPUT_ENV
+    let output_env = match options.bundle_version {
+        3 => OUTPUT_ENV_V3,
+        2 => OUTPUT_ENV_V2,
+        _ => OUTPUT_ENV,
     };
     let mut command = Command::new(cargo);
     command
@@ -240,6 +242,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     command
         .env_remove(OUTPUT_ENV)
         .env_remove(OUTPUT_ENV_V2)
+        .env_remove(OUTPUT_ENV_V3)
         .env(CRATE_ENV, &options.crate_name)
         .env(output_env, &options.output);
     let status = command
@@ -310,10 +313,11 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 7] {
+const fn conflicting_extraction_environment() -> [&'static str; 8] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,
+        OUTPUT_ENV_V3,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
@@ -323,7 +327,7 @@ const fn conflicting_extraction_environment() -> [&'static str; 7] {
 }
 
 fn fixed_target_rustflags(target: ProductionAmdTargetProfileV1, bundle_version: u16) -> String {
-    let debug_info = if bundle_version == 2 {
+    let debug_info = if bundle_version >= 2 {
         " -Cdebuginfo=2"
     } else {
         ""
@@ -344,7 +348,7 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
 }
 
 #[cfg(test)]
@@ -417,6 +421,10 @@ mod tests {
                 .ends_with(" -Cdebuginfo=2")
         );
         assert!(
+            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx942, 3)
+                .ends_with(" -Cdebuginfo=2")
+        );
+        assert!(
             parse(
                 vec![
                     OsString::from("--crate"),
@@ -424,7 +432,7 @@ mod tests {
                     OsString::from("--output"),
                     OsString::from("kernel.fe2sim"),
                     OsString::from("--bundle-version"),
-                    OsString::from("3"),
+                    OsString::from("4"),
                 ],
                 &env::temp_dir(),
             )

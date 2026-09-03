@@ -30,6 +30,7 @@ barrier_early_return = []
 barrier_loop = []
 barrier_helper = []
 device_math_sqrt = []
+typed_layout_corpus = []
 
 [dependencies]
 fe2o3-device.workspace = true

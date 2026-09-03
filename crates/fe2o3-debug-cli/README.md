@@ -47,6 +47,32 @@ the byte-compatible default. Neither route authenticates compiler execution,
 source refinement, or hardware behavior. The production regression is
 `ordinary_kernel_sources_export_and_query_exact_v2_source_variables`.
 
+`fe2o3-export-sim --bundle-version 3` adds independently bound exact
+production semantic-MIR bytes and a canonical semantic-storage map. The map
+joins source argument/local/type identities and ownership to exact KIR
+parameter/value identities, or records a typed `unavailable`, `ambiguous`, or
+`opaque_flattened` state. `fe2o3-debug sim --bundle-v3 ...` runs the unchanged
+deterministic debugger against its nested V2 execution/source bundle.
+
+`fe2o3-debug typed-layout --bundle-v3 KERNEL.fe2sim --request REQUEST.json`
+emits one bounded JSON object for agents and tools. It re-decodes current
+production semantic MIR, cross-checks every referenced root, body, local,
+source type, KIR function, parameter, and value, then reports rustc sizes,
+alignment, field source/memory order, explicit padding, direct/niche enum
+encoding, and variant layouts. Request arguments additionally report exact
+scalar bits or allocation-relative regions, byte initialization ranges,
+alignment, access, request-local provenance, and exact byte-range overlap for
+shared-backing arguments.
+Substituted layout, local, KIR, or source-map bindings fail closed. The query is
+observational and grants no compiler or execution authority.
+
+KIR V7 still has no by-value aggregate value type. Struct, tuple, array, and
+enum layouts can therefore be inspected when retained by an otherwise admitted
+ordinary Rust kernel, but aggregate values are not reconstructed from scalar
+names or silently flattened. Aggregate construction/execution outside the
+current production lowering remains a typed compiler rejection; exact
+parameter storage that cannot be interpreted is `opaque_flattened`.
+
 Source-variable inspection uses the separate
 `fe2o3-debug-source-variable-request-v2` schema. Callers select all variables,
 one exact stable identity, or a bounded inert name. Name lookup chooses the

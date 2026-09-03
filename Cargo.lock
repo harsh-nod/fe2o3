@@ -992,6 +992,7 @@ dependencies = [
  "fe2o3-kir-debugger",
  "fe2o3-kir-sim",
  "fe2o3-kir-sim-cli",
+ "fe2o3-mir-model",
  "fe2o3-semantic-import",
  "fe2o3-semantic-query",
  "fe2o3-semantic-trace",

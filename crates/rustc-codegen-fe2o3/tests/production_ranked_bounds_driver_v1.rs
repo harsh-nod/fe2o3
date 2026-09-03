@@ -888,6 +888,263 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        AdmittedInertSemanticMirV1, SemanticMirLimitsV1, SemanticTypeShapeV1,
+    };
+
+    let target = ScratchTarget::new();
+    let bundle_path = target.path().join("typed-layout-v3.fe2sim");
+    let result = output(
+        simulation_export_command_for_feature(
+            "gfx942",
+            &bundle_path,
+            &target.path().join("typed-layout-export-target"),
+            Some(3),
+            "typed_layout_corpus",
+        ),
+        "run production V3 typed-layout simulation-bundle extraction",
+    );
+    assert!(
+        result.status.success()
+            && result.stderr.contains("simulation bundle V3")
+            && result.stderr.contains("exact semantic MIR")
+            && result.stderr.contains("typed storage correspondence")
+            && result
+                .stderr
+                .contains("proof/artifact/compiler/hardware/load/launch authority false"),
+        "production V3 export failed or overclaimed authority:\n{}",
+        result.stderr,
+    );
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV3::from_canonical_bytes(
+        std::fs::read(&bundle_path).expect("read production V3 bundle"),
+    )
+    .expect("decode production V3 bundle");
+    let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        bundle.semantic_mir(),
+        SemanticMirLimitsV1::default(),
+    )
+    .expect("decode exact compiler semantic MIR");
+    let shapes = semantic
+        .types()
+        .iter()
+        .map(|declaration| declaration.shape())
+        .collect::<Vec<_>>();
+    assert!(
+        shapes
+            .iter()
+            .any(|shape| matches!(shape, SemanticTypeShapeV1::Array { .. }))
+    );
+    assert!(
+        shapes
+            .iter()
+            .any(|shape| matches!(shape, SemanticTypeShapeV1::Aggregate(_)))
+    );
+    assert!(
+        shapes
+            .iter()
+            .any(|shape| matches!(shape, SemanticTypeShapeV1::Tuple(_)))
+    );
+    assert!(
+        shapes
+            .iter()
+            .any(|shape| matches!(shape, SemanticTypeShapeV1::Enum { .. }))
+    );
+    assert!(shapes.iter().any(|shape| matches!(
+        shape,
+        SemanticTypeShapeV1::Slice { .. } | SemanticTypeShapeV1::Pointer(_)
+    )));
+    let storage =
+        fe2o3_kernel_ir::SemanticStorageMapV1::from_canonical_json_bytes(bundle.storage_map())
+            .expect("decode exact compiler storage map");
+    assert_eq!(storage.kernels().len(), 1);
+    assert_eq!(storage.kernels()[0].arguments().len(), 3);
+    assert_eq!(
+        storage.target_layout_identity(),
+        semantic.target_layout_identity().as_bytes()
+    );
+    assert!(!bundle.authenticates_compiler_execution());
+    assert!(!bundle.grants_hardware_authority());
+
+    let request_path = target.path().join("typed-layout-request.json");
+    std::fs::write(
+        &request_path,
+        serde_json::to_vec(&json!({
+            "schema": "fe2o3-simulation-request-v1",
+            "kernel": "typed_layout_corpus",
+            "grid": [1, 1, 1],
+            "workgroup": [64, 1, 1],
+            "arguments": [
+                {"kind": "scalar", "type": "f32", "bits": "0x3f800000"},
+                {
+                    "kind": "buffer_view",
+                    "backing": 7,
+                    "element": "f32",
+                    "access": "read_only",
+                    "alignment": 4,
+                    "byte_offset": 0,
+                    "elements": 64,
+                },
+                {
+                    "kind": "buffer_view",
+                    "backing": 7,
+                    "element": "f32",
+                    "access": "read_write",
+                    "alignment": 4,
+                    "byte_offset": 64 * 4,
+                    "elements": 64,
+                },
+            ],
+            "shared_buffers": [{
+                "id": 7,
+                "element": "f32",
+                "access": "read_write",
+                "alignment": 4,
+                "bytes": format!("0x{}", "00".repeat(128 * 4)),
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let debug_target = target.path().join("debug-cli-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production V3 typed-layout integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+    let typed = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["typed-layout", "--bundle-v3"])
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request_path)
+        .output()
+        .expect("query compiler-produced V3 typed layouts");
+    assert!(
+        typed.status.success(),
+        "typed-layout query rejected compiler output:\n{}",
+        String::from_utf8_lossy(&typed.stderr)
+    );
+    let response: Value = serde_json::from_slice(&typed.stdout).unwrap();
+    assert_eq!(response["schema"], "fe2o3-debug-typed-layout-v1");
+    assert_eq!(response["status"], "ok");
+    assert!(response["types"].as_array().is_some_and(|types| {
+        ["array", "struct", "tuple", "enum"]
+            .into_iter()
+            .all(|kind| types.iter().any(|ty| ty["shape"]["kind"] == kind))
+    }));
+    assert_eq!(
+        response["arguments"][0]["observation"]["status"],
+        "exact_scalar"
+    );
+    assert_eq!(
+        response["arguments"][1]["observation"]["status"],
+        "exact_region"
+    );
+    assert_eq!(
+        response["arguments"][2]["observation"]["status"],
+        "exact_region"
+    );
+    assert_eq!(
+        response["arguments"][2]["observation"]["byte_length"],
+        64 * 4
+    );
+    assert_eq!(
+        response["arguments"][1]["observation"]["same_backing"],
+        json!([{"argument": 2, "overlap_byte_range": null}])
+    );
+    assert_eq!(
+        response["arguments"][2]["observation"]["same_backing"],
+        json!([{"argument": 1, "overlap_byte_range": null}])
+    );
+    assert_eq!(
+        response["arguments"][2]["observation"]["provenance"]["backing"],
+        7
+    );
+    assert_eq!(
+        response["arguments"][2]["observation"]["initialized_ranges"],
+        json!([[0, 64 * 4]])
+    );
+    assert_eq!(response["authority"]["compiler"], false);
+    assert_eq!(response["authority"]["hardware"], false);
+
+    let mut simulator = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["sim", "--bundle-v3"])
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request_path)
+        .args(["--protocol", "jsonl"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start debugger simulator on compiler-produced V3 bundle");
+    simulator
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"direction\":\"forward\",\"granularity\":\"operation\",\"count\":1}\n")
+        .unwrap();
+    let simulated = simulator.wait_with_output().unwrap();
+    assert!(
+        simulated.status.success(),
+        "V3 debugger simulation failed:\n{}",
+        String::from_utf8_lossy(&simulated.stderr)
+    );
+    let simulated_response: Value = serde_json::from_slice(&simulated.stdout).unwrap();
+    assert_eq!(simulated_response["status"], "ok");
+    assert_eq!(simulated_response["session"]["simulated"], true);
+    assert_eq!(simulated_response["session"]["hardware_observed"], false);
+
+    let semantic_bytes = bundle.semantic_mir().to_vec();
+    let inner = bundle.into_inner_v2();
+    let hostile_map = fe2o3_kernel_ir::SemanticStorageMapV1::new(
+        *storage.bundle_v2_identity(),
+        *storage.bundle_subject_identity(),
+        storage.semantic_mir_version(),
+        *storage.semantic_mir_sha256(),
+        storage.semantic_mir_bytes(),
+        [0x55; 32],
+        *storage.canonical_kir_v7_sha256(),
+        storage.canonical_kir_v7_bytes(),
+        storage.kernels().to_vec(),
+        storage.variables().to_vec(),
+    )
+    .unwrap();
+    let hostile =
+        fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner, semantic_bytes, hostile_map)
+            .expect("envelope alone does not claim semantic layout interpretation");
+    let hostile_path = target.path().join("typed-layout-hostile.fe2sim");
+    std::fs::write(&hostile_path, hostile.canonical_bytes()).unwrap();
+    let rejected = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["typed-layout", "--bundle-v3"])
+        .arg(&hostile_path)
+        .arg("--request")
+        .arg(&request_path)
+        .output()
+        .expect("query hostile layout substitution");
+    assert!(!rejected.status.success());
+    let failure: Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(failure["code"], "semantic_correspondence_rejected");
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1() {
     let target = ScratchTarget::new();
     let default_path = target.path().join("debug-long-name-default-v1.fe2sim");
@@ -1031,6 +1288,7 @@ fn simulation_export_command_for_feature(
         .env_remove("FE2O3_EXTRACT_CRATE_V1")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2")
+        .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3")
         .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
         .env_remove("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1")
         .env_remove("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1")

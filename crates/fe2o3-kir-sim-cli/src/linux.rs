@@ -11,8 +11,9 @@ use std::process::ExitCode;
 
 use fe2o3_kernel_ir::{
     AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, MAX_SIMULATION_BUNDLE_BYTES_V2,
-    ScalarType, VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7,
-    VerifiedSimulationBundleV1, VerifiedSimulationBundleV2, WaveWidth,
+    MAX_SIMULATION_BUNDLE_BYTES_V3, ScalarType, VerifiedCanonicalKernelIrErrorV7,
+    VerifiedCanonicalKernelIrV7, VerifiedSimulationBundleV1, VerifiedSimulationBundleV2,
+    VerifiedSimulationBundleV3, WaveWidth,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -1078,6 +1079,19 @@ pub(crate) fn load_debug_simulation_bundle_v2(
     })
 }
 
+pub(crate) fn load_debug_simulation_bundle_v3(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV3, crate::SimulationInputErrorV1> {
+    load_admitted_bundle_v3(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
 pub(crate) fn load_debug_sidecar_v1(
     path: OsString,
     maximum: usize,
@@ -1517,6 +1531,59 @@ fn load_admitted_bundle_v2(
         ));
     }
     Ok(crate::AdmittedSimulationBundleInputV2 { input, bundle })
+}
+
+fn load_admitted_bundle_v3(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV3, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V3,
+        InputCode::SimulationBundle,
+        "simulation bundle V3",
+    )?;
+    let bundle = VerifiedSimulationBundleV3::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V3 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V3 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let inner = bundle.inner_v2().inner_v1();
+    let target = simulation_target_for_bundle(inner.target())?;
+    let input = load_admitted_input(
+        inner.canonical_kir_v7(),
+        request,
+        None,
+        target,
+        Some((*inner.identity().as_bytes(), *inner.subject_identity())),
+        Some(bundle_evidence_v1(inner, 3, *bundle.identity().as_bytes())),
+    )?;
+    if input.kir_sha256 != *inner.canonical_kir_v7_identity().digest()
+        || u64::try_from(inner.canonical_kir_v7().len()).ok()
+            != Some(inner.canonical_kir_v7_identity().canonical_length())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle V3 KIR identity changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV3 { input, bundle })
 }
 
 fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {
