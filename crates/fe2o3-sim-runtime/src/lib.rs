@@ -2,21 +2,23 @@
 #![doc = include_str!("../README.md")]
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V4,
-    OperationKind, ScalarType, SemanticArgumentOwnershipV1, SemanticComponentStorageBindingV2,
-    SemanticKernargSlotV2, SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
-    SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
-    SemanticStorageMapV2, SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7,
-    VerifiedSimulationBundleV3, VerifiedSimulationBundleV4,
+    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V5,
+    OperationKind, ScalarType, SemanticAggregateStorageMapV5, SemanticArgumentOwnershipV1,
+    SemanticComponentStorageBindingV2, SemanticKernargSlotV2, SemanticKernelStorageV2,
+    SemanticKirComponentRepresentationV2, SemanticKirStorageRepresentationV1,
+    SemanticStorageBindingV1, SemanticStorageMapV1, SemanticStorageMapV2, SemanticStorageMapV5,
+    SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10,
+    VerifiedSimulationBundleV3, VerifiedSimulationBundleV4, VerifiedSimulationBundleV5,
 };
 use fe2o3_kir_sim::{AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentV1, SemanticAbiPassModeV1,
-    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticEnumEncodingV1, SemanticLocalRoleV1,
+    SemanticAbiPointeeKindV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
+    SemanticBackendScalarV1, SemanticEnumEncodingV1, SemanticFieldsShapeV1, SemanticLocalRoleV1,
     SemanticMirLimitsV1, SemanticMutabilityV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
-    SemanticRustcVariantsV1, SemanticScalarTypeV1, SemanticScalarValidityRangeV1,
-    SemanticSourceArgumentOwnershipV1, SemanticTypeDeclV1, SemanticTypeIdV1,
-    SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+    SemanticRustTypeKindV1, SemanticRustcVariantsV1, SemanticScalarTypeV1,
+    SemanticScalarValidityRangeV1, SemanticSourceArgumentOwnershipV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
 };
 use fe2o3_runtime::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
@@ -674,10 +676,10 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         if device != DEVICE_HANDLE {
             return Err(rejected_handle("device"));
         }
-        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V4 {
+        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V5 {
             return Err(RuntimeBackendFailureV1::Rejected(
                 SimRuntimeBackendErrorV1::InvalidBundle(
-                    "bundle exceeds the V4 byte limit".to_owned(),
+                    "bundle exceeds the V5 byte limit".to_owned(),
                 ),
             ));
         }
@@ -977,59 +979,124 @@ struct ParsedBundleV1 {
     kernels: HashMap<String, KernelRecordV1>,
 }
 
+enum ParsedCanonicalKirV1 {
+    V7(VerifiedCanonicalKernelIrV7),
+    V10(VerifiedCanonicalKernelIrV10),
+}
+
 fn parse_bundle(
     image: &[u8],
     target: VirtualTargetProfileV1,
 ) -> Result<ParsedBundleV1, SimRuntimeBackendErrorV1> {
-    let (bundle, component_storage) = if VerifiedSimulationBundleV4::has_magic_prefix(image) {
-        let bundle = VerifiedSimulationBundleV4::from_canonical_bytes(copy_bundle_image_v2(image)?)
+    let (semantic, storage_kernels, component_kernels, canonical, module) =
+        if VerifiedSimulationBundleV5::has_magic_prefix(image) {
+            let bundle =
+                VerifiedSimulationBundleV5::from_canonical_bytes(copy_bundle_image_v2(image)?)
+                    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            bundle
+                .revalidate()
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if bundle.target() != target.label() {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "bundle target {} does not match backend target {}",
+                    bundle.target(),
+                    target.label()
+                )));
+            }
+            let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                bundle.semantic_mir(),
+                SemanticMirLimitsV1::default(),
+            )
             .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
-        bundle
-            .revalidate()
+            let storage = SemanticStorageMapV5::from_canonical_json_bytes(bundle.storage_map())
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            let component = SemanticAggregateStorageMapV5::from_canonical_json_bytes(
+                bundle.aggregate_storage_map(),
+            )
             .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
-        let storage = SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
+            if semantic.wire_version().as_u16() != storage.semantic_mir_version()
+                || semantic.target_layout_identity().as_bytes() != storage.target_layout_identity()
+            {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                    "semantic MIR and V5 storage-map target identity differ".to_owned(),
+                ));
+            }
+            let (canonical, module) =
+                VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
+                    copy_bundle_image_v2(bundle.canonical_kir_v10())?,
+                )
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            (
+                semantic,
+                storage.kernels().to_vec(),
+                Some(component.kernels().to_vec()),
+                ParsedCanonicalKirV1::V10(canonical),
+                module,
+            )
+        } else {
+            let (bundle, component_storage) = if VerifiedSimulationBundleV4::has_magic_prefix(image)
+            {
+                let bundle =
+                    VerifiedSimulationBundleV4::from_canonical_bytes(copy_bundle_image_v2(image)?)
+                        .map_err(|error| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(error.to_string())
+                        })?;
+                bundle
+                    .revalidate()
+                    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+                let storage = SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
+                    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+                (bundle.into_inner_v3(), Some(storage))
+            } else {
+                (
+                    VerifiedSimulationBundleV3::from_canonical_bytes(copy_bundle_image_v2(image)?)
+                        .map_err(|error| {
+                            SimRuntimeBackendErrorV1::InvalidBundle(error.to_string())
+                        })?,
+                    None,
+                )
+            };
+            bundle
+                .revalidate()
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if bundle.inner_v2().inner_v1().target() != target.label() {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "bundle target {} does not match backend target {}",
+                    bundle.inner_v2().inner_v1().target(),
+                    target.label()
+                )));
+            }
+            let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                bundle.semantic_mir(),
+                SemanticMirLimitsV1::default(),
+            )
             .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
-        (bundle.into_inner_v3(), Some(storage))
-    } else {
-        (
-            VerifiedSimulationBundleV3::from_canonical_bytes(copy_bundle_image_v2(image)?)
-                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?,
-            None,
-        )
-    };
-    bundle
-        .revalidate()
-        .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
-    if bundle.inner_v2().inner_v1().target() != target.label() {
-        return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
-            "bundle target {} does not match backend target {}",
-            bundle.inner_v2().inner_v1().target(),
-            target.label()
-        )));
-    }
-    let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
-        bundle.semantic_mir(),
-        SemanticMirLimitsV1::default(),
-    )
-    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
-    let storage = SemanticStorageMapV1::from_canonical_json_bytes(bundle.storage_map())
-        .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
-    if semantic.wire_version().as_u16() != storage.semantic_mir_version()
-        || semantic.target_layout_identity().as_bytes() != storage.target_layout_identity()
-    {
-        return Err(SimRuntimeBackendErrorV1::InvalidBundle(
-            "semantic MIR and storage-map target identity differ".to_owned(),
-        ));
-    }
-    let (canonical, module) = VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(
-        copy_bundle_image_v2(bundle.inner_v2().inner_v1().canonical_kir_v7())?,
-    )
-    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            let storage = SemanticStorageMapV1::from_canonical_json_bytes(bundle.storage_map())
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if semantic.wire_version().as_u16() != storage.semantic_mir_version()
+                || semantic.target_layout_identity().as_bytes() != storage.target_layout_identity()
+            {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                    "semantic MIR and storage-map target identity differ".to_owned(),
+                ));
+            }
+            let (canonical, module) =
+                VerifiedCanonicalKernelIrV7::from_canonical_bytes_with_module(
+                    copy_bundle_image_v2(bundle.inner_v2().inner_v1().canonical_kir_v7())?,
+                )
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            (
+                semantic,
+                storage.kernels().to_vec(),
+                component_storage.map(|storage| storage.kernels().to_vec()),
+                ParsedCanonicalKirV1::V7(canonical),
+                module,
+            )
+        };
     let mut kernels = HashMap::new();
-    for storage_kernel in storage.kernels() {
-        let component_kernel = component_storage.as_ref().map(|storage| {
+    for storage_kernel in &storage_kernels {
+        let component_kernel = component_kernels.as_ref().map(|storage| {
             storage
-                .kernels()
                 .iter()
                 .find(|kernel| kernel.semantic_root() == storage_kernel.semantic_root())
                 .ok_or_else(|| {
@@ -1192,17 +1259,25 @@ fn parse_bundle(
             "storage map does not cover every KIR kernel".to_owned(),
         ));
     }
-    if component_storage
+    if component_kernels
         .as_ref()
-        .is_some_and(|storage| storage.kernels().len() != kernels.len())
+        .is_some_and(|storage| storage.len() != kernels.len())
     {
         return Err(SimRuntimeBackendErrorV1::InvalidBundle(
             "component storage map has an extra semantic kernel".to_owned(),
         ));
     }
-    let admitted =
-        AdmittedSimulationModuleV1::admit(canonical, fe2o3_kir_sim::SimulationLimitsV1::default())
-            .map_err(|error| SimRuntimeBackendErrorV1::UnsupportedBundle(error.to_string()))?;
+    let admitted = match canonical {
+        ParsedCanonicalKirV1::V7(canonical) => AdmittedSimulationModuleV1::admit(
+            canonical,
+            fe2o3_kir_sim::SimulationLimitsV1::default(),
+        ),
+        ParsedCanonicalKirV1::V10(canonical) => AdmittedSimulationModuleV1::admit_v10(
+            canonical,
+            fe2o3_kir_sim::SimulationLimitsV1::default(),
+        ),
+    }
+    .map_err(|error| SimRuntimeBackendErrorV1::UnsupportedBundle(error.to_string()))?;
     Ok(ParsedBundleV1 { admitted, kernels })
 }
 
@@ -2098,97 +2173,157 @@ fn validate_region_component_v2(
     }
     let declaration = semantic_types
         .get(semantic_type.index() as usize)
-        .ok_or_else(|| "semantic pointer type is absent".to_owned())?;
-    let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape() else {
-        return Err("semantic source type is not an exact pointer or reference".to_owned());
-    };
-    if pointer.pointer_width_bits() != 64 {
-        return Err("semantic pointer width is not the runtime target width of 64 bits".to_owned());
-    }
-    if !matches!(pointer.address_space(), 0 | 1) {
-        return Err("semantic pointer address space is not device-global".to_owned());
-    }
-    let expected_access = match pointer.mutability() {
-        SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
-        SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
-    };
-    let ownership_matches_pointer = matches!(
-        (ownership, pointer.kind(), pointer.mutability()),
-        (
-            SemanticArgumentOwnershipV1::SharedBorrow,
-            SemanticPointerKindV1::Reference,
-            SemanticMutabilityV1::Immutable
-        ) | (
-            SemanticArgumentOwnershipV1::UniqueBorrow,
-            SemanticPointerKindV1::Reference,
-            SemanticMutabilityV1::Mutable
-        ) | (
-            SemanticArgumentOwnershipV1::RawPointer,
-            SemanticPointerKindV1::Raw,
-            _
-        ) | (
-            SemanticArgumentOwnershipV1::ExclusiveOwner,
-            SemanticPointerKindV1::Raw,
-            SemanticMutabilityV1::Mutable
-        )
-    );
-    if !ownership_matches_pointer {
-        return Err("semantic pointer kind, mutability, and source ownership disagree".to_owned());
-    }
-
-    let (semantic_element, kir_element, kir_address_space, kir_access, expected_size, mode_ok) =
-        match (component.representation(), pointer.metadata(), kir_type) {
-            (
-                SemanticKirComponentRepresentationV2::RegionPointer,
-                SemanticPointerMetadataV1::None,
-                Type::Pointer(kir),
-            ) => (
-                pointer.pointee(),
-                kir.pointee.as_ref(),
-                kir.address_space,
-                kir.access,
-                8,
-                matches!(physical.mode(), SemanticAbiPassModeV1::Direct(_)),
-            ),
-            (
-                SemanticKirComponentRepresentationV2::RegionSlice,
-                SemanticPointerMetadataV1::SliceLength,
-                Type::Slice(kir),
-            ) => {
-                let pointee = semantic_types
-                    .get(pointer.pointee().index() as usize)
-                    .ok_or_else(|| "semantic slice pointee type is absent".to_owned())?;
-                let SemanticTypeShapeV1::Slice { element } = pointee.shape() else {
-                    return Err(
-                        "slice-length pointer metadata does not reference a semantic slice"
-                            .to_owned(),
-                    );
-                };
+        .ok_or_else(|| "semantic region source type is absent".to_owned())?;
+    let (
+        semantic_element,
+        kir_element,
+        kir_address_space,
+        kir_access,
+        expected_access,
+        expected_size,
+        mode_ok,
+    ) = match declaration.shape() {
+        SemanticTypeShapeV1::Pointer(pointer) => {
+            if pointer.pointer_width_bits() != 64 {
+                return Err(
+                    "semantic pointer width is not the runtime target width of 64 bits".to_owned(),
+                );
+            }
+            if !matches!(pointer.address_space(), 0 | 1) {
+                return Err("semantic pointer address space is not device-global".to_owned());
+            }
+            let expected_access = match pointer.mutability() {
+                SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
+                SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
+            };
+            let ownership_matches_pointer = matches!(
+                (ownership, pointer.kind(), pointer.mutability()),
                 (
-                    *element,
-                    kir.element.as_ref(),
+                    SemanticArgumentOwnershipV1::SharedBorrow,
+                    SemanticPointerKindV1::Reference,
+                    SemanticMutabilityV1::Immutable
+                ) | (
+                    SemanticArgumentOwnershipV1::UniqueBorrow,
+                    SemanticPointerKindV1::Reference,
+                    SemanticMutabilityV1::Mutable
+                ) | (
+                    SemanticArgumentOwnershipV1::RawPointer,
+                    SemanticPointerKindV1::Raw,
+                    _
+                ) | (
+                    SemanticArgumentOwnershipV1::ExclusiveOwner,
+                    SemanticPointerKindV1::Raw,
+                    SemanticMutabilityV1::Mutable
+                )
+            );
+            if !ownership_matches_pointer {
+                return Err(
+                    "semantic pointer kind, mutability, and source ownership disagree".to_owned(),
+                );
+            }
+            match (component.representation(), pointer.metadata(), kir_type) {
+                (
+                    SemanticKirComponentRepresentationV2::RegionPointer,
+                    SemanticPointerMetadataV1::None,
+                    Type::Pointer(kir),
+                ) => (
+                    pointer.pointee(),
+                    kir.pointee.as_ref(),
                     kir.address_space,
                     kir.access,
-                    16,
-                    matches!(physical.mode(), SemanticAbiPassModeV1::Pair { .. }),
-                )
-            }
-            (SemanticKirComponentRepresentationV2::RegionPointer, _, _) => {
-                return Err(
+                    expected_access,
+                    8,
+                    matches!(physical.mode(), SemanticAbiPassModeV1::Direct(_)),
+                ),
+                (
+                    SemanticKirComponentRepresentationV2::RegionSlice,
+                    SemanticPointerMetadataV1::SliceLength,
+                    Type::Slice(kir),
+                ) => {
+                    let pointee = semantic_types
+                        .get(pointer.pointee().index() as usize)
+                        .ok_or_else(|| "semantic slice pointee type is absent".to_owned())?;
+                    let SemanticTypeShapeV1::Slice { element } = pointee.shape() else {
+                        return Err(
+                            "slice-length pointer metadata does not reference a semantic slice"
+                                .to_owned(),
+                        );
+                    };
+                    (
+                        *element,
+                        kir.element.as_ref(),
+                        kir.address_space,
+                        kir.access,
+                        expected_access,
+                        16,
+                        matches!(physical.mode(), SemanticAbiPassModeV1::Pair { .. }),
+                    )
+                }
+                (SemanticKirComponentRepresentationV2::RegionPointer, _, _) => {
+                    return Err(
                     "region-pointer representation disagrees with semantic metadata or KIR type"
                         .to_owned(),
                 );
+                }
+                (SemanticKirComponentRepresentationV2::RegionSlice, _, _) => {
+                    return Err(
+                        "region-slice representation disagrees with semantic metadata or KIR type"
+                            .to_owned(),
+                    );
+                }
+                (SemanticKirComponentRepresentationV2::ScalarValue, _, _) => {
+                    return Err("scalar component was dispatched as a region".to_owned());
+                }
             }
-            (SemanticKirComponentRepresentationV2::RegionSlice, _, _) => {
+        }
+        SemanticTypeShapeV1::Aggregate(fields) => {
+            let semantic_element = validate_owned_slice_wrapper_v2(
+                semantic_types,
+                declaration,
+                fields.fields(),
+                ownership,
+            )?;
+            let Type::Slice(kir) = kir_type else {
+                return Err("owned slice wrapper does not map to a KIR slice".to_owned());
+            };
+            if component.representation() != SemanticKirComponentRepresentationV2::RegionSlice {
                 return Err(
-                    "region-slice representation disagrees with semantic metadata or KIR type"
-                        .to_owned(),
+                    "owned slice wrapper requires a whole-value region-slice component".to_owned(),
                 );
             }
-            (SemanticKirComponentRepresentationV2::ScalarValue, _, _) => {
-                return Err("scalar component was dispatched as a region".to_owned());
+            let expected_access = match ownership {
+                SemanticArgumentOwnershipV1::SharedBorrow => AccessMode::ReadOnly,
+                SemanticArgumentOwnershipV1::UniqueBorrow => AccessMode::ReadWrite,
+                SemanticArgumentOwnershipV1::ExclusiveOwner => kir.access,
+                _ => {
+                    return Err(
+                        "owned slice wrapper requires shared, unique, or exclusive ownership"
+                            .to_owned(),
+                    );
+                }
+            };
+            if ownership == SemanticArgumentOwnershipV1::ExclusiveOwner
+                && !matches!(kir.access, AccessMode::ReadWrite | AccessMode::WriteOnly)
+            {
+                return Err("exclusive slice ownership requires mutable KIR access".to_owned());
             }
-        };
+            (
+                semantic_element,
+                kir.element.as_ref(),
+                kir.address_space,
+                kir.access,
+                expected_access,
+                16,
+                matches!(physical.mode(), SemanticAbiPassModeV1::Pair { .. }),
+            )
+        }
+        _ => {
+            return Err(
+                "semantic source type is neither an exact pointer nor an owned slice wrapper"
+                    .to_owned(),
+            );
+        }
+    };
     if kir_address_space != AddressSpace::Global || kir_access != expected_access {
         return Err(
             "semantic address space or mutability disagrees with the KIR region".to_owned(),
@@ -2230,6 +2365,119 @@ fn validate_region_component_v2(
         _ => return Err("region metadata slot disagrees with its representation".to_owned()),
     }
     Ok(())
+}
+
+fn validate_owned_slice_wrapper_v2(
+    semantic_types: &[SemanticTypeDeclV1],
+    declaration: &SemanticTypeDeclV1,
+    fields: &[SemanticTypeIdV1],
+    ownership: SemanticArgumentOwnershipV1,
+) -> Result<SemanticTypeIdV1, String> {
+    let [pointer_field, length_field, marker_field] = fields else {
+        return Err(
+            "owned slice wrapper must contain pointer, length, and marker fields".to_owned(),
+        );
+    };
+    let layout = declaration.layout();
+    if layout.size_bytes() != Some(16)
+        || layout.alignment_bytes() != 8
+        || layout.is_uninhabited()
+        || !matches!(
+            layout.variants(),
+            SemanticRustcVariantsV1::Single { index: 0 }
+        )
+        || declaration.rust_type_kind() != SemanticRustTypeKindV1::Ordinary
+    {
+        return Err("owned slice wrapper layout is not the exact 64-bit pair ABI".to_owned());
+    }
+    let exact_fields = matches!(
+        layout.fields(),
+        SemanticFieldsShapeV1::Arbitrary {
+            source_order_offsets_bytes,
+            memory_order_source_indices,
+        } if source_order_offsets_bytes.as_ref() == [0, 8, 16]
+            && memory_order_source_indices.as_ref() == [0, 1, 2]
+    ) && matches!(
+        layout.details(),
+        SemanticTypeLayoutDetailsV1::Aggregate(aggregate)
+            if aggregate.field_offsets() == [0, 8, 16] && aggregate.padding().is_empty()
+    );
+    let full_u64_range = SemanticScalarValidityRangeV1::new(0, u64::MAX.into());
+    let exact_backend_pair = matches!(
+        layout.backend_repr(),
+        SemanticBackendReprV1::ScalarPair {
+            first: SemanticBackendScalarV1::Initialized {
+                primitive: SemanticBackendPrimitiveV1::Pointer {
+                    address_space: 0,
+                    size_bytes: 8,
+                    alignment_bytes: 8,
+                },
+                valid_range: first_range,
+            },
+            second: SemanticBackendScalarV1::Initialized {
+                primitive: SemanticBackendPrimitiveV1::Integer {
+                    signed: false,
+                    bits: 64,
+                    alignment_bytes: 8,
+                },
+                valid_range: second_range,
+            },
+        } if *first_range == full_u64_range && *second_range == full_u64_range
+    );
+    let properties = declaration.abi_properties();
+    let exact_pointer_evidence = properties.rustc_layout_is_noundef()
+        && !properties.pass_indirectly_in_non_rustic_abis()
+        && !properties.has_unsized_foreign_tail()
+        && properties.second_pointee().is_none()
+        && properties.first_pointee().is_some_and(|pointee| {
+            pointee.kind() == SemanticAbiPointeeKindV1::Raw
+                && pointee.guaranteed_size_bytes() == 0
+                && pointee.reliable_alignment_bytes() == 1
+        });
+    if !exact_fields || !exact_backend_pair || !exact_pointer_evidence {
+        return Err("owned slice wrapper lacks exact compiler pointer-pair evidence".to_owned());
+    }
+    let pointer = semantic_types
+        .get(pointer_field.index() as usize)
+        .ok_or_else(|| "owned slice wrapper pointer field type is absent".to_owned())?;
+    let SemanticTypeShapeV1::Pointer(pointer) = pointer.shape() else {
+        return Err("owned slice wrapper first field is not a pointer".to_owned());
+    };
+    if pointer.pointer_width_bits() != 64
+        || pointer.address_space() != 0
+        || pointer.kind() != SemanticPointerKindV1::Raw
+        || pointer.mutability() != SemanticMutabilityV1::Mutable
+        || pointer.metadata() != SemanticPointerMetadataV1::None
+    {
+        return Err("owned slice wrapper pointer field contract changed".to_owned());
+    }
+    let length = semantic_types
+        .get(length_field.index() as usize)
+        .ok_or_else(|| "owned slice wrapper length field type is absent".to_owned())?;
+    if !matches!(
+        length.shape(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        })
+    ) {
+        return Err("owned slice wrapper length field is not target usize".to_owned());
+    }
+    let marker = semantic_types
+        .get(marker_field.index() as usize)
+        .ok_or_else(|| "owned slice wrapper marker field type is absent".to_owned())?;
+    if marker.layout().size_bytes() != Some(0) || marker.layout().is_uninhabited() {
+        return Err("owned slice wrapper marker field is not inhabited and zero-sized".to_owned());
+    }
+    if !matches!(
+        ownership,
+        SemanticArgumentOwnershipV1::SharedBorrow
+            | SemanticArgumentOwnershipV1::UniqueBorrow
+            | SemanticArgumentOwnershipV1::ExclusiveOwner
+    ) {
+        return Err("owned slice wrapper ownership is not borrow-checked".to_owned());
+    }
+    Ok(pointer.pointee())
 }
 
 fn physical_slot_v2(
@@ -3512,8 +3760,9 @@ mod tests {
         ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
     };
     use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiValueAttributesV1, SemanticAbiValueV1, SemanticAggregateLayoutV1,
-        SemanticAggregateTypeV1, SemanticBackendScalarV1, SemanticLayoutIdentityV1,
+        SemanticAbiPointeeInfoV1, SemanticAbiValueAttributesV1, SemanticAbiValueV1,
+        SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticBackendScalarV1,
+        SemanticLayoutIdentityV1, SemanticPointerTypeV1, SemanticTypeAbiPropertiesV1,
         SemanticTypeIdentityV1, SemanticTypeLayoutV1,
     };
 
@@ -4213,6 +4462,271 @@ mod tests {
                 bits,
             }),
         )
+    }
+
+    fn owned_region_slice_semantic_types(
+        fields: [SemanticTypeIdV1; 3],
+        pair_valid_max: Option<u64>,
+    ) -> Vec<SemanticTypeDeclV1> {
+        let element = scalar_semantic_type(0x80, 32, 4);
+        let pointer_primitive = SemanticBackendPrimitiveV1::pointer(0, 8, 8);
+        let pointer = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x81; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x82; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    pointer_primitive,
+                    SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new(
+                    SemanticTypeIdV1::from_index(0),
+                    SemanticMutabilityV1::Mutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        );
+        let length = scalar_semantic_type(0x83, 64, 8);
+        let marker = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x84; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x85; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(0),
+                1,
+                SemanticBackendReprV1::Memory { sized: true },
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Unit,
+        );
+        let backend_repr = if let Some(valid_max) = pair_valid_max {
+            SemanticBackendReprV1::scalar_pair(
+                SemanticBackendScalarV1::initialized(
+                    pointer_primitive,
+                    SemanticScalarValidityRangeV1::new(0, valid_max.into()),
+                ),
+                SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                    SemanticScalarValidityRangeV1::new(0, valid_max.into()),
+                ),
+            )
+        } else {
+            SemanticBackendReprV1::Memory { sized: true }
+        };
+        let wrapper = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x86; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x87; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(16),
+                8,
+                backend_repr,
+                false,
+                SemanticAggregateLayoutV1::new(vec![0, 8, 16], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(fields.into()).unwrap()),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false)
+                .with_rustc_layout_is_noundef(true)
+                .with_scalar_pointee_info(
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap(),
+                    ),
+                    None,
+                ),
+        );
+        vec![element, pointer, length, marker, wrapper]
+    }
+
+    fn owned_region_slice_component(
+        path: Vec<SemanticStorageProjectionV2>,
+        value_slot: SemanticKernargSlotV2,
+        metadata_slot: Option<SemanticKernargSlotV2>,
+    ) -> fe2o3_kernel_ir::SemanticKirComponentStorageV2 {
+        fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+            path,
+            0,
+            7,
+            SemanticKirComponentRepresentationV2::RegionSlice,
+            value_slot,
+            metadata_slot,
+        )
+    }
+
+    fn owned_region_slice_physical() -> SemanticAbiArgumentV1 {
+        SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+            SemanticTypeIdV1::from_index(4),
+            SemanticAbiPassModeV1::Pair {
+                first: SemanticAbiValueAttributesV1::plain(),
+                second: SemanticAbiValueAttributesV1::plain(),
+            },
+        ))
+    }
+
+    #[test]
+    fn owned_region_slice_requires_exact_compiler_pair_ownership_access_and_slots() {
+        let exact_fields = [
+            SemanticTypeIdV1::from_index(1),
+            SemanticTypeIdV1::from_index(2),
+            SemanticTypeIdV1::from_index(3),
+        ];
+        let types = owned_region_slice_semantic_types(exact_fields, Some(u64::MAX));
+        let physical = owned_region_slice_physical();
+        let component = owned_region_slice_component(
+            Vec::new(),
+            SemanticKernargSlotV2::new(0, 8, 8),
+            Some(SemanticKernargSlotV2::new(8, 8, 8)),
+        );
+        for (ownership, access) in [
+            (
+                SemanticArgumentOwnershipV1::SharedBorrow,
+                AccessMode::ReadOnly,
+            ),
+            (
+                SemanticArgumentOwnershipV1::UniqueBorrow,
+                AccessMode::ReadWrite,
+            ),
+            (
+                SemanticArgumentOwnershipV1::ExclusiveOwner,
+                AccessMode::WriteOnly,
+            ),
+        ] {
+            validate_region_component_v2(
+                &types,
+                SemanticTypeIdV1::from_index(4),
+                ownership,
+                &component,
+                &Type::slice(Type::Scalar(ScalarType::U32), AddressSpace::Global, access),
+                &physical,
+                16,
+            )
+            .unwrap();
+        }
+
+        for (ownership, access) in [
+            (SemanticArgumentOwnershipV1::ByValue, AccessMode::ReadWrite),
+            (
+                SemanticArgumentOwnershipV1::SharedBorrow,
+                AccessMode::ReadWrite,
+            ),
+            (
+                SemanticArgumentOwnershipV1::ExclusiveOwner,
+                AccessMode::ReadOnly,
+            ),
+        ] {
+            assert!(
+                validate_region_component_v2(
+                    &types,
+                    SemanticTypeIdV1::from_index(4),
+                    ownership,
+                    &component,
+                    &Type::slice(Type::Scalar(ScalarType::U32), AddressSpace::Global, access,),
+                    &physical,
+                    16,
+                )
+                .is_err()
+            );
+        }
+
+        let reordered = owned_region_slice_semantic_types(
+            [
+                SemanticTypeIdV1::from_index(2),
+                SemanticTypeIdV1::from_index(1),
+                SemanticTypeIdV1::from_index(3),
+            ],
+            Some(u64::MAX),
+        );
+        let lookalike = owned_region_slice_semantic_types(exact_fields, None);
+        let narrowed = owned_region_slice_semantic_types(exact_fields, Some(u32::MAX.into()));
+        for hostile in [&reordered, &lookalike, &narrowed] {
+            assert!(
+                validate_region_component_v2(
+                    hostile,
+                    SemanticTypeIdV1::from_index(4),
+                    SemanticArgumentOwnershipV1::ExclusiveOwner,
+                    &component,
+                    &Type::slice(
+                        Type::Scalar(ScalarType::U32),
+                        AddressSpace::Global,
+                        AccessMode::WriteOnly,
+                    ),
+                    &physical,
+                    16,
+                )
+                .is_err()
+            );
+        }
+
+        for substituted in [
+            owned_region_slice_component(
+                vec![SemanticStorageProjectionV2::Field { index: 0 }],
+                SemanticKernargSlotV2::new(0, 8, 8),
+                Some(SemanticKernargSlotV2::new(8, 8, 8)),
+            ),
+            owned_region_slice_component(
+                Vec::new(),
+                SemanticKernargSlotV2::new(0, 4, 8),
+                Some(SemanticKernargSlotV2::new(8, 8, 8)),
+            ),
+        ] {
+            assert!(
+                validate_region_component_v2(
+                    &types,
+                    SemanticTypeIdV1::from_index(4),
+                    SemanticArgumentOwnershipV1::ExclusiveOwner,
+                    &substituted,
+                    &Type::slice(
+                        Type::Scalar(ScalarType::U32),
+                        AddressSpace::Global,
+                        AccessMode::WriteOnly,
+                    ),
+                    &physical,
+                    16,
+                )
+                .is_err()
+            );
+        }
+
+        let swapped = owned_region_slice_component(
+            Vec::new(),
+            SemanticKernargSlotV2::new(8, 8, 8),
+            Some(SemanticKernargSlotV2::new(0, 8, 8)),
+        );
+        let swapped_plan = SemanticKernelStorageV2::new(
+            0,
+            0,
+            0,
+            16,
+            8,
+            vec![SemanticArgumentStorageV2::new(
+                0,
+                4,
+                0,
+                SemanticArgumentOwnershipV1::ExclusiveOwner,
+                SemanticComponentStorageBindingV2::exact(vec![swapped]),
+            )],
+        );
+        assert!(matches!(
+            validate_compiler_packing_plan_v2(
+                &swapped_plan,
+                &[Type::slice(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Global,
+                    AccessMode::WriteOnly,
+                )],
+            ),
+            Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
+                if detail.contains("physical slots")
+        ));
     }
 
     fn aggregate_component(

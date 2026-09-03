@@ -93,7 +93,7 @@ contract.
 | Hardware PC/register/wave state | Explicitly unavailable | Unavailable | Bounded by installed ROCgdb capabilities |
 | Structured failure diagnosis | Bounds/barrier classes implemented | Unavailable | Not inferred from a clean stop |
 | Agent-facing protocol | Versioned JSONL | Versioned JSONL | Bounded GDB/MI-to-JSONL adapter |
-| Simulator/direct-KFD differential | Prepared from exact Bundle V4 plus the admitted structural bridge | Sealed generated Worker V3 completion only; currently blocked on the unwired protected application verifier | Not applicable |
+| Simulator/direct-KFD differential | Prepared from exact Bundle V4 plus the admitted structural bridge; Bundle V5 is CPU-simulation custody only | Sealed generated Worker V3 completion only; currently blocked on the unwired protected application verifier | Not applicable |
 
 Logical CPU observations are never relabeled as hardware observations. Native
 paths, descriptors, addresses, and unverified declarations are not agent

@@ -84,6 +84,16 @@ Aggregate construction/execution outside the current production lowering
 remains a typed compiler rejection, and storage without exact correspondence
 remains typed unavailable.
 
+`fe2o3-export-sim --bundle-version 5` emits a separate self-contained Bundle
+V5. It binds the original production KIR V8 or V9 identity and an exact
+same-module KIR V10 encoding together with Source Map V2, semantic MIR, and
+both storage maps. `fe2o3-debug sim --bundle-v5 ...` executes that V10 custody
+directly, so compiler-produced gfx950 f32 wave collectives can use the public
+CPU debugger without a lossy V7 projection. The route grants no compiler,
+artifact, load, launch, or hardware authority and never falls back to a GPU.
+Production source lowering for V10-only memory intrinsics remains unavailable;
+the exporter reports that boundary rather than synthesizing such a kernel.
+
 Source-variable inspection uses the separate
 `fe2o3-debug-source-variable-request-v2` schema. Callers select all variables,
 one exact stable identity, or a bounded inert name. Name lookup chooses the

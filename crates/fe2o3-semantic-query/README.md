@@ -439,6 +439,26 @@ client validates it before reading claims. Stale revisions, duplicate IDs,
 noncanonical hex, manifest/raw-source substitutions, oversized input, and
 response substitutions fail closed.
 
+## Additive Variant V2 correlation service
+
+`fe2o3-profiler-service variant-v2-jsonl` preserves the Variant V1 API and
+route. It composes each exact V1 treatment with optional exact PC/source-ISA
+or decoded-ATT/source-ISA bytes and capture-local selectors. Existing
+correlation sessions revalidate the HSACO, target, code object or relation,
+Characteristic, and selector axes before V2 projects any occurrence.
+
+The response retains admitted PC sampling or ATT completeness/loss without an
+upgrade field. It pairs only one positive baseline and candidate occurrence
+with the same exact source-plus-MIR identity, then reports changed semantic,
+KIR, LLVM, ISA, transformation, or classification axes with their evidence
+IDs. An unmatched or multiply mapped observation is not labeled added or
+removed. Schedule identities are exact content-bound caller declarations, the
+profiler-KIR to Characteristic-KIR structural bridge remains unavailable, and
+ranked Variant V1 co-observation is never promoted to causal attribution.
+
+See [`docs/profiler-variant-v2.md`](../../docs/profiler-variant-v2.md) for the
+wire inputs, bounds, rejection policy, and remaining T3 limitations.
+
 ## Distributed-overlap extension
 
 `AgentProfilerDistributedOverlapServiceV1` and

@@ -990,6 +990,7 @@ mod tests {
         let decoded =
             VerifiedSimulationBundleV4::from_canonical_bytes(bundle.canonical_bytes().to_vec())
                 .unwrap();
+        assert_eq!(decoded.canonical_bytes(), bundle.canonical_bytes());
         assert_eq!(decoded.identity(), bundle.identity());
         assert!(
             VerifiedSimulationBundleV3::from_canonical_bytes(bundle.canonical_bytes().to_vec())

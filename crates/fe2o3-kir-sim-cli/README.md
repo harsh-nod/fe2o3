@@ -5,6 +5,7 @@ deterministic CPU execution of exact verified canonical Kernel IR V7:
 
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json
+    fe2o3-kir-sim --bundle-v5 kernel.fe2sim --request request.json
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json --output result.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
       --record-seeded-schedule schedule.json --schedule-seed 42
@@ -34,8 +35,14 @@ The library also exposes `load_debug_simulation_bundle_v2` for the debugger's
 explicit V2 envelope route. It strictly verifies the outer V2 bytes, the exact
 embedded V1 bundle, and the independently committed Source Map V2 payload.
 It still executes only the embedded canonical KIR V7 and never authorizes or
-performs source relowering. The standalone `fe2o3-kir-sim` command remains on
-its frozen V1 bundle route.
+performs source relowering. The legacy `--bundle` spelling remains on its
+frozen V1 bundle route.
+
+`--bundle-v5` is a separate strict route for self-contained Bundle V5. It
+revalidates the exact production V8/V9 identity and lossless same-module KIR
+V10 encoding, then executes that V10 module under the bundle's exact target.
+It does not reinterpret legacy `--bundle` bytes, silently downgrade V10
+operations, invoke hardware, or grant compiler or runtime authority.
 
 The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
 

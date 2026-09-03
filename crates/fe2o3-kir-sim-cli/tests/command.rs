@@ -231,7 +231,7 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
+            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH | --bundle-v5 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
         );
         assert!(output.stderr.is_empty());
     }

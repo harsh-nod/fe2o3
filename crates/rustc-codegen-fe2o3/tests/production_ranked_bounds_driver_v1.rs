@@ -693,6 +693,173 @@ fn ordinary_kernel_source_exports_the_exact_gfx950_simulation_target() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
+    let target = ScratchTarget::new();
+    let bundle_path = target.path().join("wave-reduce-f32-v5.fe2sim");
+    let result = output(
+        simulation_export_command_for_feature(
+            "gfx950",
+            &bundle_path,
+            &target.path().join("wave-reduce-export-target"),
+            Some(5),
+            "wave_reduce_f32",
+        ),
+        "export ordinary attributed Rust KIR V9 wave reduction as bundle V5",
+    );
+    assert!(
+        result.status.success()
+            && result.stderr.contains("production KIR V9")
+            && result.stderr.contains("exact same-module KIR V10")
+            && result
+                .stderr
+                .contains("compiler_execution=extraction_only_unavailable")
+            && result.stderr.contains("authority false"),
+        "ordinary Rust V9/V10 export failed or overclaimed authority:\n{}",
+        result.stderr,
+    );
+
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV5::from_canonical_bytes(
+        std::fs::read(&bundle_path).expect("read compiler-produced V5 bundle"),
+    )
+    .expect("decode compiler-produced V5 bundle");
+    assert_eq!(bundle.production_kir_identity().version(), 9);
+    assert_eq!(bundle.target(), "gfx950:xnack-");
+    assert!(!bundle.authenticates_compiler_execution());
+    assert!(!bundle.grants_compiler_authority());
+    assert!(!bundle.grants_hardware_authority());
+    assert!(!bundle.grants_load_authority());
+    assert!(!bundle.grants_launch_authority());
+    assert!(
+        fe2o3_kernel_ir::VerifiedSimulationBundleV4::from_canonical_bytes(
+            bundle.canonical_bytes().to_vec(),
+        )
+        .is_err(),
+        "V5 must not alias a frozen legacy bundle codec",
+    );
+    let (_, module) =
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
+            bundle.canonical_kir_v10().to_vec(),
+        )
+        .expect("decode the exact V10 executable body");
+    assert!(module.functions.iter().any(|function| {
+        function.body.as_ref().is_some_and(|body| {
+            body.blocks.iter().any(|block| {
+                block.operations.iter().any(|operation| {
+                    matches!(
+                        &operation.kind,
+                        fe2o3_kernel_ir::OperationKind::Wave(fe2o3_kernel_ir::WaveOperation {
+                            kind: fe2o3_kernel_ir::WaveOperationKind::ReduceF32 { .. },
+                            ..
+                        })
+                    )
+                })
+            })
+        })
+    }));
+
+    let request_path = target.path().join("wave-reduce-f32-request.json");
+    std::fs::write(
+        &request_path,
+        serde_json::to_vec(&json!({
+            "schema": "fe2o3-simulation-request-v1",
+            "kernel": "wave_reduce_f32",
+            "grid": [64, 1, 1],
+            "workgroup": [64, 1, 1],
+            "arguments": [
+                {"kind": "scalar", "type": "f32", "bits": "0x3f800000"},
+                {
+                    "kind": "buffer",
+                    "element": "f32",
+                    "access": "read_write",
+                    "alignment": 4,
+                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                },
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let debug_target = target.path().join("wave-reduce-debug-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production V5 wave integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+    let mut simulator = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["sim", "--bundle-v5"])
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request_path)
+        .args(["--protocol", "jsonl", "--wave-width", "64"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start debugger on compiler-produced V5 wave bundle");
+    simulator
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"operation\":\"continue\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"max_events\":1000000}\n")
+        .unwrap();
+    let simulated = simulator.wait_with_output().unwrap();
+    assert!(
+        simulated.status.success(),
+        "V5 debugger simulation failed:\n{}",
+        String::from_utf8_lossy(&simulated.stderr)
+    );
+    let response: Value = serde_json::from_slice(&simulated.stdout).unwrap();
+    assert_eq!(response["status"], "ok");
+    assert_eq!(response["result"]["stop"]["reason"], "completed");
+    assert_eq!(response["session"]["simulated"], true);
+    assert_eq!(response["session"]["hardware_observed"], false);
+    assert_eq!(response["session"]["performance_prediction"], false);
+
+    let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV5::from_canonical_json_bytes(
+        bundle.aggregate_storage_map(),
+    )
+    .unwrap();
+    let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        bundle.semantic_mir(),
+        fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let abi_identity = *semantic.functions()[aggregate.kernels()[0].semantic_root() as usize]
+        .abi()
+        .identity()
+        .as_bytes();
+    let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx950([0xb5; 32]).unwrap();
+    let backend_module =
+        fe2o3_runtime::RuntimeBackendV1::load_module_v1(&mut backend, 1, bundle.canonical_bytes())
+            .expect("virtual runtime loads the exact V5/V10 module");
+    let backend_kernel = fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
+        &mut backend,
+        backend_module,
+        "wave_reduce_f32",
+        abi_identity,
+    )
+    .expect("virtual runtime resolves the compiler-bound V5 ABI");
+    assert_ne!(backend_kernel, 0);
+    fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, backend_module).unwrap();
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
     let target = ScratchTarget::new();
     let debug_target = target.path().join("debug-cli-target");
@@ -1832,6 +1999,7 @@ fn simulation_export_command_for_feature(
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4")
+        .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5")
         .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
         .env_remove("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1")
         .env_remove("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1")
