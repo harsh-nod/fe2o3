@@ -22,11 +22,17 @@ use fe2o3_kir_sim::{
     SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
     SimulationEventSinkV1, SimulationEventV1, SimulationExecutionErrorKindV1,
     SimulationExecutionOutcomeV1, SimulationExplorationRequestV1, SimulationExplorationV1,
-    SimulationLimitsV1, SimulationOutOfBoundsV2, SimulationPreflightErrorV1,
-    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleDecisionV1,
-    SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
-    SimulationTargetV1, UnsupportedFeatureV1,
+    SimulationFailureReductionLimitsV1, SimulationFailureReductionReportV1,
+    SimulationFailureScheduleV1, SimulationLimitsV1, SimulationOutOfBoundsV2,
+    SimulationPreflightErrorV1, SimulationRaceAssessmentV1, SimulationRequestV1,
+    SimulationScheduleDecisionV1, SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1,
+    SimulationScheduleRequestV1, SimulationTargetV1, UnsupportedFeatureV1,
 };
+
+fn reduction_limits(max_decisions: usize) -> SimulationFailureReductionLimitsV1 {
+    SimulationFailureReductionLimitsV1::new(max_decisions + 2, max_decisions, max_decisions * 3)
+        .unwrap()
+}
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
@@ -7082,5 +7088,201 @@ fn atomic_event_budget_and_sink_rejection_fail_before_a_committed_observation() 
             kind: SimulationExecutionErrorKindV1::EventSinkFailure(_),
             ..
         })
+    ));
+}
+
+#[test]
+fn failure_reducer_minimizes_and_replays_memory_fault() {
+    let admitted = admitted(indexed_store_module());
+    let request = SimulationRequestV1::new(
+        "store",
+        [2, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[9]))],
+    );
+    let limits = SimulationLimitsV1::default();
+    let report = admitted
+        .reduce_simulation_failure(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Canonical,
+            reduction_limits(16),
+        )
+        .unwrap();
+    assert_eq!(report.fingerprint().class(), "out_of_bounds");
+    assert!(report.coverage().is_locally_minimal());
+    assert!(report.minimized_prefix().is_empty());
+    assert!(!report.reproducer_schedule().is_empty());
+    assert_eq!(
+        admitted
+            .replay_simulation_failure_reduction(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                limits,
+                &report,
+            )
+            .unwrap(),
+        report.fingerprint().clone()
+    );
+    assert!(!report.grants_execution_authority());
+    assert!(!report.predicts_hardware_timing());
+}
+
+#[test]
+fn failure_reducer_never_emits_a_report_for_a_successful_schedule() {
+    let module = admitted(empty_kernel_module(
+        "successful_reduction_input",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ));
+    let result = module.reduce_simulation_failure(
+        &SimulationRequestV1::new("successful_reduction_input", [1, 1, 1], [1, 1, 1], vec![]),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        SimulationFailureScheduleV1::Canonical,
+        reduction_limits(8),
+    );
+    assert!(matches!(
+        result,
+        Err(fe2o3_kir_sim::SimulationFailureReductionErrorV1::OriginalScheduleDidNotFail)
+    ));
+}
+
+#[test]
+fn failure_reducer_covers_barrier_and_seeded_race_failures() {
+    let limits = SimulationLimitsV1::default();
+    let barrier = admitted(barrier_failure_module(false));
+    let barrier_request = SimulationRequestV1::new("barrier_failure", [2, 1, 1], [2, 1, 1], vec![]);
+    let barrier_report = barrier
+        .reduce_simulation_failure(
+            &barrier_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: 17 },
+            reduction_limits(16),
+        )
+        .unwrap();
+    assert_eq!(
+        barrier_report.fingerprint().class(),
+        "divergent_workgroup_barrier"
+    );
+    assert!(barrier_report.coverage().is_locally_minimal());
+
+    let race = admitted(conflicting_store_module());
+    let race_request = SimulationRequestV1::new(
+        "conflict",
+        [2, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let race_report = race
+        .reduce_simulation_failure(
+            &race_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: 9 },
+            reduction_limits(16),
+        )
+        .unwrap();
+    assert_eq!(race_report.fingerprint().class(), "data_race");
+    assert!(race_report.fingerprint().related_site().is_some());
+    assert!(race_report.coverage().is_locally_minimal());
+    let recorded = race
+        .simulate_scheduled(
+            &race_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 9,
+                max_decisions: 16,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        recorded.schedule_record().unwrap().decisions(),
+        race_report.original_decisions()
+    );
+    assert_eq!(
+        race.replay_simulation_failure_reduction(
+            &race_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            &race_report,
+        )
+        .unwrap(),
+        race_report.fingerprint().clone()
+    );
+}
+
+#[test]
+fn failure_reduction_report_is_canonical_and_identity_bound() {
+    let admitted = admitted(indexed_store_module());
+    let request = SimulationRequestV1::new(
+        "store",
+        [2, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[9]))],
+    );
+    let limits = SimulationLimitsV1::default();
+    let report = admitted
+        .reduce_simulation_failure(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: u64::MAX },
+            reduction_limits(16),
+        )
+        .unwrap();
+    let bytes = report.to_canonical_bytes().unwrap();
+    let decoded = SimulationFailureReductionReportV1::from_canonical_bytes(&bytes).unwrap();
+    assert_eq!(decoded, report);
+    let mut whitespace = bytes.clone();
+    whitespace.insert(0, b' ');
+    assert!(SimulationFailureReductionReportV1::from_canonical_bytes(&whitespace).is_err());
+    let mut mutated = bytes;
+    let marker = b"\"report_sha256\":\"";
+    let position = mutated
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .unwrap()
+        + marker.len();
+    mutated[position] = if mutated[position] == b'0' {
+        b'1'
+    } else {
+        b'0'
+    };
+    assert!(SimulationFailureReductionReportV1::from_canonical_bytes(&mutated).is_err());
+
+    let different_request = SimulationRequestV1::new(
+        "store",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[9]))],
+    );
+    assert!(
+        admitted
+            .replay_simulation_failure_reduction(
+                &different_request,
+                SimulationTargetV1::amdgpu_64(),
+                limits,
+                &report,
+            )
+            .is_err()
+    );
+
+    let tiny_resident = SimulationLimitsV1 {
+        max_resident_bytes: 1,
+        ..limits
+    };
+    assert!(matches!(
+        admitted.reduce_simulation_failure(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            tiny_resident,
+            SimulationFailureScheduleV1::Canonical,
+            reduction_limits(16),
+        ),
+        Err(fe2o3_kir_sim::SimulationFailureReductionErrorV1::ResidentLimit { limit: 1, .. })
     ));
 }

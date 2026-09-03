@@ -147,6 +147,33 @@ The inline exploration result and all retained schedule, assessment, and first
 failure payloads are charged together with every later scheduled run under
 `max_resident_bytes`; decision retention is charged by actual compact capacity.
 
+`reduce_simulation_failure` accepts an exact canonical or seeded CPU schedule
+and reduces its first dynamic execution failure or exact first data race. Each
+candidate supplies a retained decision prefix and then uses the ordinary
+canonical cooperative scheduler for all remaining runnable choices; an
+incomplete successful-schedule replay is never treated as a reproducer. The
+deterministic linear suffix reducer stops only at an empty prefix or after the
+one-shorter prefix changes the exact failure fingerprint. That fingerprint
+binds the failure class, primary and related semantic sites and invocations,
+and a stable digest of representable details. Preflight failures, incomplete
+race assessments, configured resource-limit exhaustion, allocator failures,
+event-sink failures, replay failures, and internal scheduler failures are typed
+boundaries rather than reduction targets.
+
+`SimulationFailureReductionReportV1` independently binds the admitted V7, V9,
+or V10 KIR identity, full structured request context, target, every simulation
+and reduction limit, original schedule and decisions, minimized prefix,
+completed failure-terminating reproducer decisions, attempt coverage, exact
+failure fingerprint, and integrity identities. Its strict canonical JSON codec
+has byte, string, decision, allocation, and resident-memory bounds. Report
+replay re-admits the exact module/request/target/limit context, executes the
+completed reproducer, and requires both the decision sequence and fingerprint
+to match. The CLI exposes `--reduce-failure` and
+`--replay-failure-reduction REPORT`; these agent-readable operations use the
+same no-symlink snapshot input and durable no-replace output boundaries as
+other simulator artifacts. Reduction and replay remain CPU observations and
+grant no GPU scheduling, timing, performance, or execution authority.
+
 `PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
 form for that same record. It adds exact raw-KIR versus simulation-bundle route,
 bundle subject when present, request byte identity, target profile, and every

@@ -26,7 +26,10 @@ use crate::resident::{
     partitioned_bool_vec_storage_bytes, partitioned_geometric_vec_bytes, reserved_bool_vec_bytes,
     reserved_hash_map_bytes, reserved_vec_bytes,
 };
-use crate::schedule::{PreparedScheduleV1, SchedulePrepareErrorV1};
+use crate::schedule::{
+    ExecutionScheduleRequestV1, PreparedScheduleV1, ReductionScheduleSourceV1,
+    SchedulePrepareErrorV1,
+};
 use crate::soft_float::{SoftFloatErrorV1, SoftFloatOperationV1};
 use crate::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1, IndexWidthV1,
@@ -831,7 +834,48 @@ impl AdmittedSimulationModuleV1 {
                 policy: request.events,
                 plan,
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
-                schedule: Some(schedule),
+                schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
+                resident_offset,
+            },
+            &mut event_sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "internal reduction execution keeps every exact simulator context input explicit"
+    )]
+    pub(crate) fn simulate_reduction_attempt(
+        &self,
+        request: &SimulationRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        source: ReductionScheduleSourceV1<'_>,
+        max_decisions: usize,
+        decisions: &mut Vec<crate::SimulationScheduleDecisionV1>,
+        resident_offset: usize,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight(request, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: Some(ExecutionScheduleRequestV1::Reduction {
+                    source,
+                    max_decisions,
+                    decisions,
+                }),
                 resident_offset,
             },
             &mut event_sink,
@@ -922,7 +966,7 @@ impl AdmittedSimulationModuleV1 {
                 policy: request.events,
                 plan,
                 debug_capture: capture,
-                schedule: Some(schedule),
+                schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
                 resident_offset: 0,
             },
             &mut event_sink,
@@ -3068,7 +3112,7 @@ struct ExecutionConfiguration<'a> {
     policy: EventPolicyV1,
     plan: SimulationPlanV1,
     debug_capture: SimulationDebugCaptureLimitsV1,
-    schedule: Option<SimulationScheduleRequestV1<'a>>,
+    schedule: Option<ExecutionScheduleRequestV1<'a>>,
     resident_offset: usize,
 }
 

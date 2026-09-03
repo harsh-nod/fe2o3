@@ -45,6 +45,13 @@ fe2o3-kir-sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
 
 fe2o3-debug sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
   --request REQUEST.json --replay-schedule SCHEDULE.json --protocol jsonl
+
+fe2o3-kir-sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
+  --request REQUEST.json --reduce-failure --schedule-seed 42 \
+  --schedule-max-decisions 65536 --output FAILURE.json
+
+fe2o3-kir-sim (--kir-v7 KERNEL.kir | --bundle KERNEL.fe2sim) \
+  --request REQUEST.json --replay-failure-reduction FAILURE.json
 ```
 
 Replay first compares the persisted binding with already admitted artifact and
@@ -63,6 +70,14 @@ Wave32 and Wave64 are debugger visualization partitions, not simulator
 scheduling inputs, so one semantic schedule may be visualized with either.
 The debugger session configuration separately binds that wave width, preventing
 pagination cursors or agent state from being substituted across visualizations.
+
+Failure-reduction reports use a separate V1 schema and do not change successful
+Schedule V1 bytes or coverage rules. A report records the decisions executed up
+to a failure, finds a locally minimal suffix prefix, and completes every tested
+prefix with the normal canonical scheduler. Replay succeeds only when the
+report's exact KIR/request/target/limit context, completed reproducer decisions,
+and failure fingerprint all match. The canonical JSON is bounded and intended
+for debugger and agent consumption, but carries observation evidence only.
 
 This record makes CPU simulator behavior reproducible. It does not describe or
 predict hardware wave, workgroup, queue, or compute-unit scheduling; it provides

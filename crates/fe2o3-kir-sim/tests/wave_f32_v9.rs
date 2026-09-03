@@ -14,7 +14,8 @@ use fe2o3_kir_sim::{
     SimulationArgumentV1, SimulationDebugCaptureLimitsV1, SimulationDebugCollectionV1,
     SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSinkControlV1,
     SimulationDebugSinkV1, SimulationDebugValueV1, SimulationErrorV1,
-    SimulationExecutionErrorKindV1, SimulationLimitsV1, SimulationRequestV1,
+    SimulationExecutionErrorKindV1, SimulationFailureReductionLimitsV1,
+    SimulationFailureScheduleV1, SimulationLimitsV1, SimulationRequestV1,
     SimulationScheduleRequestV1, SimulationTargetV1,
 };
 
@@ -585,6 +586,35 @@ fn partial_waves_and_step_limits_remain_precise_typed_failures() {
             ..
         })
     ));
+}
+
+#[test]
+fn v9_failure_reducer_preserves_incomplete_wave_contract() {
+    let module = admitted(
+        KirVersion::V9,
+        wave_f32_module(WaveWidth::Wave32, 4, WaveF32ReductionKindV1::Sum),
+    );
+    let input = vec![exact_integer_f32(1); 31];
+    let request = request(&input, 0, 31, 32);
+    let limits = SimulationLimitsV1::default();
+    let report = module
+        .reduce_simulation_failure(
+            &request,
+            TARGET,
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: 23 },
+            SimulationFailureReductionLimitsV1::new(66, 64, 192).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(report.kir_wire_version(), 9);
+    assert_eq!(report.fingerprint().class(), "incomplete_wave");
+    assert!(report.coverage().is_locally_minimal());
+    assert_eq!(
+        module
+            .replay_simulation_failure_reduction(&request, TARGET, limits, &report)
+            .unwrap(),
+        report.fingerprint().clone()
+    );
 }
 
 #[test]

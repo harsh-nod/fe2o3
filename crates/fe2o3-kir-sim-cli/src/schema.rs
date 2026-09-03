@@ -129,6 +129,7 @@ pub(crate) enum ErrorKind {
     ExecutionReachedUnreachable,
     ExecutionInternalInvariant,
     ExecutionEventSinkFailure,
+    FailureReductionFailed,
     OutputTooLarge,
     OutputInvalidPath,
     OutputParentOpenFailed,

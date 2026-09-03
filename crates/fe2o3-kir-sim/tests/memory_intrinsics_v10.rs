@@ -9,9 +9,9 @@ use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
     IndexWidthV1, PersistedSimulationScheduleArtifactV1, PersistedSimulationScheduleBindingV1,
     PersistedSimulationScheduleDocumentV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
-    SimulationErrorV1, SimulationExecutionErrorKindV1, SimulationLimitsV1,
-    SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleRequestV1,
-    SimulationTargetV1, UnsupportedFeatureV1,
+    SimulationErrorV1, SimulationExecutionErrorKindV1, SimulationFailureReductionLimitsV1,
+    SimulationFailureScheduleV1, SimulationLimitsV1, SimulationPreflightErrorV1,
+    SimulationRequestV1, SimulationScheduleRequestV1, SimulationTargetV1, UnsupportedFeatureV1,
 };
 
 fn dynamic_domain_1d() -> LaunchDomain {
@@ -806,6 +806,49 @@ fn v10_copy_executes_exact_bytes_and_rejects_overlap_and_uninitialized_source() 
             ..
         })
     ));
+}
+
+#[test]
+fn v10_failure_reducer_preserves_memory_intrinsic_fault() {
+    let target = SimulationTargetV1::amdgpu_64();
+    let source = BufferArgumentV1::new(
+        ScalarType::U32,
+        AccessMode::ReadOnly,
+        4,
+        7_u32.to_le_bytes().to_vec(),
+        vec![false; 4],
+        target,
+    )
+    .unwrap();
+    let request = SimulationRequestV1::new(
+        "copy",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(source),
+            SimulationArgumentV1::Buffer(u32_buffer(&[0], AccessMode::ReadWrite)),
+            SimulationArgumentV1::Scalar(ScalarBitsV1::index(1, target).unwrap()),
+        ],
+    );
+    let limits = SimulationLimitsV1::default();
+    let module = admit_v10(copy_module());
+    let report = module
+        .reduce_simulation_failure(
+            &request,
+            target,
+            limits,
+            SimulationFailureScheduleV1::Canonical,
+            SimulationFailureReductionLimitsV1::new(18, 16, 48).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(report.kir_wire_version(), 10);
+    assert_eq!(report.fingerprint().class(), "uninitialized_read");
+    assert_eq!(
+        module
+            .replay_simulation_failure_reduction(&request, target, limits, &report)
+            .unwrap(),
+        report.fingerprint().clone()
+    );
 }
 
 fn offset_copy_module() -> Module {

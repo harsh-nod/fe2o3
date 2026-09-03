@@ -7,6 +7,7 @@ mod execute;
 mod explore;
 mod model;
 mod preflight;
+mod reduce;
 mod resident;
 mod schedule;
 mod soft_float;
@@ -58,6 +59,14 @@ pub use preflight::{
     MAX_REPORTED_UNSUPPORTED_FINDINGS_V1, MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1,
     SimulationPlanV1, SimulationPreflightErrorV1, UnsupportedFeatureV1,
     UnsupportedSimulationReportV1, UnsupportedSimulationSiteV1,
+};
+pub use reduce::{
+    MAX_FAILURE_REDUCTION_ATTEMPTS_V1, MAX_FAILURE_REDUCTION_RETAINED_DECISIONS_V1,
+    MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1, SimulationFailureFingerprintV1,
+    SimulationFailureReductionCodecErrorV1, SimulationFailureReductionCoverageV1,
+    SimulationFailureReductionErrorV1, SimulationFailureReductionLimitsV1,
+    SimulationFailureReductionReportV1, SimulationFailureReductionRequestErrorV1,
+    SimulationFailureScheduleV1,
 };
 pub use schedule::{
     MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,

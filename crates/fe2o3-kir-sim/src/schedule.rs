@@ -52,6 +52,14 @@ pub struct SimulationScheduleDecisionV1 {
 }
 
 impl SimulationScheduleDecisionV1 {
+    pub(crate) const fn new(workgroup: [u64; 3], phase: u64, local: [u32; 3]) -> Self {
+        Self {
+            workgroup,
+            phase,
+            local,
+        }
+    }
+
     pub const fn workgroup(self) -> [u64; 3] {
         self.workgroup
     }
@@ -171,6 +179,24 @@ pub enum SimulationScheduleReplayErrorV1 {
 enum ScheduledModeV1<'a> {
     Record,
     Replay(&'a SimulationScheduleRecordV1),
+    ReduceCanonical,
+    ReduceSeeded,
+    ReducePrefix(&'a [SimulationScheduleDecisionV1]),
+}
+
+pub(crate) enum ExecutionScheduleRequestV1<'a> {
+    Public(SimulationScheduleRequestV1<'a>),
+    Reduction {
+        source: ReductionScheduleSourceV1<'a>,
+        max_decisions: usize,
+        decisions: &'a mut Vec<SimulationScheduleDecisionV1>,
+    },
+}
+
+pub(crate) enum ReductionScheduleSourceV1<'a> {
+    Canonical,
+    Seeded(u64),
+    PrefixThenCanonical(&'a [SimulationScheduleDecisionV1]),
 }
 
 pub(crate) struct PreparedScheduleV1<'a> {
@@ -178,6 +204,7 @@ pub(crate) struct PreparedScheduleV1<'a> {
     workgroups: u64,
     barrier_releases: u64,
     scheduled: Vec<ScheduledStateV1<'a>>,
+    reduction_decisions: Option<&'a mut Vec<SimulationScheduleDecisionV1>>,
 }
 
 struct ScheduledStateV1<'a> {
@@ -203,7 +230,7 @@ pub(crate) enum SchedulePrepareErrorV1 {
 impl<'a> PreparedScheduleV1<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare(
-        request: Option<SimulationScheduleRequestV1<'a>>,
+        request: Option<ExecutionScheduleRequestV1<'a>>,
         identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
         target: SimulationTargetV1,
@@ -218,6 +245,7 @@ impl<'a> PreparedScheduleV1<'a> {
                 workgroups: 0,
                 barrier_releases: 0,
                 scheduled: Vec::new(),
+                reduction_decisions: None,
             });
         };
         let context_identity = schedule_context_identity(identity, simulation, target, limits);
@@ -229,8 +257,8 @@ impl<'a> PreparedScheduleV1<'a> {
             retained_decisions,
             resident_decisions,
             needs_order,
-        ) = match request {
-            SimulationScheduleRequestV1::Replay(record) => {
+        ) = match &request {
+            ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::Replay(record)) => {
                 validate_record(record, context_identity, plan, limits)?;
                 (
                     ScheduledModeV1::Replay(record),
@@ -242,25 +270,66 @@ impl<'a> PreparedScheduleV1<'a> {
                     true,
                 )
             }
-            SimulationScheduleRequestV1::RecordCanonical { max_decisions } => (
+            ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::RecordCanonical {
+                max_decisions,
+            }) => (
                 ScheduledModeV1::Record,
                 SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
                 None,
-                max_decisions,
-                max_decisions,
-                max_decisions,
+                *max_decisions,
+                *max_decisions,
+                *max_decisions,
                 false,
             ),
-            SimulationScheduleRequestV1::RecordSeeded {
+            ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::RecordSeeded {
                 seed,
                 max_decisions,
-            } => (
+            }) => (
                 ScheduledModeV1::Record,
                 SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1,
-                Some(seed),
+                Some(*seed),
+                *max_decisions,
+                *max_decisions,
+                *max_decisions,
+                true,
+            ),
+            ExecutionScheduleRequestV1::Reduction {
+                source: ReductionScheduleSourceV1::Canonical,
                 max_decisions,
+                ..
+            } => (
+                ScheduledModeV1::ReduceCanonical,
+                SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+                None,
+                *max_decisions,
+                0,
+                0,
+                false,
+            ),
+            ExecutionScheduleRequestV1::Reduction {
+                source: ReductionScheduleSourceV1::Seeded(seed),
                 max_decisions,
+                ..
+            } => (
+                ScheduledModeV1::ReduceSeeded,
+                SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1,
+                Some(*seed),
+                *max_decisions,
+                0,
+                0,
+                true,
+            ),
+            ExecutionScheduleRequestV1::Reduction {
+                source: ReductionScheduleSourceV1::PrefixThenCanonical(prefix),
                 max_decisions,
+                ..
+            } => (
+                ScheduledModeV1::ReducePrefix(prefix),
+                SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+                None,
+                *max_decisions,
+                0,
+                0,
                 true,
             ),
         };
@@ -349,11 +418,20 @@ impl<'a> PreparedScheduleV1<'a> {
             order,
             records,
         });
+        let reduction_decisions = match request {
+            ExecutionScheduleRequestV1::Reduction { decisions, .. } => {
+                debug_assert!(decisions.is_empty());
+                debug_assert!(decisions.capacity() >= max_decisions);
+                Some(decisions)
+            }
+            ExecutionScheduleRequestV1::Public(_) => None,
+        };
         Ok(Self {
             current_decision: 0,
             workgroups: 0,
             barrier_releases: 0,
             scheduled,
+            reduction_decisions,
         })
     }
 
@@ -378,7 +456,10 @@ impl<'a> PreparedScheduleV1<'a> {
 
     pub(crate) fn uses_canonical_order(&self) -> bool {
         self.scheduled.first().is_none_or(|state| {
-            matches!(state.mode, ScheduledModeV1::Record) && state.seed.is_none()
+            matches!(
+                state.mode,
+                ScheduledModeV1::Record | ScheduledModeV1::ReduceCanonical
+            ) && state.seed.is_none()
         })
     }
 
@@ -435,6 +516,47 @@ impl<'a> PreparedScheduleV1<'a> {
                     state.order.swap(index, swap);
                 }
             }
+            ScheduledModeV1::ReduceSeeded => {
+                state
+                    .order
+                    .extend((0..machine_count).filter(|index| runnable_at(*index)));
+                for index in (1..state.order.len()).rev() {
+                    let swap = next_random_index(&mut state.random_state, index + 1);
+                    state.order.swap(index, swap);
+                }
+            }
+            ScheduledModeV1::ReducePrefix(prefix) => {
+                let runnable = (0..machine_count)
+                    .filter(|index| runnable_at(*index))
+                    .count();
+                while state.order.len() < runnable && state.cursor < prefix.len() {
+                    let decision = prefix[state.cursor];
+                    if decision.workgroup != workgroup {
+                        return Err(SimulationScheduleReplayErrorV1::UnexpectedWorkgroup);
+                    }
+                    if decision.phase != phase {
+                        return Err(SimulationScheduleReplayErrorV1::UnexpectedPhase);
+                    }
+                    let Some(index) = (0..machine_count)
+                        .find(|index| invocation_at(*index).local == decision.local)
+                    else {
+                        return Err(SimulationScheduleReplayErrorV1::LocalNotRunnable);
+                    };
+                    if !runnable_at(index) {
+                        return Err(SimulationScheduleReplayErrorV1::LocalNotRunnable);
+                    }
+                    if state.order.contains(&index) {
+                        return Err(SimulationScheduleReplayErrorV1::DuplicateLocal);
+                    }
+                    state.order.push(index);
+                    state.cursor += 1;
+                }
+                for index in 0..machine_count {
+                    if runnable_at(index) && !state.order.contains(&index) {
+                        state.order.push(index);
+                    }
+                }
+            }
             _ => unreachable!("canonical order does not allocate a phase order"),
         }
         Ok(std::mem::take(&mut state.order))
@@ -468,6 +590,12 @@ impl<'a> PreparedScheduleV1<'a> {
             if matches!(state.mode, ScheduledModeV1::Record) {
                 state.decisions.push(decision);
             }
+        }
+        if let Some(decisions) = self.reduction_decisions.as_mut() {
+            if decisions.len() == decisions.capacity() {
+                return Err(SchedulePrepareErrorV1::AllocationFailure);
+            }
+            decisions.push(decision);
         }
         self.current_decision =
             self.current_decision
@@ -512,6 +640,15 @@ impl<'a> PreparedScheduleV1<'a> {
             if coverage != record.coverage {
                 return Err(SimulationScheduleReplayErrorV1::CoverageMismatch);
             }
+        }
+        if let Some(ScheduledStateV1 {
+            mode: ScheduledModeV1::ReducePrefix(prefix),
+            cursor,
+            ..
+        }) = &state
+            && *cursor != prefix.len()
+        {
+            return Err(SimulationScheduleReplayErrorV1::TrailingDecision);
         }
         let schedule = state.as_ref().map_or(
             SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
@@ -642,7 +779,7 @@ fn validate_record(
     Ok(())
 }
 
-fn schedule_context_identity(
+pub(crate) fn schedule_context_identity(
     identity: SimulationKernelIrIdentityV1,
     request: &SimulationRequestV1,
     target: SimulationTargetV1,
