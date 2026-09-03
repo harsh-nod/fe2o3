@@ -4,6 +4,7 @@
 
 mod capsule;
 mod error;
+mod multi_root_correspondence_payload_v2;
 mod multi_root_proof_roster_v2;
 mod multi_root_target_lineage_v2;
 mod proof_binding;
@@ -20,6 +21,15 @@ pub use capsule::{
     OrderedInertSemanticLineageReceiptsV3,
 };
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
+pub use multi_root_correspondence_payload_v2::{
+    MULTI_ROOT_CORRESPONDENCE_PAYLOAD_MAGIC_V2, MULTI_ROOT_CORRESPONDENCE_PAYLOAD_POLICY_V2,
+    MULTI_ROOT_CORRESPONDENCE_PAYLOAD_VERSION_V2, MultiRootCorrespondenceBlockV2,
+    MultiRootCorrespondenceFunctionRoleV2, MultiRootCorrespondenceFunctionV2,
+    MultiRootCorrespondenceParameterV2, MultiRootCorrespondencePayloadErrorV2,
+    MultiRootCorrespondencePayloadV2, MultiRootCorrespondenceStatementV2,
+    MultiRootCorrespondenceSyntheticRuleV2, MultiRootCorrespondenceSyntheticV2,
+    MultiRootCorrespondenceTerminatorV2,
+};
 pub use multi_root_proof_roster_v2::{
     MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V2, MULTI_ROOT_PROOF_ROSTER_POLICY_V2,
     MULTI_ROOT_PROOF_ROSTER_VERSION_V2, MultiRootCanonicalKirVersionV2,

@@ -2,7 +2,10 @@ use std::error::Error;
 use std::fmt;
 
 pub const TRACE_SCHEMA_VERSION_V1: u16 = 1;
+pub const TRACE_SCHEMA_VERSION_V2: u16 = 2;
 pub const KERNEL_IR_WIRE_VERSION_V7: u16 = 7;
+pub const KERNEL_IR_WIRE_VERSION_V9: u16 = 9;
+pub const KERNEL_IR_WIRE_VERSION_V10: u16 = 10;
 pub const KERNEL_IR_IDENTITY_POLICY_V1: u16 = 1;
 
 pub const MAX_TRACE_BYTES_V1: u64 = 64 * 1024 * 1024;
@@ -208,6 +211,96 @@ impl KernelIrIdentityClaimV1 {
 
     pub const fn canonical_len(self) -> u64 {
         self.canonical_len
+    }
+
+    fn from_versioned_claim(claim: KernelIrIdentityClaimV2) -> Self {
+        Self {
+            wire_version: claim.wire_version.as_u16(),
+            identity_policy: KERNEL_IR_IDENTITY_POLICY_V1,
+            digest: claim.digest,
+            canonical_len: claim.canonical_len,
+        }
+    }
+}
+
+/// Exact canonical KIR wire versions carried by semantic trace envelope V2.
+///
+/// V7 remains owned by the frozen semantic trace V1 wire contract. This enum
+/// deliberately admits only the production simulator's newer exact owners.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum KernelIrWireVersionV2 {
+    V9,
+    V10,
+}
+
+impl KernelIrWireVersionV2 {
+    pub const fn as_u16(self) -> u16 {
+        match self {
+            Self::V9 => KERNEL_IR_WIRE_VERSION_V9,
+            Self::V10 => KERNEL_IR_WIRE_VERSION_V10,
+        }
+    }
+
+    pub const fn from_u16(version: u16) -> Option<Self> {
+        match version {
+            KERNEL_IR_WIRE_VERSION_V9 => Some(Self::V9),
+            KERNEL_IR_WIRE_VERSION_V10 => Some(Self::V10),
+            _ => None,
+        }
+    }
+}
+
+/// Inert exact canonical KIR identity claim for semantic trace envelope V2.
+///
+/// Construction validates shape only. An owning adapter must bind the digest,
+/// length, wire version, and identity policy to an independently admitted exact
+/// canonical KIR owner before resolving any site ordinal.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KernelIrIdentityClaimV2 {
+    wire_version: KernelIrWireVersionV2,
+    digest: OpaqueIdentityV1,
+    canonical_len: u64,
+}
+
+impl KernelIrIdentityClaimV2 {
+    pub fn exact_canonical_claim(
+        wire_version: KernelIrWireVersionV2,
+        digest: OpaqueIdentityV1,
+        canonical_len: u64,
+    ) -> Result<Self, TraceValidationErrorV1> {
+        if canonical_len == 0 {
+            return Err(TraceValidationErrorV1::ZeroCanonicalLength);
+        }
+        Ok(Self {
+            wire_version,
+            digest,
+            canonical_len,
+        })
+    }
+
+    pub const fn wire_version(self) -> KernelIrWireVersionV2 {
+        self.wire_version
+    }
+
+    pub const fn identity_policy(self) -> u16 {
+        KERNEL_IR_IDENTITY_POLICY_V1
+    }
+
+    pub const fn digest(self) -> OpaqueIdentityV1 {
+        self.digest
+    }
+
+    pub const fn canonical_len(self) -> u64 {
+        self.canonical_len
+    }
+
+    fn from_internal(claim: KernelIrIdentityClaimV1) -> Self {
+        Self {
+            wire_version: KernelIrWireVersionV2::from_u16(claim.wire_version)
+                .expect("trace V2 stores only an admitted V9 or V10 claim"),
+            digest: claim.digest,
+            canonical_len: claim.canonical_len,
+        }
     }
 }
 
@@ -655,6 +748,96 @@ impl TraceHeaderV1 {
 
     pub const fn boundaries(&self) -> CaptureBoundariesV1 {
         self.boundaries
+    }
+}
+
+/// Header builder for semantic trace envelope V2.
+///
+/// The event, provenance, scope, and lifecycle grammar remains semantic trace
+/// V1. The V2 envelope changes only the exact canonical KIR claim contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceHeaderV2 {
+    inner: TraceHeaderV1,
+}
+
+impl TraceHeaderV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        producer: ProducerIdentityV1,
+        execution_kind: ExecutionKindV1,
+        kernel_ir_claim: KernelIrIdentityClaimV2,
+        semantic_mir: Option<ContentIdentityV1>,
+        lineage: Option<ContentIdentityV1>,
+        artifact: Option<ContentIdentityV1>,
+        dispatch: DispatchIdentityV1,
+        launch: LaunchGeometryV1,
+        bounds: TraceBoundsV1,
+        completeness: TraceCompletenessV1,
+        boundaries: CaptureBoundariesV1,
+    ) -> Result<Self, TraceValidationErrorV1> {
+        Ok(Self {
+            inner: TraceHeaderV1::new(
+                producer,
+                execution_kind,
+                KernelIrIdentityClaimV1::from_versioned_claim(kernel_ir_claim),
+                semantic_mir,
+                lineage,
+                artifact,
+                dispatch,
+                launch,
+                bounds,
+                completeness,
+                boundaries,
+            )?,
+        })
+    }
+
+    pub const fn producer(&self) -> &ProducerIdentityV1 {
+        self.inner.producer()
+    }
+
+    pub const fn execution_kind(&self) -> ExecutionKindV1 {
+        self.inner.execution_kind()
+    }
+
+    pub fn kernel_ir_claim(&self) -> KernelIrIdentityClaimV2 {
+        KernelIrIdentityClaimV2::from_internal(self.inner.kernel_ir_claim())
+    }
+
+    pub const fn semantic_mir(&self) -> Option<ContentIdentityV1> {
+        self.inner.semantic_mir()
+    }
+
+    pub const fn lineage(&self) -> Option<ContentIdentityV1> {
+        self.inner.lineage()
+    }
+
+    pub const fn artifact(&self) -> Option<ContentIdentityV1> {
+        self.inner.artifact()
+    }
+
+    pub const fn dispatch(&self) -> DispatchIdentityV1 {
+        self.inner.dispatch()
+    }
+
+    pub const fn launch(&self) -> LaunchGeometryV1 {
+        self.inner.launch()
+    }
+
+    pub const fn bounds(&self) -> TraceBoundsV1 {
+        self.inner.bounds()
+    }
+
+    pub const fn completeness(&self) -> TraceCompletenessV1 {
+        self.inner.completeness()
+    }
+
+    pub const fn boundaries(&self) -> CaptureBoundariesV1 {
+        self.inner.boundaries()
+    }
+
+    pub(crate) const fn inner(&self) -> &TraceHeaderV1 {
+        &self.inner
     }
 }
 
@@ -1892,6 +2075,105 @@ impl TraceV1 {
             }
         }
         Ok(())
+    }
+}
+
+/// Borrowed header view for an exact semantic trace envelope V2.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraceHeaderViewV2<'a> {
+    inner: &'a TraceHeaderV1,
+}
+
+impl TraceHeaderViewV2<'_> {
+    pub const fn producer(&self) -> &ProducerIdentityV1 {
+        self.inner.producer()
+    }
+
+    pub const fn execution_kind(&self) -> ExecutionKindV1 {
+        self.inner.execution_kind()
+    }
+
+    pub fn kernel_ir_claim(&self) -> KernelIrIdentityClaimV2 {
+        KernelIrIdentityClaimV2::from_internal(self.inner.kernel_ir_claim())
+    }
+
+    pub const fn semantic_mir(&self) -> Option<ContentIdentityV1> {
+        self.inner.semantic_mir()
+    }
+
+    pub const fn lineage(&self) -> Option<ContentIdentityV1> {
+        self.inner.lineage()
+    }
+
+    pub const fn artifact(&self) -> Option<ContentIdentityV1> {
+        self.inner.artifact()
+    }
+
+    pub const fn dispatch(&self) -> DispatchIdentityV1 {
+        self.inner.dispatch()
+    }
+
+    pub const fn launch(&self) -> LaunchGeometryV1 {
+        self.inner.launch()
+    }
+
+    pub const fn bounds(&self) -> TraceBoundsV1 {
+        self.inner.bounds()
+    }
+
+    pub const fn completeness(&self) -> TraceCompletenessV1 {
+        self.inner.completeness()
+    }
+
+    pub const fn boundaries(&self) -> CaptureBoundariesV1 {
+        self.inner.boundaries()
+    }
+}
+
+/// Canonical V2 envelope for the semantic trace event grammar.
+///
+/// V2 binds every event and site ordinal to one exact admitted canonical KIR
+/// V9 or V10 identity. It neither changes nor reinterprets the V1/V7 wire.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceEnvelopeV2 {
+    inner: TraceV1,
+}
+
+impl TraceEnvelopeV2 {
+    pub fn new(
+        header: TraceHeaderV2,
+        events: Vec<TraceEventV1>,
+    ) -> Result<Self, TraceValidationErrorV1> {
+        Self::new_with_resident_reservation(header, events, 0)
+    }
+
+    /// Constructs an envelope while accounting bytes retained by its adapter.
+    pub fn new_with_resident_reservation(
+        header: TraceHeaderV2,
+        events: Vec<TraceEventV1>,
+        reserved_resident_bytes: u64,
+    ) -> Result<Self, TraceValidationErrorV1> {
+        Ok(Self {
+            inner: TraceV1::new_with_resident_reservation(
+                header.inner,
+                events,
+                reserved_resident_bytes,
+            )?,
+        })
+    }
+
+    pub const fn header(&self) -> TraceHeaderViewV2<'_> {
+        TraceHeaderViewV2 {
+            inner: self.inner.header(),
+        }
+    }
+
+    pub fn events(&self) -> &[TraceEventV1] {
+        self.inner.events()
+    }
+
+    pub(crate) const fn inner(&self) -> &TraceV1 {
+        &self.inner
     }
 }
 

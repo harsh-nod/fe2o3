@@ -12,7 +12,12 @@ on:
         default: false
         type: boolean
       confirm_characteristic_contract_v2:
-        description: Validate the unexecuted lossless V2 characteristic contract
+        description: Validate the lossless V2 characteristic contract and adapter tests
+        required: true
+        default: false
+        type: boolean
+      confirm_characteristic_matrix_v2:
+        description: Run the protected ordinary-source V2 characteristic matrix
         required: true
         default: false
         type: boolean
@@ -50,9 +55,9 @@ jobs:
       github.repository == 'harsh-nod/fe2o3' &&
       github.ref == 'refs/heads/main' &&
       inputs.confirm_characteristic_contract_v2
-    # This compiles the lossless V2 reference acceptance and Broker V3 policy. It does not run
-    # the 3x2 matrix until the production characteristic adapter is implemented.
-    name: Validate unexecuted lossless characteristic V2 contract
+    # This validates the authority-free reference, adapter, query, and hostile framing logic. It
+    # does not run the protected 3x2 matrix or substitute for protected authority evidence.
+    name: Validate lossless characteristic V2 contract and adapter
     runs-on: [self-hosted, linux, x64, fe2o3-source-isa-protected-v1]
     timeout-minutes: 30
     env:
@@ -66,3 +71,24 @@ jobs:
 
       - name: Validate V2 acceptance and transport contract only
         run: scripts/ci-local.sh source-isa-characteristic-contract-v2
+
+  protected-characteristic-v2:
+    if: >-
+      github.repository == 'harsh-nod/fe2o3' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm_protected_runner &&
+      inputs.confirm_characteristic_matrix_v2
+    name: Observe exact characteristics for three ordinary units on gfx942 and gfx950
+    runs-on: [self-hosted, linux, x64, fe2o3-source-isa-protected-v1]
+    timeout-minutes: 120
+    env:
+      FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2: '1'
+
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Run protected ordinary-source characteristic matrix
+        run: scripts/ci-local.sh source-isa-characteristic-matrix-v2

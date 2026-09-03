@@ -44,7 +44,8 @@ const PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3-build-config-transit
 const PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3-build-config-transitive-v2";
 const PRODUCTION_BUILD_CONFIG_FORMAT_V1: &str = "fe2o3-production-build-config-v1";
 const PRODUCTION_BUILD_CONFIG_FORMAT_V2: &str = "fe2o3-production-build-config-v2";
-const SOURCE_ISA_OBSERVATION_KIND_V1: &str = "source-isa-summary-v1";
+const SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1: &str = "source-isa-summary-v1";
+const SOURCE_ISA_CHARACTERISTIC_OBSERVATION_KIND_V1: &str = "source-isa-characteristic-v1";
 const SOURCE_ISA_UNIT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-SOURCE-ISA-UNIT/V1\0";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
@@ -113,6 +114,7 @@ impl ProductionSourceIsaUnitIdentityV1 {
 pub(crate) struct ProductionSourceIsaObserverPolicyV1 {
     config_identity: BuildConfigIdentity,
     selected_units: Vec<ProductionSourceIsaUnitIdentityV1>,
+    kind: ProductionSourceIsaObservationKindV1,
 }
 
 impl ProductionSourceIsaObserverPolicyV1 {
@@ -123,6 +125,16 @@ impl ProductionSourceIsaObserverPolicyV1 {
     pub(crate) fn selected_units(&self) -> &[ProductionSourceIsaUnitIdentityV1] {
         &self.selected_units
     }
+
+    pub(crate) const fn kind(&self) -> ProductionSourceIsaObservationKindV1 {
+        self.kind
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProductionSourceIsaObservationKindV1 {
+    Summary,
+    Characteristic,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -151,12 +163,19 @@ pub(crate) struct PreparedProductionBuildConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProductionBuildConfigVersion {
     V1,
-    V2SourceIsaSummaryV1,
+    V2(ProductionSourceIsaObservationKindV1),
 }
 
 impl ProductionBuildConfigVersion {
     const fn source_isa_summary_enabled(self) -> bool {
-        matches!(self, Self::V2SourceIsaSummaryV1)
+        matches!(self, Self::V2(_))
+    }
+
+    const fn source_isa_observation_kind(self) -> Option<ProductionSourceIsaObservationKindV1> {
+        match self {
+            Self::V1 => None,
+            Self::V2(kind) => Some(kind),
+        }
     }
 }
 
@@ -191,7 +210,10 @@ impl PreparedProductionBuildConfig {
                 )));
             }
             (Some(path), None) => (path, ProductionBuildConfigVersion::V1),
-            (None, Some(path)) => (path, ProductionBuildConfigVersion::V2SourceIsaSummaryV1),
+            (None, Some(path)) => (
+                path,
+                ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary),
+            ),
             (None, None) => return Err(BuildConfigError::MissingConfiguration),
         };
         if path.is_empty() {
@@ -199,9 +221,7 @@ impl PreparedProductionBuildConfig {
         }
         match version {
             ProductionBuildConfigVersion::V1 => Self::from_manifest(Path::new(&path)),
-            ProductionBuildConfigVersion::V2SourceIsaSummaryV1 => {
-                Self::from_manifest_v2(Path::new(&path))
-            }
+            ProductionBuildConfigVersion::V2(_) => Self::from_manifest_v2(Path::new(&path)),
         }
         .map(Some)
     }
@@ -231,20 +251,24 @@ impl PreparedProductionBuildConfig {
         self.version.source_isa_summary_enabled()
     }
 
+    pub(crate) const fn source_isa_observation_kind(
+        &self,
+    ) -> Option<ProductionSourceIsaObservationKindV1> {
+        self.version.source_isa_observation_kind()
+    }
+
     #[cfg(test)]
     pub(crate) const fn config_environment_name(&self) -> &'static str {
         match self.version {
             ProductionBuildConfigVersion::V1 => PRODUCTION_BUILD_CONFIG_ENV,
-            ProductionBuildConfigVersion::V2SourceIsaSummaryV1 => PRODUCTION_BUILD_CONFIG_V2_ENV,
+            ProductionBuildConfigVersion::V2(_) => PRODUCTION_BUILD_CONFIG_V2_ENV,
         }
     }
 
     pub(crate) const fn expected_identity_environment_name(&self) -> &'static str {
         match self.version {
             ProductionBuildConfigVersion::V1 => PRODUCTION_BUILD_EXPECTED_ID_ENV,
-            ProductionBuildConfigVersion::V2SourceIsaSummaryV1 => {
-                PRODUCTION_BUILD_EXPECTED_ID_V2_ENV
-            }
+            ProductionBuildConfigVersion::V2(_) => PRODUCTION_BUILD_EXPECTED_ID_V2_ENV,
         }
     }
 
@@ -255,15 +279,13 @@ impl PreparedProductionBuildConfig {
     ) -> Result<(), BuildConfigError> {
         let expected = match (self.version, v1, v2) {
             (ProductionBuildConfigVersion::V1, Some(expected), None)
-            | (ProductionBuildConfigVersion::V2SourceIsaSummaryV1, None, Some(expected)) => {
-                expected
-            }
+            | (ProductionBuildConfigVersion::V2(_), None, Some(expected)) => expected,
             (ProductionBuildConfigVersion::V1, None, None) => {
                 return Err(BuildConfigError::Invalid(format!(
                     "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_ENV}"
                 )));
             }
-            (ProductionBuildConfigVersion::V2SourceIsaSummaryV1, None, None) => {
+            (ProductionBuildConfigVersion::V2(_), None, None) => {
                 return Err(BuildConfigError::Invalid(format!(
                     "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_V2_ENV}"
                 )));
@@ -376,6 +398,10 @@ impl PreparedProductionBuildConfig {
         Ok(Some(ProductionSourceIsaObserverPolicyV1 {
             config_identity: self.identity(),
             selected_units,
+            kind: self
+                .version
+                .source_isa_observation_kind()
+                .expect("V2 observer policy has an observation kind"),
         }))
     }
 }
@@ -466,7 +492,8 @@ fn prepare_production_manifest_v2(
             "configuration format must be exactly {PRODUCTION_BUILD_CONFIG_FORMAT_V2:?}"
         )));
     }
-    parse_source_isa_observation(required_value(root, "observation", "configuration")?)?;
+    let observation_kind =
+        parse_source_isa_observation(required_value(root, "observation", "configuration")?)?;
     let worker = prepare_worker(required_value(root, "worker", "configuration")?)?;
     let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
     let link_options = parse_link_options(required_value(root, "link_options", "configuration")?)?;
@@ -478,6 +505,12 @@ fn prepare_production_manifest_v2(
     .map_err(BuildConfigError::Protocol)?;
     let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
     let units = parse_units(required_value(root, "units", "configuration")?)?;
+    if observation_kind == ProductionSourceIsaObservationKindV1::Characteristic && units.len() != 1
+    {
+        return Err(BuildConfigError::Invalid(
+            "source-isa-characteristic-v1 requires exactly one configured unit".to_owned(),
+        ));
+    }
     let identity = transitive_identity_v2(&bytes, &worker, &providers);
     Ok(PreparedProductionBuildConfig {
         link: PreparedLinkBuildConfig {
@@ -489,7 +522,7 @@ fn prepare_production_manifest_v2(
             limits,
             units,
         },
-        version: ProductionBuildConfigVersion::V2SourceIsaSummaryV1,
+        version: ProductionBuildConfigVersion::V2(observation_kind),
     })
 }
 
@@ -885,15 +918,20 @@ fn exact_production_v2_root_object(value: &Value) -> Result<&Map<String, Value>,
     Ok(object)
 }
 
-fn parse_source_isa_observation(value: &Value) -> Result<(), BuildConfigError> {
+fn parse_source_isa_observation(
+    value: &Value,
+) -> Result<ProductionSourceIsaObservationKindV1, BuildConfigError> {
     let observation = exact_object(value, OBSERVATION_KEYS_V1, "observation")?;
     let kind = required_string(observation, "kind", "observation")?;
-    if kind != SOURCE_ISA_OBSERVATION_KIND_V1 {
-        return Err(BuildConfigError::Invalid(format!(
-            "observation.kind must be exactly {SOURCE_ISA_OBSERVATION_KIND_V1:?}"
-        )));
+    match kind {
+        SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1 => Ok(ProductionSourceIsaObservationKindV1::Summary),
+        SOURCE_ISA_CHARACTERISTIC_OBSERVATION_KIND_V1 => {
+            Ok(ProductionSourceIsaObservationKindV1::Characteristic)
+        }
+        _ => Err(BuildConfigError::Invalid(format!(
+            "observation.kind must be exactly {SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1:?} or {SOURCE_ISA_CHARACTERISTIC_OBSERVATION_KIND_V1:?}"
+        ))),
     }
-    Ok(())
 }
 
 fn required_value<'a>(
@@ -1128,7 +1166,7 @@ mod tests {
         if version == 2 {
             root.as_object_mut().unwrap().insert(
                 "observation".to_owned(),
-                serde_json::json!({"kind": SOURCE_ISA_OBSERVATION_KIND_V1}),
+                serde_json::json!({"kind": SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1}),
             );
         }
         root
@@ -1184,10 +1222,20 @@ mod tests {
             PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
             PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2
         );
-        assert!(ProductionBuildConfigVersion::V2SourceIsaSummaryV1.source_isa_summary_enabled());
+        assert!(
+            ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary)
+                .source_isa_summary_enabled()
+        );
         assert!(
             parse_source_isa_observation(&serde_json::json!({"kind": "source-isa-summary-v1"}))
                 .is_ok()
+        );
+        assert_eq!(
+            parse_source_isa_observation(
+                &serde_json::json!({"kind": "source-isa-characteristic-v1"})
+            )
+            .unwrap(),
+            ProductionSourceIsaObservationKindV1::Characteristic
         );
         for rejected in [
             serde_json::json!({"kind": "source-isa-summary-v2"}),
@@ -1196,6 +1244,32 @@ mod tests {
         ] {
             assert!(parse_source_isa_observation(&rejected).is_err());
         }
+    }
+
+    #[test]
+    fn characteristic_observation_rejects_multi_unit_configuration() {
+        let scratch = ScratchDirectory::new();
+        let mut manifest = complete_manifest(&scratch, 2);
+        manifest["observation"] =
+            serde_json::json!({"kind": SOURCE_ISA_CHARACTERISTIC_OBSERVATION_KIND_V1});
+        manifest["units"] = serde_json::json!([
+            {
+                "crate_name": "kernel",
+                "source": "src/lib.rs",
+                "working_directory": scratch.0.to_str().unwrap()
+            },
+            {
+                "crate_name": "kernel_two",
+                "source": "src/lib.rs",
+                "working_directory": scratch.0.to_str().unwrap()
+            }
+        ]);
+        let path = scratch.write_manifest("characteristic-multi-unit.json", &manifest);
+        assert!(matches!(
+            prepare_production_manifest_v2(&path),
+            Err(BuildConfigError::Invalid(message))
+                if message == "source-isa-characteristic-v1 requires exactly one configured unit"
+        ));
     }
 
     #[test]
@@ -1362,7 +1436,7 @@ mod tests {
             Value::Null,
             serde_json::json!({}),
             serde_json::json!({"kind": "source-isa-summary-v2"}),
-            serde_json::json!({"kind": SOURCE_ISA_OBSERVATION_KIND_V1, "output": "stderr"}),
+            serde_json::json!({"kind": SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1, "output": "stderr"}),
         ] {
             let mut value = valid.clone();
             value
@@ -1383,7 +1457,7 @@ mod tests {
         let mut v1_with_observation = complete_manifest(&scratch, 1);
         v1_with_observation.as_object_mut().unwrap().insert(
             "observation".to_owned(),
-            serde_json::json!({"kind": SOURCE_ISA_OBSERVATION_KIND_V1}),
+            serde_json::json!({"kind": SOURCE_ISA_SUMMARY_OBSERVATION_KIND_V1}),
         );
         let path = scratch.write_manifest("v1-with-observation.json", &v1_with_observation);
         assert!(prepare_production_manifest_v1(&path).is_err());

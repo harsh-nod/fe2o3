@@ -2,6 +2,8 @@
 
 #[cfg(feature = "device_math_sqrt")]
 use fe2o3_device::DeviceMath;
+#[cfg(feature = "wave_reduce_f32")]
+use fe2o3_device::Gfx950Subgroup;
 #[cfg(any(
     feature = "grid_exclusive",
     feature = "write_only_grid_exclusive",
@@ -49,6 +51,12 @@ use fe2o3_device::sync::syncthreads;
 ))]
 use fe2o3_device::{Blocked, Index1D};
 use fe2o3_device::{DisjointSlice, kernel, thread};
+#[cfg(any(
+    feature = "workgroup_reduce_u32",
+    feature = "workgroup_reduce_i32",
+    feature = "workgroup_reduce_f32"
+))]
+use fe2o3_device::{DynamicLds, WorkgroupCollectives, WorkgroupLdsScope};
 
 #[kernel(
     typed,
@@ -57,6 +65,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 #[cfg(not(any(
     feature = "oob",
     feature = "debug_scalar",
+    feature = "debug_helper",
     feature = "debug_long_name",
     feature = "debug_mutated_argument",
     feature = "shifted",
@@ -76,13 +85,192 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "barrier_early_return",
     feature = "barrier_loop",
     feature = "barrier_helper",
-    feature = "device_math_sqrt"
+    feature = "device_math_sqrt",
+    feature = "wave_reduce_f32",
+    feature = "workgroup_reduce_u32",
+    feature = "workgroup_reduce_i32",
+    feature = "workgroup_reduce_f32",
+    feature = "typed_layout_corpus",
+    feature = "aggregate_pair_struct",
+    feature = "aggregate_pair_tuple",
+    feature = "aggregate_pair_array",
+    feature = "aggregate_zst",
+    feature = "aggregate_nested",
+    feature = "aggregate_enum",
+    feature = "aggregate_pointer",
+    feature = "aggregate_drop"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
     let selected = input[63];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[cfg(feature = "typed_layout_corpus")]
+#[allow(dead_code)]
+struct TypedLayoutRecord {
+    tag: u8,
+    payload: u32,
+}
+
+#[cfg(feature = "typed_layout_corpus")]
+#[allow(dead_code)]
+enum TypedLayoutChoice {
+    Empty,
+    Scalar(u16),
+    Record(TypedLayoutRecord),
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "typed_layout_corpus")]
+pub fn typed_layout_corpus(value: f32, input: &[f32], mut output: DisjointSlice<f32>) {
+    let _record: TypedLayoutRecord;
+    let _tuple: (u16, u64);
+    let _array: [u32; 3];
+    let _choice: TypedLayoutChoice;
+    let _input_extent = input.len();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = value;
+    }
+}
+
+#[cfg(feature = "aggregate_pair_struct")]
+#[repr(C)]
+pub struct AggregatePairStruct {
+    pub first: u32,
+    pub second: u64,
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_pair_struct")]
+pub fn aggregate_pair_struct(
+    value: AggregatePairStruct,
+    mut output: DisjointSlice<u64>,
+    scale: u64,
+) {
+    let _scale = scale;
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = value.second;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_pair_tuple")]
+pub fn aggregate_pair_tuple(value: (u32, u64), mut output: DisjointSlice<u64>, scale: u64) {
+    let _scale = scale;
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = value.1;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_pair_array")]
+pub fn aggregate_pair_array(value: [u64; 2], mut output: DisjointSlice<u64>, scale: u64) {
+    let _scale = scale;
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = value[1];
+    }
+}
+
+#[cfg(feature = "aggregate_zst")]
+pub struct AggregateZst;
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_zst")]
+pub fn aggregate_zst(_marker: AggregateZst, mut output: DisjointSlice<u64>, scale: u64) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = scale;
+    }
+}
+
+#[cfg(feature = "aggregate_nested")]
+#[repr(C)]
+pub struct AggregateNested {
+    pub pair: (u32, u64),
+    pub values: [u16; 2],
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_nested")]
+pub fn aggregate_nested(value: AggregateNested, mut output: DisjointSlice<u64>, scale: u64) {
+    let _scale = scale;
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = value.pair.1;
+    }
+}
+
+#[cfg(feature = "aggregate_enum")]
+pub enum AggregateEnum {
+    First(u64),
+    Second(u64),
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_enum")]
+pub fn aggregate_enum(_value: AggregateEnum, mut output: DisjointSlice<u64>, scale: u64) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = scale;
+    }
+}
+
+#[cfg(feature = "aggregate_pointer")]
+#[repr(C)]
+pub struct AggregatePointer {
+    pub pointer: *const u64,
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_pointer")]
+pub fn aggregate_pointer(_value: AggregatePointer, mut output: DisjointSlice<u64>, scale: u64) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = scale;
+    }
+}
+
+#[cfg(feature = "aggregate_drop")]
+pub struct AggregateDrop {
+    pub value: u64,
+}
+
+#[cfg(feature = "aggregate_drop")]
+impl Drop for AggregateDrop {
+    fn drop(&mut self) {}
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_drop")]
+pub fn aggregate_drop(_value: AggregateDrop, mut output: DisjointSlice<u64>, scale: u64) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = scale;
     }
 }
 
@@ -103,11 +291,101 @@ pub fn device_math_sqrt(value: f32, mut output: DisjointSlice<f32>) {
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
 )]
+#[cfg(feature = "wave_reduce_f32")]
+pub fn wave_reduce_f32(value: f32, mut output: DisjointSlice<f32>) {
+    let lane = thread::index_1d();
+    let subgroup = Gfx950Subgroup::current();
+    let reduced = subgroup.reduce_sum_f32::<64>(value);
+    if let Some(element) = output.get_mut(lane) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 256
+    ),
+)]
+#[cfg(feature = "workgroup_reduce_u32")]
+pub fn workgroup_reduce_u32(value: u32, mut output: DisjointSlice<u32>) {
+    let mut lds_scope = WorkgroupLdsScope::current();
+    let scratch = DynamicLds::<u32>::exact_current::<64>(&mut lds_scope);
+    let context = WorkgroupCollectives::current();
+    let reduced = context.reduce_sum_portable(scratch, value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 256
+    ),
+)]
+#[cfg(feature = "workgroup_reduce_i32")]
+pub fn workgroup_reduce_i32(value: i32, mut output: DisjointSlice<i32>) {
+    let mut lds_scope = WorkgroupLdsScope::current();
+    let scratch = DynamicLds::<i32>::exact_current::<64>(&mut lds_scope);
+    let context = WorkgroupCollectives::current();
+    let reduced = context.reduce_sum_portable(scratch, value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(
+        required = [64, 1, 1],
+        max = [64, 1, 1],
+        static_shared_memory_bytes = 256
+    ),
+)]
+#[cfg(feature = "workgroup_reduce_f32")]
+pub fn workgroup_reduce_f32(value: f32, mut output: DisjointSlice<f32>) {
+    let mut lds_scope = WorkgroupLdsScope::current();
+    let scratch = DynamicLds::<f32>::exact_current::<64>(&mut lds_scope);
+    let context = WorkgroupCollectives::current();
+    let reduced = context.reduce_sum_portable(scratch, value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = reduced;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
 #[cfg(feature = "debug_scalar")]
 pub fn debug_scalar(value: f32, input: &[f32], mut output: DisjointSlice<f32>) {
     let _input_extent = input.len();
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = value;
+    }
+}
+
+#[cfg(feature = "debug_helper")]
+#[inline(never)]
+fn debug_helper_add_one(value: f32) -> f32 {
+    let adjusted = value + 1.0;
+    adjusted
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "debug_helper")]
+pub fn debug_helper(value: f32, mut output: DisjointSlice<f32>) {
+    let adjusted = debug_helper_add_one(value);
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = adjusted;
     }
 }
 

@@ -34,8 +34,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x32, 0x52, 0x23, 0x93, 0xcd, 0xf2, 0xc3, 0xd5, 0x02, 0x06, 0x70, 0x95, 0xe3, 0x90, 0x84, 0xfa,
-    0x9c, 0x30, 0x2f, 0xf8, 0x07, 0x47, 0x4f, 0x35, 0x97, 0x18, 0xf8, 0xfa, 0x75, 0xff, 0xd5, 0xe6,
+    0x2b, 0xa8, 0xbb, 0x9a, 0x55, 0xc2, 0x64, 0x68, 0xc9, 0x7e, 0x08, 0x94, 0x8b, 0xce, 0xf6, 0xe4,
+    0x6c, 0x78, 0x35, 0x01, 0xbe, 0xe4, 0x5c, 0x7c, 0x32, 0xd8, 0x82, 0xe5, 0x34, 0xd4, 0xf6, 0x54,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -269,6 +269,8 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupCollectivesContext,
     WorkgroupCollectivesCurrent,
     WorkgroupReduceSum,
+    WorkgroupInclusiveScanSum,
+    WorkgroupExclusiveScanSum,
     Gfx942CollectivesContext,
     Gfx942CollectivesCurrent,
     Gfx942SubgroupReduceSumF32,
@@ -815,6 +817,16 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::WorkgroupReduceSum,
         "fe2o3_device_workgroup_reduce_sum_v1",
         "fe2o3_device::WorkgroupCollectives::reduce_sum_portable",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupInclusiveScanSum,
+        "fe2o3_device_workgroup_inclusive_scan_sum_v1",
+        "fe2o3_device::WorkgroupCollectives::inclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupExclusiveScanSum,
+        "fe2o3_device_workgroup_exclusive_scan_sum_v1",
+        "fe2o3_device::WorkgroupCollectives::exclusive_scan_sum",
     ),
     (
         TrustedDeviceItem::Gfx942CollectivesContext,
@@ -1643,6 +1655,12 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::WorkgroupReduceSum => {
             "fe2o3_device::collective::{impl#7}::reduce_sum_portable"
         }
+        TrustedDeviceItem::WorkgroupInclusiveScanSum => {
+            "fe2o3_device::collective::{impl#7}::inclusive_scan_sum"
+        }
+        TrustedDeviceItem::WorkgroupExclusiveScanSum => {
+            "fe2o3_device::collective::{impl#7}::exclusive_scan_sum"
+        }
         TrustedDeviceItem::Gfx942CollectivesCurrent => {
             "fe2o3_device::collective::{impl#0}::current"
         }
@@ -1850,6 +1868,8 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::WorkgroupCollectivesContext
             | TrustedDeviceItem::WorkgroupCollectivesCurrent
             | TrustedDeviceItem::WorkgroupReduceSum
+            | TrustedDeviceItem::WorkgroupInclusiveScanSum
+            | TrustedDeviceItem::WorkgroupExclusiveScanSum
             | TrustedDeviceItem::Gfx942CollectivesContext
             | TrustedDeviceItem::Gfx942CollectivesCurrent
             | TrustedDeviceItem::Gfx942SubgroupReduceSumF32
@@ -2822,6 +2842,8 @@ mod tests {
             TrustedDeviceItem::WorkgroupCollectivesContext,
             TrustedDeviceItem::WorkgroupCollectivesCurrent,
             TrustedDeviceItem::WorkgroupReduceSum,
+            TrustedDeviceItem::WorkgroupInclusiveScanSum,
+            TrustedDeviceItem::WorkgroupExclusiveScanSum,
         ];
         for item in neutral {
             let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
@@ -2996,7 +3018,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("32522393cdf2c3d502067095e39084fa9c302ff807474f359718f8fa75ffd5e6")
+            digest("2ba8bb9a55c26468c97e08948bcef6e46c783501bee45c7c32d882e534d4f654")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3493,6 +3515,8 @@ mod tests {
             TrustedDeviceItem::WorkgroupCollectivesContext,
             TrustedDeviceItem::WorkgroupCollectivesCurrent,
             TrustedDeviceItem::WorkgroupReduceSum,
+            TrustedDeviceItem::WorkgroupInclusiveScanSum,
+            TrustedDeviceItem::WorkgroupExclusiveScanSum,
             TrustedDeviceItem::Gfx942CollectivesContext,
             TrustedDeviceItem::Gfx942CollectivesCurrent,
             TrustedDeviceItem::Gfx942SubgroupReduceSumF32,

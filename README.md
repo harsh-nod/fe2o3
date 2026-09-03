@@ -32,13 +32,20 @@ the conditions in the [release process](docs/release-process.md) and
 - **Typed compiler contracts.** Source, semantic MIR, Pliron, Kernel IR,
   LLVM, artifact, and runtime boundaries are represented explicitly and fail
   closed when a required association is unavailable.
-- **CPU simulation without a GPU.** A deterministic Kernel IR V7 simulator can
+- **CPU simulation without a GPU.** A deterministic Kernel IR simulator can
   execute the supported semantic subset and expose logical work-item, wave,
   workgroup, memory, atomic, fence, and barrier observations. It does not
   predict GPU performance.
+- **Virtual runtime without device handles.** Bounded identity-local
+  allocations, copies, queues, dependencies, dispatches, completions, and
+  quiesced failure states execute admitted KIR through the same CPU simulator.
+  This model-only path grants no KFD, load, launch, or hardware authority.
 - **Semantic debugging and profiling.** Agent-facing JSONL protocols preserve
   provenance and distinguish declared, observed, inferred, and unavailable
-  facts. CPU replay supports reverse navigation and structured diagnosis;
+  facts. An artifact-bound transformation sidecar preserves exact one-to-one,
+  one-to-many, many-to-one, many-to-many, and eliminated relations without
+  mistaking cardinality for an optimization observation. CPU replay supports
+  reverse navigation and structured diagnosis;
   bounded ROCgdb control and rocprofv3 planning/import workflows are
   implemented. Admitted stopped-GPU state, protected real-dispatch capture, and
   ATT decoding remain incomplete.
@@ -70,6 +77,10 @@ pub fn fill(mut out: DisjointSlice<f32>) {
 `DisjointSlice` makes the output partition explicit. `thread::index_1d()` is a
 typed logical index, and the bounds check remains part of the admitted kernel
 semantics.
+
+Namespace-free `#[kernel(typed)]` packages are wrapper-managed. Raw Cargo does
+not synthesize their compiler-owned crate binding, so use `cargo fe2o3` or the
+repository scripts when checking kernel examples.
 
 ## Why Write Kernels In fe2o3
 
@@ -141,10 +152,11 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | --- | --- |
 | Rust kernel surface | Typed kernels, device indexing, checked buffer views, bounded scalar/control/memory subsets |
 | Compiler | Source/MIR through typed Pliron and verified KIR; bounded `gfx942` LLVM/HSACO vertical slices |
-| CPU simulation | Deterministic execution of admitted canonical KIR V7, including supported helpers, barriers, workgroup memory, atomics, fences, floating point, and seeded schedule exploration |
+| CPU simulation | Deterministic execution of admitted canonical KIR V7 plus exact direct V9/V10 custody, including supported helpers, barriers, workgroup memory, wave f32 collectives, memory intrinsics, atomics, fences, floating point, and seeded schedule exploration |
+| Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
-| Live debugger | Bounded direct-KFD observation/control and ROCgdb MI integration; hardware lane/register/PC/source state remains incomplete |
-| Profiling | Bounded rocprofv3 dispatch import with strict JSON/CSV admission and agent-facing observation queries; real-dispatch and ATT coverage remains incomplete |
+| Live debugger | Bounded direct-KFD observation/control; ROCgdb V4 authenticates hierarchy/relative PC and V5 adds same-stop structured register/scalar-local inspection, while the installed direct-KFD target still cannot produce a physical GPU stop and source/ISA/memory remain typed unavailable |
+| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, opt-in direct-KFD runtime lifecycle, host-staging, queue/stream membership, completion and evidence-cited lifecycle causality queries, and a bounded paired rocprof-wrapper host-wall comparison; protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, device-copy/dependency producers, cross-run site comparison, capture-overhead qualification, and direct-KFD cross-collector correlation remain incomplete |
 | Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
 | Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
 
@@ -158,16 +170,30 @@ milestones are retained in the [project status archive](docs/project-status.md).
   MI300X `gfx942:xnack-` profile. Other AMD targets are not implied.
 - An ordinary external project cannot yet compile and dispatch a general Rust
   kernel through one supported public command.
-- The simulator accepts a defined KIR V7 semantic subset. Unsupported types and
-  operations fail closed; CPU results are not timing or performance predictions.
+- The simulator accepts defined KIR V7/V9/V10 semantic subsets. Legacy bundles
+  and raw CLI inputs carry V7; explicit authority-free Bundle V5 carries an
+  exact production V8/V9 module re-encoded losslessly as V10. Unsupported types
+  and operations fail closed; CPU results are not timing or performance
+  predictions.
 - CPU logical waves model semantic collectives and visualization partitions,
   not physical GPU wave scheduling or `EXEC` state.
-- Live KFD debugging does not yet expose general wave/lane PC, registers,
-  target memory, source stepping, or breakpoints.
+- Live KFD debugging admits authenticated hierarchy and relative-PC evidence and
+  can retain same-stop, wave-scoped register values and simple scalar locals.
+  The installed direct-KFD target cannot yet produce a physical GPU stop, and
+  general lane values, target memory, source stepping, and breakpoints remain
+  unavailable.
 - ROCgdb integration is bounded by what the installed debugger exposes and is
   not a source of fe2o3 compiler or runtime authority.
-- Profiler import has not completed a protected real GPU-dispatch rocprofv3
-  round trip. ATT decoding is unavailable without a mutation-proof decoder.
+- One protected MI300X direct-KFD/rocprofv3 qualification completed with exact
+  runtime dispatch evidence, but that ROCprofiler SDK 1.1.0 run produced no
+  collector artifacts and therefore no cross-collector dispatch import or
+  join. Supplied PC evidence can be joined exactly to sparse
+  characteristic source/IR/ISA coordinates, but that archive remains a
+  self-claim without producer readmission and does not enable cross-run site
+  deltas. Direct-KFD runtime observations now expose bounded local lifecycle
+  causality, but do not imply rocprof correlation, device timing, counters, PC
+  samples, dependency edges, or copy-engine events. ATT decoding is unavailable
+  without a mutation-proof decoder.
 - Multi-GPU distributed kernels and communication/computation overlap are not
   a supported execution surface.
 - The compiler and protocols are evolving. Do not treat crate APIs, KIR, bundle,
@@ -206,6 +232,9 @@ profiler, simulator, verification, and evidence contracts.
 | `crates/cargo-fe2o3` | Cargo orchestration, inspection, debug, and profile commands |
 | `crates/fe2o3-kfd` | Direct Linux KFD boundary |
 | `crates/fe2o3-kir-sim*` | Deterministic CPU simulator and CLI |
+| `crates/fe2o3-sim-differential` | Generated CPU semantic differential harness and reducer; its production closure is GPU-runtime-free |
+| `crates/fe2o3-sim-physical-differential` | Opt-in identity-bound simulator/direct-KFD comparison protocol |
+| `crates/fe2o3-virtual-runtime*` | Authority-free virtual lifecycle and headless JSON CLI over admitted simulator inputs |
 | `crates/fe2o3-debug-*` | Debug protocol, simulator debugger, and live-tool adapters |
 | `examples/` | Kernel source, host-boundary, proof, and qualification examples |
 | `docs/` | Architecture, contracts, evidence policy, testing, and status |
@@ -217,14 +246,18 @@ Run the bounded contributor preflight before opening a pull request:
 
 ```console
 cargo fmt --all -- --check
+bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
 ```
 
 Compiler, runtime, proof, and trust-policy changes must also run their
-applicable broader lanes, including `bash scripts/ci-local.sh generic-core`
-where required. The full validation matrix adds codegen shards, policy checks,
-Verus, compile-only AMDGPU checks, and hardware lanes. See
+applicable broader lanes, including `bash scripts/ci-local.sh check` for
+workspace/package check coverage and `bash scripts/ci-local.sh generic-core`
+where required. Do not replace those lanes with raw
+`cargo check --workspace --all-targets`: wrapper-managed typed kernels require
+the sealed `cargo-fe2o3` driver. The full validation matrix adds codegen
+shards, policy checks, Verus, compile-only AMDGPU checks, and hardware lanes. See
 [testing](docs/testing.md) for trust boundaries and required environments.
 
 External contributions are welcome once they satisfy the repository's

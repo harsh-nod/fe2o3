@@ -3196,6 +3196,16 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
             TerminalIdentitySchemaV1::CombinedV3 => 112,
         },
+        ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 113,
+            TerminalIdentitySchemaV1::CombinedV3 => 113,
+        },
+        ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
+            #[cfg(test)]
+            TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
+            TerminalIdentitySchemaV1::CombinedV3 => 114,
+        },
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -3439,12 +3449,14 @@ mod tests {
             [
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(
                 expansion,
                 TerminalIdentitySchemaV1::CombinedV3,
             )),
-            [111, 112],
+            [111, 112, 113, 114],
         );
 
         let gfx950 = [
@@ -3575,9 +3587,13 @@ mod tests {
                 ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(expansion, combined_schema)),
-            [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+            [
+                100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+            ]
         );
         assert_eq!(
             [

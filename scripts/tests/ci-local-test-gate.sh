@@ -365,19 +365,7 @@ assert_no_codegen_test_driver() {
 
 assert_source_isa_unit_matrix_gate() {
   local omitted name
-  local -a required_environment=(
-    FE2O3_TEST_CARGO_FE2O3_BIN
-    FE2O3_TEST_CARGO_FE2O3_SHA256
-    FE2O3_PRODUCTION_BUILD_CONFIG_V2
-    FE2O3_AUTHORITY_BACKEND_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_PATH_V1
-    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_SHA256_V1
-    FE2O3_BACKEND
-  )
+  local -a required_environment=("${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}")
 
   if (unset FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX; run_source_isa_unit_matrix) \
     >/dev/null 2>&1; then
@@ -485,6 +473,69 @@ assert_source_isa_characteristic_contract_v2_gate() {
   STEP_COMMANDS=()
 }
 
+assert_source_isa_characteristic_matrix_v2_gate() {
+  local omitted name
+  local -a required_environment=("${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}")
+  if (
+    unset FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2
+    run_source_isa_characteristic_matrix_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 matrix ran without its explicit opt-in' >&2
+    exit 1
+  fi
+  export FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2=1
+  for name in "${required_environment[@]}"; do
+    printf -v "${name}" '%s' fixture
+    export "${name}"
+  done
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Darwin ;;
+        -m) printf '%s\n' x86_64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_characteristic_matrix_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 matrix ran on a non-Linux host' >&2
+    exit 1
+  fi
+  if (
+    uname() {
+      case "$1" in
+        -s) printf '%s\n' Linux ;;
+        -m) printf '%s\n' aarch64 ;;
+        *) return 2 ;;
+      esac
+    }
+    run_source_isa_characteristic_matrix_v2
+  ) >/dev/null 2>&1; then
+    printf '%s\n' 'source/ISA characteristic V2 matrix ran on a non-x86_64 host' >&2
+    exit 1
+  fi
+  for omitted in "${required_environment[@]}"; do
+    if (unset "${omitted}"; run_source_isa_characteristic_matrix_v2) >/dev/null 2>&1; then
+      printf 'source/ISA characteristic V2 matrix ran without %s\n' "${omitted}" >&2
+      exit 1
+    fi
+  done
+
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+  run_source_isa_characteristic_matrix_v2
+  assert_equals \
+    'cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 production_source_isa_characteristic_matrix_v2::production_adapter_v2::ordinary_source_units_preserve_characteristic_facts_on_both_targets_v2 -- --ignored --exact --test-threads=1 --nocapture' \
+    "$(step_command source-isa-characteristic-matrix-v2)" \
+    'protected source/ISA characteristic V2 matrix did not retain its exact serial ignored-test command'
+  unset FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2
+  for name in "${required_environment[@]}"; do
+    unset "${name}"
+  done
+  STEP_NAMES=()
+  STEP_COMMANDS=()
+}
+
 codegen_target_prefix() {
   printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}"
@@ -521,6 +572,7 @@ assert_all_codegen_targets_once() {
 
 assert_source_isa_unit_matrix_gate
 assert_source_isa_characteristic_contract_v2_gate
+assert_source_isa_characteristic_matrix_v2_gate
 run_tests
 assert_no_codegen_test_driver
 assert_equals \
@@ -680,6 +732,8 @@ assert_step_count source-isa-unit-matrix 0 \
   'generic core unexpectedly ran the protected source/ISA unit matrix'
 assert_step_count source-isa-characteristic-contract-v2 0 \
   'generic core unexpectedly ran the protected source/ISA characteristic V2 contract'
+assert_step_count source-isa-characteristic-matrix-v2 0 \
+  'generic core unexpectedly ran the protected source/ISA characteristic V2 matrix'
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \
@@ -709,6 +763,17 @@ for core_step in \
   standalone-flash-attention-general-host-check \
   backend-build \
   backend-all-features-build \
+  virtual-runtime-no-gpu-metadata \
+  virtual-runtime-no-gpu-build \
+  virtual-runtime-no-gpu-elf \
+  sim-differential-no-gpu-build \
+  sim-differential-no-gpu-elf \
+  sim-runtime-no-gpu-build \
+  sim-runtime-no-gpu-metadata \
+  sim-runtime-no-gpu-elf \
+  kir-sim-capability-matrix \
+  kir-sim-scalar-differential \
+  kir-sim-semantic-differential \
   ci-local-test-gate \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
@@ -786,6 +851,42 @@ assert_equals \
   'env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p fe2o3-core --test production_runtime_surface_ui' \
   "$(step_command core-production-runtime-surface-ui)" \
   'generic core did not retain the default-feature raw launch rejection UI'
+assert_equals \
+  'cargo test --locked -p fe2o3-kir-sim --test capability_matrix' \
+  "$(step_command kir-sim-capability-matrix)" \
+  'generic core did not retain the exact simulator capability-matrix gate'
+assert_equals \
+  'cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256' \
+  "$(step_command kir-sim-scalar-differential)" \
+  'generic core did not retain the exact independent scalar differential gate'
+assert_equals \
+  'cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0' \
+  "$(step_command kir-sim-semantic-differential)" \
+  'generic core did not retain the exact semantic family differential gate'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} metadata --cargo --root fe2o3-virtual-runtime --root fe2o3-virtual-runtime-cli --root fe2o3-sim-differential" \
+  "$(step_command virtual-runtime-no-gpu-metadata)" \
+  'generic core did not audit every issue 216 no-GPU dependency closure'
+assert_equals \
+  "env CARGO_TARGET_DIR=${RUNTIME_PURE_RUST_TARGET_DIR} cargo build --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential" \
+  "$(step_command sim-differential-no-gpu-build)" \
+  'generic core did not build the scalar differential command for ELF audit'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} elf --input ${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential" \
+  "$(step_command sim-differential-no-gpu-elf)" \
+  'generic core did not audit the scalar differential ELF closure'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${SIM_RUNTIME_NO_GPU_POLICY} metadata --cargo --root fe2o3-sim-runtime" \
+  "$(step_command sim-runtime-no-gpu-metadata)" \
+  'generic core did not audit the normal runtime simulator package closure'
+assert_equals \
+  "env CARGO_TARGET_DIR=${RUNTIME_PURE_RUST_TARGET_DIR} cargo build --locked -p fe2o3-sim-runtime --example sim-runtime-evidence" \
+  "$(step_command sim-runtime-no-gpu-build)" \
+  'generic core did not build the normal runtime simulator adapter for ELF audit'
+assert_equals \
+  "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${SIM_RUNTIME_NO_GPU_POLICY} elf --input ${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/sim-runtime-evidence" \
+  "$(step_command sim-runtime-no-gpu-elf)" \
+  'generic core did not audit the normal runtime simulator adapter ELF'
 assert_equals \
   0 \
   "$(step_count cpu-tests-cargo-fe2o3-bootstrap)" \
@@ -1154,6 +1255,10 @@ assert_equals \
   'cargo run --locked -p fe2o3-kfd --features live-validation --example kfd-compute-aql-queue -- --all' \
   "$(step_command hardware-kfd-compute-aql-queue)" \
   'hardware smoke did not exercise KFD AQL queue ownership on every device'
+assert_equals \
+  'bash scripts/kfd-profiler-hardware-smoke.sh' \
+  "$(step_command hardware-kfd-profiler-smoke)" \
+  'hardware smoke did not produce and query a direct-KFD runtime capture'
 assert_equals \
   'cargo test --locked -p fe2o3-kfd --features live-validation --test kfd_debug_trap_live -- --exact mi300x_ptrace_runtime_handshake_and_typed_gate --nocapture --test-threads=1' \
   "$(step_command hardware-kfd-debug-trap-live)" \

@@ -64,7 +64,8 @@ use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProductionCompilerModuleHandoffIntake,
 };
 use crate::source_isa_observation::{
-    finalized_source_isa_observation_frame_v1, ready_source_isa_observation_frame_v1,
+    finalized_source_isa_characteristic_observation_v1, finalized_source_isa_observation_frame_v1,
+    ready_source_isa_observation_frame_v1,
 };
 use crate::{
     ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV, RUSTC_CHILD_FD,
@@ -385,7 +386,16 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 } else {
                     None
                 };
-                Some((current_dir, selected_kernel_root, source_isa_binding))
+                let observation_kind = build_config
+                    .as_ref()
+                    .and_then(PreparedProductionBuildConfig::source_isa_observation_kind)
+                    .expect("enabled V2 observation has an exact kind");
+                Some((
+                    current_dir,
+                    selected_kernel_root,
+                    source_isa_binding,
+                    observation_kind,
+                ))
             } else {
                 None
             };
@@ -403,7 +413,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let retain_source_isa_observer =
                 source_isa_selection
                     .as_ref()
-                    .is_some_and(|(_, selected, binding)| {
+                    .is_some_and(|(_, selected, binding, _)| {
                         retain_source_isa_observer(*selected, *binding)
                     });
             let mut compiler_capabilities = if retain_source_isa_observer {
@@ -413,8 +423,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else {
                 CompilerCapabilities::from_production_environment(capability_binding)?
             };
-            let (current_dir, selected_kernel_root, source_isa_binding) = match source_isa_selection
-            {
+            let (
+                current_dir,
+                selected_kernel_root,
+                source_isa_binding,
+                source_isa_observation_kind,
+            ) = match source_isa_selection {
                 Some(selection) => selection,
                 None => {
                     let current_dir =
@@ -429,7 +443,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         }),
                         std::env::var_os(crate::CARGO_PRIMARY_PACKAGE_ENV).as_deref(),
                     )?;
-                    (current_dir, selected_kernel_root, None)
+                    (
+                        current_dir,
+                        selected_kernel_root,
+                        None,
+                        crate::build_config::ProductionSourceIsaObservationKindV1::Summary,
+                    )
                 }
             };
             let mut managed = if !selected_kernel_root {
@@ -469,6 +488,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     config: source_isa_binding.expect("V2 observer binding exists").0,
                     unit: source_isa_binding.expect("V2 observer binding exists").1,
                     attempt: managed.attempt,
+                    kind: source_isa_observation_kind,
                     sink: Some(observer),
                 });
             }
@@ -1702,6 +1722,7 @@ struct SourceIsaObservationEmitterV1 {
     config: [u8; 32],
     unit: [u8; 32],
     attempt: BuildAttempt,
+    kind: crate::build_config::ProductionSourceIsaObservationKindV1,
     sink: Option<capability_broker::SourceIsaObservationSinkV1>,
 }
 
@@ -1714,18 +1735,12 @@ enum SourceIsaObservationEmissionTelemetryV1 {
     Submitted,
 }
 
-fn emit_source_isa_observation_once<Sink, MappingError, SubmissionError>(
+fn emit_source_isa_observation_once<Sink, Mapped, MappingError, SubmissionError>(
     sink: &mut Option<Sink>,
     expected_attempt: BuildAttempt,
     observed_attempt: BuildAttempt,
-    map: impl FnOnce() -> Result<
-        fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1,
-        MappingError,
-    >,
-    submit: impl FnOnce(
-        Sink,
-        &fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1,
-    ) -> Result<(), SubmissionError>,
+    map: impl FnOnce() -> Result<Mapped, MappingError>,
+    submit: impl FnOnce(Sink, &Mapped) -> Result<(), SubmissionError>,
 ) -> SourceIsaObservationEmissionTelemetryV1
 where
     MappingError: fmt::Display,
@@ -1737,13 +1752,13 @@ where
     if observed_attempt != expected_attempt {
         return SourceIsaObservationEmissionTelemetryV1::AttemptMismatch;
     }
-    let frame = match map() {
-        Ok(frame) => frame,
+    let mapped = match map() {
+        Ok(mapped) => mapped,
         Err(error) => {
             return SourceIsaObservationEmissionTelemetryV1::MappingFailed(error.to_string());
         }
     };
-    match submit(sink, &frame) {
+    match submit(sink, &mapped) {
         Ok(()) => SourceIsaObservationEmissionTelemetryV1::Submitted,
         Err(error) => SourceIsaObservationEmissionTelemetryV1::SubmissionFailed(error.to_string()),
     }
@@ -1776,16 +1791,52 @@ impl SourceIsaObservationEmitterV1 {
         &mut self,
         finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
     ) {
-        report_source_isa_observation_emission(emit_source_isa_observation_once(
-            &mut self.sink,
-            self.attempt,
-            finalized.attempt(),
-            || finalized_source_isa_observation_frame_v1(self.config, self.unit, finalized),
-            capability_broker::SourceIsaObservationSinkV1::submit,
-        ));
+        let status = match self.kind {
+            crate::build_config::ProductionSourceIsaObservationKindV1::Summary => {
+                emit_source_isa_observation_once(
+                    &mut self.sink,
+                    self.attempt,
+                    finalized.attempt(),
+                    || finalized_source_isa_observation_frame_v1(self.config, self.unit, finalized),
+                    capability_broker::SourceIsaObservationSinkV1::submit,
+                )
+            }
+            crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic => {
+                emit_source_isa_observation_once(
+                    &mut self.sink,
+                    self.attempt,
+                    finalized.attempt(),
+                    || {
+                        Ok::<_, String>((
+                            finalized_source_isa_observation_frame_v1(
+                                self.config,
+                                self.unit,
+                                finalized,
+                            )
+                            .map_err(|error| error.to_string())?,
+                            finalized_source_isa_characteristic_observation_v1(finalized)?,
+                        ))
+                    },
+                    |sink, (frame, characteristic)| {
+                        sink.submit_characteristic(frame, characteristic)
+                    },
+                )
+            }
+        };
+        report_source_isa_observation_emission(status);
     }
 
     fn emit_ready(&mut self, attempt: BuildAttempt, finalization: [u8; 32]) {
+        if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
+            self.sink.take();
+            report_source_isa_observation_emission(
+                SourceIsaObservationEmissionTelemetryV1::MappingFailed(
+                    "finalized Source/ISA characteristic evidence is unavailable from ready state"
+                        .to_owned(),
+                ),
+            );
+            return;
+        }
         report_source_isa_observation_emission(emit_source_isa_observation_once(
             &mut self.sink,
             self.attempt,
@@ -2725,7 +2776,9 @@ mod lifecycle_tests {
                 expected_attempt,
                 attempt(6),
                 || -> Result<_, String> { panic!("mismatched attempt must not map") },
-                |_sink, _frame| -> Result<(), String> {
+                |_sink,
+                 _frame: &fe2o3_source_isa_observation::wire_v1::SourceIsaObservationFrameV1|
+                 -> Result<(), String> {
                     panic!("mismatched attempt must not submit")
                 },
             ),

@@ -1167,9 +1167,13 @@ fn reference_query_results_v2(
 }
 
 #[test]
-fn characteristic_matrix_v2_contract_is_lossless_and_remains_unexecuted() {
+fn characteristic_matrix_v2_contract_is_lossless_and_production_adapter_is_wired() {
     let source = include_str!("production_source_isa_characteristic_matrix_v2.rs");
-    assert!(source.contains("#[cfg(target_os = \"none\")]"));
+    assert!(!source.contains("#[cfg(target_os = \"none\")]"));
+    assert!(source.contains("mod production_adapter_v2"));
+    assert!(source.contains("run_protected_build_stderr"));
+    assert!(source.contains("source-isa-characteristic-v1"));
+    assert!(source.contains("ordinary_source_units_preserve_characteristic_facts"));
     assert!(source.contains("admit_production_source_isa_characteristics_v1"));
     assert!(source.contains("ProductionSourceIsaCatalogV1"));
     assert!(source.contains("ProductionKirV7StructuralBridgeV1"));
@@ -1184,6 +1188,40 @@ fn characteristic_matrix_v2_contract_is_lossless_and_remains_unexecuted() {
     assert_eq!(families_v2().len() * 2, 6);
     assert_eq!(unit_contracts_v2().len(), 3);
     assert_eq!(hostile_substitutions_v2().len(), 19);
+    let capabilities = fe2o3_kernel_ir::production_semantic_debug_transformation_capabilities_v1();
+    assert_eq!(capabilities.len(), 6);
+    assert_eq!(
+        capabilities
+            .iter()
+            .map(|capability| (capability.class(), capability.availability()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Duplicated,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+            ),
+            (
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Fused,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+            ),
+            (
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Outlined,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoSchemaRepresentation,
+            ),
+            (
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Inlined,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+            ),
+            (
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Moved,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter,
+            ),
+            (
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationClassV1::Eliminated,
+                fe2o3_kernel_ir::ProductionSemanticDebugTransformationAvailabilityV1::Representable,
+            ),
+        ]
+    );
     let _unbound: Option<&dyn ProtectedCharacteristicAdapterV2<Error = String>> = None;
     let mut reference = ReferenceContractAdapterV2;
     assert_protected_characteristic_matrix_v2(&mut reference);
@@ -1721,23 +1759,80 @@ fn reference_characteristic_v2(
     }
 }
 
-// This module is intentionally outside every supported protected target. It freezes the remaining
-// protected build and Broker capture responsibilities. The authority-free producer/observer
-// release and exact readmission adapter are tested in fe2o3-hsaco-finalize; the manual workflow
-// validates this contract but does not run the 3x2 matrix.
-#[cfg(target_os = "none")]
-mod pending_production_adapter_v2 {
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod production_adapter_v2 {
     use super::*;
+    use std::path::{Path, PathBuf};
 
-    struct ProductionCharacteristicAdapterV2;
+    use fe2o3_source_isa_observation::characteristic_v1::{
+        InertSourceIsaCharacteristicCollectionV1, SourceIsaCharacteristicBindingV1,
+        SourceIsaCharacteristicCollectionV1,
+        SourceIsaCharacteristicCompilerHandoffLlvmCoordinateV1,
+        SourceIsaCharacteristicContentIdentityV1, SourceIsaCharacteristicIsaIntervalV1,
+        SourceIsaCharacteristicKindV1, SourceIsaCharacteristicKirCoordinateV1,
+        SourceIsaCharacteristicKirVersionV1, SourceIsaCharacteristicMatchOutcomeV1,
+        SourceIsaCharacteristicMemoryFormV1, SourceIsaCharacteristicMirCoordinateV1,
+        SourceIsaCharacteristicPreKirEliminationV1, SourceIsaCharacteristicQueryV1,
+        SourceIsaCharacteristicRecordKindV1, SourceIsaCharacteristicScanStateV1,
+        SourceIsaCharacteristicScanSummaryV1, SourceIsaCharacteristicSourceCoordinateV1,
+        SourceIsaCharacteristicSourceSpanV1, SourceIsaCharacteristicStructuralCountsV1,
+        SourceIsaCharacteristicTargetCorrelationV1, SourceIsaCharacteristicTargetProfileV1,
+        SourceIsaCharacteristicTargetQueryV1, SourceIsaCharacteristicTargetV1,
+        SourceIsaCharacteristicTransformationV1,
+    };
+    use serde_json::Value;
+
+    use crate::build_config::{PRODUCTION_BUILD_CONFIG_V2_ENV, PreparedProductionBuildConfig};
+    use crate::production_source_isa_unit_matrix_v1::{
+        ScratchDirectory, UnitCaseV1, assert_sources_unchanged, measured_test_driver,
+        read_bounded_template, run_protected_build_stderr, snapshot_sources, unit_cases, workspace,
+        write_case_config,
+    };
+
+    const CHARACTERISTIC_PREFIX: &str =
+        "[cargo-fe2o3] source-isa-characteristic-broker-v3 encoding=hex:";
+
+    struct ProductionCharacteristicAdapterV2 {
+        units: [UnitCaseV1; 3],
+        driver: crate::pinned_executable::PinnedExecutable,
+        template: Value,
+        exact_bodies: BTreeMap<(KernelFamilyV2, TargetV2), (BrokerCellBindingV3, Vec<u8>)>,
+    }
+
+    impl ProductionCharacteristicAdapterV2 {
+        fn from_environment() -> Self {
+            let workspace = workspace();
+            let template_path = PathBuf::from(
+                std::env::var_os(PRODUCTION_BUILD_CONFIG_V2_ENV).unwrap_or_else(|| {
+                    panic!(
+                        "set {PRODUCTION_BUILD_CONFIG_V2_ENV} to a canonical protected V2 template"
+                    )
+                }),
+            );
+            Self {
+                units: unit_cases(&workspace),
+                driver: measured_test_driver(),
+                template: read_bounded_template(&template_path),
+                exact_bodies: BTreeMap::new(),
+            }
+        }
+
+        fn unit(&self, family: KernelFamilyV2) -> &UnitCaseV1 {
+            let index = families_v2()
+                .iter()
+                .position(|candidate| *candidate == family)
+                .expect("production family belongs to the exact matrix");
+            &self.units[index]
+        }
+    }
 
     impl ProtectedCharacteristicAdapterV2 for ProductionCharacteristicAdapterV2 {
-        type Error = &'static str;
+        type Error = String;
 
         fn capture(
             &mut self,
-            _family: KernelFamilyV2,
-            _target: TargetV2,
+            family: KernelFamilyV2,
+            target: TargetV2,
         ) -> Result<
             (
                 BrokerCellBindingV3,
@@ -1746,33 +1841,1378 @@ mod pending_production_adapter_v2 {
             ),
             Self::Error,
         > {
-            Err("protected characteristic capture adapter is not implemented")
+            let unit = self.unit(family);
+            let snapshot = snapshot_sources(unit);
+            let config_scratch = ScratchDirectory::new(unit.label);
+            let mut template = self.template.clone();
+            template["observation"] = serde_json::json!({"kind": "source-isa-characteristic-v1"});
+            let config_path = write_case_config(
+                &config_scratch.0,
+                &template,
+                unit,
+                unit.crate_name,
+                unit.source,
+            );
+            let config = PreparedProductionBuildConfig::from_v2_manifest_for_test(&config_path)
+                .map_err(|error| format!("characteristic V2 config rejected: {error}"))?;
+            let unit_identity = config
+                .source_isa_unit_identity(
+                    unit.crate_name,
+                    Path::new(unit.source),
+                    &unit.working_directory,
+                )
+                .ok_or_else(|| "characteristic V2 config omitted its exact unit".to_owned())?;
+            let cpu = match target {
+                TargetV2::Gfx942 => "gfx942",
+                TargetV2::Gfx950 => "gfx950",
+            };
+            let build_scratch =
+                ScratchDirectory::new(&format!("{}-{cpu}-characteristic", unit.label));
+            let stderr =
+                run_protected_build_stderr(&self.driver, unit, cpu, &config_path, &build_scratch.0);
+            assert_sources_unchanged(&snapshot);
+            let binding = BrokerCellBindingV3 {
+                config: *config.identity().as_bytes(),
+                unit: *unit_identity.as_bytes(),
+                target,
+            };
+            let encoded = parse_characteristic_line(&stderr)?;
+            let broker = read_broker_v3(encoded.as_slice(), binding)?;
+            let inert = InertSourceIsaCharacteristicCollectionV1::decode_canonical(&broker.body)
+                .map_err(|error| format!("characteristic body rejected: {error}"))?;
+            if inert.grants_compiler_authority()
+                || inert.grants_runtime_authority()
+                || inert.grants_hardware_observation_authority()
+            {
+                return Err("inert characteristic body acquired authority".to_owned());
+            }
+            let collection = inert.into_self_claimed_archive_for_agent_inspection_v1();
+            if collection
+                .encode_canonical()
+                .map_err(|error| error.to_string())?
+                != broker.body
+            {
+                return Err("characteristic body is not an exact canonical round trip".to_owned());
+            }
+            let cell = map_collection(family, &collection)?;
+            let producer_binding = cell.producer_binding;
+            if self
+                .exact_bodies
+                .insert((family, target), (binding, broker.body))
+                .is_some()
+            {
+                return Err("duplicate production characteristic cell".to_owned());
+            }
+            Ok((binding, producer_binding, cell))
         }
 
         fn reseal_and_readmit(
             &mut self,
-            _admitted: &AdmittedCharacteristicCellV2,
-            _substitution: HostileSubstitutionV2,
+            admitted: &AdmittedCharacteristicCellV2,
+            substitution: HostileSubstitutionV2,
         ) -> Result<AdmittedCharacteristicCellV2, Self::Error> {
-            Err("protected characteristic Broker reseal adapter is not implemented")
+            let target = admitted.producer_binding.target;
+            let (broker_binding, exact_body) = self
+                .exact_bodies
+                .get(&(admitted.family, target))
+                .ok_or_else(|| "missing exact authenticated production body".to_owned())?;
+            let exact = InertSourceIsaCharacteristicCollectionV1::decode_canonical(exact_body)
+                .map_err(|error| error.to_string())?
+                .into_self_claimed_archive_for_agent_inspection_v1();
+            if matches!(substitution, HostileSubstitutionV2::BrokerConfigIdentity) {
+                let mut substituted = encode_broker_v3(*broker_binding, exact_body);
+                substituted[BROKER_MAGIC_V3.len() + 32] ^= 1;
+                return match read_broker_v3(substituted.as_slice(), *broker_binding) {
+                    Ok(_) => map_collection(admitted.family, &exact),
+                    Err(error) => Err(format!(
+                        "Broker V3 rejected production config substitution: {error}"
+                    )),
+                };
+            }
+            if matches!(substitution, HostileSubstitutionV2::BrokerUnitIdentity) {
+                let mut substituted = encode_broker_v3(*broker_binding, exact_body);
+                substituted[BROKER_MAGIC_V3.len() + 64] ^= 1;
+                return match read_broker_v3(substituted.as_slice(), *broker_binding) {
+                    Ok(_) => map_collection(admitted.family, &exact),
+                    Err(error) => Err(format!("Broker V3 rejected unit substitution: {error}")),
+                };
+            }
+            let mutated = canonically_resealed_substitution(admitted, substitution)?;
+            let encoded = rebuild_collection(&mutated)?
+                .encode_canonical()
+                .map_err(|error| error.to_string())?;
+            let inert = InertSourceIsaCharacteristicCollectionV1::decode_canonical(&encoded)
+                .map_err(|error| error.to_string())?;
+            inert
+                .admit_exact_projection_v1(&exact)
+                .map_err(|error| format!("exact production projection rejected: {error}"))?;
+            map_collection(admitted.family, &exact)
         }
     }
 
     #[test]
-    #[ignore = "requires the protected authority service, measured Worker V3, and protected capture adapter"]
+    #[ignore = "requires the protected authority service and measured Worker V3 environment"]
     fn ordinary_source_units_preserve_characteristic_facts_on_both_targets_v2() {
-        let mut adapter = ProductionCharacteristicAdapterV2;
+        let mut adapter = ProductionCharacteristicAdapterV2::from_environment();
         assert_protected_characteristic_matrix_v2(&mut adapter);
     }
 
-    // Required adapter operations:
-    // 1. run all six ordinary-source builds through sealed production V2 authority;
-    // 2. read one config/unit/target-bound Broker V3 body and require exact EOF;
-    // 3. canonical-decode the inert characteristic V1 collection;
-    // 4. call `admit_production_source_isa_characteristics_v1` with canonical target KIR,
-    //    `ProductionSourceIsaCatalogV1`, and `ProductionKirV7StructuralBridgeV1`;
-    // 5. release and independently exact-readmit every producer binding, target fact, backend
-    //    elimination, pre-KIR elimination, duplicate occurrence, and complete-scan count;
-    // 6. compare complete forward/reverse occurrence sets and interval pages; and
-    // 7. canonically reseal each hostile substitution, then reject it at exact projection.
+    #[test]
+    fn reconstructed_archive_rejects_every_hostile_binding_and_fact_substitution() {
+        let mut reference = ReferenceContractAdapterV2;
+        let (broker, _, cell) = reference
+            .capture(KernelFamilyV2::ElementwiseFill, TargetV2::Gfx942)
+            .unwrap();
+        let exact = rebuild_collection(&cell).unwrap();
+        let exact_bytes = exact.encode_canonical().unwrap();
+        assert_eq!(map_collection(cell.family, &exact).unwrap(), cell);
+
+        for substitution in hostile_substitutions_v2() {
+            match substitution {
+                HostileSubstitutionV2::BrokerConfigIdentity
+                | HostileSubstitutionV2::BrokerUnitIdentity => {
+                    let mut encoded = encode_broker_v3(broker, &exact_bytes);
+                    let offset = BROKER_MAGIC_V3.len()
+                        + if substitution == HostileSubstitutionV2::BrokerConfigIdentity {
+                            32
+                        } else {
+                            64
+                        };
+                    encoded[offset] ^= 1;
+                    assert!(read_broker_v3(encoded.as_slice(), broker).is_err());
+                }
+                _ => {
+                    let changed = canonically_resealed_substitution(&cell, substitution).unwrap();
+                    let encoded = rebuild_collection(&changed)
+                        .unwrap()
+                        .encode_canonical()
+                        .unwrap();
+                    let inert =
+                        InertSourceIsaCharacteristicCollectionV1::decode_canonical(&encoded)
+                            .unwrap();
+                    assert_eq!(
+                        inert.admit_exact_projection_v1(&exact).unwrap_err(),
+                        fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicErrorV1::IdentityMismatch,
+                        "{substitution:?} did not fail exact producer readmission"
+                    );
+                }
+            }
+        }
+    }
+
+    fn parse_characteristic_line(stderr: &str) -> Result<Vec<u8>, String> {
+        let mut matches = stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix(CHARACTERISTIC_PREFIX));
+        let encoded = matches
+            .next()
+            .ok_or_else(|| "missing Source/ISA characteristic Broker V3 line".to_owned())?
+            .strip_suffix(" authority=observation-only")
+            .ok_or_else(|| "malformed Source/ISA characteristic Broker V3 suffix".to_owned())?;
+        if matches.next().is_some() {
+            return Err("multiple Source/ISA characteristic Broker V3 lines".to_owned());
+        }
+        if encoded.is_empty()
+            || !encoded.len().is_multiple_of(2)
+            || encoded.len()
+                > MAX_BROKER_BODY_BYTES_V3
+                    .saturating_add(256)
+                    .saturating_mul(2)
+            || !encoded
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("Broker V3 line is not bounded canonical lowercase hex".to_owned());
+        }
+        encoded
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                u8::from_str_radix(std::str::from_utf8(pair).expect("validated ASCII hex"), 16)
+                    .map_err(|error| format!("invalid Broker V3 hex pair: {error}"))
+            })
+            .collect()
+    }
+
+    fn map_collection(
+        family: KernelFamilyV2,
+        collection: &SourceIsaCharacteristicCollectionV1,
+    ) -> Result<AdmittedCharacteristicCellV2, String> {
+        let binding = map_binding(collection)?;
+        let scan = collection.scan();
+        if !matches!(scan.state(), SourceIsaCharacteristicScanStateV1::Complete) {
+            return Err(format!(
+                "production characteristic scan is incomplete: {:?}",
+                scan.state()
+            ));
+        }
+        let characteristics = collection
+            .targets()
+            .iter()
+            .map(map_target)
+            .collect::<Result<Vec<_>, _>>()?;
+        let pre_kir_eliminations = collection
+            .pre_kir_eliminations()
+            .iter()
+            .copied()
+            .map(|fact| PreKirEliminationV2 {
+                catalog_record_ordinal: fact.catalog_record_ordinal(),
+                source: map_source(fact.source()),
+                mir_node: fact.mir_node_identity(),
+                mir: map_mir(fact.mir()),
+            })
+            .collect::<Vec<_>>();
+        let queries = reference_query_results_v2(&characteristics, &pre_kir_eliminations);
+        exercise_typed_queries(collection, &queries)?;
+        Ok(AdmittedCharacteristicCellV2 {
+            family,
+            producer_binding: binding,
+            scan: CompleteScanV2 {
+                target_operations_scanned: scan.target_operations_scanned(),
+                catalog_records_scanned: scan.catalog_records_scanned(),
+                catalog_record_count: scan.catalog_record_count(),
+                characteristic_operations: scan.classified_target_count(),
+                characteristic_correlations: scan.retained_target_correlation_count(),
+                pre_kir_eliminations: scan.pre_kir_elimination_count(),
+            },
+            characteristics,
+            pre_kir_eliminations,
+            queries,
+        })
+    }
+
+    fn map_binding(
+        collection: &SourceIsaCharacteristicCollectionV1,
+    ) -> Result<ProducerBindingV2, String> {
+        let binding = collection.binding();
+        let counts = binding.structural_counts();
+        Ok(ProducerBindingV2 {
+            target: match binding.target_profile() {
+                SourceIsaCharacteristicTargetProfileV1::Gfx942 => TargetV2::Gfx942,
+                SourceIsaCharacteristicTargetProfileV1::Gfx950 => TargetV2::Gfx950,
+            },
+            kir_version: match binding.kir_version().code() {
+                8 => KirVersionV2::V8,
+                _ => return Err("production characteristic KIR version is not V8".to_owned()),
+            },
+            neutral_kir: map_content(binding.neutral_kir()),
+            target_kir: map_content(binding.target_kir()),
+            source_map_v2: map_content(binding.source_map_v2()),
+            artifact: map_content(binding.artifact()),
+            structural_counts: StructuralCountsV2 {
+                functions: counts.functions,
+                defined_bodies: counts.defined_bodies,
+                blocks: counts.blocks,
+                operations: counts.operations,
+            },
+            structural_binding: binding.structural_identity(),
+            structural_bridge: map_content(binding.structural_bridge()),
+            catalog: map_content(binding.catalog()),
+            correlation: binding.correlation_identity(),
+            semantic_map: binding.semantic_map_identity(),
+        })
+    }
+
+    const fn map_content(
+        value: fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicContentIdentityV1,
+    ) -> ContentIdentityV2 {
+        ContentIdentityV2 {
+            sha256: value.sha256(),
+            byte_len: value.byte_len(),
+        }
+    }
+
+    fn map_target(
+        target: &fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicTargetV1,
+    ) -> Result<TargetCharacteristicV2, String> {
+        let target_kir = map_kir(target.target_kir());
+        Ok(TargetCharacteristicV2 {
+            target_kir,
+            kind: map_kind(target.kind()),
+            correlations: target
+                .correlations()
+                .iter()
+                .map(|fact| map_fact(fact, target_kir))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    fn map_fact(
+        fact: &fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicTargetCorrelationV1,
+        target_kir: KirCoordinateV2,
+    ) -> Result<TargetCatalogFactV2, String> {
+        if map_kir(fact.target_kir()) != target_kir {
+            return Err("correlation target KIR differs from its characteristic".to_owned());
+        }
+        let isa = fact
+            .isa_intervals()
+            .iter()
+            .map(|interval| IsaIntervalV2 {
+                kernel: interval.kernel_ordinal(),
+                pc_start: interval.symbol_relative_start(),
+                pc_end: interval.symbol_relative_end(),
+            })
+            .collect();
+        let transformation = map_transformation(fact.transformation());
+        match fact.kind() {
+            SourceIsaCharacteristicRecordKindV1::SourceAnchored => {
+                Ok(TargetCatalogFactV2::SourceAnchored {
+                    catalog_record_ordinal: fact.catalog_record_ordinal(),
+                    source: map_source(fact.source().ok_or_else(|| {
+                        "source-anchored characteristic omitted source".to_owned()
+                    })?),
+                    mir_node: fact.mir_node_identity().ok_or_else(|| {
+                        "source-anchored characteristic omitted MIR node".to_owned()
+                    })?,
+                    mir: map_mir(fact.mir().ok_or_else(|| {
+                        "source-anchored characteristic omitted MIR coordinate".to_owned()
+                    })?),
+                    neutral_kir_node: fact.neutral_kir_node_identity().ok_or_else(|| {
+                        "source-anchored characteristic omitted neutral-KIR node".to_owned()
+                    })?,
+                    neutral_kir: map_kir(fact.neutral_kir().ok_or_else(|| {
+                        "source-anchored characteristic omitted neutral-KIR coordinate".to_owned()
+                    })?),
+                    target_kir,
+                    semantic_operation: fact.semantic_operation_identity(),
+                    compiler_handoff_llvm: map_llvm(fact.compiler_handoff_llvm()),
+                    transformation,
+                    isa,
+                })
+            }
+            SourceIsaCharacteristicRecordKindV1::NoSourceProvenance => {
+                Ok(TargetCatalogFactV2::NoSourceProvenance {
+                    catalog_record_ordinal: fact.catalog_record_ordinal(),
+                    target_kir,
+                    semantic_operation: fact.semantic_operation_identity(),
+                    compiler_handoff_llvm: map_llvm(fact.compiler_handoff_llvm()),
+                    transformation,
+                    isa,
+                })
+            }
+            SourceIsaCharacteristicRecordKindV1::EliminatedBeforeKir => {
+                Err("pre-KIR elimination appeared in a target characteristic".to_owned())
+            }
+        }
+    }
+
+    const fn map_source(
+        source: fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicSourceCoordinateV1,
+    ) -> SourceCoordinateV2 {
+        let span = source.span();
+        SourceCoordinateV2 {
+            node: source.node_identity(),
+            span: SourceSpanV2 {
+                file: span.file_identity(),
+                byte_start: span.byte_start(),
+                byte_end: span.byte_end(),
+                line: span.line(),
+                column: span.column(),
+            },
+        }
+    }
+
+    const fn map_mir(
+        value: fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicMirCoordinateV1,
+    ) -> MirCoordinateV2 {
+        MirCoordinateV2 {
+            body: value.body_ordinal(),
+            block: value.block_ordinal(),
+            statement: value.statement_ordinal(),
+        }
+    }
+
+    const fn map_kir(
+        value: fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicKirCoordinateV1,
+    ) -> KirCoordinateV2 {
+        KirCoordinateV2 {
+            function: value.function_ordinal(),
+            block: value.block_ordinal(),
+            operation: value.operation_ordinal(),
+        }
+    }
+
+    const fn map_llvm(
+        value: fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicCompilerHandoffLlvmCoordinateV1,
+    ) -> LlvmCoordinateV2 {
+        LlvmCoordinateV2 {
+            function: value.function_ordinal(),
+            block: value.block_ordinal(),
+            instruction: value.instruction_ordinal(),
+        }
+    }
+
+    const fn map_memory(value: SourceIsaCharacteristicMemoryFormV1) -> MemoryFormV2 {
+        match value {
+            SourceIsaCharacteristicMemoryFormV1::Plain => MemoryFormV2::Plain,
+            SourceIsaCharacteristicMemoryFormV1::Guarded => MemoryFormV2::Guarded,
+            SourceIsaCharacteristicMemoryFormV1::MatrixTile => MemoryFormV2::MatrixTile,
+        }
+    }
+
+    const fn map_kind(value: SourceIsaCharacteristicKindV1) -> CharacteristicKindV2 {
+        match value {
+            SourceIsaCharacteristicKindV1::GlobalStore { form } => {
+                CharacteristicKindV2::GlobalStore {
+                    form: map_memory(form),
+                }
+            }
+            SourceIsaCharacteristicKindV1::WorkgroupLoad { form } => {
+                CharacteristicKindV2::WorkgroupLdsRead {
+                    form: map_memory(form),
+                }
+            }
+            SourceIsaCharacteristicKindV1::WorkgroupStore { form } => {
+                CharacteristicKindV2::WorkgroupLdsWrite {
+                    form: map_memory(form),
+                }
+            }
+            SourceIsaCharacteristicKindV1::WorkgroupBarrier => {
+                CharacteristicKindV2::WorkgroupBarrier
+            }
+            SourceIsaCharacteristicKindV1::Bf16F32M16N16K16Wave64MatrixMultiplyAccumulate => {
+                CharacteristicKindV2::Bf16F32M16N16K16Wave64MatrixMultiplyAccumulate
+            }
+        }
+    }
+
+    const fn map_transformation(
+        value: SourceIsaCharacteristicTransformationV1,
+    ) -> TransformationV2 {
+        match value {
+            SourceIsaCharacteristicTransformationV1::Preserved => TransformationV2::Preserved,
+            SourceIsaCharacteristicTransformationV1::Duplicated => TransformationV2::Duplicated,
+            SourceIsaCharacteristicTransformationV1::Coalesced => TransformationV2::Coalesced,
+            SourceIsaCharacteristicTransformationV1::DuplicatedAndCoalesced => {
+                TransformationV2::DuplicatedAndCoalesced
+            }
+            SourceIsaCharacteristicTransformationV1::Eliminated => TransformationV2::Eliminated,
+        }
+    }
+
+    fn exercise_typed_queries(
+        collection: &SourceIsaCharacteristicCollectionV1,
+        expected: &QueryResultsV2,
+    ) -> Result<(), String> {
+        let all_matches = assert_fact_query(
+            collection,
+            SourceIsaCharacteristicQueryV1::All,
+            &expected.all,
+        )?;
+        assert_fact_query(
+            collection,
+            SourceIsaCharacteristicQueryV1::PreKirOnly,
+            &expected.pre_kir,
+        )?;
+
+        for (kind, occurrences) in &expected.category {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::Kind(rebuild_kind(*kind)),
+                occurrences,
+            )?;
+        }
+        for family in [
+            CharacteristicFamilyV2::GlobalStore,
+            CharacteristicFamilyV2::WorkgroupLdsRead,
+            CharacteristicFamilyV2::WorkgroupLdsWrite,
+            CharacteristicFamilyV2::WorkgroupBarrier,
+            CharacteristicFamilyV2::Bf16MfmaExact,
+        ] {
+            let occurrences = merge_fact_category_occurrences(expected, family);
+            if let Some(query) = collection
+                .targets()
+                .iter()
+                .find(|target| map_kind(target.kind()).family() == family)
+                .map(|target| SourceIsaCharacteristicQueryV1::Category(target.category()))
+            {
+                assert_fact_query(collection, query, &occurrences)?;
+            }
+        }
+        for (kind, occurrences) in &expected.record_kind {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::RecordKind(rebuild_record_kind(*kind)),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.source_node {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::SourceNode(*key),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.source_span {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::SourceSpan(rebuild_span(*key)?),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.mir_node {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::MirNode(*key),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.mir {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::Mir(rebuild_mir(*key)?),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.neutral_kir_node {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::NeutralKirNode(*key),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.neutral_kir {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::NeutralKir(rebuild_kir(*key)?),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.target_kir {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::TargetKir(rebuild_kir(*key)?),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.semantic_operation {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::SemanticOperation(*key),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.llvm {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::CompilerHandoffLlvm(rebuild_llvm(*key)?),
+                occurrences,
+            )?;
+        }
+        for (key, occurrences) in &expected.transformation {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::Transformation(rebuild_transformation(*key)),
+                occurrences,
+            )?;
+        }
+        for ((kernel_ordinal, symbol_relative_pc), occurrences) in &expected.exact_pc {
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::ExactPc {
+                    kernel_ordinal: *kernel_ordinal,
+                    symbol_relative_pc: *symbol_relative_pc,
+                },
+                occurrences,
+            )?;
+        }
+
+        assert_target_query(
+            collection,
+            SourceIsaCharacteristicTargetQueryV1::All,
+            &expected.structural,
+        )?;
+        for (ordinal, target) in collection.targets().iter().enumerate() {
+            let occurrence = TargetCharacteristicOccurrenceV2 {
+                characteristic_ordinal: u32::try_from(ordinal)
+                    .map_err(|_| "target ordinal exceeds u32".to_owned())?,
+            };
+            assert_target_query(
+                collection,
+                SourceIsaCharacteristicTargetQueryV1::CharacteristicIdentity(target.identity()),
+                &BTreeSet::from([occurrence]),
+            )?;
+            assert_fact_query(
+                collection,
+                SourceIsaCharacteristicQueryV1::CharacteristicIdentity(target.identity()),
+                &expected
+                    .all
+                    .iter()
+                    .copied()
+                    .filter(|candidate| matches!(candidate, FactOccurrenceV2::Target { characteristic_ordinal, .. } if *characteristic_ordinal == occurrence.characteristic_ordinal))
+                    .collect(),
+            )?;
+        }
+        for (kind, occurrences) in &expected.structural_category {
+            assert_target_query(
+                collection,
+                SourceIsaCharacteristicTargetQueryV1::Kind(rebuild_kind(*kind)),
+                occurrences,
+            )?;
+        }
+        for family in [
+            CharacteristicFamilyV2::GlobalStore,
+            CharacteristicFamilyV2::WorkgroupLdsRead,
+            CharacteristicFamilyV2::WorkgroupLdsWrite,
+            CharacteristicFamilyV2::WorkgroupBarrier,
+            CharacteristicFamilyV2::Bf16MfmaExact,
+        ] {
+            let occurrences = merge_target_category_occurrences(expected, family);
+            if let Some(query) = collection
+                .targets()
+                .iter()
+                .find(|target| map_kind(target.kind()).family() == family)
+                .map(|target| SourceIsaCharacteristicTargetQueryV1::Category(target.category()))
+            {
+                assert_target_query(collection, query, &occurrences)?;
+            }
+        }
+        for (coordinate, occurrences) in &expected.structural_target_kir {
+            assert_target_query(
+                collection,
+                SourceIsaCharacteristicTargetQueryV1::TargetKir(rebuild_kir(*coordinate)?),
+                occurrences,
+            )?;
+        }
+
+        for (occurrence, match_identity) in all_matches {
+            if let FactOccurrenceV2::Target { .. } = occurrence {
+                assert_interval_query(
+                    collection,
+                    match_identity,
+                    expected
+                        .intervals
+                        .get(&occurrence)
+                        .map_or(&[][..], Vec::as_slice),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn assert_fact_query(
+        collection: &SourceIsaCharacteristicCollectionV1,
+        query: SourceIsaCharacteristicQueryV1,
+        expected: &BTreeSet<FactOccurrenceV2>,
+    ) -> Result<Vec<(FactOccurrenceV2, [u8; 32])>, String> {
+        let mut cursor = None;
+        let mut observed = Vec::new();
+        let mut identities = BTreeSet::new();
+        loop {
+            let page = collection
+                .query_page(&query, cursor.as_ref(), 1)
+                .map_err(|error| error.to_string())?;
+            if page.collection_identity() != collection.identity()
+                || page.query_identity() != query.identity()
+                || usize::try_from(page.total_matches()).ok() != Some(expected.len())
+            {
+                return Err("fact query page binding or total differs from expectation".to_owned());
+            }
+            for matched in page.matches() {
+                if !identities.insert(matched.identity()) {
+                    return Err("fact query repeated an occurrence identity".to_owned());
+                }
+                observed.push((
+                    map_match_occurrence(collection, *matched)?,
+                    matched.identity(),
+                ));
+            }
+            cursor = page.next_cursor();
+            if cursor.is_none() {
+                if !page.page_exhausted() {
+                    return Err("terminal fact page is not exhausted".to_owned());
+                }
+                break;
+            }
+        }
+        let observed_set = observed
+            .iter()
+            .map(|(occurrence, _)| *occurrence)
+            .collect::<BTreeSet<_>>();
+        if &observed_set != expected {
+            return Err("typed fact query differs from its exact occurrence set".to_owned());
+        }
+        Ok(observed)
+    }
+
+    fn assert_target_query(
+        collection: &SourceIsaCharacteristicCollectionV1,
+        query: SourceIsaCharacteristicTargetQueryV1,
+        expected: &BTreeSet<TargetCharacteristicOccurrenceV2>,
+    ) -> Result<(), String> {
+        let mut cursor = None;
+        let mut observed = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        loop {
+            let page = collection
+                .query_targets_page(&query, cursor.as_ref(), 1)
+                .map_err(|error| error.to_string())?;
+            if page.collection_identity() != collection.identity()
+                || page.query_identity() != query.identity()
+                || usize::try_from(page.total_matches()).ok() != Some(expected.len())
+            {
+                return Err(
+                    "target query page binding or total differs from expectation".to_owned(),
+                );
+            }
+            for matched in page.targets() {
+                if !identities.insert(matched.identity()) {
+                    return Err("target query repeated an occurrence identity".to_owned());
+                }
+                let ordinal = collection
+                    .targets()
+                    .iter()
+                    .position(|target| target.identity() == matched.characteristic_identity())
+                    .ok_or_else(|| "target query returned an unknown characteristic".to_owned())?;
+                observed.insert(TargetCharacteristicOccurrenceV2 {
+                    characteristic_ordinal: u32::try_from(ordinal)
+                        .map_err(|_| "target ordinal exceeds u32".to_owned())?,
+                });
+            }
+            cursor = page.next_cursor();
+            if cursor.is_none() {
+                if !page.page_exhausted() {
+                    return Err("terminal target page is not exhausted".to_owned());
+                }
+                break;
+            }
+        }
+        if &observed != expected {
+            return Err("typed target query differs from its exact occurrence set".to_owned());
+        }
+        Ok(())
+    }
+
+    fn map_match_occurrence(
+        collection: &SourceIsaCharacteristicCollectionV1,
+        matched: fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicMatchV1,
+    ) -> Result<FactOccurrenceV2, String> {
+        match matched.outcome() {
+            SourceIsaCharacteristicMatchOutcomeV1::TargetCorrelation(summary) => {
+                let characteristic_identity = matched
+                    .characteristic_identity()
+                    .ok_or_else(|| "target match omitted characteristic identity".to_owned())?;
+                let characteristic_ordinal = collection
+                    .targets()
+                    .iter()
+                    .position(|target| target.identity() == characteristic_identity)
+                    .ok_or_else(|| "fact query returned an unknown characteristic".to_owned())?;
+                let correlation_ordinal = collection.targets()[characteristic_ordinal]
+                    .correlations()
+                    .iter()
+                    .position(|fact| {
+                        fact.catalog_record_ordinal() == summary.catalog_record_ordinal
+                    })
+                    .ok_or_else(|| "fact query returned an unknown correlation".to_owned())?;
+                Ok(FactOccurrenceV2::Target {
+                    characteristic_ordinal: u32::try_from(characteristic_ordinal)
+                        .map_err(|_| "characteristic ordinal exceeds u32".to_owned())?,
+                    correlation_ordinal: u32::try_from(correlation_ordinal)
+                        .map_err(|_| "correlation ordinal exceeds u32".to_owned())?,
+                    catalog_record_ordinal: summary.catalog_record_ordinal,
+                })
+            }
+            SourceIsaCharacteristicMatchOutcomeV1::PreKirElimination(fact) => {
+                let elimination_ordinal = collection
+                    .pre_kir_eliminations()
+                    .iter()
+                    .position(|candidate| {
+                        candidate.catalog_record_ordinal() == fact.catalog_record_ordinal()
+                    })
+                    .ok_or_else(|| {
+                        "fact query returned an unknown pre-KIR elimination".to_owned()
+                    })?;
+                Ok(FactOccurrenceV2::PreKir {
+                    elimination_ordinal: u32::try_from(elimination_ordinal)
+                        .map_err(|_| "pre-KIR ordinal exceeds u32".to_owned())?,
+                    catalog_record_ordinal: fact.catalog_record_ordinal(),
+                })
+            }
+        }
+    }
+
+    fn merge_fact_category_occurrences(
+        expected: &QueryResultsV2,
+        family: CharacteristicFamilyV2,
+    ) -> BTreeSet<FactOccurrenceV2> {
+        expected
+            .category
+            .iter()
+            .filter(|(kind, _)| kind.family() == family)
+            .flat_map(|(_, occurrences)| occurrences.iter().copied())
+            .collect()
+    }
+
+    fn merge_target_category_occurrences(
+        expected: &QueryResultsV2,
+        family: CharacteristicFamilyV2,
+    ) -> BTreeSet<TargetCharacteristicOccurrenceV2> {
+        expected
+            .structural_category
+            .iter()
+            .filter(|(kind, _)| kind.family() == family)
+            .flat_map(|(_, occurrences)| occurrences.iter().copied())
+            .collect()
+    }
+
+    fn assert_interval_query(
+        collection: &SourceIsaCharacteristicCollectionV1,
+        occurrence_identity: [u8; 32],
+        expected: &[(u32, IsaIntervalV2)],
+    ) -> Result<(), String> {
+        let mut cursor = None;
+        let mut observed = Vec::new();
+        let mut identities = BTreeSet::new();
+        loop {
+            let page = collection
+                .interval_page(occurrence_identity, cursor.as_ref(), 1)
+                .map_err(|error| error.to_string())?;
+            if page.occurrence_identity() != occurrence_identity
+                || usize::try_from(page.total_intervals()).ok() != Some(expected.len())
+            {
+                return Err("interval page binding or total differs from expectation".to_owned());
+            }
+            for item in page.intervals() {
+                if !identities.insert(item.identity()) {
+                    return Err("interval query repeated an item identity".to_owned());
+                }
+                let interval = item.interval();
+                observed.push((
+                    u32::try_from(item.ordinal())
+                        .map_err(|_| "interval ordinal exceeds u32".to_owned())?,
+                    IsaIntervalV2 {
+                        kernel: interval.kernel_ordinal(),
+                        pc_start: interval.symbol_relative_start(),
+                        pc_end: interval.symbol_relative_end(),
+                    },
+                ));
+            }
+            cursor = page.next_cursor();
+            if cursor.is_none() {
+                if !page.page_exhausted() {
+                    return Err("terminal interval page is not exhausted".to_owned());
+                }
+                break;
+            }
+        }
+        if observed != expected {
+            return Err("interval query differs from its exact ordered multiplicity".to_owned());
+        }
+        Ok(())
+    }
+
+    fn canonically_resealed_substitution(
+        admitted: &AdmittedCharacteristicCellV2,
+        substitution: HostileSubstitutionV2,
+    ) -> Result<AdmittedCharacteristicCellV2, String> {
+        let mut changed = admitted.clone();
+        match substitution {
+            HostileSubstitutionV2::Category => {
+                let first = changed
+                    .characteristics
+                    .first_mut()
+                    .ok_or("missing characteristic")?;
+                first.kind = match first.kind {
+                    CharacteristicKindV2::GlobalStore {
+                        form: MemoryFormV2::Plain,
+                    } => CharacteristicKindV2::GlobalStore {
+                        form: MemoryFormV2::Guarded,
+                    },
+                    CharacteristicKindV2::GlobalStore { .. } => CharacteristicKindV2::GlobalStore {
+                        form: MemoryFormV2::Plain,
+                    },
+                    _ => CharacteristicKindV2::GlobalStore {
+                        form: MemoryFormV2::Plain,
+                    },
+                };
+            }
+            HostileSubstitutionV2::RecordKind => {
+                let fact = first_source_fact_mut(&mut changed)?;
+                let TargetCatalogFactV2::SourceAnchored {
+                    catalog_record_ordinal,
+                    target_kir,
+                    semantic_operation,
+                    compiler_handoff_llvm,
+                    transformation,
+                    isa,
+                    ..
+                } = fact.clone()
+                else {
+                    return Err("no source-anchored fact to substitute".to_owned());
+                };
+                *fact = TargetCatalogFactV2::NoSourceProvenance {
+                    catalog_record_ordinal,
+                    target_kir,
+                    semantic_operation,
+                    compiler_handoff_llvm,
+                    transformation,
+                    isa,
+                };
+            }
+            HostileSubstitutionV2::SourceCoordinate => {
+                if let TargetCatalogFactV2::SourceAnchored { source, .. } =
+                    first_source_fact_mut(&mut changed)?
+                {
+                    source.node[0] ^= 1;
+                }
+            }
+            HostileSubstitutionV2::MirCoordinate => {
+                if let TargetCatalogFactV2::SourceAnchored { mir, .. } =
+                    first_source_fact_mut(&mut changed)?
+                {
+                    mir.statement = mir.statement.checked_add(1).ok_or("MIR ordinal overflow")?;
+                }
+            }
+            HostileSubstitutionV2::NeutralKirCoordinate => {
+                if let TargetCatalogFactV2::SourceAnchored { neutral_kir, .. } =
+                    first_source_fact_mut(&mut changed)?
+                {
+                    neutral_kir.operation = neutral_kir
+                        .operation
+                        .checked_add(1)
+                        .ok_or("KIR ordinal overflow")?;
+                }
+            }
+            HostileSubstitutionV2::TargetKirCoordinate => {
+                let target = changed
+                    .characteristics
+                    .first_mut()
+                    .ok_or("missing characteristic")?;
+                target.target_kir.operation = target
+                    .target_kir
+                    .operation
+                    .checked_add(1)
+                    .ok_or("target-KIR ordinal overflow")?;
+                for fact in &mut target.correlations {
+                    match fact {
+                        TargetCatalogFactV2::SourceAnchored { target_kir, .. }
+                        | TargetCatalogFactV2::NoSourceProvenance { target_kir, .. } => {
+                            *target_kir = target.target_kir
+                        }
+                    }
+                }
+            }
+            HostileSubstitutionV2::SemanticOperation => match first_fact_mut(&mut changed)? {
+                TargetCatalogFactV2::SourceAnchored {
+                    semantic_operation, ..
+                }
+                | TargetCatalogFactV2::NoSourceProvenance {
+                    semantic_operation, ..
+                } => semantic_operation[0] ^= 1,
+            },
+            HostileSubstitutionV2::CompilerHandoffLlvmCoordinate => {
+                match first_fact_mut(&mut changed)? {
+                    TargetCatalogFactV2::SourceAnchored {
+                        compiler_handoff_llvm,
+                        ..
+                    }
+                    | TargetCatalogFactV2::NoSourceProvenance {
+                        compiler_handoff_llvm,
+                        ..
+                    } => {
+                        compiler_handoff_llvm.instruction = compiler_handoff_llvm
+                            .instruction
+                            .checked_add(1)
+                            .ok_or("LLVM ordinal overflow")?;
+                    }
+                }
+            }
+            HostileSubstitutionV2::Transformation => match first_fact_mut(&mut changed)? {
+                TargetCatalogFactV2::SourceAnchored { transformation, .. }
+                | TargetCatalogFactV2::NoSourceProvenance { transformation, .. } => {
+                    if *transformation == TransformationV2::Eliminated {
+                        return Err("first fact is eliminated".to_owned());
+                    }
+                    *transformation = if *transformation == TransformationV2::Duplicated {
+                        TransformationV2::Preserved
+                    } else {
+                        TransformationV2::Duplicated
+                    };
+                }
+            },
+            HostileSubstitutionV2::IsaInterval => {
+                let interval = first_interval_mut(&mut changed)?;
+                interval.pc_start = interval.pc_start.checked_add(4).ok_or("ISA PC overflow")?;
+                interval.pc_end = interval.pc_end.checked_add(4).ok_or("ISA PC overflow")?;
+            }
+            HostileSubstitutionV2::IsaIntervalMultiplicity => {
+                let fact = first_fact_mut(&mut changed)?;
+                let interval = *fact.isa().first().ok_or("missing ISA interval")?;
+                match fact {
+                    TargetCatalogFactV2::SourceAnchored { isa, .. }
+                    | TargetCatalogFactV2::NoSourceProvenance { isa, .. } => isa.push(interval),
+                }
+            }
+            HostileSubstitutionV2::PreKirElimination => {
+                if let Some(fact) = changed.pre_kir_eliminations.first_mut() {
+                    fact.source.node[0] ^= 1;
+                } else {
+                    let TargetCatalogFactV2::SourceAnchored {
+                        source,
+                        mir_node,
+                        mir,
+                        ..
+                    } = first_source_fact_mut(&mut changed)?.clone()
+                    else {
+                        unreachable!()
+                    };
+                    let ordinal = changed.scan.catalog_record_count;
+                    changed.scan.catalog_record_count =
+                        ordinal.checked_add(1).ok_or("catalog count overflow")?;
+                    changed.scan.catalog_records_scanned = changed.scan.catalog_record_count;
+                    changed.scan.pre_kir_eliminations = changed
+                        .scan
+                        .pre_kir_eliminations
+                        .checked_add(1)
+                        .ok_or("pre-KIR count overflow")?;
+                    changed.pre_kir_eliminations.push(PreKirEliminationV2 {
+                        catalog_record_ordinal: ordinal,
+                        source,
+                        mir_node,
+                        mir,
+                    });
+                }
+            }
+            HostileSubstitutionV2::CompleteScan => {
+                changed.scan.catalog_record_count = changed
+                    .scan
+                    .catalog_record_count
+                    .checked_add(1)
+                    .ok_or("scan overflow")?;
+                changed.scan.catalog_records_scanned = changed.scan.catalog_record_count;
+            }
+            HostileSubstitutionV2::StructuralBridgeIdentity => {
+                changed.producer_binding.structural_bridge.sha256[0] ^= 1
+            }
+            HostileSubstitutionV2::CatalogIdentity => {
+                changed.producer_binding.catalog.sha256[0] ^= 1
+            }
+            HostileSubstitutionV2::ArtifactIdentity => {
+                changed.producer_binding.artifact.sha256[0] ^= 1
+            }
+            HostileSubstitutionV2::ProducerTarget => {
+                changed.producer_binding.target = match changed.producer_binding.target {
+                    TargetV2::Gfx942 => TargetV2::Gfx950,
+                    TargetV2::Gfx950 => TargetV2::Gfx942,
+                };
+            }
+            HostileSubstitutionV2::BrokerConfigIdentity
+            | HostileSubstitutionV2::BrokerUnitIdentity => unreachable!(),
+        }
+        changed.queries =
+            reference_query_results_v2(&changed.characteristics, &changed.pre_kir_eliminations);
+        Ok(changed)
+    }
+
+    fn first_fact_mut(
+        cell: &mut AdmittedCharacteristicCellV2,
+    ) -> Result<&mut TargetCatalogFactV2, String> {
+        cell.characteristics
+            .iter_mut()
+            .flat_map(|target| target.correlations.iter_mut())
+            .find(|fact| !fact.isa().is_empty())
+            .ok_or_else(|| "missing non-eliminated target fact".to_owned())
+    }
+
+    fn first_source_fact_mut(
+        cell: &mut AdmittedCharacteristicCellV2,
+    ) -> Result<&mut TargetCatalogFactV2, String> {
+        cell.characteristics
+            .iter_mut()
+            .flat_map(|target| target.correlations.iter_mut())
+            .find(|fact| matches!(fact, TargetCatalogFactV2::SourceAnchored { .. }))
+            .ok_or_else(|| "missing source-anchored target fact".to_owned())
+    }
+
+    fn first_interval_mut(
+        cell: &mut AdmittedCharacteristicCellV2,
+    ) -> Result<&mut IsaIntervalV2, String> {
+        match first_fact_mut(cell)? {
+            TargetCatalogFactV2::SourceAnchored { isa, .. }
+            | TargetCatalogFactV2::NoSourceProvenance { isa, .. } => isa
+                .first_mut()
+                .ok_or_else(|| "missing ISA interval".to_owned()),
+        }
+    }
+
+    fn rebuild_collection(
+        cell: &AdmittedCharacteristicCellV2,
+    ) -> Result<SourceIsaCharacteristicCollectionV1, String> {
+        let producer = cell.producer_binding;
+        let counts = producer.structural_counts;
+        let binding = SourceIsaCharacteristicBindingV1::new(
+            match producer.target {
+                TargetV2::Gfx942 => SourceIsaCharacteristicTargetProfileV1::Gfx942,
+                TargetV2::Gfx950 => SourceIsaCharacteristicTargetProfileV1::Gfx950,
+            },
+            SourceIsaCharacteristicKirVersionV1::V8,
+            producer.structural_binding,
+            SourceIsaCharacteristicStructuralCountsV1 {
+                functions: counts.functions,
+                defined_bodies: counts.defined_bodies,
+                blocks: counts.blocks,
+                operations: counts.operations,
+            },
+            rebuild_content(producer.source_map_v2)?,
+            rebuild_content(producer.neutral_kir)?,
+            rebuild_content(producer.target_kir)?,
+            rebuild_content(producer.artifact)?,
+            rebuild_content(producer.catalog)?,
+            rebuild_content(producer.structural_bridge)?,
+            producer.correlation,
+            producer.semantic_map,
+        )
+        .map_err(|error| error.to_string())?;
+        let scan = SourceIsaCharacteristicScanSummaryV1::new(
+            cell.scan.catalog_record_count,
+            cell.scan.catalog_records_scanned,
+            producer.structural_counts.operations,
+            cell.scan.target_operations_scanned,
+            cell.scan.characteristic_operations,
+            cell.scan.characteristic_correlations,
+            cell.scan.pre_kir_eliminations,
+            cell.scan
+                .characteristic_correlations
+                .checked_add(cell.scan.pre_kir_eliminations)
+                .ok_or_else(|| "retained correlation count overflow".to_owned())?,
+            SourceIsaCharacteristicScanStateV1::Complete,
+        )
+        .map_err(|error| error.to_string())?;
+        let targets = cell
+            .characteristics
+            .iter()
+            .map(|target| {
+                SourceIsaCharacteristicTargetV1::new(
+                    rebuild_kind(target.kind),
+                    rebuild_kir(target.target_kir)?,
+                    target
+                        .correlations
+                        .iter()
+                        .map(rebuild_fact)
+                        .collect::<Result<Vec<_>, String>>()?,
+                )
+                .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let pre_kir = cell
+            .pre_kir_eliminations
+            .iter()
+            .map(|fact| {
+                SourceIsaCharacteristicPreKirEliminationV1::new(
+                    fact.catalog_record_ordinal,
+                    rebuild_source(fact.source)?,
+                    fact.mir_node,
+                    rebuild_mir(fact.mir)?,
+                )
+                .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        SourceIsaCharacteristicCollectionV1::new(binding, scan, targets, pre_kir)
+            .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_fact(
+        fact: &TargetCatalogFactV2,
+    ) -> Result<SourceIsaCharacteristicTargetCorrelationV1, String> {
+        let (
+            ordinal,
+            kind,
+            source,
+            mir_node,
+            mir,
+            neutral_node,
+            neutral,
+            target,
+            semantic,
+            llvm,
+            transformation,
+            isa,
+        ) = match fact {
+            TargetCatalogFactV2::SourceAnchored {
+                catalog_record_ordinal,
+                source,
+                mir_node,
+                mir,
+                neutral_kir_node,
+                neutral_kir,
+                target_kir,
+                semantic_operation,
+                compiler_handoff_llvm,
+                transformation,
+                isa,
+            } => (
+                *catalog_record_ordinal,
+                SourceIsaCharacteristicRecordKindV1::SourceAnchored,
+                Some(rebuild_source(*source)?),
+                Some(*mir_node),
+                Some(rebuild_mir(*mir)?),
+                Some(*neutral_kir_node),
+                Some(rebuild_kir(*neutral_kir)?),
+                rebuild_kir(*target_kir)?,
+                *semantic_operation,
+                rebuild_llvm(*compiler_handoff_llvm)?,
+                *transformation,
+                isa,
+            ),
+            TargetCatalogFactV2::NoSourceProvenance {
+                catalog_record_ordinal,
+                target_kir,
+                semantic_operation,
+                compiler_handoff_llvm,
+                transformation,
+                isa,
+            } => (
+                *catalog_record_ordinal,
+                SourceIsaCharacteristicRecordKindV1::NoSourceProvenance,
+                None,
+                None,
+                None,
+                None,
+                None,
+                rebuild_kir(*target_kir)?,
+                *semantic_operation,
+                rebuild_llvm(*compiler_handoff_llvm)?,
+                *transformation,
+                isa,
+            ),
+        };
+        SourceIsaCharacteristicTargetCorrelationV1::new(
+            ordinal,
+            kind,
+            source,
+            mir_node,
+            mir,
+            neutral_node,
+            neutral,
+            target,
+            semantic,
+            llvm,
+            isa.iter()
+                .map(|interval| {
+                    SourceIsaCharacteristicIsaIntervalV1::new(
+                        interval.kernel,
+                        interval.pc_start,
+                        interval.pc_end,
+                    )
+                    .map_err(|error| error.to_string())
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            rebuild_transformation(transformation),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_content(
+        value: ContentIdentityV2,
+    ) -> Result<SourceIsaCharacteristicContentIdentityV1, String> {
+        SourceIsaCharacteristicContentIdentityV1::new(value.sha256, value.byte_len)
+            .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_source(
+        value: SourceCoordinateV2,
+    ) -> Result<SourceIsaCharacteristicSourceCoordinateV1, String> {
+        SourceIsaCharacteristicSourceCoordinateV1::new(value.node, rebuild_span(value.span)?)
+            .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_span(value: SourceSpanV2) -> Result<SourceIsaCharacteristicSourceSpanV1, String> {
+        SourceIsaCharacteristicSourceSpanV1::new(
+            value.file,
+            value.byte_start,
+            value.byte_end,
+            value.line,
+            value.column,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_mir(
+        value: MirCoordinateV2,
+    ) -> Result<SourceIsaCharacteristicMirCoordinateV1, String> {
+        SourceIsaCharacteristicMirCoordinateV1::new(value.body, value.block, value.statement)
+            .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_kir(
+        value: KirCoordinateV2,
+    ) -> Result<SourceIsaCharacteristicKirCoordinateV1, String> {
+        SourceIsaCharacteristicKirCoordinateV1::new(value.function, value.block, value.operation)
+            .map_err(|error| error.to_string())
+    }
+
+    fn rebuild_llvm(
+        value: LlvmCoordinateV2,
+    ) -> Result<SourceIsaCharacteristicCompilerHandoffLlvmCoordinateV1, String> {
+        SourceIsaCharacteristicCompilerHandoffLlvmCoordinateV1::new(
+            value.function,
+            value.block,
+            value.instruction,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    const fn rebuild_memory(value: MemoryFormV2) -> SourceIsaCharacteristicMemoryFormV1 {
+        match value {
+            MemoryFormV2::Plain => SourceIsaCharacteristicMemoryFormV1::Plain,
+            MemoryFormV2::Guarded => SourceIsaCharacteristicMemoryFormV1::Guarded,
+            MemoryFormV2::MatrixTile => SourceIsaCharacteristicMemoryFormV1::MatrixTile,
+        }
+    }
+
+    const fn rebuild_kind(value: CharacteristicKindV2) -> SourceIsaCharacteristicKindV1 {
+        match value {
+            CharacteristicKindV2::GlobalStore { form } => {
+                SourceIsaCharacteristicKindV1::GlobalStore {
+                    form: rebuild_memory(form),
+                }
+            }
+            CharacteristicKindV2::WorkgroupLdsRead { form } => {
+                SourceIsaCharacteristicKindV1::WorkgroupLoad {
+                    form: rebuild_memory(form),
+                }
+            }
+            CharacteristicKindV2::WorkgroupLdsWrite { form } => {
+                SourceIsaCharacteristicKindV1::WorkgroupStore {
+                    form: rebuild_memory(form),
+                }
+            }
+            CharacteristicKindV2::WorkgroupBarrier => {
+                SourceIsaCharacteristicKindV1::WorkgroupBarrier
+            }
+            CharacteristicKindV2::Bf16F32M16N16K16Wave64MatrixMultiplyAccumulate => {
+                SourceIsaCharacteristicKindV1::Bf16F32M16N16K16Wave64MatrixMultiplyAccumulate
+            }
+        }
+    }
+
+    const fn rebuild_transformation(
+        value: TransformationV2,
+    ) -> SourceIsaCharacteristicTransformationV1 {
+        match value {
+            TransformationV2::Preserved => SourceIsaCharacteristicTransformationV1::Preserved,
+            TransformationV2::Duplicated => SourceIsaCharacteristicTransformationV1::Duplicated,
+            TransformationV2::Coalesced => SourceIsaCharacteristicTransformationV1::Coalesced,
+            TransformationV2::DuplicatedAndCoalesced => {
+                SourceIsaCharacteristicTransformationV1::DuplicatedAndCoalesced
+            }
+            TransformationV2::Eliminated => SourceIsaCharacteristicTransformationV1::Eliminated,
+        }
+    }
+
+    const fn rebuild_record_kind(
+        value: CatalogRecordKindV2,
+    ) -> SourceIsaCharacteristicRecordKindV1 {
+        match value {
+            CatalogRecordKindV2::SourceAnchored => {
+                SourceIsaCharacteristicRecordKindV1::SourceAnchored
+            }
+            CatalogRecordKindV2::NoSourceProvenance => {
+                SourceIsaCharacteristicRecordKindV1::NoSourceProvenance
+            }
+            CatalogRecordKindV2::EliminatedBeforeKir => {
+                SourceIsaCharacteristicRecordKindV1::EliminatedBeforeKir
+            }
+        }
+    }
 }

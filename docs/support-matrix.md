@@ -68,7 +68,7 @@ equivalence or race freedom.
 | F16, BF16, F32, F64 scalar operations | Qualified simulator/compiler subsets | Simulator uses pinned software IEEE evaluation; unsupported transcendental operations fail closed |
 | 1D/2D/3D launch indices | Qualified subsets | Typed logical indices; target layout is explicit |
 | Checked global buffers and views | Qualified subsets | Allocation-relative bounds, access, initialization, and provenance checks |
-| Workgroup memory and barriers | Qualified subsets | Static scalar LDS and convergent workgroup barriers within defined limits |
+| Workgroup memory and barriers | Qualified subsets | Static scalar LDS plus one explicitly sized reachable canonical dynamic LDS base, with convergent barriers and exact initialization/publication/lifetime checks within defined limits; multiple bases and `DynamicAtLeast` fail typed |
 | Integer atomics and fences | Qualified simulator subsets | Exact supported width/operation/ordering/scope combinations only |
 | Wave32/Wave64 collectives | Qualified simulator subsets | Logical collective semantics, not physical `EXEC` emulation |
 | Helpers and structured control flow | Qualified simulator/compiler subsets | Bounded call depth and explicit unsupported diagnostics |
@@ -94,6 +94,7 @@ contract.
 | Hardware PC/register/wave state | Explicitly unavailable | Unavailable | Bounded by installed ROCgdb capabilities |
 | Structured failure diagnosis | Bounds/barrier classes implemented | Unavailable | Not inferred from a clean stop |
 | Agent-facing protocol | Versioned JSONL | Versioned JSONL | Bounded GDB/MI-to-JSONL adapter |
+| Simulator/direct-KFD differential | Prepared from exact Bundle V4 plus the admitted structural bridge; Bundle V5 is CPU-simulation custody only | Sealed generated Worker V3 completion only; currently blocked on the unwired protected application verifier | Not applicable |
 
 Logical CPU observations are never relabeled as hardware observations. Native
 paths, descriptors, addresses, and unverified declarations are not agent
@@ -105,9 +106,11 @@ authority.
 | --- | --- | --- |
 | rocprofv3 dispatch JSON/CSV import | Experimental, bounded implementation | Strict reviewed dialects, KFD identity join, bounded collector custody |
 | Dry-run collection planning | Experimental | Produces no fabricated collection recipe when prerequisites are unavailable |
+| Direct-KFD runtime observation | Experimental, MI300X-qualified slice | Opt-in bounded lifecycle, host staging, queue, AQL publication/completion, and host-monotonic timing; no device-clock or rocprof correlation claim |
+| rocprof wrapper host-wall comparison | Experimental, MI300X-observed slice | Explicitly authorized alternating raw/wrapped process timing with exact identities, bounded outputs, complete per-leg outcomes, and a caller candidate budget. This is wrapper-path wall time, not counter/PC/ATT/debugger or kernel-capture overhead; empty collector inventory keeps capture overhead and loss unavailable |
 | Real GPU-dispatch round trip | Unavailable as protected qualification | Current tests use deterministic/fake collector inputs plus real KFD observation where gated |
-| Runtime/copy attribution | Incomplete | Full semantic treatment lineage remains open |
-| ATT/thread trace import | Unavailable | Requires a mutation-proof sealed decoder route |
+| Runtime/copy attribution | Incomplete | Direct-KFD logical runtime and host staging are observed; device copy-engine events and full semantic treatment lineage remain unavailable |
+| ATT/thread trace import | Experimental, authority-free decoded interchange | Strictly admits a canonical external ROCprofiler SDK 7.2.4 callback export with exact manifest/raw/header/library/exporter identities, bounded paging, and loss/incomplete truth. A separate exact supplied decoded-ATT/HSACO/Characteristic binding maps ELF PCs through authenticated kernel symbols to every matching sparse source/MIR/KIR/LLVM/ISA occurrence without exposing symbol names or addresses; raw decoding, authenticated decoder custody, beta collection, and full-grid coverage remain unavailable |
 | Source/IR/ISA causal localization | Incomplete | Exact artifact and source-map associations remain open |
 | Performance prediction | Out of scope | CPU simulation and profiler import make no prediction claim |
 | Agent-native queries | Experimental | Read-only typed facts with explicit provenance and availability |

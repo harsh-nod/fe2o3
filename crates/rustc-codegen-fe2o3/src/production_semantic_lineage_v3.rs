@@ -19,9 +19,9 @@ use fe2o3_compiler_lineage::{
     InertProofBindingAssociationV4, InertProofBindingReceiptV3,
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmAssociationV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
-    LineageErrorV3, MultiRootCanonicalKirVersionV2, MultiRootNeutralKirIdentityV2,
-    MultiRootProofRosterErrorV2, MultiRootProofRosterInputsV2, MultiRootProofRosterKindV2,
-    MultiRootProofRosterRootInputV2, MultiRootProofRosterTranscriptV2,
+    LineageErrorV3, MultiRootCanonicalKirVersionV2, MultiRootCorrespondencePayloadV2,
+    MultiRootNeutralKirIdentityV2, MultiRootProofRosterErrorV2, MultiRootProofRosterInputsV2,
+    MultiRootProofRosterKindV2, MultiRootProofRosterRootInputV2, MultiRootProofRosterTranscriptV2,
     MultiRootTargetBindingInputsV2, MultiRootTargetBindingTranscriptV2,
     MultiRootTargetWorkgroupInputV2, OrderedInertSemanticLineageReceiptsV3,
     ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
@@ -36,10 +36,10 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
-    InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV5,
     ProductionCanonicalKernelIrIdentityV1, ProductionCanonicalKernelIrVersionV1,
-    ProductionCorrespondenceEvidenceErrorV4, ProductionFormalMemoryEvidenceErrorV4,
-    ProductionFormalMemoryOwnerV1,
+    ProductionCorrespondenceEvidenceErrorV4, ProductionCorrespondenceEvidenceErrorV5,
+    ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
@@ -319,12 +319,12 @@ fn prepare_lineage_evidence_v1(
                 "singleton lineage has no matching ranked root",
             ))?
             .verification();
-        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(
+        let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(
             admitted.semantic_kir(),
             verification.semantic_u32_induction(),
         )?;
         let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
-        if correspondence.canonical_kernel_ir_identity() != neutral_kir
+        if correspondence.nested_v4().canonical_kernel_ir_identity() != neutral_kir
             || formal.canonical_kernel_ir_identity() != neutral_kir
         {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
@@ -509,6 +509,16 @@ fn encode_correspondence_root_payload_v1(
     if !has_blocks || !has_functions {
         return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
             "a lineage root has no exact correspondence records",
+        ));
+    }
+    let decoded = MultiRootCorrespondencePayloadV2::decode(&bytes).map_err(|_| {
+        ProductionSemanticLineageErrorV3::AxisMismatch(
+            "producer emitted a non-canonical multi-root correspondence payload",
+        )
+    })?;
+    if decoded.root_ordinal() != ordinal || decoded.correspondence_owner() != owner.index() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "producer cross-wired its multi-root correspondence payload header",
         ));
     }
     Ok(bytes)
@@ -917,7 +927,7 @@ impl PreparedProductionSemanticLineageV3 {
             } => match &roster_custody {
                 PreparedLineageRosterCustodyV1::Singleton => {
                     let correspondence =
-                        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(
+                        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(
                             mir_to_kir_correspondence.canonical_preimage(),
                         )?;
                     match crate::production_semantic_debug_v1::prepare_production_semantic_debug_v1(
@@ -933,9 +943,17 @@ impl PreparedProductionSemanticLineageV3 {
                     }
                 }
                 PreparedLineageRosterCustodyV1::MultiRoot { .. } => {
-                    crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
-                        ProductionSemanticDebugProducerGapV1::MultipleKirFunctionBodies,
-                    )
+                    match crate::production_semantic_debug_v1::prepare_production_semantic_debug_multi_root_v1(
+                        admitted.semantic_kir(),
+                        mir_to_kir_correspondence.canonical_preimage(),
+                        *source_map,
+                        &canonical_kir_v7,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(error) => crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
+                            semantic_debug_prepare_gap(&error),
+                        ),
+                    }
                 }
             },
         };
@@ -1040,20 +1058,25 @@ impl PreparedProductionSemanticLineageV3 {
         validate_final_llvm_layout(final_llvm)?;
         match &self.roster_custody {
             PreparedLineageRosterCustodyV1::Singleton => {
-                let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(
+                let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(
                     self.mir_to_kir_correspondence.canonical_preimage(),
                 )?;
                 let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(
                     self.formal_memory.canonical_preimage(),
                 )?;
                 if correspondence
+                    .nested_v4()
                     .semantic_u32_induction()
                     .semantic_mir_sha256()
                     != self.semantic_mir.identity().sha256()
-                    || correspondence.canonical_kernel_ir_identity() != self.neutral_kir_custody
+                    || correspondence.nested_v4().canonical_kernel_ir_identity()
+                        != self.neutral_kir_custody
                     || formal.canonical_kernel_ir_identity() != self.neutral_kir_custody
                     || correspondence.grants_authority()
-                    || correspondence.semantic_u32_induction().grants_authority()
+                    || correspondence
+                        .nested_v4()
+                        .semantic_u32_induction()
+                        .grants_authority()
                     || formal.grants_authority()
                 {
                     return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
@@ -1667,6 +1690,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     CanonicalKir(VerifiedCanonicalKernelIrErrorV8),
     CanonicalKirV9(VerifiedCanonicalKernelIrErrorV9),
     Correspondence(ProductionCorrespondenceEvidenceErrorV4),
+    CorrespondenceV5(ProductionCorrespondenceEvidenceErrorV5),
     FormalMemory(ProductionFormalMemoryEvidenceErrorV4),
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
     KirToLlvmReplay(dialect_amdgcn::ProductionKirToLlvmReplayErrorV1),
@@ -1708,6 +1732,12 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
                 write!(
                     formatter,
                     "production lossless correspondence failed: {error}"
+                )
+            }
+            Self::CorrespondenceV5(error) => {
+                write!(
+                    formatter,
+                    "production exact-function correspondence failed: {error}"
                 )
             }
             Self::FormalMemory(error) => {
@@ -1778,6 +1808,12 @@ impl From<VerifiedCanonicalKernelIrErrorV9> for ProductionSemanticLineageErrorV3
 impl From<ProductionCorrespondenceEvidenceErrorV4> for ProductionSemanticLineageErrorV3 {
     fn from(error: ProductionCorrespondenceEvidenceErrorV4) -> Self {
         Self::Correspondence(error)
+    }
+}
+
+impl From<ProductionCorrespondenceEvidenceErrorV5> for ProductionSemanticLineageErrorV3 {
+    fn from(error: ProductionCorrespondenceEvidenceErrorV5) -> Self {
+        Self::CorrespondenceV5(error)
     }
 }
 

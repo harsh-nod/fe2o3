@@ -12,6 +12,11 @@ pub const GENERATED_KERNEL_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/GENERATED-KERNEL-
 pub const GENERATED_HOST_CONTRACT_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/GENERATED-HOST-CONTRACT-IDENTITY/V1\0";
 
+/// Domain for a source registration whose by-value layout is deliberately
+/// deferred to the production rustc transaction.
+pub const COMPILER_LAYOUT_REGISTRATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/COMPILER-LAYOUT-REGISTRATION-IDENTITY/V1\0";
+
 /// Derives the pre-executable identity of a generated host contract.
 ///
 /// This commits to the complete canonical host ABI, including Rust type and
@@ -35,6 +40,33 @@ pub fn derive_generated_host_contract_identity_v1(
         export_name,
         None,
         abi,
+        launch,
+    )
+}
+
+/// Derives the marker identity for an attributed signature containing an
+/// opaque by-value aggregate. This is only registration custody: it commits to
+/// the kernel binding, names, profile, and launch geometry, and explicitly
+/// grants no host ABI or packing authority. The production rustc transaction
+/// must replace it with exact type, layout, ABI, and component evidence before
+/// simulation or code generation.
+pub fn derive_compiler_layout_registration_identity_v1(
+    profile_tag: &str,
+    kernel_binding: [u8; 32],
+    logical_name: &str,
+    export_name: &str,
+    launch: &LaunchContract,
+) -> DigestBytes {
+    let empty_abi = AbiLayout::new(0, 1, PointerWidth::Bits64, Vec::new())
+        .expect("the layout-deferred registration ABI is empty");
+    derive_identity(
+        COMPILER_LAYOUT_REGISTRATION_IDENTITY_DOMAIN_V1,
+        profile_tag,
+        kernel_binding,
+        logical_name,
+        export_name,
+        None,
+        &empty_abi,
         launch,
     )
 }

@@ -31,6 +31,8 @@ readonly PLIRON_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/pliron_depen
 readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lockfiles.sh"
 readonly RUNTIME_PURE_RUST_AUDITOR="${REPO_ROOT}/scripts/runtime_pure_rust_audit.py"
 readonly RUNTIME_PURE_RUST_POLICY="${REPO_ROOT}/scripts/runtime-pure-rust-policy.json"
+readonly SIM_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/sim-runtime-no-gpu-policy.json"
+readonly VIRTUAL_RUNTIME_NO_GPU_POLICY="${REPO_ROOT}/scripts/virtual-runtime-no-gpu-policy.json"
 readonly RUNTIME_PURE_RUST_AUDIT_TESTS="${REPO_ROOT}/scripts/tests/runtime_pure_rust_audit.py"
 readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_identity_oracle.py"
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
@@ -39,12 +41,26 @@ readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 readonly TEST_DRIVER_BINARY_ENV="FE2O3_TEST_CARGO_FE2O3_BIN"
 readonly TEST_DRIVER_SHA256_ENV="FE2O3_TEST_CARGO_FE2O3_SHA256"
+readonly -a SOURCE_ISA_PROTECTED_ENVIRONMENT=(
+  FE2O3_TEST_CARGO_FE2O3_BIN
+  FE2O3_TEST_CARGO_FE2O3_SHA256
+  FE2O3_PRODUCTION_BUILD_CONFIG_V2
+  FE2O3_AUTHORITY_BACKEND_SHA256_V1
+  FE2O3_AUTHORITY_CARGO_SHA256_V1
+  FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
+  FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
+  FE2O3_AUTHORITY_RUSTC_PATH_V1
+  FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
+  FE2O3_AUTHORITY_RUSTC_SHA256_V1
+  FE2O3_BACKEND
+)
 CARGO_FE2O3_BINARY=
 CARGO_FE2O3_SHA256=
 CARGO_FE2O3_DRIVER_ROOT=
 CARGO_FE2O3_DRIVER_PROFILE=
 CARGO_TARGET_DIRECTORY=
 CI_PRIVATE_TMP_ROOT=
+STANDALONE_LOCKFILES_CHECKED=0
 readonly -a ROCM_TRUSTED_DEVICE_ITEM_PACKAGES=(
   fe2o3-vecadd
   fe2o3-trusted-item-renamed-genuine
@@ -104,11 +120,15 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-pliron
   fe2o3-pliron-conformance
   fe2o3-process-identity
+  fe2o3-profiler-protocol
   fe2o3-proof-contracts
   fe2o3-rustc-front
   fe2o3-rustc-invocation
   fe2o3-service-host
   fe2o3-service-model
+  fe2o3-sim-differential
+  fe2o3-sim-physical-differential
+  fe2o3-sim-runtime
   fe2o3-source-isa-observation
   fe2o3-semantic-import
   fe2o3-semantic-query
@@ -117,6 +137,8 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-runtime-machine-adapter
   fe2o3-runtime-model
   fe2o3-target-spec
+  fe2o3-virtual-runtime
+  fe2o3-virtual-runtime-cli
   fe2o3-verifier
   reserved-fe2o3-symbols
 )
@@ -142,7 +164,8 @@ Commands:
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
   source-isa-unit-matrix  Run the opt-in protected source/ISA ordinary-unit matrix
-  source-isa-characteristic-contract-v2  Validate the opt-in, unexecuted characteristic matrix contract
+  source-isa-characteristic-contract-v2  Validate the opt-in characteristic matrix contract
+  source-isa-characteristic-matrix-v2  Run the opt-in protected ordinary-source 3x2 characteristic matrix
   rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
@@ -579,6 +602,7 @@ run_check() {
   local -a loader_environment_removals
   local -A rustc_example_set=()
   local package
+  run_standalone_lockfiles
   prepare_cargo_fe2o3_driver generic-check production
   validate_cargo_fe2o3_driver
   load_example_packages all all_examples "${CARGO_FE2O3_BINARY}"
@@ -762,7 +786,11 @@ run_workspace_dependency_policy() {
 }
 
 run_standalone_lockfiles() {
+  if ((STANDALONE_LOCKFILES_CHECKED)); then
+    return 0
+  fi
   run_step standalone-lockfiles bash "${STANDALONE_LOCKFILE_CHECKER}"
+  STANDALONE_LOCKFILES_CHECKED=1
 }
 
 run_runtime_pure_rust_policy() {
@@ -770,6 +798,28 @@ run_runtime_pure_rust_policy() {
     env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
   run_step runtime-identity-oracle-parser-tests \
     env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}"
+  run_step virtual-runtime-no-gpu-metadata \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
+      --root fe2o3-virtual-runtime \
+      --root fe2o3-virtual-runtime-cli \
+      --root fe2o3-sim-differential
+  run_step virtual-runtime-no-gpu-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-virtual-runtime-cli \
+        --bin fe2o3-virtual-runtime
+  run_step virtual-runtime-no-gpu-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-virtual-runtime"
+  run_step sim-differential-no-gpu-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-sim-differential \
+        --bin fe2o3-sim-differential
+  run_step sim-differential-no-gpu-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential"
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
@@ -779,7 +829,16 @@ run_runtime_pure_rust_policy() {
       --root fe2o3-amdhsa-loader \
       --root fe2o3-aql \
       --root fe2o3-runtime \
-      --root fe2o3-runtime-model
+      --root fe2o3-runtime-model \
+      --root fe2o3-sim-runtime
+  run_step sim-runtime-no-gpu-metadata \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${SIM_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
+      --root fe2o3-sim-runtime
+  run_step sim-runtime-no-gpu-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-sim-runtime \
+        --example sim-runtime-evidence
   run_step runtime-pure-rust-kfd-examples-build \
     env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
       cargo build --locked -p fe2o3-kfd \
@@ -810,6 +869,10 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/gfx942-lds-diagnostic"
+  run_step sim-runtime-no-gpu-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${SIM_RUNTIME_NO_GPU_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/sim-runtime-evidence"
   run_step runtime-pure-rust-kfd-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
@@ -960,13 +1023,24 @@ run_authority_launcher_tests() {
     bash scripts/tests/cargo-fe2o3-authority-launcher.sh
 }
 
+require_source_isa_protected_environment() {
+  local label="$1"
+  local name
+  for name in "${SOURCE_ISA_PROTECTED_ENVIRONMENT[@]}"; do
+    if [[ -z "${!name:-}" ]]; then
+      printf '%s requires %s\n' "${label}" "${name}" >&2
+      return 2
+    fi
+  done
+}
+
 run_source_isa_unit_matrix() {
   if [[ "${FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX:-}" != "1" ]]; then
     printf '%s\n' \
       'protected source/ISA unit matrix requires FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX=1' >&2
     return 2
   fi
-  local name platform_architecture platform_kernel
+  local platform_architecture platform_kernel
   platform_kernel="$(uname -s)" || {
     printf '%s\n' 'protected source/ISA unit matrix could not identify the host kernel' >&2
     return 2
@@ -980,25 +1054,7 @@ run_source_isa_unit_matrix() {
       "${platform_kernel}" "${platform_architecture}" >&2
     return 2
   fi
-  local -a required_environment=(
-    FE2O3_TEST_CARGO_FE2O3_BIN
-    FE2O3_TEST_CARGO_FE2O3_SHA256
-    FE2O3_PRODUCTION_BUILD_CONFIG_V2
-    FE2O3_AUTHORITY_BACKEND_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_SHA256_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1
-    FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_PATH_V1
-    FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1
-    FE2O3_AUTHORITY_RUSTC_SHA256_V1
-    FE2O3_BACKEND
-  )
-  for name in "${required_environment[@]}"; do
-    if [[ -z "${!name:-}" ]]; then
-      printf 'protected source/ISA unit matrix requires %s\n' "${name}" >&2
-      return 2
-    fi
-  done
+  require_source_isa_protected_environment 'protected source/ISA unit matrix' || return $?
   run_step source-isa-unit-matrix \
     cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
       production_source_isa_unit_matrix_v1::ordinary_source_units_round_trip_through_the_production_observer_on_both_targets -- \
@@ -1029,6 +1085,34 @@ run_source_isa_characteristic_contract_v2() {
     cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
       production_source_isa_characteristic_matrix_v2:: -- \
       --test-threads=1
+}
+
+run_source_isa_characteristic_matrix_v2() {
+  if [[ "${FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2:-}" != "1" ]]; then
+    printf '%s\n' \
+      'protected source/ISA characteristic V2 matrix requires FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2=1' >&2
+    return 2
+  fi
+  local platform_architecture platform_kernel
+  platform_kernel="$(uname -s)" || {
+    printf '%s\n' 'protected source/ISA characteristic V2 matrix could not identify the host kernel' >&2
+    return 2
+  }
+  platform_architecture="$(uname -m)" || {
+    printf '%s\n' 'protected source/ISA characteristic V2 matrix could not identify the host architecture' >&2
+    return 2
+  }
+  if [[ "${platform_kernel}" != "Linux" || "${platform_architecture}" != "x86_64" ]]; then
+    printf 'protected source/ISA characteristic V2 matrix requires Linux x86_64, found %s %s\n' \
+      "${platform_kernel}" "${platform_architecture}" >&2
+    return 2
+  fi
+  require_source_isa_protected_environment \
+    'protected source/ISA characteristic V2 matrix' || return $?
+  run_step source-isa-characteristic-matrix-v2 \
+    cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+      production_source_isa_characteristic_matrix_v2::production_adapter_v2::ordinary_source_units_preserve_characteristic_facts_on_both_targets_v2 -- \
+      --ignored --exact --test-threads=1 --nocapture
 }
 
 run_rustc_trampoline_tests() {
@@ -1083,6 +1167,14 @@ run_generic_core() {
   run_backend_build
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
+  run_step kir-sim-capability-matrix \
+    cargo test --locked -p fe2o3-kir-sim --test capability_matrix
+  run_step kir-sim-scalar-differential \
+    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
+      --seed-start 0 --cases 256
+  run_step kir-sim-semantic-differential \
+    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
+      semantic-run-v2 --seed 0
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
   run_cpu_tests
   run_rustc_codegen_lib_tests
@@ -1227,6 +1319,8 @@ run_hardware_smoke() {
   run_step hardware-kfd-compute-aql-queue \
     cargo run --locked -p fe2o3-kfd --features live-validation \
       --example kfd-compute-aql-queue -- --all
+  run_step hardware-kfd-profiler-smoke \
+    bash scripts/kfd-profiler-hardware-smoke.sh
   run_step hardware-kfd-debug-trap-live \
     cargo test --locked -p fe2o3-kfd --features live-validation \
       --test kfd_debug_trap_live -- \
@@ -1290,6 +1384,7 @@ main() {
     authority-launcher) run_authority_launcher_tests ;;
     source-isa-unit-matrix) run_source_isa_unit_matrix ;;
     source-isa-characteristic-contract-v2) run_source_isa_characteristic_contract_v2 ;;
+    source-isa-characteristic-matrix-v2) run_source_isa_characteristic_matrix_v2 ;;
     rustc-trampoline) run_rustc_trampoline_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;

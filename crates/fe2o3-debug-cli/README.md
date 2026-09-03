@@ -47,6 +47,53 @@ the byte-compatible default. Neither route authenticates compiler execution,
 source refinement, or hardware behavior. The production regression is
 `ordinary_kernel_sources_export_and_query_exact_v2_source_variables`.
 
+`fe2o3-export-sim --bundle-version 3` adds independently bound exact
+production semantic-MIR bytes and a canonical semantic-storage map. The map
+joins source argument/local/type identities and ownership to exact KIR
+parameter/value identities, or records a typed `unavailable`, `ambiguous`, or
+`opaque_flattened` state. `fe2o3-debug sim --bundle-v3 ...` runs the unchanged
+deterministic debugger against its nested V2 execution/source bundle.
+
+`fe2o3-debug typed-layout --bundle-v3 KERNEL.fe2sim --request REQUEST.json`
+emits one bounded JSON object for agents and tools. It re-decodes current
+production semantic MIR, cross-checks every referenced root, body, local,
+source type, KIR function, parameter, and value, then reports rustc sizes,
+alignment, field source/memory order, explicit padding, direct/niche enum
+encoding, and variant layouts. Request arguments additionally report exact
+scalar bits or allocation-relative regions, byte initialization ranges,
+alignment, access, request-local provenance, and exact byte-range overlap for
+shared-backing arguments.
+Substituted layout, local, KIR, or source-map bindings fail closed. The query is
+observational and grants no compiler or execution authority.
+
+Bundle V4 retains the complete V3 payload byte-for-byte and adds a separately
+content-bound one-to-many component map with explicit physical kernarg size,
+alignment, and slots. The production V4 exporter derives that map from the
+sole rustc-to-KIR lowering correspondence. `fe2o3-debug sim --bundle-v4 ...`
+runs the nested canonical KIR with the flattened compiler parameter order; no
+GPU, KFD, or physical-host ABI authority is implied. Use
+`fe2o3-debug typed-layout --bundle-v4 KERNEL.fe2sim --request REQUEST.json` to
+associate each observed KIR argument with its source argument, semantic type,
+and nested struct, tuple, array, or enum projection path. This emits
+`fe2o3-debug-typed-layout-v2`; V3 continues to emit the unchanged V1 response.
+
+KIR V7 still has no by-value aggregate value type. V4 reconstructs components
+only when the compiler supplies the exact semantic projection for every
+retained scalar KIR parameter; it never infers flattening from scalar names.
+Aggregate construction/execution outside the current production lowering
+remains a typed compiler rejection, and storage without exact correspondence
+remains typed unavailable.
+
+`fe2o3-export-sim --bundle-version 5` emits a separate self-contained Bundle
+V5. It binds the original production KIR V8 or V9 identity and an exact
+same-module KIR V10 encoding together with Source Map V2, semantic MIR, and
+both storage maps. `fe2o3-debug sim --bundle-v5 ...` executes that V10 custody
+directly, so compiler-produced gfx950 f32 wave collectives can use the public
+CPU debugger without a lossy V7 projection. The route grants no compiler,
+artifact, load, launch, or hardware authority and never falls back to a GPU.
+Production source lowering for V10-only memory intrinsics remains unavailable;
+the exporter reports that boundary rather than synthesizing such a kernel.
+
 Source-variable inspection uses the separate
 `fe2o3-debug-source-variable-request-v2` schema. Callers select all variables,
 one exact stable identity, or a bounded inert name. Name lookup chooses the
@@ -224,8 +271,8 @@ canonical archive. The client securely reads the singly linked archive and
 requires its path to resolve to the same admitted object after the read,
 requires the caller-pinned digest of its exact bytes, verifies every member
 digest and the canonical complete member set, and then supplies member bytes
-directly to the existing debugger, Bundle V4, Variant V1, diagnosis V2, and
-Agent Profiler V1 admissions. Members are never extracted or interpreted as
+directly to the existing debugger, Bundle V4, Variant V1 and V2, diagnosis V2,
+and Agent Profiler V1 admissions. Members are never extracted or interpreted as
 filesystem paths. The archive route therefore has no member symlink, hardlink,
 or traversal surface. The archive report preserves the complete existing V1
 workflow report and adds the archive plus ordered member content identities.
@@ -252,19 +299,24 @@ One workflow discovers capabilities and then performs four read-only tasks:
 
 - diagnose a retained simulator memory out-of-bounds failure;
 - diagnose a retained simulator workgroup-barrier divergence;
-- compare a seeded schedule/resource Variant V1 regression while preserving
-  decoded ATT, runtime/copy, semantic/ISA, and causal gaps as unavailable; and
+- compare a seeded schedule/resource Variant V1 regression;
+- independently compare the same exact treatments through Variant V2, binding
+  both schedules and preserving absent PC/ATT sessions, the profiler-KIR bridge,
+  and causal attribution as typed unavailable facts; and
 - page the exact dispatch set and ask Agent Profiler V1 for the minimum capture
   that distinguishes scheduling delay from resource pressure.
 
 The client decodes simulator diagnoses with the full evidence-manifest
-validator, validates the serialized Variant response identity, and requires
+validator, validates both serialized Variant response identities, and requires
 the capability, continued, and diagnosis sessions to carry one configuration
 identity, with the diagnosis session exactly equal to the continued session.
 Treatment files consume one decreasing aggregate admission budget before any
 read past that budget, and exact byte inputs are emitted with fallible bounded
-streaming hex encoding. The returned typed Variant comparison is independently
-recomputed and decoded with the production exact-input comparator. Its bounded
+streaming hex encoding. The returned typed Variant V1 comparison is independently
+recomputed and decoded with the production exact-input comparator. The V2
+comparison is independently reproduced from the same retained bytes and must
+equal the complete service result, including its request, artifact and schedule
+bindings, evidence IDs, and unavailable facts. Its bounded
 report retains each full
 authenticated diagnosis with every material citation identity and the capture
 plan's exact Agent V1 evidence/origins. Agent Profiler V1 responses must match
@@ -279,8 +331,10 @@ content identities, truth classifications, cited claims, typed unavailable
 states, and pagination counts. It has no launch, attach,
 pause, scheduling, KFD, ROCgdb-control, rocprofv3-collection, or recapture
 operation. `fe2o3-agent-profiler-service` is a small companion executable that
-exposes the unchanged Agent Profiler V1 JSONL mode and the separate Variant V1
-mode for this process-isolated workflow; it is not an MCP adapter.
+exposes the unchanged Agent Profiler V1 JSONL mode and separate Variant V1 and
+V2 modes for this process-isolated workflow; it is not an MCP adapter. Neither
+Variant mode accepts paths or grants execution, replay, file, network, patch,
+decoder, attach, scheduling, collection, or launch authority.
 
 ## KFD hardware protocol V2
 
@@ -373,6 +427,24 @@ leader. This is forced leader teardown, not graceful target queue/runtime
 shutdown or descendant containment; the test deliberately does not load or
 execute its declared fixture HSACO.
 
+## Qualification assessment
+
+`fe2o3-debug qualification --manifest /absolute/path/to/qualification.json`
+strictly admits one bounded, single-link regular file and emits one
+`fe2o3-debug-qualification-assessment-v1` JSON line. The response includes the
+complete component and capture-mode evidence matrix, exact manifest and
+environment identities, per-mode policy assessments, and an overall
+`incomplete`, `failed`, or `caller_bound_policies_satisfied` disposition.
+Input is capped at 256 KiB, and the complete response including its newline is
+capped at 512 KiB. Symlinks, hard links, changing path identities, and
+malformed or oversized input are rejected before stdout is written.
+
+This mode executes no collector or target and grants no observation or
+qualification authority. Its two authority fields are always false. An agent
+can therefore explain missing evidence and select the next bounded capture
+without scraping prose or converting the archived caller-bound manifest into
+live GPU truth.
+
 ## Structured live ROCgdb protocol V3
 
 `fe2o3-debug live-rocgdb --rocgdb /usr/bin/rocgdb --authorization ID --
@@ -444,7 +516,8 @@ unavailable result. The collector pumps MI events and V2 telemetry together,
 so a missed breakpoint or target exit cannot erase an already observed AQL
 publication.
 
-On 2026-08-30, installed `/usr/bin/rocgdb` (GDB 16.3) and direct KFD on MI300X
+On 2026-09-02, installed `/usr/bin/rocgdb` (GDB 16.3,
+`rocm-rel-7.2-93`) and direct KFD on MI300X
 ran the public command with the SHA-pinned
 `lds_publish_read_reduce_i32_v1` diagnostic HSACO
 (`ab6bda1e8af05b61c22753382e75dd6a9952db8e598eaac3cb5769863a618ed0`).
@@ -456,3 +529,64 @@ result was unavailable rather than inferred:
 ```json
 {"schema":"fe2o3-rocgdb-kfd-native-response-v4","result":{"status":"unavailable","probe":{"structured_mi_commands":true,"direct_kfd_device_admitted":true,"cooperative_v2_declaration":true,"cooperative_v2_publication":true},"reason":"gpu_stopped_state_unavailable"}}
 ```
+
+That response, including its terminating newline, has SHA-256
+`e83ce302728df11f5a496cf3576f2785825815a43fd784780828de190e9f8251`
+at compiler commit `308d8fa00fa41e098b2a1a47bbfea1bc29735464`, tree
+`aee01674fefa733731db35eae1a1705b3286179e`. A separate diagnostic MI run
+showed the kernel breakpoint remaining pending, `amd-dbgapi` failing to read
+`global#0`, and empty agent, queue, dispatch, and thread lists after the KFD
+dispatch completed correctly. Its raw unredacted transcript was not checked
+in; its SHA-256 is
+`dd172567ea7311aef647161606769a74ac895c129b4e87ef402a8c18fb658856`.
+The [official ROCgdb AMD GPU contract](https://rocm.docs.amd.com/projects/ROCgdb/en/latest/ROCgdb/gdb/doc/gdb/AMD-GPU.html)
+requires compatible ROCm runtime metadata, whereas the production fe2o3
+direct-KFD runtime intentionally supplies `r_debug=0`. This result is
+therefore an installed bridge capability gap, not permission to infer stopped
+waves from KFD publication.
+
+## Authenticated native stopped-state inspection V5
+
+`fe2o3-debug live-rocgdb-kfd-v5` preserves the V4 launch, telemetry, artifact,
+hierarchy, stop, and relative-PC contract and adds machine-interface register
+and simple-local inspection. Registry discovery is reported separately and is
+never treated as an observation. Register names and values are obtained with
+`-data-list-register-names` and `-data-list-register-values`; locals use
+`-stack-list-variables --simple-values`. Every command selects the exact
+private current-thread token admitted by V4, and the stop generation is checked
+after every result. Published scopes and evidence identities bind the V4
+association, redacted stop, redacted thread, and authenticated wave. Counts,
+MI records, commands, strings, and values retain the V3 bounds. The scope is
+wave-level (`lane` is absent): V4 authenticates the current wave thread but has
+no independent selected-lane observation, so locals are not labeled as
+lane-specific.
+
+Register bit patterns are captured, except the absolute `pc`/`pc_all` register,
+which is redacted because V4 already supplies the authenticated artifact-relative
+PC. Local values are captured only for explicitly scalar integral or Boolean
+debug types. Pointers, aggregates, floating-point text, unknown types,
+optimized-out values, and values outside the MI capture are typed unavailable;
+the adapter does not reinterpret debugger text with host arithmetic. Source is
+unavailable until an authenticated artifact-relative source map is supplied,
+ISA until instruction boundaries and decoded bytes are bound to the artifact,
+and memory until the target publishes exact allocation-relative authority.
+Native selectors and MI address fields are not serialized or treated as
+identity. Register bit patterns remain opaque machine bits and can numerically
+resemble an address, but are never admitted as pointer or memory authority;
+the known absolute PC register is redacted. Pointer local values are not
+serialized.
+
+The installed MI300X ROCgdb reports all five V5 inspection command names. A
+2026-09-03 run of the public V5 command with the same SHA-pinned diagnostic,
+direct-KFD device, and target used for V4 returned:
+
+```json
+{"schema":"fe2o3-rocgdb-kfd-native-response-v5","result":{"status":"unavailable","probe":{"structured_mi_commands":true,"direct_kfd_device_admitted":true,"cooperative_v2_declaration":true,"cooperative_v2_publication":true},"inspection_probe":{"register_names":true,"register_values":true,"simple_locals":true,"disassembly":true,"memory_bytes":true},"reason":"gpu_stopped_state_unavailable"}}
+```
+
+The exact JSONL record has SHA-256
+`71ea391f489e0f068e524bef93fee1384b2dbf4956aeb33ef854db2b2a3dc5e1`.
+Thus the direct-KFD launch still reaches the V4 stopped-state boundary.
+This release validates V5 parsing, same-stop collection, redaction, and hostile
+substitution with deterministic MI fixtures; it does not claim a physical
+register or local capture on MI300X.

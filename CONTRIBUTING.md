@@ -35,6 +35,7 @@ Run the fork-safe preflight commands before submitting:
 
 ```bash
 cargo fmt --all -- --check
+bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
 ```
@@ -46,6 +47,11 @@ repository's generic qualification entry point:
 ```bash
 scripts/ci-local.sh generic-core
 ```
+
+Use `scripts/ci-local.sh check` or `cargo fe2o3 check` for packages that contain
+namespace-free `#[kernel(typed)]` functions. Raw Cargo does not provide the
+compiler-owned binding for those packages and is not the supported workspace
+check path.
 
 See `docs/testing.md` for test tiers and hardware gates. A pull request should
 state exactly what was run and what was not run. Do not describe synthetic,

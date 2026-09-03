@@ -1,12 +1,13 @@
 use std::mem::size_of;
 
-use fe2o3_kernel_ir::{AccessMode, ScalarType, VerifiedCanonicalKernelIrIdentityV7};
+use fe2o3_kernel_ir::{AccessMode, ScalarType};
 use sha2::{Digest, Sha256};
 
 use crate::resident::reserved_vec_bytes;
 use crate::{
-    BufferArgumentV1, EventPolicyV1, IndexWidthV1, SimulationArgumentV1, SimulationInvocationV1,
-    SimulationLimitsV1, SimulationPlanV1, SimulationRequestV1, SimulationTargetV1,
+    BufferArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, IndexWidthV1,
+    SimulationArgumentV1, SimulationInvocationV1, SimulationKernelIrIdentityV1, SimulationLimitsV1,
+    SimulationPlanV1, SimulationRequestV1, SimulationTargetV1,
 };
 
 mod persisted;
@@ -22,6 +23,9 @@ pub const MAX_SCHEDULE_DECISIONS_V1: usize = 4 * 1024 * 1024;
 
 const CONTEXT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V1\0";
 const CONTEXT_DOMAIN_V2: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V2\0";
+const CONTEXT_DOMAIN_V3: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V3\0";
+const CONTEXT_DOMAIN_V4: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-CONTEXT/V4\0";
+const DYNAMIC_CONTEXT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/DYNAMIC-LDS-SCHEDULE-CONTEXT/V1\0";
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-TRANSCRIPT/V1\0";
 const RECORD_INTEGRITY_DOMAIN_V1: &[u8] = b"FE2O3/KIR-SIM/SCHEDULE-RECORD/V1\0";
 
@@ -49,6 +53,14 @@ pub struct SimulationScheduleDecisionV1 {
 }
 
 impl SimulationScheduleDecisionV1 {
+    pub(crate) const fn new(workgroup: [u64; 3], phase: u64, local: [u32; 3]) -> Self {
+        Self {
+            workgroup,
+            phase,
+            local,
+        }
+    }
+
     pub const fn workgroup(self) -> [u64; 3] {
         self.workgroup
     }
@@ -168,6 +180,24 @@ pub enum SimulationScheduleReplayErrorV1 {
 enum ScheduledModeV1<'a> {
     Record,
     Replay(&'a SimulationScheduleRecordV1),
+    ReduceCanonical,
+    ReduceSeeded,
+    ReducePrefix(&'a [SimulationScheduleDecisionV1]),
+}
+
+pub(crate) enum ExecutionScheduleRequestV1<'a> {
+    Public(SimulationScheduleRequestV1<'a>),
+    Reduction {
+        source: ReductionScheduleSourceV1<'a>,
+        max_decisions: usize,
+        decisions: &'a mut Vec<SimulationScheduleDecisionV1>,
+    },
+}
+
+pub(crate) enum ReductionScheduleSourceV1<'a> {
+    Canonical,
+    Seeded(u64),
+    PrefixThenCanonical(&'a [SimulationScheduleDecisionV1]),
 }
 
 pub(crate) struct PreparedScheduleV1<'a> {
@@ -175,6 +205,7 @@ pub(crate) struct PreparedScheduleV1<'a> {
     workgroups: u64,
     barrier_releases: u64,
     scheduled: Vec<ScheduledStateV1<'a>>,
+    reduction_decisions: Option<&'a mut Vec<SimulationScheduleDecisionV1>>,
 }
 
 struct ScheduledStateV1<'a> {
@@ -200,9 +231,10 @@ pub(crate) enum SchedulePrepareErrorV1 {
 impl<'a> PreparedScheduleV1<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare(
-        request: Option<SimulationScheduleRequestV1<'a>>,
-        identity: VerifiedCanonicalKernelIrIdentityV7,
+        request: Option<ExecutionScheduleRequestV1<'a>>,
+        identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
         plan: &SimulationPlanV1,
@@ -215,9 +247,11 @@ impl<'a> PreparedScheduleV1<'a> {
                 workgroups: 0,
                 barrier_releases: 0,
                 scheduled: Vec::new(),
+                reduction_decisions: None,
             });
         };
-        let context_identity = schedule_context_identity(identity, simulation, target, limits);
+        let context_identity =
+            schedule_context_identity_configured(identity, simulation, dynamic, target, limits);
         let (
             mode,
             schedule,
@@ -226,8 +260,8 @@ impl<'a> PreparedScheduleV1<'a> {
             retained_decisions,
             resident_decisions,
             needs_order,
-        ) = match request {
-            SimulationScheduleRequestV1::Replay(record) => {
+        ) = match &request {
+            ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::Replay(record)) => {
                 validate_record(record, context_identity, plan, limits)?;
                 (
                     ScheduledModeV1::Replay(record),
@@ -239,25 +273,66 @@ impl<'a> PreparedScheduleV1<'a> {
                     true,
                 )
             }
-            SimulationScheduleRequestV1::RecordCanonical { max_decisions } => (
+            ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::RecordCanonical {
+                max_decisions,
+            }) => (
                 ScheduledModeV1::Record,
                 SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
                 None,
-                max_decisions,
-                max_decisions,
-                max_decisions,
+                *max_decisions,
+                *max_decisions,
+                *max_decisions,
                 false,
             ),
-            SimulationScheduleRequestV1::RecordSeeded {
+            ExecutionScheduleRequestV1::Public(SimulationScheduleRequestV1::RecordSeeded {
                 seed,
                 max_decisions,
-            } => (
+            }) => (
                 ScheduledModeV1::Record,
                 SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1,
-                Some(seed),
+                Some(*seed),
+                *max_decisions,
+                *max_decisions,
+                *max_decisions,
+                true,
+            ),
+            ExecutionScheduleRequestV1::Reduction {
+                source: ReductionScheduleSourceV1::Canonical,
                 max_decisions,
+                ..
+            } => (
+                ScheduledModeV1::ReduceCanonical,
+                SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+                None,
+                *max_decisions,
+                0,
+                0,
+                false,
+            ),
+            ExecutionScheduleRequestV1::Reduction {
+                source: ReductionScheduleSourceV1::Seeded(seed),
                 max_decisions,
+                ..
+            } => (
+                ScheduledModeV1::ReduceSeeded,
+                SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1,
+                Some(*seed),
+                *max_decisions,
+                0,
+                0,
+                true,
+            ),
+            ExecutionScheduleRequestV1::Reduction {
+                source: ReductionScheduleSourceV1::PrefixThenCanonical(prefix),
                 max_decisions,
+                ..
+            } => (
+                ScheduledModeV1::ReducePrefix(prefix),
+                SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+                None,
+                *max_decisions,
+                0,
+                0,
                 true,
             ),
         };
@@ -346,11 +421,20 @@ impl<'a> PreparedScheduleV1<'a> {
             order,
             records,
         });
+        let reduction_decisions = match request {
+            ExecutionScheduleRequestV1::Reduction { decisions, .. } => {
+                debug_assert!(decisions.is_empty());
+                debug_assert!(decisions.capacity() >= max_decisions);
+                Some(decisions)
+            }
+            ExecutionScheduleRequestV1::Public(_) => None,
+        };
         Ok(Self {
             current_decision: 0,
             workgroups: 0,
             barrier_releases: 0,
             scheduled,
+            reduction_decisions,
         })
     }
 
@@ -375,7 +459,10 @@ impl<'a> PreparedScheduleV1<'a> {
 
     pub(crate) fn uses_canonical_order(&self) -> bool {
         self.scheduled.first().is_none_or(|state| {
-            matches!(state.mode, ScheduledModeV1::Record) && state.seed.is_none()
+            matches!(
+                state.mode,
+                ScheduledModeV1::Record | ScheduledModeV1::ReduceCanonical
+            ) && state.seed.is_none()
         })
     }
 
@@ -432,6 +519,47 @@ impl<'a> PreparedScheduleV1<'a> {
                     state.order.swap(index, swap);
                 }
             }
+            ScheduledModeV1::ReduceSeeded => {
+                state
+                    .order
+                    .extend((0..machine_count).filter(|index| runnable_at(*index)));
+                for index in (1..state.order.len()).rev() {
+                    let swap = next_random_index(&mut state.random_state, index + 1);
+                    state.order.swap(index, swap);
+                }
+            }
+            ScheduledModeV1::ReducePrefix(prefix) => {
+                let runnable = (0..machine_count)
+                    .filter(|index| runnable_at(*index))
+                    .count();
+                while state.order.len() < runnable && state.cursor < prefix.len() {
+                    let decision = prefix[state.cursor];
+                    if decision.workgroup != workgroup {
+                        return Err(SimulationScheduleReplayErrorV1::UnexpectedWorkgroup);
+                    }
+                    if decision.phase != phase {
+                        return Err(SimulationScheduleReplayErrorV1::UnexpectedPhase);
+                    }
+                    let Some(index) = (0..machine_count)
+                        .find(|index| invocation_at(*index).local == decision.local)
+                    else {
+                        return Err(SimulationScheduleReplayErrorV1::LocalNotRunnable);
+                    };
+                    if !runnable_at(index) {
+                        return Err(SimulationScheduleReplayErrorV1::LocalNotRunnable);
+                    }
+                    if state.order.contains(&index) {
+                        return Err(SimulationScheduleReplayErrorV1::DuplicateLocal);
+                    }
+                    state.order.push(index);
+                    state.cursor += 1;
+                }
+                for index in 0..machine_count {
+                    if runnable_at(index) && !state.order.contains(&index) {
+                        state.order.push(index);
+                    }
+                }
+            }
             _ => unreachable!("canonical order does not allocate a phase order"),
         }
         Ok(std::mem::take(&mut state.order))
@@ -466,6 +594,12 @@ impl<'a> PreparedScheduleV1<'a> {
                 state.decisions.push(decision);
             }
         }
+        if let Some(decisions) = self.reduction_decisions.as_mut() {
+            if decisions.len() == decisions.capacity() {
+                return Err(SchedulePrepareErrorV1::AllocationFailure);
+            }
+            decisions.push(decision);
+        }
         self.current_decision =
             self.current_decision
                 .checked_add(1)
@@ -482,8 +616,9 @@ impl<'a> PreparedScheduleV1<'a> {
     pub(crate) fn finish(
         self,
         expected_workgroups: u64,
-        identity: VerifiedCanonicalKernelIrIdentityV7,
+        identity: SimulationKernelIrIdentityV1,
         simulation: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
         target: SimulationTargetV1,
         limits: SimulationLimitsV1,
     ) -> Result<PreparedScheduleResultV1, SimulationScheduleReplayErrorV1> {
@@ -510,13 +645,22 @@ impl<'a> PreparedScheduleV1<'a> {
                 return Err(SimulationScheduleReplayErrorV1::CoverageMismatch);
             }
         }
+        if let Some(ScheduledStateV1 {
+            mode: ScheduledModeV1::ReducePrefix(prefix),
+            cursor,
+            ..
+        }) = &state
+            && *cursor != prefix.len()
+        {
+            return Err(SimulationScheduleReplayErrorV1::TrailingDecision);
+        }
         let schedule = state.as_ref().map_or(
             SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
             |state| state.schedule,
         );
         let seed = state.as_ref().and_then(|state| state.seed);
         let context_identity = state.as_ref().map_or_else(
-            || schedule_context_identity(identity, simulation, target, limits),
+            || schedule_context_identity_configured(identity, simulation, dynamic, target, limits),
             |state| state.context_identity,
         );
         let transcript_identity = transcript_identity(context_identity, schedule, seed, coverage);
@@ -639,9 +783,29 @@ fn validate_record(
     Ok(())
 }
 
-fn schedule_context_identity(
-    identity: VerifiedCanonicalKernelIrIdentityV7,
+pub(crate) fn schedule_context_identity(
+    identity: SimulationKernelIrIdentityV1,
     request: &SimulationRequestV1,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> [u8; 32] {
+    schedule_context_identity_configured(identity, request, None, target, limits)
+}
+
+pub(crate) fn schedule_context_identity_with_dynamic(
+    identity: SimulationKernelIrIdentityV1,
+    request: &SimulationRequestV1,
+    dynamic: DynamicWorkgroupMemoryRequestV1,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+) -> [u8; 32] {
+    schedule_context_identity_configured(identity, request, Some(dynamic), target, limits)
+}
+
+fn schedule_context_identity_configured(
+    identity: SimulationKernelIrIdentityV1,
+    request: &SimulationRequestV1,
+    dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> [u8; 32] {
@@ -654,11 +818,23 @@ fn schedule_context_identity(
         .shared_buffers
         .iter()
         .any(|shared| shared.buffer.access() == AccessMode::WriteOnly);
-    hash.update(if write_only {
-        CONTEXT_DOMAIN_V2
+    let versioned_context = identity.wire_version() != 7;
+    if let Some(dynamic) = dynamic {
+        hash.update(DYNAMIC_CONTEXT_DOMAIN_V1);
+        hash.update(identity.wire_version().to_le_bytes());
+        hash.update([u8::from(write_only)]);
+        hash.update(dynamic.byte_extent().to_le_bytes());
     } else {
-        CONTEXT_DOMAIN_V1
-    });
+        hash.update(match (versioned_context, write_only) {
+            (false, false) => CONTEXT_DOMAIN_V1,
+            (false, true) => CONTEXT_DOMAIN_V2,
+            (true, false) => CONTEXT_DOMAIN_V3,
+            (true, true) => CONTEXT_DOMAIN_V4,
+        });
+    }
+    if dynamic.is_none() && versioned_context {
+        hash.update(identity.wire_version().to_le_bytes());
+    }
     hash.update(identity.digest());
     hash.update(identity.canonical_length().to_le_bytes());
     hash_bytes(&mut hash, request.kernel.as_str().as_bytes());

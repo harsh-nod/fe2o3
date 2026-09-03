@@ -54,22 +54,28 @@ use fe2o3_compiler_lineage::{
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, FinalizedSemanticDebugMapAdmissionStatusV1,
     FinalizedSemanticDebugMapErrorV1, InertProductionKirV7StructuralBridgeV1,
-    InertProductionSourceIsaCatalogV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
-    ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
+    InertProductionProfilerKirArchiveV1, InertProductionSourceIsaCatalogV1,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedWorkerV3HsacoV1, LinkOptionV1,
+    PinnedWorkerV1, ProductionFinalizedSemanticDebugAdmissionV1, ProductionIsaPointV1,
     ProductionKirV7BridgeAdmissionV1, ProductionKirV7BridgeCatalogQueryUnavailableV1,
-    ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeSiteV1, ProductionSemanticAnchorAdmissionV1,
-    ProductionSemanticAnchorErrorV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
-    ProductionSourceIsaCatalogAdmissionV1, ProductionSourceIsaCatalogPointV1,
-    ProductionSourceIsaCatalogRecordKindV1, ProductionSourceIsaCorrelationAdmissionV1,
-    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
-    ProductionSourceIsaRecordKindV1, ProtectedWorkerV3CompactFinalizerReplayV2,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError, WorkerV3HsacoInspectionError,
-    WorkerV3HsacoPublicationErrorV1, admit_production_kir_v7_structural_bridge_v1,
+    ProductionKirV7BridgeErrorV1, ProductionKirV7BridgeSiteV1,
+    ProductionProfilerKirArchiveAdmissionV1, ProductionProfilerKirArchiveErrorV1,
+    ProductionProfilerKirArchiveUnavailableClassV1, ProductionProfilerKirArchiveUnavailableV1,
+    ProductionSemanticAnchorAdmissionV1, ProductionSemanticAnchorErrorV1,
+    ProductionSemanticAnchorUnavailableV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
+    ProductionSourceIsaCatalogAdmissionV1, ProductionSourceIsaCatalogErrorV1,
+    ProductionSourceIsaCatalogPointV1, ProductionSourceIsaCatalogRecordKindV1,
+    ProductionSourceIsaCatalogTargetV1, ProductionSourceIsaCatalogTransformationV1,
+    ProductionSourceIsaCorrelationAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
+    ProductionSourceIsaCorrelationUnavailableV1, ProductionSourceIsaRecordKindV1,
+    ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
+    WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
+    admit_production_kir_v7_structural_bridge_v1,
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    prepare_production_profiler_kir_archive_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -85,16 +91,21 @@ use fe2o3_kernel_descriptor::{
     SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
 };
 use fe2o3_kernel_ir::{
-    DebugSourceMapBindingV1, DebugSourceMapDocumentV2, ProductionSemanticDebugAvailabilityV1,
-    ProductionSemanticDebugCarrierV1, ProductionSemanticDebugFragmentErrorV1,
-    ProductionSemanticDebugFragmentV1, ProductionSemanticDebugProducerCapabilityV1,
-    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
-    SemanticDebugBoundaryDirectionV1, SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1,
-    SemanticDebugContentIdentityV1, SemanticDebugLayerV1, SemanticDebugLocationV1,
-    SemanticDebugMapBindingV1, SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1,
-    SemanticDebugMappingOutputV1, SemanticDebugMappingV1, SemanticDebugNodeV1,
+    BinaryOp, CheckedBinaryOperator, DebugSourceMapBindingV1, DebugSourceMapDocumentV2,
+    OperationKind, ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
+    ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugFragmentV1,
+    ProductionSemanticDebugProducerCapabilityV1, ProductionSemanticDebugProducerGapV1,
+    ProductionSemanticDebugReceiptExtensionV1, ProductionSemanticDebugTransformationAvailabilityV1,
+    ProductionSemanticDebugTransformationClassV1, SemanticDebugBoundaryDirectionV1,
+    SemanticDebugBoundaryReasonV1, SemanticDebugBoundaryV1, SemanticDebugContentIdentityV1,
+    SemanticDebugLayerV1, SemanticDebugLocationV1, SemanticDebugMapBindingV1,
+    SemanticDebugMapDocumentV1, SemanticDebugMapErrorV1, SemanticDebugMappingOutputV1,
+    SemanticDebugMappingV1, SemanticDebugNodeV1, SemanticDebugRelationCardinalityV2,
+    SemanticDebugTransformationClassV2, SemanticDebugTransformationClassificationV2,
+    SemanticDebugTransformationEvidenceInputV2, SemanticDebugTransformationEvidenceKindV2,
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    production_semantic_debug_transformation_capabilities_v1,
 };
 use fe2o3_verifier::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
@@ -111,7 +122,8 @@ mod hsaco_fixture;
 mod production_semantic_debug_fixture_v1;
 
 use compiler_proof_inputs_v3::{
-    canonical_compiler_proof_inputs_v4,
+    ProductionSourceIsaKernelFamilyV1, canonical_compiler_proof_inputs_v4,
+    canonical_compiler_proof_inputs_v4_with_sourceful_family,
     canonical_compiler_proof_inputs_v4_with_sourceful_induction,
     canonical_verus_execution_evidence_v1,
 };
@@ -671,6 +683,7 @@ fn native_v3_finalizer_admits_only_the_exact_artifact_and_bounded_isa_interval()
     assert!(!admitted.validates_all_input_axes());
     assert!(!admitted.authenticates_compiler_execution());
     assert!(!admitted.grants_publication_authority());
+    assert!(admitted.transformation_map_v2().is_none());
 
     let stale = finalizer_semantic_map(b"substituted-hsaco", 4);
     assert!(matches!(
@@ -746,6 +759,40 @@ fn production_semantic_debug_legacy_and_unavailable_states_are_typed() {
         available.raw_output_identity()
     );
     let outer = available.outer_handoff();
+    let transformation_map = admitted
+        .transformation_map_v2()
+        .expect("exact production admission carries cardinality evidence");
+    let correspondence = outer
+        .capsule()
+        .receipts()
+        .mir_to_kir_correspondence()
+        .canonical_preimage();
+    transformation_map
+        .validate_exact_inputs(
+            admitted.canonical_bytes(),
+            &[SemanticDebugTransformationEvidenceInputV2 {
+                kind: SemanticDebugTransformationEvidenceKindV2::MirKirCorrespondenceV4,
+                canonical_bytes: correspondence,
+            }],
+        )
+        .unwrap();
+    assert!(transformation_map.relations().iter().any(|relation| {
+        relation.classification()
+            == SemanticDebugTransformationClassificationV2::Observed {
+                class: SemanticDebugTransformationClassV2::Eliminated,
+            }
+    }));
+    let expanded = transformation_map
+        .relations()
+        .iter()
+        .find(|relation| relation.cardinality() == SemanticDebugRelationCardinalityV2::OneToMany)
+        .expect("fixture contains an exact lowering expansion");
+    assert_eq!(
+        expanded.classification(),
+        SemanticDebugTransformationClassificationV2::Unavailable {
+            reason: fe2o3_kernel_ir::SemanticDebugTransformationUnavailableReasonV2::ProducerDidNotClassify,
+        }
+    );
     let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
         outer
             .capsule()
@@ -1629,11 +1676,34 @@ fn semantic_anchor_handoff(
     semantic_anchor_handoff_with_version(profile, ProductionReplayKernelIrVersionV1::V8)
 }
 
+fn semantic_anchor_handoff_for_family(
+    profile: ProductionAmdTargetProfileV1,
+    family: ProductionSourceIsaKernelFamilyV1,
+) -> (CompilerModuleHandoffV2, CompilerDescriptorSourceV1, String) {
+    semantic_anchor_handoff_with_version_and_family(
+        profile,
+        ProductionReplayKernelIrVersionV1::V8,
+        family,
+    )
+}
+
 fn semantic_anchor_handoff_with_version(
     profile: ProductionAmdTargetProfileV1,
     version: ProductionReplayKernelIrVersionV1,
 ) -> (CompilerModuleHandoffV2, CompilerDescriptorSourceV1, String) {
-    let proof_inputs = canonical_compiler_proof_inputs_v4_with_sourceful_induction(0x20);
+    semantic_anchor_handoff_with_version_and_family(
+        profile,
+        version,
+        ProductionSourceIsaKernelFamilyV1::Elementwise,
+    )
+}
+
+fn semantic_anchor_handoff_with_version_and_family(
+    profile: ProductionAmdTargetProfileV1,
+    version: ProductionReplayKernelIrVersionV1,
+    family: ProductionSourceIsaKernelFamilyV1,
+) -> (CompilerModuleHandoffV2, CompilerDescriptorSourceV1, String) {
+    let proof_inputs = canonical_compiler_proof_inputs_v4_with_sourceful_family(0x20, family);
     let neutral_bytes = replay_kernel_ir_bytes(proof_inputs.kernel_ir(), version);
     let neutral_module = match version {
         ProductionReplayKernelIrVersionV1::V8 => {
@@ -1760,6 +1830,54 @@ fn semantic_anchor_outer(
             Some(extension.canonical_bytes()),
             Some(profile),
             Some(descriptor_source.canonical_bytes()),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap()
+}
+
+fn semantic_anchor_outer_for_family(
+    handoff: &CompilerModuleHandoffV2,
+    descriptor_source: &CompilerDescriptorSourceV1,
+    profile: ProductionAmdTargetProfileV1,
+    family: ProductionSourceIsaKernelFamilyV1,
+) -> InertSemanticCompilerModuleHandoffV3 {
+    let base = InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm_and_version_for_family(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            None,
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+            ProductionReplayKernelIrVersionV1::V8,
+            Some(family),
+        ),
+        handoff.canonical_bytes(),
+    ))
+    .unwrap();
+    let association = association_from_outer(&base);
+    let proof = canonical_compiler_proof_inputs_v4_with_sourceful_family(0x20, family);
+    let carrier = exact_source_mir_kir_carrier_v1(
+        association.canonical_bytes(),
+        proof.semantic_mir(),
+        proof.kernel_ir(),
+        proof.correspondence(),
+        handoff.module_bytes(),
+    );
+    let extension =
+        ProductionSemanticDebugReceiptExtensionV1::new(association.canonical_bytes(), carrier)
+            .unwrap();
+    InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
+        &capsule_bytes_with_semantic_to_llvm_and_version_for_family(
+            0x20,
+            handoff,
+            DescriptorLineageMutation::Exact,
+            Some(extension.canonical_bytes()),
+            Some(profile),
+            Some(descriptor_source.canonical_bytes()),
+            ProductionReplayKernelIrVersionV1::V8,
+            Some(family),
         ),
         handoff.canonical_bytes(),
     ))
@@ -1913,6 +2031,22 @@ fn execute_semantic_anchor_handoff(
     Vec<u8>,
 ) {
     let outer = semantic_anchor_outer(handoff, descriptor_source, profile);
+    execute_semantic_anchor_outer(directory, &outer, worker, llvm_build_identity)
+}
+
+fn execute_semantic_anchor_handoff_for_family(
+    directory: &TestDirectory,
+    handoff: &CompilerModuleHandoffV2,
+    descriptor_source: &CompilerDescriptorSourceV1,
+    profile: ProductionAmdTargetProfileV1,
+    family: ProductionSourceIsaKernelFamilyV1,
+    worker: &PinnedWorkerV1,
+    llvm_build_identity: &'static str,
+) -> (
+    fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+    Vec<u8>,
+) {
+    let outer = semantic_anchor_outer_for_family(handoff, descriptor_source, profile, family);
     execute_semantic_anchor_outer(directory, &outer, worker, llvm_build_identity)
 }
 
@@ -2076,6 +2210,82 @@ fn source_isa_correlation_preserves_exact_source_carrier_unavailability() {
     ));
 }
 
+#[test]
+fn production_profiler_kir_archive_replays_finalizer_and_preserves_typed_unavailability() {
+    let finalized = finalized_with_optional_semantic_debug(
+        slice_fixture_with_descriptor_table(&slice_descriptor_table()).bytes,
+        OptionalSemanticDebugFixture::Available,
+    );
+    let prepared = prepare_production_profiler_kir_archive_v1(finalized).unwrap();
+    let expected_identity = prepared.identity();
+    let bytes = prepared.into_canonical_bytes();
+    let inert = InertProductionProfilerKirArchiveV1::decode_canonical(&bytes).unwrap();
+    assert_eq!(inert.identity(), expected_identity);
+    let ProductionProfilerKirArchiveAdmissionV1::Unavailable(reason) =
+        inert.admit_exact_replay_v1().unwrap()
+    else {
+        panic!("synthetic archive unexpectedly produced structural owners")
+    };
+    assert!(matches!(
+        reason,
+        ProductionProfilerKirArchiveUnavailableV1::SourceIsaCatalog(
+            ProductionSourceIsaCorrelationUnavailableV1::SemanticAnchors(
+                ProductionSemanticAnchorUnavailableV1::CompilerInstrumentationAbsent
+            )
+        )
+    ));
+    assert_eq!(
+        reason.class(),
+        ProductionProfilerKirArchiveUnavailableClassV1::SourceIsaCatalog
+    );
+    assert_eq!(
+        reason.reason_code(),
+        "semantic_anchors_compiler_instrumentation_absent"
+    );
+
+    let mut substituted = bytes;
+    mutate_profiler_archive_finalized_hsaco_and_reseal(&mut substituted);
+    assert_eq!(
+        InertProductionProfilerKirArchiveV1::decode_owned_canonical(substituted)
+            .unwrap()
+            .admit_exact_replay_v1()
+            .unwrap_err(),
+        ProductionProfilerKirArchiveErrorV1::FinalizerReplay
+    );
+}
+
+fn mutate_profiler_archive_finalized_hsaco_and_reseal(bytes: &mut [u8]) {
+    const HEADER_BYTES: usize = 80;
+    const SECTION_HEADER_BYTES: usize = 12;
+    const CHECKSUM_BYTES: usize = 32;
+    const CHECKSUM_DOMAIN: &[u8] = b"FE2O3/PRODUCTION-PROFILER-KIR-ARCHIVE-CHECKSUM/V1\0";
+    let section_count = u16::from_le_bytes(bytes[76..78].try_into().unwrap()) as usize;
+    let mut offset = HEADER_BYTES;
+    let checksum_offset = bytes.len() - CHECKSUM_BYTES;
+    let mut mutated = false;
+    for _ in 0..section_count {
+        let tag = bytes[offset];
+        let length = usize::try_from(u64::from_le_bytes(
+            bytes[offset + 4..offset + SECTION_HEADER_BYTES]
+                .try_into()
+                .unwrap(),
+        ))
+        .unwrap();
+        let payload = offset + SECTION_HEADER_BYTES;
+        if tag == 4 {
+            bytes[payload] ^= 1;
+            mutated = true;
+        }
+        offset = payload + length;
+    }
+    assert!(mutated);
+    assert_eq!(offset, checksum_offset);
+    let mut digest = Sha256::new();
+    digest.update(CHECKSUM_DOMAIN);
+    digest.update(&bytes[..checksum_offset]);
+    bytes[checksum_offset..].copy_from_slice(&digest.finalize());
+}
+
 fn production_bridge_inputs(
     finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
@@ -2114,6 +2324,298 @@ fn reseal_bridge_claim(bytes: &mut [u8]) {
     digest.update(DOMAIN);
     digest.update(&bytes[..identity_offset]);
     bytes[identity_offset..].copy_from_slice(&digest.finalize());
+}
+
+fn assert_production_source_isa_family_shape(family: ProductionSourceIsaKernelFamilyV1) {
+    let proof = canonical_compiler_proof_inputs_v4_with_sourceful_family(0x20, family);
+    let (_, module) =
+        VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(proof.kernel_ir().to_vec())
+            .unwrap();
+    let operations = module
+        .functions
+        .iter()
+        .filter_map(|function| function.body.as_ref())
+        .flat_map(|body| body.blocks.iter())
+        .flat_map(|block| block.operations.iter())
+        .map(|operation| &operation.kind)
+        .collect::<Vec<_>>();
+    assert!(
+        operations.iter().any(|operation| {
+            matches!(
+                operation,
+                OperationKind::Binary {
+                    op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                    ..
+                }
+            )
+        }),
+        "{family:?} lost the production u32 induction operation"
+    );
+    match family {
+        ProductionSourceIsaKernelFamilyV1::Elementwise => {}
+        ProductionSourceIsaKernelFamilyV1::WorkgroupCollective => assert!(
+            operations
+                .iter()
+                .any(|operation| matches!(operation, OperationKind::WorkgroupBarrier(_))),
+            "workgroup-collective fixture lost its uniform barrier"
+        ),
+        ProductionSourceIsaKernelFamilyV1::Tiled => {
+            for expected in [BinaryOp::Divide, BinaryOp::Remainder] {
+                assert!(
+                    operations.iter().any(|operation| {
+                        matches!(operation, OperationKind::Binary { op, .. } if *op == expected)
+                    }),
+                    "tiled fixture lost {expected:?} coordinate arithmetic"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn production_source_isa_kernel_family_fixtures_are_distinct_canonical_kir_v8() {
+    let mut identities = Vec::new();
+    for family in [
+        ProductionSourceIsaKernelFamilyV1::Elementwise,
+        ProductionSourceIsaKernelFamilyV1::WorkgroupCollective,
+        ProductionSourceIsaKernelFamilyV1::Tiled,
+    ] {
+        assert_production_source_isa_family_shape(family);
+        let proof = canonical_compiler_proof_inputs_v4_with_sourceful_family(0x20, family);
+        let owner =
+            VerifiedCanonicalKernelIrV8::from_canonical_bytes(proof.kernel_ir().to_vec()).unwrap();
+        assert!(
+            !identities.contains(owner.identity().digest()),
+            "{family:?} reused another family's canonical KIR"
+        );
+        identities.push(*owner.identity().digest());
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+#[ignore = "requires FE2O3_TEST_REAL_WORKER, FE2O3_TEST_REAL_WORKER_BUILD_ID, and FE2O3_TEST_REAL_LLVM_BUILD_ID"]
+fn production_source_isa_catalog_admits_real_worker_kernel_family_matrix() {
+    let worker_path = PathBuf::from(std::env::var("FE2O3_TEST_REAL_WORKER").unwrap());
+    let worker_build_identity = std::env::var("FE2O3_TEST_REAL_WORKER_BUILD_ID").unwrap();
+    let llvm_build_identity: &'static str = Box::leak(
+        std::env::var("FE2O3_TEST_REAL_LLVM_BUILD_ID")
+            .unwrap()
+            .into_boxed_str(),
+    );
+    let families = [
+        ProductionSourceIsaKernelFamilyV1::Elementwise,
+        ProductionSourceIsaKernelFamilyV1::WorkgroupCollective,
+        ProductionSourceIsaKernelFamilyV1::Tiled,
+    ];
+    let profiles = [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ];
+    let mut prior_catalogs: Vec<(
+        ProductionAmdTargetProfileV1,
+        ProductionSourceIsaKernelFamilyV1,
+        Vec<u8>,
+    )> = Vec::new();
+    let mut saw_map_family_substitution = false;
+    let mut saw_target_substitution = false;
+    let mut saw_coalesced = false;
+    let mut saw_eliminated = false;
+
+    for profile in profiles {
+        for family in families {
+            assert_production_source_isa_family_shape(family);
+            let (handoff, descriptor_source, _) =
+                semantic_anchor_handoff_for_family(profile, family);
+            let directory = TestDirectory::new();
+            let real_worker = pinned_external(
+                &directory,
+                &worker_path,
+                &worker_build_identity,
+                llvm_build_identity,
+            );
+            let (finalized, _) = execute_semantic_anchor_handoff_for_family(
+                &directory,
+                &handoff,
+                &descriptor_source,
+                profile,
+                family,
+                &real_worker,
+                llvm_build_identity,
+            );
+            let correlation = match finalized
+                .admit_production_source_isa_correlation_v1()
+                .unwrap()
+            {
+                ProductionSourceIsaCorrelationAdmissionV1::Admitted(correlation) => correlation,
+                ProductionSourceIsaCorrelationAdmissionV1::Unavailable(reason) => {
+                    panic!("{profile:?} {family:?} correlation unavailable: {reason:?}")
+                }
+            };
+            let catalog = match finalized.admit_production_source_isa_catalog_v1().unwrap() {
+                ProductionSourceIsaCatalogAdmissionV1::Admitted(catalog) => catalog,
+                ProductionSourceIsaCatalogAdmissionV1::Unavailable(reason) => {
+                    panic!("{profile:?} {family:?} catalog unavailable: {reason:?}")
+                }
+            };
+            assert_eq!(correlation.structural_binding().profile(), profile);
+            assert_eq!(
+                catalog.structural_binding().target(),
+                match profile {
+                    ProductionAmdTargetProfileV1::Gfx942 => {
+                        ProductionSourceIsaCatalogTargetV1::Gfx942
+                    }
+                    ProductionAmdTargetProfileV1::Gfx950 => {
+                        ProductionSourceIsaCatalogTargetV1::Gfx950
+                    }
+                }
+            );
+            assert_eq!(catalog.artifact_identity(), correlation.artifact_identity());
+            assert_eq!(catalog.records().len(), correlation.records().len());
+
+            let mut exact_round_trips = 0_usize;
+            for record in catalog.records() {
+                match record.transformation() {
+                    Some(ProductionSourceIsaCatalogTransformationV1::Duplicated) => {}
+                    Some(ProductionSourceIsaCatalogTransformationV1::Coalesced) => {
+                        saw_coalesced = true;
+                    }
+                    Some(ProductionSourceIsaCatalogTransformationV1::DuplicatedAndCoalesced) => {
+                        saw_coalesced = true;
+                    }
+                    Some(ProductionSourceIsaCatalogTransformationV1::Eliminated) => {
+                        saw_eliminated = true;
+                    }
+                    Some(ProductionSourceIsaCatalogTransformationV1::Preserved) | None => {}
+                }
+                if record.kind() == ProductionSourceIsaCatalogRecordKindV1::EliminatedBeforeKir {
+                    saw_eliminated = true;
+                }
+                if record.kind() != ProductionSourceIsaCatalogRecordKindV1::SourceAnchored
+                    || record.isa().is_empty()
+                {
+                    continue;
+                }
+
+                let source_node = record.source_node_identity().unwrap();
+                let source_span = record.source_span().unwrap();
+                let mir_node = record.mir_node_identity().unwrap();
+                let mir = record.mir().unwrap();
+                let neutral_kir_node = record.neutral_kir_node_identity().unwrap();
+                let neutral_kir = record.neutral_kir().unwrap();
+                let target_kir = record.target_kir().unwrap();
+                let semantic_operation = record.semantic_operation_id().unwrap();
+                let llvm = record.compiler_handoff_llvm().unwrap();
+                assert!(
+                    catalog
+                        .query_source_node(source_node)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(
+                    catalog
+                        .query_source_span(source_span)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(
+                    catalog
+                        .query_mir_node(mir_node)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(catalog.query_mir(mir).unwrap().any(|v| v == record));
+                assert!(
+                    catalog
+                        .query_neutral_kir_node(neutral_kir_node)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(
+                    catalog
+                        .query_neutral_kir(neutral_kir)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(
+                    catalog
+                        .query_target_kir(target_kir)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(
+                    catalog
+                        .query_semantic_operation(semantic_operation)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                assert!(
+                    catalog
+                        .query_compiler_handoff_llvm(llvm)
+                        .unwrap()
+                        .any(|v| v == record)
+                );
+                for interval in record.isa() {
+                    assert!(
+                        catalog
+                            .query_isa_pc(ProductionSourceIsaCatalogPointV1::new(
+                                interval.kernel_ordinal(),
+                                interval.byte_start(),
+                            ))
+                            .unwrap()
+                            .any(|v| v == record)
+                    );
+                }
+                exact_round_trips += 1;
+            }
+            assert!(
+                exact_round_trips > 0,
+                "{profile:?} {family:?} has no exact Source-to-ISA-to-Source witness"
+            );
+            assert!(!catalog.proves_complete_machine_instruction_coverage());
+            assert!(!catalog.proves_a_schedule());
+            assert!(!catalog.proves_semantic_refinement());
+            assert!(!catalog.proves_optimized_or_final_llvm_custody());
+            assert!(!catalog.proves_live_program_counter_ownership());
+            assert!(!catalog.grants_debugger_authority());
+            assert!(!catalog.grants_profiler_authority());
+            assert!(!catalog.grants_publication_authority());
+            assert!(!catalog.grants_runtime_authority());
+
+            let catalog_bytes = catalog.to_canonical_bytes().unwrap();
+            let re_admitted =
+                InertProductionSourceIsaCatalogV1::from_canonical_bytes(&catalog_bytes)
+                    .unwrap()
+                    .admit_exact_projection_v1(&correlation)
+                    .unwrap();
+            assert_eq!(re_admitted.records(), catalog.records());
+            for (prior_profile, prior_family, prior_bytes) in &prior_catalogs {
+                let wrong = InertProductionSourceIsaCatalogV1::from_canonical_bytes(prior_bytes)
+                    .unwrap()
+                    .admit_exact_projection_v1(&correlation);
+                assert!(matches!(
+                    wrong,
+                    Err(ProductionSourceIsaCatalogErrorV1::ExactProjectionMismatch)
+                ));
+                saw_map_family_substitution |= *prior_profile == profile && *prior_family != family;
+                saw_target_substitution |= *prior_profile != profile && *prior_family == family;
+            }
+            prior_catalogs.push((profile, family, catalog_bytes));
+        }
+    }
+    assert!(saw_map_family_substitution);
+    assert!(saw_target_substitution);
+    assert!(saw_coalesced);
+    assert!(saw_eliminated);
+    assert_eq!(
+        production_semantic_debug_transformation_capabilities_v1()
+            .into_iter()
+            .find(|capability| {
+                capability.class() == ProductionSemanticDebugTransformationClassV1::Duplicated
+            })
+            .map(|capability| capability.availability()),
+        Some(ProductionSemanticDebugTransformationAvailabilityV1::UnavailableNoProductionEmitter)
+    );
 }
 
 #[test]
@@ -2637,6 +3139,37 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
         assert!(!summary.retains_correlation_records());
         assert!(!summary.grants_publication_authority());
         assert!(!summary.grants_runtime_authority());
+
+        let prepared = prepare_production_profiler_kir_archive_v1(finalized).unwrap();
+        let archive_identity = prepared.identity();
+        let archive_bytes = prepared.into_canonical_bytes();
+        let admitted = match InertProductionProfilerKirArchiveV1::decode_canonical(&archive_bytes)
+            .unwrap()
+            .admit_exact_replay_v1()
+            .unwrap()
+        {
+            ProductionProfilerKirArchiveAdmissionV1::Admitted(value) => value,
+            ProductionProfilerKirArchiveAdmissionV1::Unavailable(reason) => {
+                panic!("real Worker profiler archive unexpectedly unavailable: {reason:?}")
+            }
+        };
+        assert_eq!(admitted.identity(), archive_identity);
+        assert_eq!(admitted.canonical_len(), archive_bytes.len() as u64);
+        assert_eq!(
+            admitted.bridge().catalog_identity(),
+            admitted.catalog().identity()
+        );
+        assert_eq!(
+            admitted.characteristic().structural_bridge_identity(),
+            admitted.bridge().identity()
+        );
+        assert!(!admitted.authenticates_external_provenance());
+        assert!(!admitted.grants_compiler_authority());
+        assert!(!admitted.grants_publication_authority());
+        assert!(!admitted.grants_load_authority());
+        assert!(!admitted.grants_launch_authority());
+        assert!(!admitted.grants_profiler_collection_authority());
+        assert!(!admitted.grants_runtime_authority());
 
         let (v9_handoff, v9_descriptor_source, _) =
             semantic_anchor_handoff_with_version(profile, ProductionReplayKernelIrVersionV1::V9);
@@ -3410,6 +3943,29 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
     descriptor_source_override: Option<&[u8]>,
     replay_version: ProductionReplayKernelIrVersionV1,
 ) -> Vec<u8> {
+    capsule_bytes_with_semantic_to_llvm_and_version_for_family(
+        seed,
+        handoff,
+        lineage_mutation,
+        semantic_to_llvm,
+        replay_profile,
+        descriptor_source_override,
+        replay_version,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capsule_bytes_with_semantic_to_llvm_and_version_for_family(
+    seed: u8,
+    handoff: &CompilerModuleHandoffV2,
+    lineage_mutation: DescriptorLineageMutation,
+    semantic_to_llvm: Option<&[u8]>,
+    replay_profile: Option<ProductionAmdTargetProfileV1>,
+    descriptor_source_override: Option<&[u8]>,
+    replay_version: ProductionReplayKernelIrVersionV1,
+    family: Option<ProductionSourceIsaKernelFamilyV1>,
+) -> Vec<u8> {
     let invocation = invocation_bytes_for_target(seed, &handoff.target().to_string());
     let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(handoff).unwrap();
     let mut receipts = RECEIPTS
@@ -3421,7 +3977,9 @@ fn capsule_bytes_with_semantic_to_llvm_and_version(
             )
         })
         .collect::<Vec<_>>();
-    let proof_inputs = if replay_profile.is_some() {
+    let proof_inputs = if let Some(family) = family {
+        canonical_compiler_proof_inputs_v4_with_sourceful_family(seed, family)
+    } else if replay_profile.is_some() {
         canonical_compiler_proof_inputs_v4_with_sourceful_induction(seed)
     } else {
         canonical_compiler_proof_inputs_v4(seed)
@@ -3773,14 +4331,13 @@ fn validate_fixture_target_lineage(
         receipts.formal_memory(),
     )
     .unwrap();
-    validate_compiler_target_lineage_v1(capsule, &proof_inputs).map(|lineage| {
+    validate_compiler_target_lineage_v1(capsule, &proof_inputs).inspect(|lineage| {
         assert!(lineage.has_exact_receipt_association());
         assert!(lineage.has_exact_kir_to_llvm_replay());
         assert!(!lineage.establishes_semantic_refinement());
         assert!(!lineage.establishes_llvm_to_machine_refinement());
         assert!(!lineage.authenticates_producer());
         assert!(!lineage.grants_runtime_authority());
-        lineage
     })
 }
 

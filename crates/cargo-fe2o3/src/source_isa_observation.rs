@@ -3,15 +3,172 @@ use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_artifact_transaction::BuildAttempt;
 use fe2o3_hsaco_finalize::{
     FinalizedSemanticDebugMapErrorV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
-    ProductionSemanticAnchorErrorV1, ProductionSemanticAnchorUnavailableV1,
-    ProductionSourceIsaAcceptanceSummaryAdmissionV1, ProductionSourceIsaAcceptanceSummaryV1,
-    ProductionSourceIsaCorrelationErrorV1, ProductionSourceIsaCorrelationUnavailableV1,
+    ProductionKirV7BridgeAdmissionV1, ProductionSemanticAnchorErrorV1,
+    ProductionSemanticAnchorUnavailableV1, ProductionSourceIsaAcceptanceSummaryAdmissionV1,
+    ProductionSourceIsaAcceptanceSummaryV1, ProductionSourceIsaCatalogAdmissionV1,
+    ProductionSourceIsaCharacteristicAdmissionV1, ProductionSourceIsaCorrelationErrorV1,
+    ProductionSourceIsaCorrelationUnavailableV1, admit_production_kir_v7_structural_bridge_v1,
+    admit_production_source_isa_characteristics_v1,
+    readmit_exact_production_source_isa_characteristic_projection_v1,
+    release_production_source_isa_characteristic_projection_v1,
 };
 use fe2o3_kernel_ir::{
-    ProductionSemanticDebugFragmentErrorV1, ProductionSemanticDebugProducerGapV1,
-    SemanticDebugMapErrorV1,
+    ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugFragmentErrorV1,
+    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
+    SemanticDebugMapErrorV1, SemanticDebugTransformationMapErrorV2,
 };
 pub(crate) use fe2o3_source_isa_observation::wire_v1::*;
+use sha2::{Digest, Sha256};
+
+pub(crate) const SOURCE_ISA_CHARACTERISTIC_BROKER_MAGIC_V3: &[u8] =
+    b"FE2O3/SOURCE-ISA-CHARACTERISTIC-BROKER/V3\0";
+const SOURCE_ISA_CHARACTERISTIC_BROKER_CONFIG_DOMAIN_V3: &[u8] =
+    b"FE2O3/SOURCE-ISA-CHARACTERISTIC-BROKER-CONFIG/V3\0";
+const SOURCE_ISA_CHARACTERISTIC_BODY_FORMAT_V1: &[u8] =
+    b"fe2o3-source-isa-characteristic-collection-v1";
+
+pub(crate) fn source_isa_characteristic_broker_config_identity_v3() -> [u8; 32] {
+    let mut digest = Sha256::new();
+    for field in [
+        SOURCE_ISA_CHARACTERISTIC_BROKER_CONFIG_DOMAIN_V3,
+        SOURCE_ISA_CHARACTERISTIC_BROKER_MAGIC_V3,
+        SOURCE_ISA_CHARACTERISTIC_BODY_FORMAT_V1,
+        &u64::try_from(
+            fe2o3_source_isa_observation::characteristic_v1::MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1,
+        )
+        .expect("characteristic collection bound fits u64")
+        .to_le_bytes(),
+        b"u64-le-length-prefix",
+        b"config-unit-target-cell-binding",
+        b"exact-eof-required",
+    ] {
+        digest.update(
+            u64::try_from(field.len())
+                .expect("Broker identity field length fits u64")
+                .to_le_bytes(),
+        );
+        digest.update(field);
+    }
+    digest.finalize().into()
+}
+
+pub(crate) fn encode_source_isa_characteristic_broker_v3(
+    config: [u8; 32],
+    unit: [u8; 32],
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    if config == [0; 32]
+        || unit == [0; 32]
+        || body.is_empty()
+        || body.len()
+            > fe2o3_source_isa_observation::characteristic_v1::MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+    {
+        return Err("invalid Source/ISA characteristic Broker V3 cell".to_owned());
+    }
+    let inert = fe2o3_source_isa_observation::characteristic_v1::InertSourceIsaCharacteristicCollectionV1::decode_canonical(body)
+        .map_err(|error| format!("invalid Source/ISA characteristic body: {error}"))?;
+    let target = match inert.claimed_binding().target_profile() {
+        fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicTargetProfileV1::Gfx942 => 1_u16,
+        fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicTargetProfileV1::Gfx950 => 2_u16,
+    };
+    let total = SOURCE_ISA_CHARACTERISTIC_BROKER_MAGIC_V3
+        .len()
+        .checked_add(32 + 32 + 32 + 2 + 8)
+        .and_then(|length| length.checked_add(body.len()))
+        .ok_or_else(|| "Source/ISA characteristic Broker V3 length overflow".to_owned())?;
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve_exact(total)
+        .map_err(|_| "cannot allocate Source/ISA characteristic Broker V3 cell".to_owned())?;
+    encoded.extend_from_slice(SOURCE_ISA_CHARACTERISTIC_BROKER_MAGIC_V3);
+    encoded.extend_from_slice(&source_isa_characteristic_broker_config_identity_v3());
+    encoded.extend_from_slice(&config);
+    encoded.extend_from_slice(&unit);
+    encoded.extend_from_slice(&target.to_le_bytes());
+    encoded.extend_from_slice(
+        &u64::try_from(body.len())
+            .map_err(|_| "Source/ISA characteristic body length exceeds u64".to_owned())?
+            .to_le_bytes(),
+    );
+    encoded.extend_from_slice(body);
+    Ok(encoded)
+}
+
+pub(crate) fn finalized_source_isa_characteristic_observation_v1(
+    finalized: &PreparedFinalizedProtectedWorkerV3HsacoV1,
+) -> Result<
+    fe2o3_source_isa_observation::characteristic_v1::SourceIsaCharacteristicCollectionV1,
+    String,
+> {
+    let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
+        finalized
+            .outer_handoff()
+            .capsule()
+            .receipts()
+            .semantic_to_llvm()
+            .canonical_preimage(),
+    )
+    .map_err(|error| format!("invalid production semantic-debug receipt: {error}"))?;
+    let ProductionSemanticDebugAvailabilityV1::Available(fragment) =
+        extension.carrier_v1().availability()
+    else {
+        return Err("production semantic-debug characteristic evidence is unavailable".to_owned());
+    };
+    let target_kir = finalized
+        .outer_handoff()
+        .capsule()
+        .receipts()
+        .kernel_ir()
+        .canonical_preimage();
+    let catalog = match finalized
+        .admit_production_source_isa_catalog_v1()
+        .map_err(|error| format!("production Source/ISA catalog admission failed: {error}"))?
+    {
+        ProductionSourceIsaCatalogAdmissionV1::Admitted(catalog) => catalog,
+        ProductionSourceIsaCatalogAdmissionV1::Unavailable(reason) => {
+            return Err(format!(
+                "production Source/ISA catalog evidence is unavailable: {reason:?}"
+            ));
+        }
+    };
+    let bridge = match admit_production_kir_v7_structural_bridge_v1(
+        fragment.canonical_kir_v7(),
+        target_kir,
+        fragment.source_map_v2(),
+        finalized.exact_finalized_bytes(),
+        &catalog,
+    )
+    .map_err(|error| format!("production KIR V7 structural bridge admission failed: {error}"))?
+    {
+        ProductionKirV7BridgeAdmissionV1::Admitted(bridge) => bridge,
+        ProductionKirV7BridgeAdmissionV1::Unavailable(reason) => {
+            return Err(format!(
+                "production KIR V7 structural bridge is unavailable: {reason:?}"
+            ));
+        }
+    };
+    let producer =
+        match admit_production_source_isa_characteristics_v1(target_kir, &catalog, &bridge)
+            .map_err(|error| {
+                format!("production Source/ISA characteristic admission failed: {error}")
+            })? {
+            ProductionSourceIsaCharacteristicAdmissionV1::Admitted(producer) => producer,
+            ProductionSourceIsaCharacteristicAdmissionV1::Unavailable(reason) => {
+                return Err(format!(
+                    "production Source/ISA characteristic evidence is unavailable: {reason:?}"
+                ));
+            }
+        };
+    let released = release_production_source_isa_characteristic_projection_v1(&producer)
+        .map_err(|error| format!("Source/ISA characteristic release failed: {error}"))?;
+    let encoded = released
+        .encode_canonical()
+        .map_err(|error| format!("Source/ISA characteristic encoding failed: {error}"))?;
+    let inert = fe2o3_source_isa_observation::characteristic_v1::InertSourceIsaCharacteristicCollectionV1::decode_canonical(&encoded)
+        .map_err(|error| format!("Source/ISA characteristic self-decode failed: {error}"))?;
+    readmit_exact_production_source_isa_characteristic_projection_v1(inert, &producer)
+        .map_err(|error| format!("Source/ISA characteristic exact readmission failed: {error}"))
+}
 
 pub(crate) const fn inert_source_isa_session_v1(
     session: fe2o3_artifact_transaction::BuildSession,
@@ -301,6 +458,15 @@ const fn map_semantic_debug_map_error(
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV4 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV4
         }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5
+        }
+        FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2 => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2
+        }
+        FinalizedSemanticDebugMapErrorV1::InstanceCustodyV1(_) => {
+            SourceIsaObservationErrorCodeV1::FinalizedMapInvalidInstanceCustodyV1
+        }
         FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8 => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8
         }
@@ -316,6 +482,15 @@ const fn map_semantic_debug_map_error(
         FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence => {
             SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence
         }
+        FinalizedSemanticDebugMapErrorV1::TransformationMapV2(error) => match error {
+            SemanticDebugTransformationMapErrorV2::ResourceLimit => {
+                SourceIsaObservationErrorCodeV1::ResourceLimit
+            }
+            SemanticDebugTransformationMapErrorV2::AllocationFailure => {
+                SourceIsaObservationErrorCodeV1::FinalizedMapAllocationFailure
+            }
+            _ => SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence,
+        },
         FinalizedSemanticDebugMapErrorV1::ArtifactInspection => {
             SourceIsaObservationErrorCodeV1::FinalizedMapArtifactInspection
         }
@@ -539,6 +714,20 @@ mod tests {
             outcome,
         )
     }
+
+    #[test]
+    fn characteristic_broker_v3_config_identity_is_frozen() {
+        let identity = source_isa_characteristic_broker_config_identity_v3();
+        let encoded = identity
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            encoded,
+            "d8cda5df0538ddd552b4b93bff3d8f1b9fefc379a0e941e271f0ca508e51ae74"
+        );
+    }
+
     #[test]
     fn all_correlation_errors_map_to_distinct_canonical_codes() {
         fn assert_code(
@@ -628,6 +817,20 @@ mod tests {
                 SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV4,
             ),
             (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundCorrespondenceV5,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCorrespondenceV5,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InvalidBoundMultiRootCorrespondenceV2,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundMultiRootCorrespondenceV2,
+            ),
+            (
+                FinalizedSemanticDebugMapErrorV1::InstanceCustodyV1(
+                    fe2o3_hsaco_finalize::ProductionSemanticDebugInstanceCustodyErrorV1::InvalidEncoding,
+                ),
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidInstanceCustodyV1,
+            ),
+            (
                 FinalizedSemanticDebugMapErrorV1::InvalidBoundCanonicalKirV8,
                 SourceIsaObservationErrorCodeV1::FinalizedMapInvalidBoundCanonicalKirV8,
             ),
@@ -658,6 +861,28 @@ mod tests {
         ] {
             assert_code(
                 ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(error),
+                code,
+            );
+        }
+
+        for (error, code) in [
+            (
+                SemanticDebugTransformationMapErrorV2::InvalidRelation,
+                SourceIsaObservationErrorCodeV1::FinalizedMapInvalidSemanticCorrespondence,
+            ),
+            (
+                SemanticDebugTransformationMapErrorV2::ResourceLimit,
+                SourceIsaObservationErrorCodeV1::ResourceLimit,
+            ),
+            (
+                SemanticDebugTransformationMapErrorV2::AllocationFailure,
+                SourceIsaObservationErrorCodeV1::FinalizedMapAllocationFailure,
+            ),
+        ] {
+            assert_code(
+                ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap(
+                    FinalizedSemanticDebugMapErrorV1::TransformationMapV2(error),
+                ),
                 code,
             );
         }

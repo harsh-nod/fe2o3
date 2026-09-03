@@ -418,7 +418,7 @@ mod platform {
         /// path supports an externally retained executable without reopening its mutable source.
         /// Parent-directory resolution of ordinary paths may race, but substituting a different
         /// object cannot pass the authenticated content identity unless it has the same bytes.
-        /// The immutable captured image, rather than the pathname, is used by [`Self::execute`].
+        /// The immutable captured image, rather than the pathname, is used by execution.
         pub fn open(
             path: impl AsRef<Path>,
             measurement: WorkerMeasurementV1,

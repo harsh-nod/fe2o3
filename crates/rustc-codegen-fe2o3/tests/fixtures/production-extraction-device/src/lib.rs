@@ -148,6 +148,10 @@ fn zeta_reference(_point: usize, output: &mut u32) {
 }
 
 #[cfg(feature = "multi-root-target-lineage")]
+#[inline(never)]
+fn shared_kernel_marker() {}
+
+#[cfg(feature = "multi-root-target-lineage")]
 #[kernel(
     typed,
     reference = alpha_reference,
@@ -156,6 +160,7 @@ fn zeta_reference(_point: usize, output: &mut u32) {
 pub fn alpha(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
+        shared_kernel_marker();
         *element = 17;
     }
 }
@@ -169,6 +174,7 @@ pub fn alpha(mut output: DisjointSlice<u32>) {
 pub fn zeta(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
+        shared_kernel_marker();
         *element = 23;
     }
 }

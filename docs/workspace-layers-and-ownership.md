@@ -256,6 +256,22 @@ be hosted behind the bounded `RuntimeWorkerBackendV1` transport so a terminal
 failure destroys the worker instead of the application process. Deprecated HSA
 qualification code may use the same isolation without becoming a public route.
 
+`fe2o3-virtual-runtime` is also classified here. It composes the syscall-free
+runtime model with already admitted KIR simulator state for deterministic CPU
+tests of allocation, copy, queue, dependency, dispatch, completion, and
+quiescence lifetimes. Its identity-bound ordinal handles expose neither host
+pointers nor model-internal synthetic addresses. It has no KFD, load, launch,
+hardware, equivalence, or performance authority and is not an alternate
+production runtime composition boundary. Its headless CLI belongs to the
+integration layer and reuses the existing secure simulator admission path.
+
+`fe2o3-sim-runtime` is the explicit no-GPU adapter from exact admitted V3
+bundles to the ordinary `RuntimeBackendV1` SPI. It shares the host-runtime layer
+because `fe2o3-runtime` owns that SPI, but it never probes or falls back to KFD
+execution. Runtime policy checks its dependency closure and final ELF for the
+absence of HIP/HSA and GPU shared libraries. Its evidence is semantic CPU
+simulation only, never hardware, equivalence, or performance authority.
+
 The bounded pure-Rust `gfx942:xnack-` composition is the protected production
 direction in the same crate. Its safe API prepares a complete address-free
 request and has one consuming execution transition. That transition requires an unsafe

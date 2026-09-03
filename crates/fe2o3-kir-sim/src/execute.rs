@@ -9,12 +9,15 @@ use std::fmt;
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
-    CheckedBinaryOperator, ComparePredicate, Constant, Fence, Function, FunctionId, FunctionRole,
-    IndexKind, IntrinsicKind, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
-    ScalarType, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrIdentityV7, WaveOperation, WaveOperationKind, WaveWidth,
-    WorkgroupBarrier, WorkgroupMemoryExtent,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis, BasicBlock,
+    BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Fence,
+    Function, FunctionId, FunctionRole, Gfx950LdsTransposeFormatV1,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
+    MatrixElement, MatrixLdsProfile, MatrixOperation, MatrixOperationKind, MemoryAccess,
+    MemoryIntrinsicOperation, MemoryOrdering, Module, Operation, OperationKind,
+    PointerDistanceKind, PointerDistanceUnit, ScalarType, SynchronizationScope, Terminator, Type,
+    UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -24,17 +27,21 @@ use crate::resident::{
     partitioned_bool_vec_storage_bytes, partitioned_geometric_vec_bytes, reserved_bool_vec_bytes,
     reserved_hash_map_bytes, reserved_vec_bytes,
 };
-use crate::schedule::{PreparedScheduleV1, SchedulePrepareErrorV1};
+use crate::schedule::{
+    ExecutionScheduleRequestV1, PreparedScheduleV1, ReductionScheduleSourceV1,
+    SchedulePrepareErrorV1,
+};
 use crate::soft_float::{SoftFloatErrorV1, SoftFloatOperationV1};
 use crate::{
-    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1,
-    NoopSimulationDebugSinkV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
-    SimulationDebugAllocationV1, SimulationDebugBarrierActionV1, SimulationDebugBindingV1,
-    SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1,
-    SimulationDebugFrameV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
-    SimulationDebugRecordV1, SimulationDebugScheduleV1, SimulationDebugSinkControlV1,
-    SimulationDebugSinkV1, SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1,
-    SimulationDebugValueV1, SimulationInvocationV1, SimulationLimitsV1, SimulationPlanV1,
+    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1,
+    DynamicWorkgroupMemoryRequestV1, EventPolicyV1, IndexWidthV1, NoopSimulationDebugSinkV1,
+    ScalarBitsV1, SharedBufferV1, SimulationArgumentV1, SimulationDebugAllocationV1,
+    SimulationDebugBarrierActionV1, SimulationDebugBindingV1, SimulationDebugCaptureLimitsV1,
+    SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1, SimulationDebugFrameV1,
+    SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1, SimulationDebugRecordV1,
+    SimulationDebugScheduleV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
+    SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+    SimulationInvocationV1, SimulationKernelIrIdentityV1, SimulationLimitsV1, SimulationPlanV1,
     SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleCoverageV1,
     SimulationScheduleIdentityV1, SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1,
     SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
@@ -283,7 +290,8 @@ impl SimulationEventSinkV1 for NoopSimulationEventSinkV1 {
 /// Completed deterministic execution and copied-back arguments.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationExecutionV1 {
-    identity: VerifiedCanonicalKernelIrIdentityV7,
+    identity: SimulationKernelIrIdentityV1,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     arguments: Vec<SimulationArgumentV1>,
     shared_buffers: Vec<SharedBufferV1>,
     invocations_executed: u64,
@@ -306,8 +314,13 @@ struct SimulationSupplementalV1 {
 
 impl SimulationExecutionV1 {
     /// Returns the exact canonical KIR identity that was simulated.
-    pub const fn identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
+    pub const fn identity(&self) -> &SimulationKernelIrIdentityV1 {
         &self.identity
+    }
+
+    /// Returns the explicit runtime-sized LDS contract bound to this execution.
+    pub const fn dynamic_workgroup_memory(&self) -> Option<DynamicWorkgroupMemoryRequestV1> {
+        self.dynamic_workgroup_memory
     }
 
     /// Returns copied-back scalar and buffer arguments in entry-ABI order.
@@ -555,6 +568,24 @@ pub enum SimulationExecutionErrorKindV1 {
     UndefinedIntegerOperation(&'static str),
     IntegerOutOfRange,
     PointerOffsetOverflow,
+    PointerDistanceDifferentAllocation {
+        pointer_allocation: u64,
+        origin_allocation: u64,
+    },
+    PointerDistanceOutOfBounds,
+    PointerDistanceNotDivisible {
+        byte_difference: u64,
+        unit_bytes: u64,
+    },
+    PointerDistanceOverflow,
+    PointerDistanceNegativeUnsigned,
+    CopyRangesOverlap {
+        allocation: u64,
+        source_offset: usize,
+        destination_offset: usize,
+        bytes: usize,
+    },
+    MemoryIntrinsicByteCountOverflow,
     DanglingPointer {
         allocation: u64,
     },
@@ -631,6 +662,13 @@ impl SimulationExecutionErrorKindV1 {
             | Self::UndefinedIntegerOperation(_)
             | Self::IntegerOutOfRange
             | Self::PointerOffsetOverflow
+            | Self::PointerDistanceDifferentAllocation { .. }
+            | Self::PointerDistanceOutOfBounds
+            | Self::PointerDistanceNotDivisible { .. }
+            | Self::PointerDistanceOverflow
+            | Self::PointerDistanceNegativeUnsigned
+            | Self::CopyRangesOverlap { .. }
+            | Self::MemoryIntrinsicByteCountOverflow
             | Self::DanglingPointer { .. }
             | Self::AddressSpaceMismatch
             | Self::ReadOnlyWrite
@@ -767,6 +805,37 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_with_sink(request, target, limits, &mut sink)
     }
 
+    /// Runs with one explicit runtime-sized LDS segment and no event delivery.
+    pub fn simulate_with_dynamic_workgroup_memory(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let mut event_sink = NoopSimulationEventSinkV1;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: None,
+                resident_offset: 0,
+            },
+            &mut event_sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     /// Runs with an explicit bounded schedule recording or exact replay policy.
     ///
     /// This controls deterministic CPU semantic ordering only. It does not model
@@ -781,6 +850,25 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_scheduled_with_resident_offset(request, target, limits, schedule, 0)
     }
 
+    /// Runs a scheduled simulation bound to one explicit runtime-sized LDS segment.
+    pub fn simulate_scheduled_with_dynamic_workgroup_memory(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        self.simulate_scheduled_configured_with_resident_offset(
+            request,
+            Some(dynamic),
+            target,
+            limits,
+            schedule,
+            0,
+        )
+    }
+
     pub(crate) fn simulate_scheduled_with_resident_offset(
         &self,
         request: &SimulationRequestV1,
@@ -789,9 +877,32 @@ impl AdmittedSimulationModuleV1 {
         schedule: SimulationScheduleRequestV1<'_>,
         resident_offset: usize,
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
-        let plan = self
-            .preflight(request, target, limits)
-            .map_err(SimulationErrorV1::Preflight)?;
+        self.simulate_scheduled_configured_with_resident_offset(
+            request,
+            None,
+            target,
+            limits,
+            schedule,
+            resident_offset,
+        )
+    }
+
+    pub(crate) fn simulate_scheduled_configured_with_resident_offset(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+        resident_offset: usize,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = match dynamic {
+            Some(dynamic) => {
+                self.preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            }
+            None => self.preflight(request, target, limits),
+        }
+        .map_err(SimulationErrorV1::Preflight)?;
         let mut event_sink = NoopSimulationEventSinkV1;
         let mut debug_sink = NoopSimulationDebugSinkV1;
         execute(
@@ -803,7 +914,53 @@ impl AdmittedSimulationModuleV1 {
                 policy: request.events,
                 plan,
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
-                schedule: Some(schedule),
+                schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
+                resident_offset,
+            },
+            &mut event_sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "internal reduction execution keeps every exact simulator context input explicit"
+    )]
+    pub(crate) fn simulate_reduction_attempt_configured(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        source: ReductionScheduleSourceV1<'_>,
+        max_decisions: usize,
+        decisions: &mut Vec<crate::SimulationScheduleDecisionV1>,
+        resident_offset: usize,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = match dynamic {
+            Some(dynamic) => {
+                self.preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            }
+            None => self.preflight(request, target, limits),
+        }
+        .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: Some(ExecutionScheduleRequestV1::Reduction {
+                    source,
+                    max_decisions,
+                    decisions,
+                }),
                 resident_offset,
             },
             &mut event_sink,
@@ -836,6 +993,37 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_with_event_policy(request, target, limits, EventPolicyV1::Enabled, sink)
     }
 
+    /// Runs explicit dynamic LDS semantics with bounded event delivery enabled.
+    pub fn simulate_observed_with_dynamic_workgroup_memory_and_sink(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        sink: &mut impl SimulationEventSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: EventPolicyV1::Enabled,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: None,
+                resident_offset: 0,
+            },
+            sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     /// Runs the ordinary simulator while recording an independent bounded debug observation.
     ///
     /// Debug records are derived from live interpreter state and do not alter the stable
@@ -851,6 +1039,38 @@ impl AdmittedSimulationModuleV1 {
     ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
         let plan = self
             .preflight(request, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: capture,
+                schedule: None,
+                resident_offset: 0,
+            },
+            &mut event_sink,
+            debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
+    /// Runs explicit dynamic LDS semantics with independent bounded debug snapshots.
+    pub fn simulate_debugged_with_dynamic_workgroup_memory_and_sink(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        capture: SimulationDebugCaptureLimitsV1,
+        debug_sink: &mut impl SimulationDebugSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
         let mut event_sink = NoopSimulationEventSinkV1;
         execute(
@@ -894,7 +1114,41 @@ impl AdmittedSimulationModuleV1 {
                 policy: request.events,
                 plan,
                 debug_capture: capture,
-                schedule: Some(schedule),
+                schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
+                resident_offset: 0,
+            },
+            &mut event_sink,
+            debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
+    /// Runs scheduled explicit dynamic LDS semantics with bounded debug snapshots.
+    #[allow(clippy::too_many_arguments)]
+    pub fn simulate_debugged_scheduled_with_dynamic_workgroup_memory_and_sink(
+        &self,
+        request: &SimulationRequestV1,
+        dynamic: DynamicWorkgroupMemoryRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+        capture: SimulationDebugCaptureLimitsV1,
+        debug_sink: &mut impl SimulationDebugSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight_with_dynamic_workgroup_memory(request, dynamic, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: capture,
+                schedule: Some(ExecutionScheduleRequestV1::Public(schedule)),
                 resident_offset: 0,
             },
             &mut event_sink,
@@ -1195,6 +1449,121 @@ impl Memory {
         Ok(width)
     }
 
+    fn validate_range_read(
+        &self,
+        pointer: &PointerValue,
+        alignment: u32,
+        width: usize,
+        invocation: SimulationInvocationV1,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        let allocation = self.allocation(pointer)?;
+        validate_access(
+            allocation,
+            pointer,
+            MemoryAccess::new(pointer.address_space, alignment),
+            width,
+            false,
+        )?;
+        let end = pointer
+            .byte_offset
+            .checked_add(width)
+            .ok_or(SimulationExecutionErrorKindV1::PointerOffsetOverflow)?;
+        if allocation.initialized[pointer.byte_offset..end]
+            .iter()
+            .any(|initialized| !initialized)
+        {
+            return Err(SimulationExecutionErrorKindV1::UninitializedRead {
+                allocation: pointer.allocation,
+                offset: pointer.byte_offset,
+                bytes: width,
+            });
+        }
+        if pointer.address_space == AddressSpace::Workgroup {
+            let writer = invocation_local_ordinal(invocation)
+                .and_then(|ordinal| ordinal.checked_add(1))
+                .ok_or(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "workgroup invocation ordinal",
+                ))?;
+            if allocation.workgroup_published[pointer.byte_offset..end]
+                .iter()
+                .zip(&allocation.workgroup_writer[pointer.byte_offset..end])
+                .any(|(published, owner)| !published && *owner != writer)
+            {
+                return Err(SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish {
+                    allocation: pointer.allocation,
+                    offset: pointer.byte_offset,
+                    bytes: width,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_range_write(
+        &self,
+        pointer: &PointerValue,
+        alignment: u32,
+        width: usize,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        let allocation = self.allocation(pointer)?;
+        validate_access(
+            allocation,
+            pointer,
+            MemoryAccess::new(pointer.address_space, alignment),
+            width,
+            true,
+        )
+    }
+
+    fn validate_zero_byte_pointer(
+        &self,
+        pointer: &PointerValue,
+        alignment: u32,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        let allocation = self.allocation(pointer)?;
+        if alignment == 0
+            || allocation.alignment < alignment
+            || !pointer.byte_offset.is_multiple_of(alignment as usize)
+        {
+            return Err(SimulationExecutionErrorKindV1::MisalignedAccess {
+                required: alignment,
+                offset: pointer.byte_offset,
+            });
+        }
+        Ok(())
+    }
+
+    fn commit_copy(
+        &mut self,
+        source: &PointerValue,
+        destination: &PointerValue,
+        width: usize,
+        workgroup_writer: Option<u64>,
+    ) {
+        for relative in 0..width {
+            let source_offset = source.byte_offset + relative;
+            let destination_offset = destination.byte_offset + relative;
+            let byte = self.allocations[&source.allocation].bytes[source_offset];
+            let destination_allocation = self
+                .allocations
+                .get_mut(&destination.allocation)
+                .expect("validated copy destination remains live");
+            destination_allocation.bytes[destination_offset] = byte;
+            destination_allocation.initialized[destination_offset] = true;
+        }
+        if let Some(writer) = workgroup_writer {
+            let destination_end = destination.byte_offset + width;
+            let destination_allocation = self
+                .allocations
+                .get_mut(&destination.allocation)
+                .expect("validated workgroup copy destination remains live");
+            destination_allocation.workgroup_published[destination.byte_offset..destination_end]
+                .fill(false);
+            destination_allocation.workgroup_writer[destination.byte_offset..destination_end]
+                .fill(writer);
+        }
+    }
+
     fn prepare_store(
         &mut self,
         pointer: &PointerValue,
@@ -1416,6 +1785,7 @@ struct Engine<'a, S> {
     call_targets: Vec<Vec<Vec<CallTarget>>>,
     switch_targets: Vec<Vec<SwitchLookup>>,
     target: SimulationTargetV1,
+    dynamic_workgroup_memory: Option<DynamicWorkgroupMemoryRequestV1>,
     limits: SimulationLimitsV1,
     policy: EventPolicyV1,
     memory: Memory,
@@ -1488,6 +1858,7 @@ enum CallTarget {
     NotCall,
     Internal(usize),
     Float(SoftFloatOperationV1),
+    Trap,
 }
 
 fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
@@ -2228,14 +2599,6 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 ),
             ));
         };
-        let WorkgroupMemoryExtent::Static(elements) = memory.extent else {
-            return Err(self.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "preflighted static workgroup memory",
-                ),
-            ));
-        };
         let element_bytes = self.target.scalar_bytes(element).ok_or_else(|| {
             self.at(
                 site,
@@ -2244,18 +2607,23 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 ),
             )
         })?;
-        let bytes = usize::try_from(elements)
-            .ok()
-            .and_then(|elements| elements.checked_mul(element_bytes))
-            .ok_or_else(|| {
-                self.at(
-                    site,
-                    SimulationExecutionErrorKindV1::AllocationBytesLimit {
-                        actual: usize::MAX,
-                        limit: self.limits.max_allocation_bytes,
-                    },
-                )
-            })?;
+        let bytes = match memory.extent {
+            WorkgroupMemoryExtent::Static(elements) => usize::try_from(elements)
+                .ok()
+                .and_then(|elements| elements.checked_mul(element_bytes)),
+            WorkgroupMemoryExtent::Dynamic => self
+                .dynamic_workgroup_memory
+                .and_then(|dynamic| usize::try_from(dynamic.byte_extent()).ok()),
+            WorkgroupMemoryExtent::DynamicAtLeast(_) => None,
+        }
+        .ok_or_else(|| {
+            self.at(
+                site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "preflighted workgroup memory extent",
+                ),
+            )
+        })?;
         if let Some(existing) = self
             .workgroup_allocations
             .iter()
@@ -2855,6 +3223,11 @@ fn build_execution_indices<'a>(
                                 crate::soft_float::operation_for_call_v1(callee, arguments)
                             {
                                 CallTarget::Float(operation)
+                            } else if matches!(
+                                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                                Some(AmdGpuDiagnosticOperation::Trap)
+                            ) {
+                                CallTarget::Trap
                             } else {
                                 CallTarget::Internal(*functions.get(callee).ok_or_else(|| {
                                     top_level_error(
@@ -2925,7 +3298,7 @@ struct ExecutionConfiguration<'a> {
     policy: EventPolicyV1,
     plan: SimulationPlanV1,
     debug_capture: SimulationDebugCaptureLimitsV1,
-    schedule: Option<SimulationScheduleRequestV1<'a>>,
+    schedule: Option<ExecutionScheduleRequestV1<'a>>,
     resident_offset: usize,
 }
 
@@ -2958,6 +3331,7 @@ fn execute(
         schedule,
         admitted.identity,
         request,
+        plan.dynamic_workgroup_memory,
         target,
         limits,
         &plan,
@@ -3022,6 +3396,7 @@ fn execute(
         call_targets,
         switch_targets,
         target,
+        dynamic_workgroup_memory: plan.dynamic_workgroup_memory,
         limits,
         policy,
         memory,
@@ -3175,11 +3550,19 @@ fn execute(
     let shared_buffers = copy_back_shared_buffers(&engine.memory, &request.shared_buffers)?;
     let conflict_assessment = engine.conflict_assessment();
     let schedule = schedule
-        .finish(plan.workgroups, admitted.identity, request, target, limits)
+        .finish(
+            plan.workgroups,
+            admitted.identity,
+            request,
+            plan.dynamic_workgroup_memory,
+            target,
+            limits,
+        )
         .map_err(|error| engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error)))?;
     let supplemental = collect_supplemental_observations(&engine, schedule.records)?;
     Ok(SimulationExecutionV1 {
         identity: admitted.identity,
+        dynamic_workgroup_memory: plan.dynamic_workgroup_memory,
         arguments,
         shared_buffers,
         invocations_executed: invocations,
@@ -3315,6 +3698,9 @@ fn execute_cooperative_workgroup<'a>(
                     MachineYield::Wave(arrival) => {
                         machine.waiting = Some(MachineWait::Wave(arrival));
                     }
+                    MachineYield::Collective(arrival) => {
+                        machine.waiting = Some(MachineWait::Collective(arrival));
+                    }
                 }
             }
         } else {
@@ -3344,6 +3730,9 @@ fn execute_cooperative_workgroup<'a>(
         }
 
         if resolve_ready_waves(engine, machines, &mut wave_results)? != 0 {
+            continue;
+        }
+        if resolve_ready_collectives(engine, machines, schedule, &mut phase)? != 0 {
             continue;
         }
         if machines.iter().all(|machine| machine.completed) {
@@ -3385,6 +3774,9 @@ fn advance_runnable_machine<'a>(
             machine.waiting = Some(MachineWait::Barrier(arrival));
         }
         MachineYield::Wave(arrival) => machine.waiting = Some(MachineWait::Wave(arrival)),
+        MachineYield::Collective(arrival) => {
+            machine.waiting = Some(MachineWait::Collective(arrival));
+        }
     }
     Ok(())
 }
@@ -3482,6 +3874,43 @@ fn resolve_ready_waves<'a>(
                         }),
                     ));
                 }
+            }
+        }
+
+        let mut reduced_f32 = [ScalarBitsV1::boolean(false); 64];
+        if let WaveOperationKind::ReduceF32 {
+            tile_width, kind, ..
+        } = arrival.wave.kind
+        {
+            for lane in 0..width {
+                let source = wave_member_index(machines, start, lane).ok_or_else(|| {
+                    engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::InternalInvariant("f32 reduction member"),
+                    )
+                })?;
+                let Some(WaveInput::ReduceF32(value)) = machines[source].wave_input() else {
+                    return Err(engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::InternalInvariant("f32 reduction input"),
+                    ));
+                };
+                reduced_f32[lane as usize] = value;
+            }
+            let mut distance = 1_u32;
+            while distance < tile_width {
+                let previous = reduced_f32;
+                for lane in 0..width {
+                    let source = lane ^ u64::from(distance);
+                    reduced_f32[lane as usize] = execute_wave_f32_reduction(
+                        kind,
+                        previous[lane as usize],
+                        previous[source as usize],
+                        engine.target,
+                    )
+                    .map_err(|error| engine.at(arrival.site, map_soft_float_error(error)))?;
+                }
+                distance *= 2;
             }
         }
 
@@ -3603,13 +4032,42 @@ fn resolve_ready_waves<'a>(
                     };
                     value
                 }
-                WaveOperationKind::ReduceF32 { .. } | WaveOperationKind::BroadcastF32 { .. } => {
-                    return Err(engine.at(
-                        arrival.site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "unsupported wave operation passed preflight",
-                        ),
-                    ));
+                WaveOperationKind::ReduceF32 { .. } => reduced_f32[lane as usize],
+                WaveOperationKind::BroadcastF32 { .. } => {
+                    let Some(WaveInput::BroadcastF32 {
+                        source_lane,
+                        tile_width,
+                        ..
+                    }) = machines[index].wave_input()
+                    else {
+                        return Err(engine.at(
+                            arrival.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "f32 broadcast input",
+                            ),
+                        ));
+                    };
+                    let tile_start = (lane / u64::from(tile_width)) * u64::from(tile_width);
+                    let source =
+                        wave_member_index(machines, start, tile_start + u64::from(source_lane))
+                            .ok_or_else(|| {
+                                engine.at(
+                                    arrival.site,
+                                    SimulationExecutionErrorKindV1::InternalInvariant(
+                                        "f32 broadcast source member",
+                                    ),
+                                )
+                            })?;
+                    let Some(WaveInput::BroadcastF32 { value, .. }) = machines[source].wave_input()
+                    else {
+                        return Err(engine.at(
+                            arrival.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "f32 broadcast source input",
+                            ),
+                        ));
+                    };
+                    value
                 }
             };
             results.push((index, value));
@@ -3621,6 +4079,233 @@ fn resolve_ready_waves<'a>(
         resolved += 1;
     }
     Ok(resolved)
+}
+
+fn resolve_ready_collectives<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    machines: &mut [InvocationMachine<'a>],
+    schedule: &mut PreparedScheduleV1<'_>,
+    phase: &mut u64,
+) -> Result<usize, SimulationExecutionErrorV1> {
+    let mut resolved = 0_usize;
+    for representative in 0..machines.len() {
+        let Some(MachineWait::Collective(arrival)) = machines[representative].waiting else {
+            continue;
+        };
+        let width = u64::from(arrival.width.lanes());
+        let linear = local_linear(machines[representative].invocation);
+        let wave_in_workgroup = linear / width;
+        let start = wave_in_workgroup * width;
+        let active_mask = wave_active_mask(machines, start, width);
+        let required_mask = full_wave_mask(arrival.width);
+        if active_mask != required_mask {
+            engine.invocation = Some(machines[representative].invocation);
+            return Err(engine.at(
+                arrival.site,
+                SimulationExecutionErrorKindV1::IncompleteWave(IncompleteWaveV1 {
+                    width: arrival.width,
+                    wave_in_workgroup,
+                    active_mask,
+                    required_mask,
+                }),
+            ));
+        }
+
+        for lane in 0..width {
+            let index = wave_member_index(machines, start, lane).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "full cooperative wave active mask member",
+                    ),
+                )
+            })?;
+            match machines[index].waiting {
+                Some(MachineWait::Collective(peer))
+                    if peer.site == arrival.site && peer.operation == arrival.operation => {}
+                Some(MachineWait::Collective(peer)) => {
+                    engine.invocation = Some(machines[index].invocation);
+                    return Err(engine.at(
+                        peer.site,
+                        SimulationExecutionErrorKindV1::MismatchedWave(MismatchedWaveV1 {
+                            width: arrival.width,
+                            expected: engine.materialize_event_site(arrival.site),
+                        }),
+                    ));
+                }
+                _ => {
+                    engine.invocation = Some(machines[representative].invocation);
+                    return Err(engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::DivergentWave(DivergentWaveV1 {
+                            width: arrival.width,
+                            wave_in_workgroup,
+                            nonparticipating: machines[index].invocation.into(),
+                        }),
+                    ));
+                }
+            }
+        }
+
+        if matches!(
+            arrival.operation,
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                kind: Gfx950LdsTransposeOperationKindV1::Publish { .. },
+                ..
+            })
+        ) {
+            let participants = u32::try_from(width).map_err(|_| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "transpose publish participant count",
+                    ),
+                )
+            })?;
+            engine.invocation = Some(machines[representative].invocation);
+            engine.event(
+                &arrival.site,
+                SimulationEventKindV1::WorkgroupBarrierRelease {
+                    phase: *phase,
+                    participants,
+                },
+            )?;
+            engine.debug_barrier(
+                arrival.site,
+                SimulationDebugBarrierActionV1::Release,
+                *phase,
+                participants,
+            );
+            schedule.barrier_released();
+            engine.publish_workgroup();
+            *phase = phase.checked_add(1).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::StepLimit {
+                        limit: engine.limits.max_steps,
+                    },
+                )
+            })?;
+        }
+
+        for lane in 0..width {
+            let index = wave_member_index(machines, start, lane).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "validated cooperative wave member",
+                    ),
+                )
+            })?;
+            let input = machines[index].collective_input().cloned().ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "cooperative operation input",
+                    ),
+                )
+            })?;
+            engine.invocation = Some(machines[index].invocation);
+            complete_collective_lane(engine, &mut machines[index], arrival, lane as u32, input)?;
+        }
+        resolved += 1;
+    }
+    Ok(resolved)
+}
+
+fn complete_collective_lane<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    machine: &mut InvocationMachine<'a>,
+    arrival: CollectiveArrival<'a>,
+    lane: u32,
+    input: CollectiveInput,
+) -> Result<(), SimulationExecutionErrorV1> {
+    match (arrival.operation, input) {
+        (
+            OperationKind::Matrix(MatrixOperation {
+                kind: MatrixOperationKind::LdsLoad { profile, .. },
+                ..
+            }),
+            CollectiveInput::MatrixLdsLoad { base },
+        ) => {
+            let values = execute_matrix_lds_load(engine, &arrival.site, &base, *profile, lane)?;
+            let results = values.map(RuntimeValue::Scalar);
+            machine.complete_collective(engine, &results)
+        }
+        (
+            OperationKind::Matrix(MatrixOperation {
+                kind: MatrixOperationKind::LdsStore { profile, .. },
+                ..
+            }),
+            CollectiveInput::MatrixLdsStore { base, values },
+        ) => {
+            execute_matrix_lds_store(engine, &arrival.site, &base, *profile, lane, values)?;
+            machine.complete_collective(engine, &[])
+        }
+        (
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                kind: Gfx950LdsTransposeOperationKindV1::Current { .. },
+                ..
+            }),
+            CollectiveInput::TransposeCurrent { storage },
+        ) => machine.complete_collective(engine, &[RuntimeValue::Pointer(storage)]),
+        (
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                kind: Gfx950LdsTransposeOperationKindV1::Stage { format, .. },
+                ..
+            }),
+            CollectiveInput::TransposeStage {
+                storage,
+                source,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+            },
+        ) => {
+            execute_transpose_stage(
+                engine,
+                &arrival.site,
+                *format,
+                lane,
+                &storage,
+                &source,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+            )?;
+            machine.complete_collective(engine, &[RuntimeValue::Pointer(storage)])
+        }
+        (
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                kind: Gfx950LdsTransposeOperationKindV1::Publish { .. },
+                ..
+            }),
+            CollectiveInput::TransposePublish { storage },
+        ) => machine.complete_collective(engine, &[RuntimeValue::Pointer(storage)]),
+        (
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                kind: Gfx950LdsTransposeOperationKindV1::Read { format, .. },
+                ..
+            }),
+            CollectiveInput::TransposeRead { storage },
+        ) => {
+            let values = execute_transpose_read(engine, &arrival.site, *format, lane, &storage)?;
+            let results = values.map(|value| RuntimeValue::Scalar(ScalarBitsV1::u32(value)));
+            machine.complete_collective(engine, &results)
+        }
+        _ => Err(engine.at(
+            arrival.site,
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "cooperative operation/input mismatch",
+            ),
+        )),
+    }
 }
 
 fn release_workgroup_barrier<'a>(
@@ -4167,6 +4852,7 @@ struct InvocationMachine<'a> {
     completed: bool,
     waiting: Option<MachineWait<'a>>,
     pending_wave_input: Option<WaveInput>,
+    pending_collective_input: Option<CollectiveInput>,
 }
 
 #[derive(Clone, Copy)]
@@ -4184,6 +4870,12 @@ enum WaveInput {
         source_lane: u32,
         tile_width: u32,
     },
+    ReduceF32(ScalarBitsV1),
+    BroadcastF32 {
+        value: ScalarBitsV1,
+        source_lane: u32,
+        tile_width: u32,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -4192,15 +4884,54 @@ struct WaveArrival<'a> {
     wave: &'a WaveOperation,
 }
 
+#[derive(Clone)]
+enum CollectiveInput {
+    MatrixLdsLoad {
+        base: PointerValue,
+    },
+    MatrixLdsStore {
+        base: PointerValue,
+        values: [ScalarBitsV1; 4],
+    },
+    TransposeCurrent {
+        storage: PointerValue,
+    },
+    TransposeStage {
+        storage: PointerValue,
+        source: SliceValue,
+        offset: u64,
+        rows: u64,
+        columns: u64,
+        stride: u64,
+        token_base: u64,
+        reduction_base: u64,
+    },
+    TransposePublish {
+        storage: PointerValue,
+    },
+    TransposeRead {
+        storage: PointerValue,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct CollectiveArrival<'a> {
+    site: CompactSite,
+    operation: &'a OperationKind,
+    width: WaveWidth,
+}
+
 #[derive(Clone, Copy)]
 enum MachineWait<'a> {
     Barrier(BarrierArrival<'a>),
     Wave(WaveArrival<'a>),
+    Collective(CollectiveArrival<'a>),
 }
 
 enum MachineYield<'a> {
     Barrier(BarrierArrival<'a>),
     Wave(WaveArrival<'a>),
+    Collective(CollectiveArrival<'a>),
     Complete,
 }
 
@@ -4337,6 +5068,7 @@ impl<'a> InvocationMachine<'a> {
             completed: false,
             waiting: None,
             pending_wave_input: None,
+            pending_collective_input: None,
         })
     }
 
@@ -4399,6 +5131,40 @@ impl<'a> InvocationMachine<'a> {
                 })?;
                 let arrival = advance_wave_frame(engine, frame, &mut self.pending_wave_input)?;
                 return Ok(MachineYield::Wave(arrival));
+            }
+            if self.frames[self.active_depth - 1].block_entered
+                && self.frames[self.active_depth - 1]
+                    .function
+                    .body
+                    .as_ref()
+                    .and_then(|body| {
+                        body.blocks
+                            .get(self.frames[self.active_depth - 1].current_index)
+                    })
+                    .and_then(|block| {
+                        block
+                            .operations
+                            .get(self.frames[self.active_depth - 1].operation)
+                    })
+                    .is_some_and(|operation| {
+                        matches!(
+                            operation.kind,
+                            OperationKind::Matrix(_) | OperationKind::Gfx950LdsTranspose(_)
+                        )
+                    })
+            {
+                let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
+                    engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                        "collective runtime frame",
+                    ))
+                })?;
+                let arrival = advance_collective_frame(
+                    engine,
+                    frame,
+                    phase,
+                    &mut self.pending_collective_input,
+                )?;
+                return Ok(MachineYield::Collective(arrival));
             }
             let action = {
                 let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
@@ -4627,6 +5393,68 @@ impl<'a> InvocationMachine<'a> {
     fn wave_input(&self) -> Option<WaveInput> {
         self.pending_wave_input
     }
+
+    fn collective_input(&self) -> Option<&CollectiveInput> {
+        self.pending_collective_input.as_ref()
+    }
+
+    fn complete_collective<S: SimulationEventSinkV1>(
+        &mut self,
+        engine: &mut Engine<'a, S>,
+        results: &[RuntimeValue],
+    ) -> Result<(), SimulationExecutionErrorV1> {
+        let Some(MachineWait::Collective(arrival)) = self.waiting.take() else {
+            return Err(
+                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "completed a machine not waiting at a cooperative operation",
+                )),
+            );
+        };
+        let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
+            engine.at(
+                arrival.site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "cooperative operation runtime frame",
+                ),
+            )
+        })?;
+        let operation = frame
+            .function
+            .body
+            .as_ref()
+            .and_then(|body| body.blocks.get(frame.current_index))
+            .and_then(|block| block.operations.get(frame.operation))
+            .ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "suspended cooperative operation",
+                    ),
+                )
+            })?;
+        bind_dynamic_results(
+            engine,
+            &mut frame.values,
+            &operation.results,
+            results,
+            &arrival.site,
+        )?;
+        self.pending_collective_input = None;
+        frame.active_operation = None;
+        engine.end_lifecycle(
+            &arrival.site,
+            SimulationEventKindV1::OperationEnd {
+                outcome: SimulationExecutionOutcomeV1::Completed,
+            },
+        )?;
+        frame.operation += 1;
+        engine.debug_checkpoint(
+            &self.frames[..self.active_depth],
+            arrival.site,
+            SimulationDebugCheckpointPhaseV1::AfterOperation,
+        );
+        Ok(())
+    }
 }
 
 #[inline(never)]
@@ -4816,7 +5644,7 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
             let target =
                 engine.call_targets[frame.function_index][frame.current_index][frame.operation];
             let callee_index = match target {
-                CallTarget::Float(_) => None,
+                CallTarget::Float(_) | CallTarget::Trap => None,
                 CallTarget::Internal(callee_index) => Some(callee_index),
                 CallTarget::NotCall => {
                     return Err(engine.at(
@@ -4974,16 +5802,221 @@ fn prepare_wave_wait(
                 tile_width,
             }
         }
-        WaveOperationKind::ReduceF32 { .. } | WaveOperationKind::BroadcastF32 { .. } => {
-            return Err(engine.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "unsupported wave operation passed preflight",
-                ),
-            ));
+        WaveOperationKind::ReduceF32 { value, .. } => {
+            let value_id = value;
+            let value = scalar_value(engine, &frame.values, value_id, &site)?;
+            if value.ty() != ScalarType::F32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(value_id),
+                        expected: "f32 wave reduction value",
+                    },
+                ));
+            }
+            WaveInput::ReduceF32(value)
+        }
+        WaveOperationKind::BroadcastF32 {
+            value,
+            source_lane,
+            tile_width,
+        } => {
+            let value_id = value;
+            let value = scalar_value(engine, &frame.values, value_id, &site)?;
+            if value.ty() != ScalarType::F32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(value_id),
+                        expected: "f32 wave broadcast value",
+                    },
+                ));
+            }
+            let source = scalar_value(engine, &frame.values, source_lane, &site)?;
+            if source.ty() != ScalarType::U32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(source_lane),
+                        expected: "u32 wave broadcast source lane",
+                    },
+                ));
+            }
+            let source_lane = source.bits() as u32;
+            if source_lane >= tile_width {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "verified f32 broadcast source bound",
+                    ),
+                ));
+            }
+            WaveInput::BroadcastF32 {
+                value,
+                source_lane,
+                tile_width,
+            }
         }
     });
     Ok(())
+}
+
+#[inline(never)]
+fn advance_collective_frame<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    frame: &mut RuntimeFrame<'a>,
+    phase: u64,
+    pending: &mut Option<CollectiveInput>,
+) -> Result<CollectiveArrival<'a>, SimulationExecutionErrorV1> {
+    let block = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+        .ok_or_else(|| engine.fail(SimulationExecutionErrorKindV1::UnknownBlock(frame.current)))?;
+    let operation = block.operations.get(frame.operation).ok_or_else(|| {
+        engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+            "cooperative operation position",
+        ))
+    })?;
+    let site = operation_site(frame.function_index, block, frame.operation);
+    engine.step(&site)?;
+    engine.begin_lifecycle(&site, SimulationEventKindV1::OperationBegin)?;
+    frame.active_operation = Some(site);
+    let width = prepare_collective_wait(engine, frame, &operation.kind, site, phase, pending)?;
+    Ok(CollectiveArrival {
+        site,
+        operation: &operation.kind,
+        width,
+    })
+}
+
+fn prepare_collective_wait(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    frame: &RuntimeFrame<'_>,
+    operation: &OperationKind,
+    site: CompactSite,
+    phase: u64,
+    pending: &mut Option<CollectiveInput>,
+) -> Result<WaveWidth, SimulationExecutionErrorV1> {
+    let (width, input) = match operation {
+        OperationKind::Matrix(matrix) => (
+            matrix_wave_width(matrix),
+            match &matrix.kind {
+                MatrixOperationKind::LdsLoad { base, .. } => CollectiveInput::MatrixLdsLoad {
+                    base: pointer_value(engine, &frame.values, *base, &site)?.clone(),
+                },
+                MatrixOperationKind::LdsStore { base, values, .. } => {
+                    let mut resolved = [ScalarBitsV1::boolean(false); 4];
+                    for (destination, value) in resolved.iter_mut().zip(values) {
+                        *destination = scalar_value(engine, &frame.values, *value, &site)?;
+                    }
+                    CollectiveInput::MatrixLdsStore {
+                        base: pointer_value(engine, &frame.values, *base, &site)?.clone(),
+                        values: resolved,
+                    }
+                }
+                MatrixOperationKind::MultiplyAccumulate { .. }
+                | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                    return Err(engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "matrix numerical operation passed preflight",
+                        ),
+                    ));
+                }
+            },
+        ),
+        OperationKind::Gfx950LdsTranspose(transpose) => {
+            let input = match transpose.kind {
+                Gfx950LdsTransposeOperationKindV1::Current { format } => {
+                    let memory = WorkgroupMemory {
+                        element: Type::Scalar(ScalarType::U8),
+                        extent: WorkgroupMemoryExtent::Static(format.lds_bytes()),
+                        alignment: 64,
+                    };
+                    CollectiveInput::TransposeCurrent {
+                        storage: engine.workgroup_pointer(site, &memory)?,
+                    }
+                }
+                Gfx950LdsTransposeOperationKindV1::Stage {
+                    storage,
+                    source_slice,
+                    offset,
+                    rows,
+                    columns,
+                    stride,
+                    token_base,
+                    reduction_base,
+                    ..
+                } => CollectiveInput::TransposeStage {
+                    storage: pointer_value(engine, &frame.values, storage, &site)?.clone(),
+                    source: slice_value(engine, &frame.values, source_slice, &site)?.clone(),
+                    offset: index_u64(engine, &frame.values, offset, &site)?,
+                    rows: index_u64(engine, &frame.values, rows, &site)?,
+                    columns: index_u64(engine, &frame.values, columns, &site)?,
+                    stride: index_u64(engine, &frame.values, stride, &site)?,
+                    token_base: index_u64(engine, &frame.values, token_base, &site)?,
+                    reduction_base: index_u64(engine, &frame.values, reduction_base, &site)?,
+                },
+                Gfx950LdsTransposeOperationKindV1::Publish { storage, .. } => {
+                    engine.event(
+                        &site,
+                        SimulationEventKindV1::WorkgroupBarrierArrive { phase },
+                    )?;
+                    engine.debug_barrier(site, SimulationDebugBarrierActionV1::Arrive, phase, 1);
+                    CollectiveInput::TransposePublish {
+                        storage: pointer_value(engine, &frame.values, storage, &site)?.clone(),
+                    }
+                }
+                Gfx950LdsTransposeOperationKindV1::Read { storage, .. } => {
+                    CollectiveInput::TransposeRead {
+                        storage: pointer_value(engine, &frame.values, storage, &site)?.clone(),
+                    }
+                }
+            };
+            (transpose.width, input)
+        }
+        _ => {
+            return Err(engine.at(
+                site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "non-cooperative operation dispatched as collective",
+                ),
+            ));
+        }
+    };
+    *pending = Some(input);
+    Ok(width)
+}
+
+const fn matrix_wave_width(matrix: &MatrixOperation) -> WaveWidth {
+    match matrix.kind {
+        MatrixOperationKind::MultiplyAccumulate { profile, .. }
+        | MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => profile.wave_width,
+        MatrixOperationKind::LdsLoad { profile, .. }
+        | MatrixOperationKind::LdsStore { profile, .. } => profile.wave_width,
+    }
+}
+
+fn execute_wave_f32_reduction(
+    kind: WaveF32ReductionKindV1,
+    lhs: ScalarBitsV1,
+    rhs: ScalarBitsV1,
+    target: SimulationTargetV1,
+) -> Result<ScalarBitsV1, SoftFloatErrorV1> {
+    match kind {
+        WaveF32ReductionKindV1::Sum => {
+            crate::soft_float::execute_binary_v1(BinaryOp::Add, lhs, rhs, target)
+        }
+        WaveF32ReductionKindV1::Maximum => {
+            if crate::soft_float::execute_compare_v1(ComparePredicate::LessThan, lhs, rhs)? {
+                Ok(rhs)
+            } else {
+                Ok(lhs)
+            }
+        }
+    }
 }
 
 #[inline(never)]
@@ -5398,17 +6431,20 @@ fn execute_operation(
                         ),
                     )
                 })?;
-            let CallTarget::Float(operation) =
-                engine.call_targets[function_index][block_index][ordinal]
-            else {
-                return Err(engine.at(
+            match engine.call_targets[function_index][block_index][ordinal] {
+                CallTarget::Float(operation) => {
+                    execute_float_call(engine, values, operation, arguments, site)
+                }
+                CallTarget::Trap => {
+                    Err(engine.at(site, SimulationExecutionErrorKindV1::ReachedUnreachable))
+                }
+                CallTarget::NotCall | CallTarget::Internal(_) => Err(engine.at(
                     site,
                     SimulationExecutionErrorKindV1::InternalInvariant(
-                        "non-float call reached non-recursive operation evaluator",
+                        "non-leaf call reached non-recursive operation evaluator",
                     ),
-                ));
-            };
-            execute_float_call(engine, values, operation, arguments, site)
+                )),
+            }
         }
         OperationKind::Alloca {
             element,
@@ -5718,8 +6754,10 @@ fn execute_operation(
             engine.debug_fence(site, fence);
             Ok(SmallResults::None)
         }
-        OperationKind::MemoryIntrinsic(_)
-        | OperationKind::Barrier(_)
+        OperationKind::MemoryIntrinsic(intrinsic) => {
+            execute_memory_intrinsic(engine, values, intrinsic, &site)
+        }
+        OperationKind::Barrier(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
@@ -5731,6 +6769,330 @@ fn execute_operation(
             ),
         )),
     }
+}
+
+fn execute_memory_intrinsic(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    intrinsic: &MemoryIntrinsicOperation,
+    site: &CompactSite,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    match intrinsic {
+        MemoryIntrinsicOperation::PointerDistance {
+            pointer,
+            origin,
+            kind,
+            unit,
+            layout,
+            ..
+        } => {
+            let pointer_runtime = pointer_value(engine, values, *pointer, site)?.clone();
+            let origin_value = pointer_value(engine, values, *origin, site)?.clone();
+            if pointer_runtime.allocation != origin_value.allocation {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceDifferentAllocation {
+                        pointer_allocation: pointer_runtime.allocation,
+                        origin_allocation: origin_value.allocation,
+                    },
+                ));
+            }
+            let allocation_bytes = match engine.memory.allocation(&pointer_runtime) {
+                Ok(allocation) => allocation.bytes.len(),
+                Err(error) => {
+                    return Err(engine.memory_error_at(*site, &pointer_runtime, error));
+                }
+            };
+            let in_bounds_or_one_past = |value: &PointerValue| {
+                value.byte_offset >= value.lower_bound
+                    && value.byte_offset <= value.upper_bound
+                    && value.byte_offset <= allocation_bytes
+            };
+            if !in_bounds_or_one_past(&pointer_runtime) || !in_bounds_or_one_past(&origin_value) {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceOutOfBounds,
+                ));
+            }
+            let difference =
+                (pointer_runtime.byte_offset as i128) - (origin_value.byte_offset as i128);
+            let unit_bytes = match unit {
+                PointerDistanceUnit::Bytes => 1_i128,
+                PointerDistanceUnit::Elements => i128::from(layout.size_bytes),
+            };
+            if difference % unit_bytes != 0 {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceNotDivisible {
+                        byte_difference: difference.unsigned_abs() as u64,
+                        unit_bytes: unit_bytes as u64,
+                    },
+                ));
+            }
+            let distance = difference / unit_bytes;
+            let (isize_min, isize_max) = match engine.target.index_width() {
+                IndexWidthV1::Bits32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+                IndexWidthV1::Bits64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+            };
+            if distance < isize_min || distance > isize_max {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceOverflow,
+                ));
+            }
+            let result = match kind {
+                PointerDistanceKind::Signed => ScalarBitsV1::new(
+                    ScalarType::I64,
+                    u128::from(distance as i64 as u64),
+                    engine.target,
+                ),
+                PointerDistanceKind::Unsigned if distance < 0 => {
+                    return Err(engine.at(
+                        *site,
+                        SimulationExecutionErrorKindV1::PointerDistanceNegativeUnsigned,
+                    ));
+                }
+                PointerDistanceKind::Unsigned => {
+                    ScalarBitsV1::index(distance as u64, engine.target)
+                }
+            }
+            .map_err(|_| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::PointerDistanceOverflow,
+                )
+            })?;
+            Ok(SmallResults::One(RuntimeValue::Scalar(result)))
+        }
+        MemoryIntrinsicOperation::VolatileLoad {
+            pointer,
+            address_space,
+            layout,
+            ..
+        } => Ok(SmallResults::One(RuntimeValue::Scalar(
+            execute_scalar_load(
+                engine,
+                values,
+                *pointer,
+                MemoryAccess::new(*address_space, layout.alignment_bytes),
+                site,
+            )?,
+        ))),
+        MemoryIntrinsicOperation::VolatileStore {
+            pointer,
+            value,
+            address_space,
+            layout,
+            ..
+        } => {
+            let pointer_value = pointer_value(engine, values, *pointer, site)?.clone();
+            let stored = scalar_value(engine, values, *value, site)?;
+            let access = MemoryAccess::new(*address_space, layout.alignment_bytes);
+            let bytes = engine
+                .memory
+                .validate_store(&pointer_value, access, stored, engine.target)
+                .map_err(|kind| engine.memory_error_at(*site, &pointer_value, kind))?;
+            if pointer_value.address_space == AddressSpace::Global {
+                engine.record_access(
+                    site,
+                    pointer_value.allocation,
+                    pointer_value.byte_offset,
+                    bytes,
+                    true,
+                    false,
+                )?;
+            }
+            engine.observe_and_commit_store(site, &pointer_value, stored, bytes)?;
+            Ok(SmallResults::None)
+        }
+        MemoryIntrinsicOperation::CopyNonOverlapping {
+            source,
+            destination,
+            count,
+            layout,
+            ..
+        } => {
+            let source = pointer_value(engine, values, *source, site)?.clone();
+            let destination = pointer_value(engine, values, *destination, site)?.clone();
+            let count = scalar_nonnegative_usize(
+                scalar_value(engine, values, *count, site)?,
+                engine.target,
+            )
+            .map_err(|kind| engine.at(*site, kind))?;
+            let element_bytes = usize::try_from(layout.size_bytes).map_err(|_| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::MemoryIntrinsicByteCountOverflow,
+                )
+            })?;
+            let bytes = count
+                .checked_mul(element_bytes)
+                .filter(|bytes| match engine.target.index_width() {
+                    IndexWidthV1::Bits32 => *bytes <= u32::MAX as usize,
+                    IndexWidthV1::Bits64 => true,
+                })
+                .ok_or_else(|| {
+                    engine.at(
+                        *site,
+                        SimulationExecutionErrorKindV1::MemoryIntrinsicByteCountOverflow,
+                    )
+                })?;
+            if bytes == 0 {
+                engine
+                    .memory
+                    .validate_zero_byte_pointer(&source, layout.alignment_bytes)
+                    .map_err(|kind| engine.memory_error_at(*site, &source, kind))?;
+                engine
+                    .memory
+                    .validate_zero_byte_pointer(&destination, layout.alignment_bytes)
+                    .map_err(|kind| engine.memory_error_at(*site, &destination, kind))?;
+                return Ok(SmallResults::None);
+            }
+            let invocation = engine.invocation.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("copy invocation"),
+                )
+            })?;
+            engine
+                .memory
+                .validate_range_read(&source, layout.alignment_bytes, bytes, invocation)
+                .map_err(|kind| engine.memory_error_at(*site, &source, kind))?;
+            engine
+                .memory
+                .validate_range_write(&destination, layout.alignment_bytes, bytes)
+                .map_err(|kind| engine.memory_error_at(*site, &destination, kind))?;
+            let source_end = source.byte_offset + bytes;
+            let destination_end = destination.byte_offset + bytes;
+            if source.allocation == destination.allocation
+                && source.byte_offset < destination_end
+                && destination.byte_offset < source_end
+            {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::CopyRangesOverlap {
+                        allocation: source.allocation,
+                        source_offset: source.byte_offset,
+                        destination_offset: destination.byte_offset,
+                        bytes,
+                    },
+                ));
+            }
+            let workgroup_writer = if destination.address_space == AddressSpace::Workgroup {
+                Some(
+                    invocation_local_ordinal(invocation)
+                        .and_then(|ordinal| ordinal.checked_add(1))
+                        .ok_or_else(|| {
+                            engine.at(
+                                *site,
+                                SimulationExecutionErrorKindV1::InternalInvariant(
+                                    "workgroup invocation ordinal",
+                                ),
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
+            engine.charge_steps(site, bytes)?;
+            if source.address_space == AddressSpace::Global {
+                engine.record_access(
+                    site,
+                    source.allocation,
+                    source.byte_offset,
+                    bytes,
+                    false,
+                    false,
+                )?;
+            }
+            engine.event(
+                site,
+                SimulationEventKindV1::MemoryRead {
+                    allocation: source.allocation,
+                    offset: source.byte_offset,
+                    bytes,
+                },
+            )?;
+            if destination.address_space == AddressSpace::Global {
+                engine.record_access(
+                    site,
+                    destination.allocation,
+                    destination.byte_offset,
+                    bytes,
+                    true,
+                    false,
+                )?;
+            }
+            engine.event(
+                site,
+                SimulationEventKindV1::MemoryWrite {
+                    allocation: destination.allocation,
+                    offset: destination.byte_offset,
+                    bytes,
+                },
+            )?;
+            engine
+                .memory
+                .commit_copy(&source, &destination, bytes, workgroup_writer);
+            Ok(SmallResults::None)
+        }
+    }
+}
+
+fn pointer_value<'a>(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &'a HashMap<ValueId, RuntimeValue>,
+    id: ValueId,
+    site: &CompactSite,
+) -> Result<&'a PointerValue, SimulationExecutionErrorV1> {
+    match runtime_value(engine, values, id, site)? {
+        RuntimeValue::Pointer(pointer) => Ok(pointer),
+        _ => Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(id),
+                expected: "pointer",
+            },
+        )),
+    }
+}
+
+fn slice_value<'a>(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &'a HashMap<ValueId, RuntimeValue>,
+    id: ValueId,
+    site: &CompactSite,
+) -> Result<&'a SliceValue, SimulationExecutionErrorV1> {
+    match runtime_value(engine, values, id, site)? {
+        RuntimeValue::Slice(slice) => Ok(slice),
+        _ => Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(id),
+                expected: "slice",
+            },
+        )),
+    }
+}
+
+fn index_u64(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    id: ValueId,
+    site: &CompactSite,
+) -> Result<u64, SimulationExecutionErrorV1> {
+    let value = scalar_value(engine, values, id, site)?;
+    if value.ty() != ScalarType::Index {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(id),
+                expected: "index",
+            },
+        ));
+    }
+    u64::try_from(value.bits())
+        .map_err(|_| engine.at(*site, SimulationExecutionErrorKindV1::IntegerOutOfRange))
 }
 
 #[inline(never)]
@@ -6039,10 +7401,19 @@ fn execute_scalar_load(
             },
         ));
     };
+    execute_pointer_load(engine, pointer_value, access, site)
+}
+
+fn execute_pointer_load(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    pointer: &PointerValue,
+    access: MemoryAccess,
+    site: &CompactSite,
+) -> Result<ScalarBitsV1, SimulationExecutionErrorV1> {
     let value = engine
         .memory
         .load(
-            pointer_value,
+            pointer,
             access,
             engine.target,
             engine.invocation.ok_or_else(|| {
@@ -6052,21 +7423,18 @@ fn execute_scalar_load(
                 )
             })?,
         )
-        .map_err(|kind| engine.memory_error_at(*site, pointer_value, kind))?;
-    let bytes = engine
-        .target
-        .scalar_bytes(pointer_value.element)
-        .ok_or_else(|| {
-            engine.at(
-                *site,
-                SimulationExecutionErrorKindV1::InternalInvariant("preflighted load element"),
-            )
-        })?;
-    if pointer_value.address_space == AddressSpace::Global {
+        .map_err(|kind| engine.memory_error_at(*site, pointer, kind))?;
+    let bytes = engine.target.scalar_bytes(pointer.element).ok_or_else(|| {
+        engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::InternalInvariant("preflighted load element"),
+        )
+    })?;
+    if pointer.address_space == AddressSpace::Global {
         engine.record_access(
             site,
-            pointer_value.allocation,
-            pointer_value.byte_offset,
+            pointer.allocation,
+            pointer.byte_offset,
             bytes,
             false,
             false,
@@ -6075,19 +7443,401 @@ fn execute_scalar_load(
     engine.event(
         site,
         SimulationEventKindV1::MemoryRead {
-            allocation: pointer_value.allocation,
-            offset: pointer_value.byte_offset,
+            allocation: pointer.allocation,
+            offset: pointer.byte_offset,
             bytes,
         },
     )?;
     engine.debug_memory(
         *site,
         SimulationDebugMemoryAccessV1::Read,
-        pointer_value,
+        pointer,
         bytes,
         value,
     );
     Ok(value)
+}
+
+fn execute_pointer_store(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    pointer: &PointerValue,
+    value: ScalarBitsV1,
+    access: MemoryAccess,
+    site: &CompactSite,
+) -> Result<(), SimulationExecutionErrorV1> {
+    let bytes = engine
+        .memory
+        .validate_store(pointer, access, value, engine.target)
+        .map_err(|kind| engine.memory_error_at(*site, pointer, kind))?;
+    if pointer.address_space == AddressSpace::Global {
+        engine.record_access(
+            site,
+            pointer.allocation,
+            pointer.byte_offset,
+            bytes,
+            true,
+            false,
+        )?;
+    }
+    engine.observe_and_commit_store(site, pointer, value, bytes)
+}
+
+fn pointer_at_byte(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    pointer: &PointerValue,
+    byte_delta: usize,
+    element: ScalarType,
+    site: &CompactSite,
+) -> Result<PointerValue, SimulationExecutionErrorV1> {
+    let byte_offset = pointer
+        .byte_offset
+        .checked_add(byte_delta)
+        .ok_or_else(|| engine.at(*site, SimulationExecutionErrorKindV1::PointerOffsetOverflow))?;
+    Ok(PointerValue {
+        byte_offset,
+        element,
+        ..pointer.clone()
+    })
+}
+
+fn matrix_lds_pointer(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    base: &PointerValue,
+    profile: MatrixLdsProfile,
+    lane: u32,
+    component: u32,
+) -> Result<PointerValue, SimulationExecutionErrorV1> {
+    let row = lane & 15;
+    let chunk = lane >> 4;
+    let column = chunk * 4 + component;
+    let physical_column = column ^ ((row & 3) << 2);
+    let element_index = row * 16 + physical_column;
+    let element = match profile.element {
+        MatrixElement::Bf16 => ScalarType::Bf16,
+        MatrixElement::F32 => ScalarType::F32,
+        MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3 => ScalarType::U8,
+    };
+    let element_bytes = engine.target.scalar_bytes(element).ok_or_else(|| {
+        engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::InternalInvariant("verified matrix LDS element layout"),
+        )
+    })?;
+    let byte_delta = usize::try_from(element_index)
+        .ok()
+        .and_then(|index| index.checked_mul(element_bytes))
+        .ok_or_else(|| engine.at(*site, SimulationExecutionErrorKindV1::PointerOffsetOverflow))?;
+    pointer_at_byte(engine, base, byte_delta, element, site)
+}
+
+fn execute_matrix_lds_load(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    base: &PointerValue,
+    profile: MatrixLdsProfile,
+    lane: u32,
+) -> Result<[ScalarBitsV1; 4], SimulationExecutionErrorV1> {
+    let mut values = [ScalarBitsV1::boolean(false); 4];
+    for (component, value) in values.iter_mut().enumerate() {
+        let pointer = matrix_lds_pointer(engine, site, base, profile, lane, component as u32)?;
+        *value = execute_pointer_load(
+            engine,
+            &pointer,
+            MemoryAccess::new(AddressSpace::Workgroup, profile.required_alignment()),
+            site,
+        )?;
+    }
+    Ok(values)
+}
+
+fn execute_matrix_lds_store(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    base: &PointerValue,
+    profile: MatrixLdsProfile,
+    lane: u32,
+    values: [ScalarBitsV1; 4],
+) -> Result<(), SimulationExecutionErrorV1> {
+    for (component, value) in values.into_iter().enumerate() {
+        let pointer = matrix_lds_pointer(engine, site, base, profile, lane, component as u32)?;
+        execute_pointer_store(
+            engine,
+            &pointer,
+            value,
+            MemoryAccess::new(AddressSpace::Workgroup, profile.required_alignment()),
+            site,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_transpose_stage(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    format: Gfx950LdsTransposeFormatV1,
+    lane: u32,
+    storage: &PointerValue,
+    source: &SliceValue,
+    offset: u64,
+    rows: u64,
+    columns: u64,
+    stride: u64,
+    token_base: u64,
+    reduction_base: u64,
+) -> Result<(), SimulationExecutionErrorV1> {
+    let lane_in_group = lane & 15;
+    let group = lane >> 4;
+    match format {
+        Gfx950LdsTransposeFormatV1::Fp4E2M1 => {
+            let depth_base = u64::from(group * 32 + lane_in_group);
+            for part in 0..2_u32 {
+                let depth_delta = depth_base + u64::from(part * 16);
+                for byte in 0..8_u32 {
+                    let low = guarded_transpose_source_byte(
+                        engine,
+                        site,
+                        source,
+                        offset,
+                        rows,
+                        columns,
+                        stride,
+                        token_base,
+                        reduction_base,
+                        u64::from(byte * 2),
+                        depth_delta,
+                    )? & 0x0f;
+                    let high = guarded_transpose_source_byte(
+                        engine,
+                        site,
+                        source,
+                        offset,
+                        rows,
+                        columns,
+                        stride,
+                        token_base,
+                        reduction_base,
+                        u64::from(byte * 2 + 1),
+                        depth_delta,
+                    )? & 0x0f;
+                    store_transpose_byte(
+                        engine,
+                        site,
+                        storage,
+                        lane,
+                        format,
+                        part,
+                        byte,
+                        low | (high << 4),
+                    )?;
+                }
+            }
+        }
+        Gfx950LdsTransposeFormatV1::Fp8E4M3 => {
+            let token_band = u64::from((lane_in_group & 1) * 8);
+            let depth_base = u64::from(group * 16 + (lane_in_group >> 1));
+            for (part, depth_offset) in [0_u64, 8, 64, 72].into_iter().enumerate() {
+                for byte in 0..8_u32 {
+                    let value = guarded_transpose_source_byte(
+                        engine,
+                        site,
+                        source,
+                        offset,
+                        rows,
+                        columns,
+                        stride,
+                        token_base,
+                        reduction_base,
+                        token_band + u64::from(byte),
+                        depth_base + depth_offset,
+                    )?;
+                    store_transpose_byte(
+                        engine,
+                        site,
+                        storage,
+                        lane,
+                        format,
+                        part as u32,
+                        byte,
+                        value,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn guarded_transpose_source_byte(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    source: &SliceValue,
+    offset: u64,
+    rows: u64,
+    columns: u64,
+    stride: u64,
+    token_base: u64,
+    reduction_base: u64,
+    row_delta: u64,
+    column_delta: u64,
+) -> Result<u8, SimulationExecutionErrorV1> {
+    let Some(row) = token_base.checked_add(row_delta) else {
+        return Ok(0);
+    };
+    let Some(column) = reduction_base.checked_add(column_delta) else {
+        return Ok(0);
+    };
+    if row >= rows || column >= columns {
+        return Ok(0);
+    }
+    let Some(index) = row
+        .checked_mul(stride)
+        .and_then(|linear| linear.checked_add(column))
+        .and_then(|linear| offset.checked_add(linear))
+    else {
+        return Ok(0);
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return Ok(0);
+    };
+    if index >= source.elements {
+        return Ok(0);
+    }
+    let base = PointerValue {
+        allocation: source.allocation,
+        byte_offset: source.byte_offset,
+        element: ScalarType::U8,
+        address_space: source.address_space,
+        access: source.access,
+        lower_bound: source.byte_offset,
+        upper_bound: source.byte_offset + source.byte_len,
+        abi_argument_ordinal: source.abi_argument_ordinal,
+    };
+    let pointer = pointer_at_byte(engine, &base, index, ScalarType::U8, site)?;
+    let value = execute_pointer_load(
+        engine,
+        &pointer,
+        MemoryAccess::new(AddressSpace::Global, 1),
+        site,
+    )?;
+    Ok(value.bits() as u8)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_transpose_byte(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    storage: &PointerValue,
+    lane: u32,
+    format: Gfx950LdsTransposeFormatV1,
+    part: u32,
+    byte: u32,
+    value: u8,
+) -> Result<(), SimulationExecutionErrorV1> {
+    let byte_delta = usize::try_from(lane * format.lane_byte_stride() + part * 8 + byte)
+        .map_err(|_| engine.at(*site, SimulationExecutionErrorKindV1::PointerOffsetOverflow))?;
+    let pointer = pointer_at_byte(engine, storage, byte_delta, ScalarType::U8, site)?;
+    let value = ScalarBitsV1::new(ScalarType::U8, u128::from(value), engine.target)
+        .map_err(|_| engine.at(*site, SimulationExecutionErrorKindV1::IntegerOutOfRange))?;
+    execute_pointer_store(
+        engine,
+        &pointer,
+        value,
+        MemoryAccess::new(AddressSpace::Workgroup, 1),
+        site,
+    )
+}
+
+fn load_transpose_byte(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    storage: &PointerValue,
+    lane: u32,
+    format: Gfx950LdsTransposeFormatV1,
+    part: u32,
+    byte: u32,
+) -> Result<u8, SimulationExecutionErrorV1> {
+    let byte_delta = usize::try_from(lane * format.lane_byte_stride() + part * 8 + byte)
+        .map_err(|_| engine.at(*site, SimulationExecutionErrorKindV1::PointerOffsetOverflow))?;
+    let pointer = pointer_at_byte(engine, storage, byte_delta, ScalarType::U8, site)?;
+    let value = execute_pointer_load(
+        engine,
+        &pointer,
+        MemoryAccess::new(AddressSpace::Workgroup, 1),
+        site,
+    )?;
+    Ok(value.bits() as u8)
+}
+
+fn execute_transpose_read(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    site: &CompactSite,
+    format: Gfx950LdsTransposeFormatV1,
+    lane: u32,
+    storage: &PointerValue,
+) -> Result<[u32; 8], SimulationExecutionErrorV1> {
+    let mut results = [0_u32; 8];
+    let group_base = (lane / 16) * 16;
+    match format {
+        Gfx950LdsTransposeFormatV1::Fp8E4M3 => {
+            let source_parity = (lane % 16) / 8;
+            let source_byte = lane % 8;
+            for part in 0..4_u32 {
+                let mut packed = [0_u8; 8];
+                for (component, destination) in packed.iter_mut().enumerate() {
+                    let source_lane = group_base + 2 * component as u32 + source_parity;
+                    *destination = load_transpose_byte(
+                        engine,
+                        site,
+                        storage,
+                        source_lane,
+                        format,
+                        part,
+                        source_byte,
+                    )?;
+                }
+                results[(part * 2) as usize] =
+                    u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]);
+                results[(part * 2 + 1) as usize] =
+                    u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]);
+            }
+        }
+        Gfx950LdsTransposeFormatV1::Fp4E2M1 => {
+            let source_byte = (lane % 16) / 2;
+            let shift = (lane & 1) * 4;
+            for part in 0..2_u32 {
+                let mut packed = [0_u8; 8];
+                for (component, destination) in packed.iter_mut().enumerate() {
+                    let first = load_transpose_byte(
+                        engine,
+                        site,
+                        storage,
+                        group_base + 2 * component as u32,
+                        format,
+                        part,
+                        source_byte,
+                    )?;
+                    let second = load_transpose_byte(
+                        engine,
+                        site,
+                        storage,
+                        group_base + 2 * component as u32 + 1,
+                        format,
+                        part,
+                        source_byte,
+                    )?;
+                    *destination = ((first >> shift) & 0x0f) | (((second >> shift) & 0x0f) << 4);
+                }
+                results[(part * 2) as usize] =
+                    u32::from_le_bytes([packed[0], packed[1], packed[2], packed[3]]);
+                results[(part * 2 + 1) as usize] =
+                    u32::from_le_bytes([packed[4], packed[5], packed[6], packed[7]]);
+            }
+        }
+    }
+    Ok(results)
 }
 
 fn operation_site(function: usize, block: &BasicBlock, ordinal: usize) -> CompactSite {
@@ -6783,6 +8533,7 @@ mod tests {
             call_targets: vec![vec![]],
             switch_targets: vec![vec![]],
             target: SimulationTargetV1::amdgpu_64(),
+            dynamic_workgroup_memory: None,
             limits: SimulationLimitsV1::default(),
             policy: EventPolicyV1::Disabled,
             memory: Memory {

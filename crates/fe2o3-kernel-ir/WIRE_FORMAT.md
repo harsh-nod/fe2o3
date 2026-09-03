@@ -1,7 +1,7 @@
-# Kernel IR Wire Formats V1 through V6
+# Kernel IR Wire Formats V1 through V10
 
 This document freezes the canonical binary representations produced by
-`encode_module_v1` through `encode_module_v6`. `decode_module_v1` accepts only
+`encode_module_v1` through `encode_module_v10`. `decode_module_v1` accepts only
 V1; each later decoder accepts canonical bytes up to its own version for
 migration safety. Every encoder always emits exactly its named version.
 
@@ -206,8 +206,35 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
 | 20 (V2) | `Wave` | `WaveOperation` |
 | 21 (V3) | `InlineAssembly` | `InlineAssembly` |
 | 22 (V5) | `Matrix` | `MatrixOperation` |
+| 23 (V7) | `GuardedLoad` | `ValueId pointer, ValueId predicate, ValueId fallback, MemoryAccess` |
+| 24 (V9) | `Gfx950LdsTranspose` | `Gfx950LdsTransposeOperation` |
+| 25 (V9) | `GuardedStore` | `ValueId pointer, ValueId predicate, ValueId value, MemoryAccess` |
+| 26 (V10) | `MemoryIntrinsic` | `u32 semantic_instance_bytes, byte[semantic_instance_bytes] instance, variant operands` |
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
+
+### V10 Memory Intrinsics
+
+V10 is the first module wire version that admits `MemoryIntrinsic`. The
+embedded byte string is the exact bounded
+`encode_semantic_operation_instance_id` result for the operation contract.
+Its family and opcode must identify one of `PointerDistance`, `VolatileLoad`,
+`VolatileStore`, or `CopyNonOverlapping`; launch semantic instances are
+rejected in this operation slot. The following operand identities then appear
+in the variant's semantic order:
+
+| Variant | Operands |
+|---|---|
+| `PointerDistance` | `ValueId pointer, ValueId origin` |
+| `VolatileLoad` | `ValueId pointer` |
+| `VolatileStore` | `ValueId pointer, ValueId value` |
+| `CopyNonOverlapping` | `ValueId source, ValueId destination, ValueId count` |
+
+The instance length is capped by the semantic-instance header plus its frozen
+maximum payload. Exact instance decoding rejects malformed headers, contracts,
+tags, lengths, reserved bytes, truncation, and trailing bytes before any
+operand is admitted. V1 through V9 encoders continue to reject every memory
+intrinsic, and their operation tags and bytes remain unchanged.
 
 ### V6 Checked Integer Arithmetic
 
@@ -510,6 +537,7 @@ or lowering authority.
 | Blocks per function | 65536 |
 | Parameters or operations per block | 65536 each |
 | Results per operation | 65536 |
+| Embedded semantic-operation instance | semantic header plus 256 payload bytes |
 | Any value-argument list | 65536 |
 | Legacy or typed integer switch cases | 65536 |
 | Nested pointer/slice depth | 64 |

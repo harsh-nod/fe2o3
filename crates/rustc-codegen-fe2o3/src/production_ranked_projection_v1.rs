@@ -49,7 +49,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticSwitchTargetsV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
     SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
-    SemanticWriteOnlyDisjointWriteKindV1,
+    SemanticWorkgroupScanKindV1, SemanticWriteOnlyDisjointWriteKindV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -1843,6 +1843,171 @@ fn scalar_or_checked_carrier_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticT
         || checked_scalar_carrier_type_v1(types, ty).is_some()
 }
 
+fn zero_sized_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    fn visit(
+        types: &[SemanticTypeDeclV1],
+        ty: SemanticTypeIdV1,
+        visiting: &mut BTreeSet<SemanticTypeIdV1>,
+        admitted: &mut BTreeSet<SemanticTypeIdV1>,
+    ) -> bool {
+        if admitted.contains(&ty) {
+            return true;
+        }
+        if !visiting.insert(ty) {
+            return false;
+        }
+        let Some(declaration) = types.get(ty.index() as usize) else {
+            return false;
+        };
+        if declaration.layout().size_bytes() != Some(0) {
+            return false;
+        }
+        let pointer_free = match declaration.shape() {
+            SemanticTypeShapeV1::Unit | SemanticTypeShapeV1::Never => true,
+            SemanticTypeShapeV1::Array { element, .. } => {
+                visit(types, *element, visiting, admitted)
+            }
+            SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => fields
+                .fields()
+                .iter()
+                .copied()
+                .all(|field| visit(types, field, visiting, admitted)),
+            SemanticTypeShapeV1::Scalar(_)
+            | SemanticTypeShapeV1::ValidityScalar(_)
+            | SemanticTypeShapeV1::Pointer(_)
+            | SemanticTypeShapeV1::Slice { .. }
+            | SemanticTypeShapeV1::Enum { .. }
+            | SemanticTypeShapeV1::Union(_)
+            | SemanticTypeShapeV1::FunctionPointer { .. }
+            | SemanticTypeShapeV1::Opaque => false,
+        };
+        visiting.remove(&ty);
+        if pointer_free {
+            admitted.insert(ty);
+        }
+        pointer_free
+    }
+
+    visit(types, ty, &mut BTreeSet::new(), &mut BTreeSet::new())
+}
+
+fn zero_sized_defined_callable_place_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1 + place.projections().len())?;
+    Ok(place.projections().is_empty()
+        && zero_sized_defined_callable_type_v1(types, place.ty())
+        && function
+            .locals()
+            .get(place.local().index() as usize)
+            .is_some_and(|local| local.ty() == place.ty()))
+}
+
+fn zero_sized_defined_callable_operand_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    operand: &SemanticOperandV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match operand {
+        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+            zero_sized_defined_callable_place_v1(types, function, place, work)
+        }
+        SemanticOperandV1::Constant(constant) => {
+            Ok(zero_sized_defined_callable_type_v1(types, constant.ty())
+                && matches!(constant.value(), SemanticConstantValueV1::ZeroSized))
+        }
+    }
+}
+
+fn zero_sized_defined_callable_statement_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    charge_defined_callable_summary_work_v1(work, 1)?;
+    match statement.kind() {
+        SemanticStatementKindV1::Assign(assignment) => {
+            if !zero_sized_defined_callable_place_v1(
+                types,
+                function,
+                assignment.destination(),
+                work,
+            )? || !zero_sized_defined_callable_type_v1(types, assignment.value().result_type())
+            {
+                return Ok(false);
+            }
+            match assignment.value().kind() {
+                SemanticRvalueKindV1::Use(operand) => {
+                    zero_sized_defined_callable_operand_v1(types, function, operand, work)
+                }
+                SemanticRvalueKindV1::Aggregate(aggregate) => {
+                    for operand in aggregate.operands() {
+                        if !zero_sized_defined_callable_operand_v1(types, function, operand, work)?
+                        {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+                SemanticRvalueKindV1::Unary { .. }
+                | SemanticRvalueKindV1::Binary { .. }
+                | SemanticRvalueKindV1::CheckedBinary(_)
+                | SemanticRvalueKindV1::UncheckedBinary(_)
+                | SemanticRvalueKindV1::Cast { .. }
+                | SemanticRvalueKindV1::Borrow { .. }
+                | SemanticRvalueKindV1::AddressOf { .. }
+                | SemanticRvalueKindV1::Length(_)
+                | SemanticRvalueKindV1::Discriminant(_)
+                | SemanticRvalueKindV1::Load(_) => Ok(false),
+            }
+        }
+        SemanticStatementKindV1::StorageLive(local)
+        | SemanticStatementKindV1::StorageDead(local) => Ok(function
+            .locals()
+            .get(local.index() as usize)
+            .is_some_and(|local| zero_sized_defined_callable_type_v1(types, local.ty()))),
+        SemanticStatementKindV1::Nop => Ok(true),
+        SemanticStatementKindV1::Store(_)
+        | SemanticStatementKindV1::AtomicRmw(_)
+        | SemanticStatementKindV1::AtomicCompareExchange(_)
+        | SemanticStatementKindV1::SetDiscriminant { .. }
+        | SemanticStatementKindV1::Deinitialize(_)
+        | SemanticStatementKindV1::Assume(_) => Ok(false),
+    }
+}
+
+fn zero_sized_direct_defined_callable_abi_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> bool {
+    let abi = function.abi();
+    !abi.c_variadic()
+        && abi.hidden_arguments().is_empty()
+        && abi.arguments().iter().all(|argument| {
+            let value = argument.value();
+            zero_sized_defined_callable_type_v1(types, value.source_ty())
+                && value.adjusted().is_none()
+                && value.pointee_override().is_none()
+                && matches!(value.mode(), SemanticAbiPassModeV1::Ignore)
+        })
+        && zero_sized_defined_callable_type_v1(types, abi.return_value().source_ty())
+        && abi.return_value().adjusted().is_none()
+        && abi.return_value().pointee_override().is_none()
+        && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+        && abi
+            .source_input_types()
+            .iter()
+            .copied()
+            .all(|ty| zero_sized_defined_callable_type_v1(types, ty))
+        && zero_sized_defined_callable_type_v1(types, abi.source_output_type())
+}
+
 fn scalar_direct_abi_value_v1(
     types: &[SemanticTypeDeclV1],
     value: &fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueV1,
@@ -2265,14 +2430,20 @@ fn direct_defined_callable_summary_v1(
     work: &mut usize,
 ) -> Result<DefinedCallableDirectSummaryV1, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1 + function.locals().len())?;
-    let base_eligible = scalar_direct_defined_callable_abi_v1(types, function)
+    let scalar_base_eligible = scalar_direct_defined_callable_abi_v1(types, function)
         && function
             .locals()
             .iter()
             .all(|local| scalar_or_checked_carrier_type_v1(types, local.ty()));
+    let zero_sized_base_eligible = zero_sized_direct_defined_callable_abi_v1(types, function)
+        && function
+            .locals()
+            .iter()
+            .all(|local| zero_sized_defined_callable_type_v1(types, local.ty()));
+    let base_eligible = scalar_base_eligible || zero_sized_base_eligible;
     let mut empty_eligible = base_eligible;
-    let mut deterministic_scalar_eligible = base_eligible;
-    let assert_proofs = if base_eligible
+    let mut deterministic_scalar_eligible = scalar_base_eligible;
+    let assert_proofs = if scalar_base_eligible
         && function.blocks().iter().any(|block| {
             matches!(
                 block.terminator().kind(),
@@ -2289,27 +2460,40 @@ fn direct_defined_callable_summary_v1(
     for (block_index, block) in function.blocks().iter().enumerate() {
         charge_defined_callable_summary_work_v1(work, 1)?;
         for statement in block.statements() {
-            let statement_eligible =
-                scalar_defined_callable_statement_v1(types, function, statement, work)?;
+            let statement_eligible = if scalar_base_eligible {
+                scalar_defined_callable_statement_v1(types, function, statement, work)?
+            } else {
+                zero_sized_defined_callable_statement_v1(types, function, statement, work)?
+            };
             empty_eligible &= statement_eligible;
             deterministic_scalar_eligible &=
                 statement_eligible && deterministic_scalar_defined_callable_statement_v1(statement);
         }
-        let terminator_eligible = scalar_defined_callable_terminator_v1(
-            types,
-            function,
-            function_count,
-            callables,
-            assert_proofs
-                .as_deref()
-                .and_then(|proved| proved.get(block_index))
-                .copied()
-                .unwrap_or(false),
-            block.terminator().kind(),
-            &mut callees,
-            call_edges,
-            work,
-        )?;
+        let terminator_eligible = if scalar_base_eligible {
+            scalar_defined_callable_terminator_v1(
+                types,
+                function,
+                function_count,
+                callables,
+                assert_proofs
+                    .as_deref()
+                    .and_then(|proved| proved.get(block_index))
+                    .copied()
+                    .unwrap_or(false),
+                block.terminator().kind(),
+                &mut callees,
+                call_edges,
+                work,
+            )?
+        } else {
+            charge_defined_callable_summary_work_v1(work, 1)?;
+            matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Goto(_)
+                    | SemanticTerminatorKindV1::Return
+                    | SemanticTerminatorKindV1::Unreachable
+            )
+        };
         empty_eligible &= terminator_eligible;
         deterministic_scalar_eligible &= terminator_eligible;
     }
@@ -6106,6 +6290,32 @@ fn blocked_mapping_fits_launch_v1(
 
 const NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/NEUTRAL-WORKGROUP-ALLOCATION/V1\0";
+const NEUTRAL_WORKGROUP_SCAN_ALLOCATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/NEUTRAL-WORKGROUP-SCAN-ALLOCATION/V1\0";
+
+#[derive(Clone, Copy)]
+enum NeutralWorkgroupRecipeKindV1 {
+    Reduction,
+    InclusiveScan,
+    ExclusiveScan,
+}
+
+impl NeutralWorkgroupRecipeKindV1 {
+    const fn from_scan(kind: SemanticWorkgroupScanKindV1) -> Self {
+        match kind {
+            SemanticWorkgroupScanKindV1::Inclusive => Self::InclusiveScan,
+            SemanticWorkgroupScanKindV1::Exclusive => Self::ExclusiveScan,
+        }
+    }
+
+    const fn identity_tag(self) -> u8 {
+        match self {
+            Self::Reduction => 0,
+            Self::InclusiveScan => 1,
+            Self::ExclusiveScan => 2,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct NeutralWorkgroupRecipeIdentityInputV1 {
@@ -6116,6 +6326,7 @@ struct NeutralWorkgroupRecipeIdentityInputV1 {
     element: SemanticTypeIdV1,
     elements: u32,
     scalar_tag: u8,
+    kind: NeutralWorkgroupRecipeKindV1,
 }
 
 fn neutral_workgroup_recipe_identity_v1(
@@ -6123,8 +6334,18 @@ fn neutral_workgroup_recipe_identity_v1(
     input: NeutralWorkgroupRecipeIdentityInputV1,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1);
-    hasher.update(b"recipe-v1\0");
+    match input.kind {
+        NeutralWorkgroupRecipeKindV1::Reduction => {
+            hasher.update(NEUTRAL_WORKGROUP_ALLOCATION_IDENTITY_DOMAIN_V1);
+            hasher.update(b"recipe-v1\0");
+        }
+        NeutralWorkgroupRecipeKindV1::InclusiveScan
+        | NeutralWorkgroupRecipeKindV1::ExclusiveScan => {
+            hasher.update(NEUTRAL_WORKGROUP_SCAN_ALLOCATION_IDENTITY_DOMAIN_V1);
+            hasher.update(b"scan-recipe-v1\0");
+            hasher.update([input.kind.identity_tag()]);
+        }
+    }
     hasher.update(function.identity().as_bytes());
     for value in [
         input.producer_block as u64,
@@ -6169,27 +6390,53 @@ fn project_generated_terminator_effects_v1(
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation:
-                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
-                    context,
-                    dynamic_lds,
-                    element_storage,
-                    element,
-                },
-            ..
-        }) = callables.get(call.callee().index() as usize)
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
         else {
             continue;
+        };
+        let (context, dynamic_lds, element_storage, element, kind) = match operation {
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+            } => (
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+                NeutralWorkgroupRecipeKindV1::Reduction,
+            ),
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+                kind,
+            } => (
+                context,
+                dynamic_lds,
+                element_storage,
+                element,
+                NeutralWorkgroupRecipeKindV1::from_scan(*kind),
+            ),
+            _ => continue,
         };
         let [context_argument, dynamic_argument, value_argument] = call.arguments() else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "target-neutral reduction argument arity changed",
             ));
         };
-        let SemanticOperandV1::Move(dynamic_place) = dynamic_argument else {
+        // The semantic linearity pass has already authenticated exactly one
+        // path-local transfer into this terminal consumer. Post-borrow-check
+        // rustc MIR may encode that transfer as `Copy` for a non-Copy,
+        // no-drop value when move semantics are no longer observable.
+        let (SemanticOperandV1::Copy(dynamic_place) | SemanticOperandV1::Move(dynamic_place)) =
+            dynamic_argument
+        else {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "target-neutral reduction must move its affine DynamicLds authority",
+                "target-neutral reduction must transfer its affine DynamicLds authority",
             ));
         };
         if !is_exact_shared_reference_to_v1(types, context_argument.ty(), *context)
@@ -6266,7 +6513,8 @@ fn project_generated_terminator_effects_v1(
             || *producer_element_storage != *element_storage
             || !matches!(
                 producer_call.arguments(),
-                [SemanticOperandV1::Move(place)] if place.projections().is_empty()
+                [SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)]
+                    if place.projections().is_empty()
             )
             || *producer_block == consumer_block
             || !dominance.block_dominates(*producer_block, consumer_block)?
@@ -6291,6 +6539,7 @@ fn project_generated_terminator_effects_v1(
                 element: *element,
                 elements,
                 scalar_tag,
+                kind,
             },
         );
         let (allocation_origin, noalias_class) =
@@ -8187,10 +8436,21 @@ fn project_workgroup_pipeline_effects_v1(
                     contract.destination,
                     simple_call_destination(call)?.index() as usize
                 );
+                let result =
+                    contract
+                        .pipeline
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a workgroup pipeline creation result was not assigned",
+                        ))?;
+                let view = contract
+                    .view
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a workgroup pipeline view was not assigned",
+                    ))?;
                 ProjectedPipelineEffectV1::Create {
                     owner,
-                    result: Some(contract.pipeline.expect("assigned pipeline result")),
-                    view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
+                    result: Some(result),
+                    view: ProductionRankedValueV1::Local(view),
                     buffers: contract.buffers,
                     prefetch_distance: contract.prefetch_distance,
                 }
@@ -8199,11 +8459,17 @@ fn project_workgroup_pipeline_effects_v1(
                 let owner = pipeline_call_owner_v1(call, &owners)?;
                 let contract = &pending[owner];
                 let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
+                let modulus =
+                    contract
+                        .modulus
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a workgroup pipeline modulus was not assigned",
+                        ))?;
                 ProjectedPipelineEffectV1::Event {
                     owner,
                     epoch,
                     slot_result: None,
-                    modulus: contract.modulus.expect("assigned pipeline modulus"),
+                    modulus,
                     kind: pipeline_event_kind_v1(*event),
                 }
             }
@@ -8213,12 +8479,23 @@ fn project_workgroup_pipeline_effects_v1(
                 let contract = &pending[owner];
                 let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
                 let index = scalar_projector.project_root(block_index, &call.arguments()[2])?;
+                let view = contract
+                    .view
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a workgroup pipeline view was not assigned",
+                    ))?;
+                let modulus =
+                    contract
+                        .modulus
+                        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a workgroup pipeline modulus was not assigned",
+                        ))?;
                 ProjectedPipelineEffectV1::Access {
-                    view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
+                    view: ProductionRankedValueV1::Local(view),
                     epoch,
                     index,
                     slot_result: None,
-                    modulus: contract.modulus.expect("assigned pipeline modulus"),
+                    modulus,
                     kind: if matches!(
                         operation,
                         SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
@@ -8335,11 +8612,11 @@ impl PipelineScalarProjectorV1<'_> {
         if tuple_field_operand_local_v1(operand, 0).is_some() {
             return self.project_checked_result(operand, use_site, visiting);
         }
-        if unsigned_index_bits_v1(self.types, operand.ty()).is_none() {
+        let Some(bits) = unsigned_index_bits_v1(self.types, operand.ty()) else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a pipeline scalar is not an exact unsigned index expression",
             ));
-        }
+        };
         if let SemanticOperandV1::Constant(constant) = operand {
             let SemanticConstantValueV1::Scalar(value) = constant.value() else {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -8351,8 +8628,6 @@ impl PipelineScalarProjectorV1<'_> {
                     "a pipeline scalar constant exceeds ranked index width",
                 )
             })?;
-            let bits = unsigned_index_bits_v1(self.types, operand.ty())
-                .expect("validated unsigned pipeline scalar type");
             if bits < 64 && value >= (1_u64 << bits) {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "a pipeline scalar constant exceeds its semantic type",
@@ -9806,9 +10081,12 @@ fn project_deterministic_scalar_switches_v1(
             ));
         }
         if switch_fallback_is_empty_unreachable_v1(function, otherwise) && exhausts_valid_domain {
-            let (_, exhaustive_target) = projected_targets
-                .pop()
-                .expect("an authenticated valid-value domain is nonempty");
+            let (_, exhaustive_target) =
+                projected_targets
+                    .pop()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "an authenticated valid-value domain has no retained switch target",
+                    ))?;
             otherwise = exhaustive_target;
         }
         switches[block_index] = Some(ProjectedDeterministicSwitchV1 {
@@ -15538,7 +15816,12 @@ fn order_projected_block_effects(
             .is_some_and(|site| site.insertion_operation == index)
         {
             items.push(ProjectedBlockItemV1::Guarded(
-                sites.next().expect("peeked guarded access site").access,
+                sites
+                    .next()
+                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a peeked guarded access site disappeared before projection",
+                    ))?
+                    .access,
             ));
         }
         if sites
@@ -15686,10 +15969,16 @@ fn projected_cfg_terminator(
                     "a comparison predicate switch with a reachable non-boolean successor",
                 ));
             }
+            let one = one.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a comparison predicate switch lost its true variant",
+            ))?;
+            let zero = zero.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a comparison predicate switch lost its false variant",
+            ))?;
             Ok(ProjectedCfgTerminatorV1::Predicate {
                 predicate,
-                true_block: target(one.expect("checked exact variant").edge().target())?,
-                false_block: target(zero.expect("checked exact variant").edge().target())?,
+                true_block: target(one.edge().target())?,
+                false_block: target(zero.edge().target())?,
             })
         }
         SemanticTerminatorKindV1::Call(call) => {
@@ -16504,7 +16793,9 @@ fn prepare_pipeline_values_v1(
             };
             match effect {
                 ProjectedPipelineEffectV1::Create { owner, result, .. } => {
-                    let value = result.expect("entry-declared pipeline result");
+                    let value = (*result).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a workgroup pipeline creation result was not prepared",
+                    ))?;
                     if pipeline_values
                         .insert(*owner, ProductionRankedValueV1::Local(value))
                         .is_some()
@@ -16563,7 +16854,9 @@ fn materialize_pipeline_effect_v1(
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match effect {
         ProjectedPipelineEffectV1::Create { owner, result, .. } => {
-            let result = result.expect("prepared pipeline result");
+            let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline creation result was not prepared",
+            ))?;
             debug_assert_eq!(
                 pipeline_values.get(&owner),
                 Some(&ProductionRankedValueV1::Local(result))
@@ -16582,7 +16875,9 @@ fn materialize_pipeline_effect_v1(
                 ),
             )?;
             let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
-            let slot_result = slot_result.expect("prepared pipeline slot result");
+            let slot_result = slot_result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline event slot result was not prepared",
+            ))?;
             operations.push(ProductionRankedOperationV1::IndexBinary {
                 result: slot_result,
                 kind: IndexBinaryKindAttr::Remainder,
@@ -16606,7 +16901,9 @@ fn materialize_pipeline_effect_v1(
         } => {
             let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
             let index = materialize_pipeline_scalar_v1(index, block, live, operations)?;
-            let slot_result = slot_result.expect("prepared pipeline slot result");
+            let slot_result = slot_result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline access slot result was not prepared",
+            ))?;
             operations.push(ProductionRankedOperationV1::IndexBinary {
                 result: slot_result,
                 kind: IndexBinaryKindAttr::Remainder,
@@ -16655,7 +16952,9 @@ fn materialize_pipeline_scalar_v1(
         } => {
             let lhs = materialize_pipeline_scalar_v1(*left, block, live, operations)?;
             let rhs = materialize_pipeline_scalar_v1(*right, block, live, operations)?;
-            let result = result.expect("prepared pipeline scalar result");
+            let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline scalar result was not prepared",
+            ))?;
             operations.push(ProductionRankedOperationV1::IndexBinary {
                 result,
                 kind,
@@ -18554,7 +18853,8 @@ fn project_direct_call_accesses(
     if matches!(
         callables.get(call.callee().index() as usize),
         Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. },
+            operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum { .. }
+                | SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. },
             ..
         })
     ) {
@@ -19531,6 +19831,21 @@ fn project_place_access_with_atomic(
             }
         }
     }
+    if dereferenced_memory_space.is_none()
+        && let SemanticLocalRoleV1::Argument(argument) = local.role()
+        && function
+            .abi()
+            .source_argument_ownership()
+            .get(argument as usize)
+            == Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+    {
+        if requirement == PlaceAccessRequirementV1::ExplicitMemory {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an explicit memory operation targets a by-value argument component",
+            ));
+        }
+        return Ok(());
+    }
     if indices.is_empty() && crosses_memory_boundary {
         let singleton = matches!(dereferenced_memory_space, Some(MemorySpaceAttr::Global))
             && local_contracts
@@ -20376,6 +20691,77 @@ mod tests {
         ]
     }
 
+    fn zero_sized_summary_helper_v1(
+        tag: u8,
+        blocks: Vec<SemanticBasicBlockV1>,
+    ) -> SemanticFunctionDeclV1 {
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            Vec::new(),
+            SemanticAbiValueV1::new(NEUTRAL_LDS_SCOPE_TYPE, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(tag.wrapping_add(1))),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag.wrapping_add(2))),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag.wrapping_add(3))),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(4))),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag.wrapping_add(5))),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![
+                local(
+                    tag.wrapping_add(6),
+                    NEUTRAL_LDS_SCOPE_TYPE,
+                    SemanticLocalRoleV1::Return,
+                ),
+                local(
+                    tag.wrapping_add(7),
+                    NEUTRAL_UNIT_TYPE,
+                    SemanticLocalRoleV1::Temporary,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap()
+    }
+
+    fn exact_zero_sized_summary_helper_v1(tag: u8) -> SemanticFunctionDeclV1 {
+        zero_sized_summary_helper_v1(
+            tag,
+            vec![block(
+                tag,
+                vec![statement(SemanticStatementKindV1::Assign(
+                    SemanticAssignmentV1::new(
+                        neutral_test_place_v1(0, NEUTRAL_LDS_SCOPE_TYPE),
+                        SemanticRvalueV1::new(
+                            NEUTRAL_LDS_SCOPE_TYPE,
+                            SemanticRvalueKindV1::Aggregate(
+                                SemanticAggregateRvalueV1::new(
+                                    SemanticAggregateKindV1::Aggregate,
+                                    vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                        NEUTRAL_UNIT_TYPE,
+                                        SemanticConstantValueV1::ZeroSized,
+                                    ))],
+                                )
+                                .unwrap(),
+                            ),
+                        ),
+                    ),
+                ))],
+                SemanticTerminatorKindV1::Return,
+            )],
+        )
+    }
+
     fn neutral_plain_direct_abi_value_v1(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
         SemanticAbiValueV1::new(
             ty,
@@ -20499,7 +20885,9 @@ mod tests {
         )
     }
 
-    fn neutral_ranked_program_v1() -> ProductionRankedSemanticProgramV1 {
+    fn neutral_ranked_program_for_operation_v1(
+        operation: SemanticCompilerIntrinsicOperationV1,
+    ) -> ProductionRankedSemanticProgramV1 {
         let scope_borrow = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
             neutral_test_place_v1(2, NEUTRAL_LDS_SCOPE_REFERENCE_TYPE),
             SemanticRvalueV1::new(
@@ -20526,7 +20914,7 @@ mod tests {
                 vec![scope_borrow],
                 neutral_test_call_v1(
                     1,
-                    vec![SemanticOperandV1::Move(neutral_test_place_v1(
+                    vec![SemanticOperandV1::Copy(neutral_test_place_v1(
                         2,
                         NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
                     ))],
@@ -20550,7 +20938,9 @@ mod tests {
                             5,
                             NEUTRAL_CONTEXT_REFERENCE_TYPE,
                         )),
-                        SemanticOperandV1::Move(neutral_test_place_v1(3, NEUTRAL_DYNAMIC_LDS_TYPE)),
+                        // Match the post-borrow-check encoding produced by
+                        // ordinary Rust for this non-Copy, no-drop value.
+                        SemanticOperandV1::Copy(neutral_test_place_v1(3, NEUTRAL_DYNAMIC_LDS_TYPE)),
                         SemanticOperandV1::Constant(SemanticConstantV1::new(
                             NEUTRAL_ELEMENT_TYPE,
                             SemanticConstantValueV1::Scalar(
@@ -20657,12 +21047,7 @@ mod tests {
                     neutral_plain_direct_abi_value_v1(NEUTRAL_ELEMENT_TYPE),
                 ],
                 neutral_plain_direct_abi_value_v1(NEUTRAL_ELEMENT_TYPE),
-                SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
-                    context: NEUTRAL_CONTEXT_TYPE,
-                    dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
-                    element_storage: NEUTRAL_ELEMENT_TYPE,
-                    element: NEUTRAL_ELEMENT_TYPE,
-                },
+                operation,
             ),
         ];
         let admitted = InertSemanticMirRequestV1::new_with_callables(
@@ -20689,6 +21074,126 @@ mod tests {
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
         )
         .unwrap()
+    }
+
+    fn neutral_ranked_program_v1() -> ProductionRankedSemanticProgramV1 {
+        neutral_ranked_program_for_operation_v1(
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                context: NEUTRAL_CONTEXT_TYPE,
+                dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+                element_storage: NEUTRAL_ELEMENT_TYPE,
+                element: NEUTRAL_ELEMENT_TYPE,
+            },
+        )
+    }
+
+    fn neutral_scan_ranked_program_v1(
+        kind: SemanticWorkgroupScanKindV1,
+    ) -> ProductionRankedSemanticProgramV1 {
+        neutral_ranked_program_for_operation_v1(
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+                context: NEUTRAL_CONTEXT_TYPE,
+                dynamic_lds: NEUTRAL_DYNAMIC_LDS_TYPE,
+                element_storage: NEUTRAL_ELEMENT_TYPE,
+                element: NEUTRAL_ELEMENT_TYPE,
+                kind,
+            },
+        )
+    }
+
+    #[test]
+    fn neutral_scan_projection_and_lowering_bind_kind_and_complete_effect_stream() {
+        let mut recipe_identities = Vec::new();
+        for kind in [
+            SemanticWorkgroupScanKindV1::Inclusive,
+            SemanticWorkgroupScanKindV1::Exclusive,
+        ] {
+            let program = neutral_scan_ranked_program_v1(kind);
+            let sources = &program.roots[0].executable_effect_sources;
+            assert_eq!(sources.len(), 34);
+            let recipe = sources[0].recipe_identity();
+            assert_ne!(recipe, [0; 32]);
+            assert!(
+                sources
+                    .iter()
+                    .all(|source| source.recipe_identity() == recipe)
+            );
+            recipe_identities.push(recipe);
+
+            let ProductionRankedSemanticProgramV1 {
+                semantic_owner,
+                roots,
+            } = program;
+            let root = roots.into_vec().into_iter().next().unwrap();
+            let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+                semantic_owner,
+                root.lowering,
+                root.ranked_ir,
+                root.access_sources,
+                root.executable_effect_sources,
+            )
+            .unwrap();
+            let _ = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+                receipt,
+                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                1,
+            )
+            .expect("the exact scan projection and generated KIR recipe must validate");
+        }
+        assert_ne!(recipe_identities[0], recipe_identities[1]);
+    }
+
+    #[test]
+    fn neutral_scan_full_path_rejects_kind_recipe_and_partial_effect_substitution() {
+        let exclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive);
+        let exclusive_recipe = exclusive.roots[0].executable_effect_sources[0].recipe_identity();
+        let inclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Inclusive);
+        let ProductionRankedSemanticProgramV1 {
+            semantic_owner,
+            roots,
+        } = inclusive;
+        let mut root = roots.into_vec().into_iter().next().unwrap();
+        root.executable_effect_sources = root
+            .executable_effect_sources
+            .into_iter()
+            .map(|source| {
+                ProductionRankedExecutableEffectSourceV1::new(
+                    source.semantic_block(),
+                    source.semantic_effect_ordinal(),
+                    source.ranked_block(),
+                    source.ranked_operation(),
+                    source.origin(),
+                    exclusive_recipe,
+                )
+            })
+            .collect();
+        let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+            semantic_owner,
+            root.lowering,
+            root.ranked_ir,
+            root.access_sources,
+            root.executable_effect_sources,
+        )
+        .unwrap();
+        assert_neutral_mutated_projection_rejected_v1(receipt);
+
+        let ProductionRankedSemanticProgramV1 {
+            semantic_owner,
+            roots,
+        } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive);
+        let mut root = roots.into_vec().into_iter().next().unwrap();
+        root.executable_effect_sources
+            .pop()
+            .expect("scan projection has a final barrier effect");
+        let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
+            semantic_owner,
+            root.lowering,
+            root.ranked_ir,
+            root.access_sources,
+            root.executable_effect_sources,
+        )
+        .unwrap();
+        assert_neutral_mutated_projection_rejected_v1(receipt);
     }
 
     fn neutral_mutated_projection_receipt_v1(
@@ -30165,6 +30670,77 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn defined_zero_sized_helper_requires_recursive_pointer_free_no_effect_body() {
+        let types = neutral_semantic_types_v1();
+        assert!(zero_sized_defined_callable_type_v1(
+            &types,
+            NEUTRAL_UNIT_TYPE
+        ));
+        assert!(zero_sized_defined_callable_type_v1(
+            &types,
+            NEUTRAL_LDS_SCOPE_TYPE
+        ));
+        for rejected in [
+            NEUTRAL_LDS_SCOPE_REFERENCE_TYPE,
+            NEUTRAL_DYNAMIC_LDS_TYPE,
+            NEUTRAL_CONTEXT_TYPE,
+            NEUTRAL_CONTEXT_REFERENCE_TYPE,
+        ] {
+            assert!(!zero_sized_defined_callable_type_v1(&types, rejected));
+        }
+
+        let callable = [SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )];
+        let exact = [exact_zero_sized_summary_helper_v1(180)];
+        let summaries =
+            derive_defined_callable_empty_effect_summaries_v1(&types, &exact, &callable).unwrap();
+        assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(
+            !summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+
+        let store = statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            neutral_test_place_v1(1, NEUTRAL_UNIT_TYPE),
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                NEUTRAL_UNIT_TYPE,
+                SemanticConstantValueV1::ZeroSized,
+            )),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )));
+        let effectful = [zero_sized_summary_helper_v1(
+            190,
+            vec![block(190, vec![store], SemanticTerminatorKindV1::Return)],
+        )];
+        let summaries =
+            derive_defined_callable_empty_effect_summaries_v1(&types, &effectful, &callable)
+                .unwrap();
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            Vec::new(),
+            Some(SemanticCallDestinationV1::new(
+                neutral_test_place_v1(0, NEUTRAL_LDS_SCOPE_TYPE),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let calling = [zero_sized_summary_helper_v1(
+            200,
+            vec![
+                block(200, Vec::new(), SemanticTerminatorKindV1::Call(call)),
+                block(201, Vec::new(), SemanticTerminatorKindV1::Return),
+            ],
+        )];
+        let summaries =
+            derive_defined_callable_empty_effect_summaries_v1(&types, &calling, &callable).unwrap();
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
     }
 
     #[test]

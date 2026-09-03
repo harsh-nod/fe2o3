@@ -22,7 +22,7 @@ struct ProductionExtractionCallbacksV1 {
     expected_llvm_target: Option<&'static str>,
     gfx942_compiler_handoff_output: Option<PathBuf>,
     simulation_bundle_output: Option<PathBuf>,
-    simulation_bundle_v2: bool,
+    simulation_bundle_version: u16,
     result: Option<Result<(), String>>,
 }
 
@@ -30,10 +30,12 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some(
             if let Some(output) = self.simulation_bundle_output.as_deref() {
-                if self.simulation_bundle_v2 {
-                    extract_simulation_bundle_in_active_session_v2(tcx, output)
-                } else {
-                    extract_simulation_bundle_in_active_session_v1(tcx, output)
+                match self.simulation_bundle_version {
+                    5 => extract_simulation_bundle_in_active_session_v5(tcx, output),
+                    4 => extract_simulation_bundle_in_active_session_v4(tcx, output),
+                    3 => extract_simulation_bundle_in_active_session_v3(tcx, output),
+                    2 => extract_simulation_bundle_in_active_session_v2(tcx, output),
+                    _ => extract_simulation_bundle_in_active_session_v1(tcx, output),
                 }
             } else if let Some(output) = self.gfx942_compiler_handoff_output.as_deref() {
                 extract_gfx942_compiler_handoff_in_active_session_v1(tcx, output)
@@ -426,6 +428,91 @@ fn extract_simulation_bundle_in_active_session_v2(
     Ok(())
 }
 
+fn extract_simulation_bundle_in_active_session_v3(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let bundle = transaction_in_active_session_v1(
+        tcx,
+        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+    )?
+    .export_simulation_bundle_v3()
+    .map_err(|error| error.to_string())?;
+    publish_new_simulation_bundle(
+        output,
+        bundle.canonical_bytes(),
+        fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V3,
+    )?;
+    eprintln!(
+        "fe2o3 production extraction: ordinary Rust -> admitted semantic MIR -> ranked PLIRON checks -> sole target-neutral Kernel IR lowering -> simulation bundle V3 with exact semantic MIR, source variables, and typed storage correspondence; target {}, {} kernel(s), simulation_bundle_subject {}, content {}, semantic_mir {}, storage_map {}, {} byte(s), compiler_execution_binding=extraction_only_unavailable, authenticates_compiler_execution=false, proof/artifact/compiler/hardware/load/launch authority false",
+        bundle.target(),
+        bundle.kernel_count(),
+        lower_hex_v1(bundle.subject_identity()),
+        lower_hex_v1(bundle.identity().as_bytes()),
+        lower_hex_v1(bundle.semantic_mir_identity()),
+        lower_hex_v1(bundle.storage_map_identity()),
+        bundle.canonical_bytes().len(),
+    );
+    Ok(())
+}
+
+fn extract_simulation_bundle_in_active_session_v4(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let bundle = transaction_in_active_session_v1(
+        tcx,
+        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+    )?
+    .export_simulation_bundle_v4()
+    .map_err(|error| error.to_string())?;
+    publish_new_simulation_bundle(
+        output,
+        bundle.canonical_bytes(),
+        fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V4,
+    )?;
+    eprintln!(
+        "fe2o3 production extraction: ordinary Rust -> admitted semantic MIR -> target-neutral Kernel IR -> simulation bundle V4 with compiler-rederived aggregate component and physical simulator-kernarg correspondence; target {}, {} kernel(s), content {}, storage_map {}, {} byte(s), KFD packing/launch authority=false",
+        bundle.inner_v3().target(),
+        bundle.inner_v3().kernel_count(),
+        lower_hex_v1(bundle.identity().as_bytes()),
+        lower_hex_v1(bundle.storage_map_identity()),
+        bundle.canonical_bytes().len(),
+    );
+    Ok(())
+}
+
+fn extract_simulation_bundle_in_active_session_v5(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let bundle = transaction_in_active_session_v1(
+        tcx,
+        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+    )?
+    .export_simulation_bundle_v5()
+    .map_err(|error| error.to_string())?;
+    publish_new_simulation_bundle(
+        output,
+        bundle.canonical_bytes(),
+        fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V5,
+    )?;
+    eprintln!(
+        "fe2o3 production extraction: ordinary Rust -> admitted semantic MIR -> target-neutral production KIR V{} -> exact same-module KIR V10 simulation bundle V5; target {}, {} kernel(s), subject {}, content {}, source_map {}, semantic_mir {}, storage_map {}, aggregate_map {}, {} byte(s), compiler_execution=extraction_only_unavailable, proof/compiler/artifact/hardware/load/launch authority false",
+        bundle.production_kir_identity().version(),
+        bundle.target(),
+        bundle.kernel_count(),
+        lower_hex_v1(bundle.subject_identity()),
+        lower_hex_v1(bundle.identity().as_bytes()),
+        lower_hex_v1(&bundle.debug_map_identity()),
+        lower_hex_v1(&bundle.semantic_mir_identity()),
+        lower_hex_v1(&bundle.storage_map_identity()),
+        lower_hex_v1(&bundle.aggregate_storage_map_identity()),
+        bundle.canonical_bytes().len(),
+    );
+    Ok(())
+}
+
 fn publish_new_simulation_bundle_v1(output: &Path, bytes: &[u8]) -> Result<(), String> {
     publish_new_simulation_bundle(
         output,
@@ -527,7 +614,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: None,
         simulation_bundle_output: None,
-        simulation_bundle_v2: false,
+        simulation_bundle_version: 1,
         result: None,
     };
     run_production_driver_v1(
@@ -549,7 +636,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: None,
         simulation_bundle_output: None,
-        simulation_bundle_v2: false,
+        simulation_bundle_version: 1,
         result: None,
     };
     run_production_driver_v1(
@@ -570,7 +657,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
         gfx942_compiler_handoff_output: None,
         simulation_bundle_output: None,
-        simulation_bundle_v2: false,
+        simulation_bundle_version: 1,
         result: None,
     };
     run_production_driver_v1(
@@ -593,7 +680,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: Some(output.to_path_buf()),
         simulation_bundle_output: None,
-        simulation_bundle_v2: false,
+        simulation_bundle_version: 1,
         result: None,
     };
     run_production_driver_v1(
@@ -616,7 +703,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
-        simulation_bundle_v2: false,
+        simulation_bundle_version: 1,
         result: None,
     };
     run_production_driver_v1(
@@ -638,13 +725,79 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
-        simulation_bundle_v2: true,
+        simulation_bundle_version: 2,
         result: None,
     };
     run_production_driver_v1(
         args,
         callbacks,
         "production simulation-bundle V2 extraction callback did not reach rustc analysis",
+    )
+}
+
+/// Runs the opt-in V3 export that embeds exact canonical semantic MIR and a
+/// bundle-bound map from semantic locals to retained KIR parameter storage.
+pub fn run_production_simulation_bundle_extraction_driver_v3(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: Some(output.to_path_buf()),
+        simulation_bundle_version: 3,
+        result: None,
+    };
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production simulation-bundle V3 extraction callback did not reach rustc analysis",
+    )
+}
+
+/// Runs the opt-in V4 export with compiler-produced one-to-many aggregate
+/// storage and physical simulator-kernarg correspondence.
+pub fn run_production_simulation_bundle_extraction_driver_v4(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: Some(output.to_path_buf()),
+        simulation_bundle_version: 4,
+        result: None,
+    };
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production simulation-bundle V4 extraction callback did not reach rustc analysis",
+    )
+}
+
+/// Runs the opt-in V5 export with an exact V10 same-module projection of the
+/// producer-owned canonical V8/V9 KIR and self-contained debug/storage maps.
+pub fn run_production_simulation_bundle_extraction_driver_v5(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: Some(output.to_path_buf()),
+        simulation_bundle_version: 5,
+        result: None,
+    };
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production simulation-bundle V5 extraction callback did not reach rustc analysis",
     )
 }
 

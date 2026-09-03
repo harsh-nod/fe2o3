@@ -1,22 +1,24 @@
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BlockId,
-    Constant, Convergence, Fence, Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
-    ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueDef,
-    ValueId, VerifiedCanonicalKernelIrV7, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BinaryOp,
+    BlockId, Constant, Convergence, Fence, Function, IndexKind, IntrinsicKind, IntrinsicOperation,
+    Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation,
+    OperationKind, ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV10, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, IndexWidthV1, ScalarBitsV1, SimulationArgumentV1,
     SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 use fe2o3_kir_sim_trace::{
-    KirSiteCatalogV1, SimulationTraceProfileV1, simulate_with_semantic_trace_v1,
+    KirSiteCatalogV1, SimulationTraceProfileV1, TraceAdapterErrorV1,
+    simulate_with_semantic_trace_v1, simulate_with_semantic_trace_v2,
 };
 use fe2o3_semantic_trace::{
     AddressSpaceV1, AllocationEventV1, BarrierActionV1, CaptureEndBoundaryV1, DiagnosticKindV1,
-    DispatchEventV1, DispatchOutcomeV1, ExecutionLevelV1, KirSitePointV1, MemoryAccessKindV1,
-    OperationEventV1, TraceBoundsV1, TraceCompletenessV1, TraceEventKindV1, WaveWidthV1,
-    decode_trace_v1, encode_trace_v1,
+    DispatchEventV1, DispatchOutcomeV1, ExecutionLevelV1, KernelIrWireVersionV2, KirSitePointV1,
+    MemoryAccessKindV1, OperationEventV1, TraceBoundsV1, TraceCompletenessV1, TraceEventKindV1,
+    WaveWidthV1, decode_trace_v1, decode_trace_v2, encode_trace_v1, encode_trace_v2,
 };
 
 fn op(result: u32, value: u32) -> Operation {
@@ -178,6 +180,71 @@ fn traced_lds_module() -> Module {
     module
 }
 
+fn two_lane_workgroup_sum_module() -> Module {
+    let mut module = traced_lds_module();
+    let scalar = Type::Scalar(ScalarType::U32);
+    let workgroup = Type::pointer(
+        scalar.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let global = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let value = |id, ty, kind| Operation::effect_free(ValueDef::new(ValueId(id), ty), kind);
+    let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+    operations.truncate(7);
+    operations.extend([
+        value(6, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+        value(
+            7,
+            workgroup,
+            OperationKind::GetElementPointer {
+                base: ValueId(1),
+                offset: ValueId(6),
+            },
+        ),
+        value(
+            8,
+            scalar.clone(),
+            OperationKind::Load {
+                pointer: ValueId(7),
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ),
+        value(
+            9,
+            scalar,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(5),
+                rhs: ValueId(8),
+            },
+        ),
+        value(
+            10,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+        ),
+        value(
+            11,
+            global,
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(10),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(11),
+                value: ValueId(9),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ]);
+    module.id = "trace-workgroup-sum".into();
+    module
+}
+
 fn empty_buffer_module() -> Module {
     let mut block = BasicBlock::new(BlockId(0));
     block.terminator = Some(Terminator::Return { values: vec![] });
@@ -280,6 +347,192 @@ fn zero_count_alloca_module() -> Module {
 fn admitted(module: Module) -> AdmittedSimulationModuleV1 {
     let canonical = VerifiedCanonicalKernelIrV7::from_module(module).unwrap();
     AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default()).unwrap()
+}
+
+#[test]
+fn v1_trace_adapter_rejects_v10_instead_of_mislabeling_it_as_v7() {
+    let canonical = VerifiedCanonicalKernelIrV10::from_module(simple_module(1)).unwrap();
+    let admitted =
+        AdmittedSimulationModuleV1::admit_v10(canonical, SimulationLimitsV1::default()).unwrap();
+    let request = SimulationRequestV1::new("kernel", [1, 1, 1], [1, 1, 1], vec![]);
+    let error = simulate_with_semantic_trace_v1(
+        &admitted,
+        &request,
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        profile(WaveWidthV1::Wave64, 128),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        TraceAdapterErrorV1::UnsupportedKernelIrWireVersion { version: 10 }
+    ));
+}
+
+#[test]
+fn v2_trace_adapter_rejects_v7_and_binds_exact_v9_v10_owners() {
+    let v7 = admitted(simple_module(1));
+    let request = SimulationRequestV1::new("kernel", [1, 1, 1], [1, 1, 1], vec![]);
+    assert!(matches!(
+        simulate_with_semantic_trace_v2(
+            &v7,
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            profile(WaveWidthV1::Wave64, 128),
+        ),
+        Err(TraceAdapterErrorV1::UnsupportedKernelIrWireVersion { version: 7 })
+    ));
+
+    let v9 = AdmittedSimulationModuleV1::admit_v9(
+        VerifiedCanonicalKernelIrV9::from_module(simple_module(1)).unwrap(),
+        SimulationLimitsV1::default(),
+    )
+    .unwrap();
+    let v10 = AdmittedSimulationModuleV1::admit_v10(
+        VerifiedCanonicalKernelIrV10::from_module(simple_module(1)).unwrap(),
+        SimulationLimitsV1::default(),
+    )
+    .unwrap();
+    for (module, expected) in [
+        (&v9, KernelIrWireVersionV2::V9),
+        (&v10, KernelIrWireVersionV2::V10),
+    ] {
+        let outcome = simulate_with_semantic_trace_v2(
+            module,
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            profile(WaveWidthV1::Wave64, 128),
+        )
+        .unwrap();
+        assert!(outcome.execution.is_ok());
+        assert!(!outcome.grants_execution_authority());
+        let claim = outcome.trace.header().kernel_ir_claim();
+        assert_eq!(claim.wire_version(), expected);
+        assert_eq!(claim.digest().as_bytes(), module.identity().digest());
+        assert_eq!(claim.canonical_len(), module.identity().canonical_length());
+        assert!(outcome
+            .trace
+            .events()
+            .iter()
+            .all(|event| event.provenance() == fe2o3_semantic_trace::FactProvenanceV1::Observed));
+        let bytes = encode_trace_v2(&outcome.trace).unwrap();
+        assert_eq!(decode_trace_v2(&bytes).unwrap(), outcome.trace);
+    }
+}
+
+#[test]
+fn v10_workgroup_sum_produces_deterministic_bounded_semantic_timeline() {
+    let module = AdmittedSimulationModuleV1::admit_v10(
+        VerifiedCanonicalKernelIrV10::from_module(two_lane_workgroup_sum_module()).unwrap(),
+        SimulationLimitsV1::default(),
+    )
+    .unwrap();
+    let request = || {
+        let output = BufferArgumentV1::from_scalars(
+            AccessMode::ReadWrite,
+            4,
+            &[ScalarBitsV1::u32(0); 2],
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+        SimulationRequestV1::new(
+            "kernel",
+            [2, 1, 1],
+            [2, 1, 1],
+            vec![SimulationArgumentV1::Buffer(output)],
+        )
+    };
+    let run = || {
+        simulate_with_semantic_trace_v2(
+            &module,
+            &request(),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            profile(WaveWidthV1::Wave32, 10_000),
+        )
+        .unwrap()
+    };
+    let first = run();
+    let second = run();
+    let execution = first.execution.as_ref().unwrap();
+    assert_eq!(
+        execution.buffer(0).unwrap().bytes(),
+        &[18, 0, 0, 0, 18, 0, 0, 0]
+    );
+    assert_eq!(
+        encode_trace_v2(&first.trace).unwrap(),
+        encode_trace_v2(&second.trace).unwrap()
+    );
+    assert_eq!(
+        first.trace.header().kernel_ir_claim().wire_version(),
+        KernelIrWireVersionV2::V10
+    );
+    let barrier_claim = first
+        .catalog
+        .claim(&SimulationSiteV1 {
+            function: "entry".into(),
+            block: BlockId(0),
+            operation: Some(5),
+        })
+        .unwrap();
+    assert_eq!(barrier_claim.point(), KirSitePointV1::Operation(5));
+    let arrivals = first
+        .trace
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind(),
+                TraceEventKindV1::Barrier(barrier)
+                    if barrier.action() == BarrierActionV1::Arrive
+            )
+        })
+        .count();
+    let releases = first
+        .trace
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind(),
+                TraceEventKindV1::Barrier(barrier)
+                    if barrier.action() == BarrierActionV1::Release
+            )
+        })
+        .count();
+    assert_eq!((arrivals, releases), (2, 1));
+    assert!(
+        first
+            .trace
+            .events()
+            .iter()
+            .filter(|event| { matches!(event.kind(), TraceEventKindV1::Barrier(_)) })
+            .all(|event| event.site() == Some(barrier_claim))
+    );
+    assert!(first.trace.events().iter().any(|event| {
+        matches!(
+            event.kind(),
+            TraceEventKindV1::Memory(memory)
+                if memory.address_space() == AddressSpaceV1::Workgroup
+                    && memory.kind() == MemoryAccessKindV1::Read
+        )
+    }));
+
+    let truncated = simulate_with_semantic_trace_v2(
+        &module,
+        &request(),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        profile(WaveWidthV1::Wave32, 3),
+    )
+    .unwrap();
+    assert!(matches!(
+        truncated.trace.header().completeness(),
+        TraceCompletenessV1::Truncated { .. }
+    ));
+    assert!(encode_trace_v2(&truncated.trace).is_ok());
 }
 
 fn profile(wave_width: WaveWidthV1, max_events: u64) -> SimulationTraceProfileV1 {

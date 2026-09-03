@@ -1131,16 +1131,16 @@ mod tests {
                         )
                     })
                     .collect();
-                if matches!(mutation, HostileMutation::CorrelationMultiplicity) {
-                    if let Some(original) = selected_original {
-                        correlations.push(rebuilt_correlation(
-                            original,
-                            unused_catalog_record_ordinal,
-                            target_kir,
-                            mutation,
-                            false,
-                        ));
-                    }
+                if matches!(mutation, HostileMutation::CorrelationMultiplicity)
+                    && let Some(original) = selected_original
+                {
+                    correlations.push(rebuilt_correlation(
+                        original,
+                        unused_catalog_record_ordinal,
+                        target_kir,
+                        mutation,
+                        false,
+                    ));
                 }
                 SourceIsaCharacteristicTargetV1::new(kind, target_kir, correlations).unwrap()
             })

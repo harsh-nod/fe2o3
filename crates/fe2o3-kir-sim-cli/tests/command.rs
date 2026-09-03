@@ -231,7 +231,7 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT]]\n"
+            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH | --bundle-v5 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
         );
         assert!(output.stderr.is_empty());
     }
@@ -691,6 +691,86 @@ fn seeded_exploration_is_bounded_agent_native_and_exactly_replayable() {
     assert!(!rejected.status.success());
     let rejected: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
     assert_eq!(rejected["kind"], "schedule_binding_mismatch");
+}
+
+#[test]
+fn failure_reduction_is_agent_readable_and_cli_replayable() {
+    let directory = TestDirectory::new();
+    let kir = directory.path().join("race.kir");
+    let request = directory.path().join("race-request.json");
+    let report = directory.path().join("failure.json");
+    fs::write(
+        &kir,
+        VerifiedCanonicalKernelIrV7::from_module(conflicting_store_module("race_impl"))
+            .unwrap()
+            .into_canonical_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"conflict","grid":[2,1,1],"workgroup":[2,1,1],"arguments":[{"kind":"buffer","element":"u32","access":"read_write","alignment":4,"bytes":"0x00000000"}]}"#,
+    )
+    .unwrap();
+
+    let reduced = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--reduce-failure")
+        .args(["--schedule-seed", "9", "--schedule-max-decisions", "16"])
+        .arg("--output")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(
+        reduced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reduced.stderr)
+    );
+    assert!(reduced.stdout.is_empty());
+    let report_bytes = fs::read(&report).unwrap();
+    assert!(!report_bytes.ends_with(b"\n"));
+    let report_json: serde_json::Value = serde_json::from_slice(&report_bytes).unwrap();
+    assert_eq!(
+        report_json["schema"],
+        "fe2o3-simulation-failure-reduction-v1"
+    );
+    assert_eq!(report_json["fingerprint"]["class"], "data_race");
+    assert_eq!(report_json["coverage"]["one_shorter_checked"], true);
+    assert_eq!(report_json["grants_execution_authority"], false);
+    assert_eq!(report_json["predicts_hardware_timing"], false);
+
+    let replayed = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-failure-reduction")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+    assert_eq!(replayed.stdout, report_bytes);
+
+    let hostile = directory.path().join("hostile.json");
+    let mut noncanonical = fs::read(&report).unwrap();
+    noncanonical.insert(0, b' ');
+    fs::write(&hostile, noncanonical).unwrap();
+    let rejected = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-failure-reduction")
+        .arg(&hostile)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
 }
 
 #[test]

@@ -86,3 +86,45 @@ The API therefore makes hard false claims for complete instruction coverage, a p
 live-PC ownership, semantic refinement, optimized/final LLVM custody, debugger authority, profiler
 authority, publication authority, and runtime authority. V9 production admission and V9 wire claims
 remain typed unavailable rather than inferred or admitted.
+
+## Production kernel-family acceptance
+
+The finalizer real-Worker conformance matrix covers three independently
+generated canonical KIR V8 shapes:
+
+- a scalar-elementwise checked-arithmetic fixture;
+- an induction fixture with a uniform workgroup barrier; and
+- a tiled-coordinate fixture retaining divide/remainder row and column operations.
+
+Each shape retains the exact production u32-induction custody required by the current V4
+MIR-to-KIR correspondence. It is then independently built for gfx942 and gfx950 through target
+binding, semantic-anchor LLVM lowering, the pinned LLVM Worker, final-HSACO inspection, correlation
+admission, and catalog projection. This is intentionally a reusable family-case
+harness: family inputs are canonical semantic-MIR fixtures, not ordinary
+attributed Rust source, hand-authored catalog records, or patched map bytes.
+
+For every admitted family/target pair the test requires at least one exact
+Source-to-MIR-to-neutral-KIR-to-target-KIR-to-compiler-handoff-LLVM-to-sparse-ISA witness and
+reverses its aligned ISA point back to the identical source record. It exercises every catalog
+query index, canonical wire re-admission, distinct family KIR identities, and fail-closed
+cross-family and cross-target substitution. Across the pinned matrix it requires the backend to
+expose coalesced and eliminated outcomes rather than silently reducing them to a one-to-one
+presentation. `Duplicated` is an exact representable producer capability, and independent
+producer/parser tests preserve duplicate and duplicated-and-coalesced cardinality, but no current
+ordinary-source or canonical semantic-MIR real-Worker fixture has produced an observed duplicated
+round trip. The general hostile suite separately substitutes semantic maps and final artifacts
+before admission.
+
+The matrix does not widen catalog authority. In particular, the workgroup barrier proves that the
+compiled module is a cooperative kernel family; the V1 source projection continues to cover exact
+semantic statement spans and does not invent source provenance for call terminators. Records with
+no admitted source statement remain explicit `NoSourceProvenance` observations. The matrix makes no
+claim about complete machine-instruction coverage, optimized/final LLVM custody, scheduling,
+live-PC ownership, runtime execution, or performance.
+
+Ordinary attributed-Rust acceptance is a separate protected matrix in
+`cargo-fe2o3`. It drives the elementwise fill, workgroup-reduction, and tiled
+BF16 GEMM source units through the sealed production build and Broker V3
+observer path on `gfx942` and `gfx950`. Its adapter is implemented, but its
+six-cell protected run remains unavailable until the qualified authority
+service supplies all required environment bindings.

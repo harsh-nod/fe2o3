@@ -1,32 +1,40 @@
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BinaryOp,
-    BlockId, CheckedBinaryOperator, ComparePredicate, Constant, Convergence, DiagnosticCode, Fence,
-    Function, IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
-    ScalarType, Signature, SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type,
-    UnaryOp, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, WaveOperation, WaveOperationKind,
-    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
-    verify_module,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
+    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CheckedBinaryOperator, ComparePredicate,
+    Constant, Convergence, DiagnosticCode, Fence, Function, IndexKind, IntegerSwitchCase,
+    IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess,
+    MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
-    EventPolicyV1, MAX_REPORTED_UNSUPPORTED_FINDINGS_V1,
-    MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,
-    PersistedSimulationScheduleArtifactV1, PersistedSimulationScheduleBindingV1,
-    PersistedSimulationScheduleCodecErrorV1, PersistedSimulationScheduleDocumentV1, ScalarBitsV1,
-    SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
-    SimulationConflictAssessmentV1, SimulationDebugCaptureLimitsV1, SimulationDebugMemoryAccessV1,
-    SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSinkControlV1,
-    SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
-    SimulationEventSinkV1, SimulationEventV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionOutcomeV1, SimulationExplorationRequestV1, SimulationExplorationV1,
-    SimulationLimitsV1, SimulationOutOfBoundsV2, SimulationPreflightErrorV1,
-    SimulationRaceAssessmentV1, SimulationRequestV1, SimulationScheduleDecisionV1,
-    SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
-    SimulationTargetV1, UnsupportedFeatureV1,
+    DynamicWorkgroupMemoryRequestV1, DynamicWorkgroupMemoryUnavailableV1, EventPolicyV1,
+    MAX_REPORTED_UNSUPPORTED_FINDINGS_V1, MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1,
+    MAX_SCHEDULE_DECISIONS_V1, PersistedSimulationScheduleArtifactV1,
+    PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleCodecErrorV1,
+    PersistedSimulationScheduleDocumentV1, ScalarBitsV1, SharedBufferV1,
+    SimulationAdmissionErrorV1, SimulationArgumentV1, SimulationConflictAssessmentV1,
+    SimulationDebugCaptureLimitsV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
+    SimulationDebugRecordV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
+    SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1, SimulationEventSinkV1,
+    SimulationEventV1, SimulationExecutionErrorKindV1, SimulationExecutionOutcomeV1,
+    SimulationExplorationRequestV1, SimulationExplorationV1, SimulationFailureReductionLimitsV1,
+    SimulationFailureReductionReportV1, SimulationFailureScheduleV1, SimulationLimitsV1,
+    SimulationOutOfBoundsV2, SimulationPreflightErrorV1, SimulationRaceAssessmentV1,
+    SimulationRequestV1, SimulationScheduleDecisionV1, SimulationScheduleIdentityV1,
+    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationTargetV1,
+    UnsupportedFeatureV1,
 };
+
+fn reduction_limits(max_decisions: usize) -> SimulationFailureReductionLimitsV1 {
+    SimulationFailureReductionLimitsV1::new(max_decisions + 2, max_decisions, max_decisions * 3)
+        .unwrap()
+}
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
@@ -1437,6 +1445,77 @@ fn reaching_unreachable_is_a_site_and_invocation_bound_dynamic_error() {
     assert_eq!(
         error.kind,
         SimulationExecutionErrorKindV1::ReachedUnreachable
+    );
+}
+
+#[test]
+fn canonical_amdgpu_trap_is_a_dynamic_error_instead_of_an_external_call_gap() {
+    let trap = AmdGpuDiagnosticOperation::Trap;
+    let mut block = BasicBlock::new(BlockId(7));
+    block.operations.push(trap.operation(None));
+    block.terminator = Some(Terminator::Unreachable);
+    let entry = Function::kernel_entry(
+        "trap_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::trap");
+    module.functions.extend([entry, trap.declaration()]);
+    module
+        .kernels
+        .push(Kernel::new("trap", "trap_impl", dynamic_domain_1d()));
+    let error = admitted(module)
+        .simulate(
+            &SimulationRequestV1::new("trap", [1, 1, 1], [1, 1, 1], vec![]),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .expect_err("reaching the canonical AMDGPU trap fails dynamically");
+    let SimulationErrorV1::Execution(error) = error else {
+        panic!("expected dynamic trap error")
+    };
+    assert_eq!(error.invocation.unwrap().global, [0, 0, 0]);
+    assert_eq!(error.site.unwrap().operation, Some(0));
+    assert_eq!(
+        error.kind,
+        SimulationExecutionErrorKindV1::ReachedUnreachable
+    );
+}
+
+#[test]
+fn other_amdgpu_diagnostics_remain_typed_unavailable() {
+    let debug_trap = AmdGpuDiagnosticOperation::DebugTrap;
+    let mut block = BasicBlock::new(BlockId(7));
+    block.operations.push(debug_trap.operation(None));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "debug_trap_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::debug-trap");
+    module.functions.extend([entry, debug_trap.declaration()]);
+    module.kernels.push(Kernel::new(
+        "debug_trap",
+        "debug_trap_impl",
+        dynamic_domain_1d(),
+    ));
+    let error = admitted(module)
+        .preflight(
+            &SimulationRequestV1::new("debug_trap", [1, 1, 1], [1, 1, 1], vec![]),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .expect_err("non-terminating diagnostics remain unavailable");
+    let SimulationPreflightErrorV1::Unsupported(report) = error else {
+        panic!("expected typed external-call finding")
+    };
+    assert_eq!(report.total_findings(), 1);
+    assert_eq!(
+        report.findings()[0].feature,
+        UnsupportedFeatureV1::ExternalCall(debug_trap.intrinsic_function_id())
     );
 }
 
@@ -2974,6 +3053,597 @@ fn lds_exchange_module(include_barrier: bool) -> Module {
     module
 }
 
+fn workgroup_scan_module(scalar: ScalarType, exclusive: bool) -> Module {
+    const LANES: u32 = 8;
+    let scalar_ty = Type::Scalar(scalar);
+    let global_pointer = Type::pointer(
+        scalar_ty.clone(),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let workgroup_pointer = Type::pointer(
+        scalar_ty.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let mut next_value = 2_u32;
+    let mut block = BasicBlock::new(BlockId(0));
+    macro_rules! push {
+        ($ty:expr, $kind:expr $(,)?) => {{
+            let id = ValueId(next_value);
+            next_value += 1;
+            block
+                .operations
+                .push(Operation::effect_free(ValueDef::new(id, $ty), $kind));
+            id
+        }};
+    }
+    let scratch = push!(
+        workgroup_pointer.clone(),
+        OperationKind::WorkgroupMemory(WorkgroupMemory {
+            element: scalar_ty.clone(),
+            extent: WorkgroupMemoryExtent::Static(LANES),
+            alignment: 4,
+        }),
+    );
+    let rank = push!(
+        Type::INDEX,
+        OperationKind::Intrinsic(IntrinsicOperation::new(
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+            Type::INDEX,
+        )),
+    );
+    let input_pointer = push!(
+        global_pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: ValueId(0),
+            offset: rank,
+        },
+    );
+    let input = push!(
+        scalar_ty.clone(),
+        OperationKind::Load {
+            pointer: input_pointer,
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    );
+    let initial_pointer = push!(
+        workgroup_pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: scratch,
+            offset: rank,
+        },
+    );
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::Store {
+            pointer: initial_pointer,
+            value: input,
+            access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+        },
+    ));
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    ));
+
+    let mut offset = 1_u32;
+    while offset < LANES {
+        let offset_value = push!(
+            Type::INDEX,
+            OperationKind::Constant(Constant::Index(u64::from(offset))),
+        );
+        let active = push!(
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::GreaterThanOrEqual,
+                lhs: rank,
+                rhs: offset_value,
+            },
+        );
+        let safe_rank = push!(
+            Type::INDEX,
+            OperationKind::Select {
+                condition: active,
+                true_value: rank,
+                false_value: offset_value,
+            },
+        );
+        let safe_source = push!(
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Subtract,
+                lhs: safe_rank,
+                rhs: offset_value,
+            },
+        );
+        let current_pointer = push!(
+            workgroup_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: rank,
+            },
+        );
+        let current = push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: current_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        );
+        let prefix_pointer = push!(
+            workgroup_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: safe_source,
+            },
+        );
+        let prefix = push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: prefix_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        );
+        let sum = push!(
+            scalar_ty.clone(),
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: prefix,
+                rhs: current,
+            },
+        );
+        let selected = push!(
+            scalar_ty.clone(),
+            OperationKind::Select {
+                condition: active,
+                true_value: sum,
+                false_value: current,
+            },
+        );
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ));
+        let output_pointer = push!(
+            workgroup_pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: rank,
+            },
+        );
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::Store {
+                pointer: output_pointer,
+                value: selected,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ));
+        block.operations.push(Operation::new(
+            Vec::new(),
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ));
+        offset <<= 1;
+    }
+
+    let result = if exclusive {
+        let one = push!(Type::INDEX, OperationKind::Constant(Constant::Index(1)),);
+        let has_predecessor = push!(
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::GreaterThanOrEqual,
+                lhs: rank,
+                rhs: one,
+            },
+        );
+        let safe_rank = push!(
+            Type::INDEX,
+            OperationKind::Select {
+                condition: has_predecessor,
+                true_value: rank,
+                false_value: one,
+            },
+        );
+        let safe_predecessor = push!(
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Subtract,
+                lhs: safe_rank,
+                rhs: one,
+            },
+        );
+        let prior_pointer = push!(
+            workgroup_pointer,
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: safe_predecessor,
+            },
+        );
+        let prior = push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: prior_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        );
+        let identity = push!(
+            scalar_ty.clone(),
+            OperationKind::Constant(match scalar {
+                ScalarType::U32 => Constant::U32(0),
+                ScalarType::I32 => Constant::I32(0),
+                ScalarType::F32 => Constant::F32Bits(0.0_f32.to_bits()),
+                _ => unreachable!("scan test uses the admitted scalar matrix"),
+            }),
+        );
+        push!(
+            scalar_ty.clone(),
+            OperationKind::Select {
+                condition: has_predecessor,
+                true_value: prior,
+                false_value: identity,
+            },
+        )
+    } else {
+        let result_pointer = push!(
+            workgroup_pointer,
+            OperationKind::GetElementPointer {
+                base: scratch,
+                offset: rank,
+            },
+        );
+        push!(
+            scalar_ty.clone(),
+            OperationKind::Load {
+                pointer: result_pointer,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        )
+    };
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    ));
+    let result_pointer = push!(
+        global_pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: ValueId(1),
+            offset: rank,
+        },
+    );
+    block.operations.push(Operation::new(
+        Vec::new(),
+        OperationKind::Store {
+            pointer: result_pointer,
+            value: result,
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    block.terminator = Some(Terminator::Return { values: Vec::new() });
+    let _ = next_value;
+
+    let capabilities = std::collections::BTreeSet::from([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::WorkgroupBarrier,
+    ]);
+    let mut function = Function::kernel_entry(
+        "workgroup_scan_impl",
+        Signature::new(vec![global_pointer.clone(), global_pointer], Vec::new()),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    function.required_capabilities = capabilities.clone();
+    let mut kernel = Kernel::new("workgroup_scan", "workgroup_scan_impl", dynamic_domain_1d());
+    kernel.workgroup_size = Some(WorkgroupSize::new(LANES, 1, 1));
+    kernel.required_capabilities = capabilities.clone();
+    let mut module = Module::new("sim-tests::workgroup-scan");
+    module.required_capabilities = capabilities;
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn scan_buffer_v1(scalar: ScalarType, bits: &[u32]) -> BufferArgumentV1 {
+    let target = SimulationTargetV1::amdgpu_64();
+    let values = bits
+        .iter()
+        .map(|bits| ScalarBitsV1::new(scalar, u128::from(*bits), target).unwrap())
+        .collect::<Vec<_>>();
+    BufferArgumentV1::from_scalars(AccessMode::ReadWrite, 4, &values, target).unwrap()
+}
+
+fn scan_request_v1(scalar: ScalarType, bits: &[u32]) -> SimulationRequestV1 {
+    SimulationRequestV1::new(
+        "workgroup_scan",
+        [8, 1, 1],
+        [8, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, bits)),
+            SimulationArgumentV1::Buffer(scan_buffer_v1(scalar, &[0; 8])),
+        ],
+    )
+}
+
+#[test]
+fn workgroup_scans_are_exact_under_canonical_seeded_and_replay_schedules() {
+    for scalar in [ScalarType::U32, ScalarType::I32, ScalarType::F32] {
+        let input = match scalar {
+            ScalarType::U32 => (1_u32..=8).collect::<Vec<_>>(),
+            ScalarType::I32 => [-4_i32, 7, -2, 9, -3, 1, 6, -5]
+                .map(|value| value as u32)
+                .to_vec(),
+            ScalarType::F32 => [1.0_f32; 8].map(f32::to_bits).to_vec(),
+            _ => unreachable!(),
+        };
+        for exclusive in [false, true] {
+            let module = admitted(workgroup_scan_module(scalar, exclusive));
+            let request = scan_request_v1(scalar, &input);
+            let canonical = module
+                .simulate(
+                    &request,
+                    SimulationTargetV1::amdgpu_64(),
+                    SimulationLimitsV1::default(),
+                )
+                .unwrap();
+            let seeded = module
+                .simulate_scheduled(
+                    &request,
+                    SimulationTargetV1::amdgpu_64(),
+                    SimulationLimitsV1::default(),
+                    SimulationScheduleRequestV1::RecordSeeded {
+                        seed: 0x5ca1,
+                        max_decisions: 10_000,
+                    },
+                )
+                .unwrap();
+            let replayed = module
+                .simulate_scheduled(
+                    &request,
+                    SimulationTargetV1::amdgpu_64(),
+                    SimulationLimitsV1::default(),
+                    SimulationScheduleRequestV1::Replay(seeded.schedule_record().unwrap()),
+                )
+                .unwrap();
+            assert_eq!(canonical.arguments(), seeded.arguments());
+            assert_eq!(seeded.arguments(), replayed.arguments());
+
+            let expected = match scalar {
+                ScalarType::U32 => {
+                    let inclusive = [1_u32, 3, 6, 10, 15, 21, 28, 36];
+                    if exclusive {
+                        [0_u32, 1, 3, 6, 10, 15, 21, 28]
+                    } else {
+                        inclusive
+                    }
+                }
+                ScalarType::I32 => {
+                    let inclusive = [-4_i32, 3, 1, 10, 7, 8, 14, 9].map(|value| value as u32);
+                    if exclusive {
+                        [0_i32, -4, 3, 1, 10, 7, 8, 14].map(|value| value as u32)
+                    } else {
+                        inclusive
+                    }
+                }
+                ScalarType::F32 => {
+                    if exclusive {
+                        [0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0].map(f32::to_bits)
+                    } else {
+                        [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0].map(f32::to_bits)
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(words(canonical.buffer(1).unwrap().bytes()), expected);
+        }
+    }
+}
+
+#[test]
+fn workgroup_scan_debug_records_retain_lane_lds_barrier_and_schedule_evidence() {
+    let module = admitted(workgroup_scan_module(ScalarType::U32, false));
+    let request = scan_request_v1(ScalarType::U32, &(1_u32..=8).collect::<Vec<_>>());
+    let mut debug = DebugCollector::default();
+    let execution = module
+        .simulate_debugged_scheduled_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 0xd38,
+                max_decisions: 10_000,
+            },
+            SimulationDebugCaptureLimitsV1::new(64, 4_096, 64, 65_536).unwrap(),
+            &mut debug,
+        )
+        .unwrap();
+    assert!(debug.0.iter().any(|record| {
+        matches!(
+            record.kind,
+            SimulationDebugRecordKindV1::Memory {
+                address_space: AddressSpace::Workgroup,
+                ..
+            }
+        )
+    }));
+    assert!(debug.0.iter().any(|record| {
+        matches!(
+            record.kind,
+            SimulationDebugRecordKindV1::WorkgroupBarrier {
+                action: fe2o3_kir_sim::SimulationDebugBarrierActionV1::Release,
+                participants: 8,
+                ..
+            }
+        )
+    }));
+    assert!(debug.0.iter().any(|record| record.invocation.local[0] == 7));
+    assert!(debug.0.iter().all(|record| {
+        record.schedule.identity
+            == SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1
+            && record.schedule.decision_ordinal < execution.schedule_coverage().decisions()
+    }));
+}
+
+#[test]
+fn workgroup_scan_rejects_workgroup_and_replay_input_substitution() {
+    let module = admitted(workgroup_scan_module(ScalarType::U32, false));
+    let request = scan_request_v1(ScalarType::U32, &(1_u32..=8).collect::<Vec<_>>());
+    let wrong_workgroup = SimulationRequestV1::new(
+        "workgroup_scan",
+        [8, 1, 1],
+        [4, 1, 1],
+        request.arguments.clone(),
+    );
+    assert!(matches!(
+        module.preflight(
+            &wrong_workgroup,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        ),
+        Err(SimulationPreflightErrorV1::WorkgroupMismatch { .. })
+    ));
+
+    let recorded = module
+        .simulate_scheduled(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordCanonical {
+                max_decisions: 10_000,
+            },
+        )
+        .unwrap();
+    let substituted = scan_request_v1(ScalarType::U32, &[9, 2, 3, 4, 5, 6, 7, 8]);
+    assert!(matches!(
+        module.simulate_scheduled(
+            &substituted,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::Replay(recorded.schedule_record().unwrap()),
+        ),
+        Err(SimulationErrorV1::Execution(
+            fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::ScheduleReplay(
+                    SimulationScheduleReplayErrorV1::ContextMismatch
+                ),
+                ..
+            }
+        ))
+    ));
+
+    let divergent = admitted(barrier_failure_module(false));
+    assert!(matches!(
+        divergent.simulate(
+            &SimulationRequestV1::new("barrier_failure", [8, 1, 1], [8, 1, 1], Vec::new()),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        ),
+        Err(SimulationErrorV1::Execution(
+            fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(_),
+                ..
+            }
+        ))
+    ));
+}
+
+fn dynamic_lds_exchange_module(include_barrier: bool) -> Module {
+    let mut module = lds_exchange_module(include_barrier);
+    let memory = module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .iter_mut()
+        .find_map(|operation| match &mut operation.kind {
+            OperationKind::WorkgroupMemory(memory) => Some(memory),
+            _ => None,
+        })
+        .expect("workgroup-memory declaration");
+    memory.extent = WorkgroupMemoryExtent::Dynamic;
+    module
+        .required_capabilities
+        .insert(TargetCapability::DynamicWorkgroupMemory);
+    module.functions[0]
+        .required_capabilities
+        .insert(TargetCapability::DynamicWorkgroupMemory);
+    module.kernels[0]
+        .required_capabilities
+        .insert(TargetCapability::DynamicWorkgroupMemory);
+    module
+}
+
+fn called_dynamic_workgroup_memory_module(ambiguous: bool) -> Module {
+    let mut module = unsupported_workgroup_memory_module(
+        Type::Scalar(ScalarType::U32),
+        WorkgroupMemoryExtent::Dynamic,
+    );
+    let entry = module.functions[0].body.as_mut().unwrap();
+    let dynamic = entry.blocks[0].operations[0].clone();
+    entry.blocks[0].operations = if ambiguous {
+        vec![
+            dynamic.clone(),
+            Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: "dynamic_lds_helper".into(),
+                    arguments: vec![],
+                },
+            ),
+        ]
+    } else {
+        vec![Operation::new(
+            vec![],
+            OperationKind::Call {
+                callee: "dynamic_lds_helper".into(),
+                arguments: vec![],
+            },
+        )]
+    };
+    let mut helper_block = BasicBlock::new(BlockId(0));
+    helper_block.operations.push(dynamic);
+    helper_block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut helper = Function::internal_helper(
+        "dynamic_lds_helper",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![helper_block],
+    );
+    helper.required_capabilities.extend([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::DynamicWorkgroupMemory,
+    ]);
+    module.functions.push(helper);
+    module
+}
+
 fn barrier_failure_module(mismatch: bool) -> Module {
     let barrier = |address_spaces| {
         Operation::new(
@@ -3186,6 +3856,47 @@ fn uninitialized_workgroup_memory_module() -> Module {
     module
 }
 
+fn dynamic_partial_write_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(
+        scalar.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let mut module =
+        unsupported_workgroup_memory_module(scalar.clone(), WorkgroupMemoryExtent::Dynamic);
+    let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
+    block.operations.extend([
+        op(1, scalar.clone(), OperationKind::Constant(Constant::U32(7))),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(0),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ),
+        op(2, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+        op(
+            3,
+            pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(2),
+            },
+        ),
+        op(
+            4,
+            scalar,
+            OperationKind::Load {
+                pointer: ValueId(3),
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+            },
+        ),
+    ]);
+    module
+}
+
 #[test]
 fn workgroup_memory_barrier_exchanges_across_full_and_partial_workgroups() {
     let admitted = admitted(lds_exchange_module(true));
@@ -3234,6 +3945,412 @@ fn workgroup_memory_barrier_exchanges_across_full_and_partial_workgroups() {
         })
         .count();
     assert_eq!(creates, 3, "one static allocation per site and workgroup");
+}
+
+#[test]
+fn explicit_dynamic_workgroup_memory_exchanges_across_partial_workgroups() {
+    let admitted = admitted(dynamic_lds_exchange_module(true));
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [10, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 10]))],
+    );
+    let dynamic = DynamicWorkgroupMemoryRequestV1::new(16);
+    let mut events = Collector::default();
+    let execution = admitted
+        .simulate_observed_with_dynamic_workgroup_memory_and_sink(
+            &request,
+            dynamic,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut events,
+        )
+        .expect("explicit dynamic LDS exchange executes");
+    assert_eq!(execution.dynamic_workgroup_memory(), Some(dynamic));
+    assert_eq!(
+        words(execution.buffer(0).unwrap().bytes()),
+        vec![0, 0, 0, 0, 4, 4, 4, 4, 8, 8]
+    );
+    assert_eq!(execution.workgroups_visited(), 3);
+    let dynamic_allocations = events
+        .0
+        .iter()
+        .filter_map(|event| match event.kind {
+            SimulationEventKindV1::AllocationCreated {
+                address_space: AddressSpace::Workgroup,
+                bytes: 16,
+                allocation,
+            } => Some(allocation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dynamic_allocations.len(),
+        3,
+        "one dynamic segment is created for each workgroup generation"
+    );
+    for allocation in dynamic_allocations {
+        assert!(events.0.iter().any(|event| matches!(
+            event.kind,
+            SimulationEventKindV1::AllocationReleased { allocation: released }
+                if released == allocation
+        )));
+    }
+}
+
+#[test]
+fn explicit_dynamic_workgroup_memory_preserves_v9_and_v10_custody() {
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [4, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 4]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let module = dynamic_lds_exchange_module(true);
+    let v9 = AdmittedSimulationModuleV1::admit_v9(
+        VerifiedCanonicalKernelIrV9::from_module(module.clone()).unwrap(),
+        limits,
+    )
+    .unwrap();
+    let v10 = AdmittedSimulationModuleV1::admit_v10(
+        VerifiedCanonicalKernelIrV10::from_module(module).unwrap(),
+        limits,
+    )
+    .unwrap();
+    for (wire_version, admitted) in [(9, v9), (10, v10)] {
+        let execution = admitted
+            .simulate_with_dynamic_workgroup_memory(
+                &request,
+                DynamicWorkgroupMemoryRequestV1::new(16),
+                target,
+                limits,
+            )
+            .unwrap();
+        assert_eq!(execution.identity().wire_version(), wire_version);
+        assert_eq!(words(execution.buffer(0).unwrap().bytes()), vec![0; 4]);
+    }
+}
+
+#[test]
+fn explicit_dynamic_workgroup_memory_validates_layout_and_resource_bounds() {
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let request = SimulationRequestV1::new("unsupported_lds", [1, 1, 1], [1, 1, 1], vec![]);
+    for scalar in [
+        ScalarType::U8,
+        ScalarType::U16,
+        ScalarType::U32,
+        ScalarType::U64,
+    ] {
+        admitted(unsupported_workgroup_memory_module(
+            Type::Scalar(scalar),
+            WorkgroupMemoryExtent::Dynamic,
+        ))
+        .simulate_with_dynamic_workgroup_memory(
+            &request,
+            DynamicWorkgroupMemoryRequestV1::new(8),
+            target,
+            limits,
+        )
+        .expect("scalar dynamic segment layout executes");
+    }
+
+    let module = admitted(unsupported_workgroup_memory_module(
+        Type::Scalar(ScalarType::U32),
+        WorkgroupMemoryExtent::Dynamic,
+    ));
+    module
+        .simulate_with_dynamic_workgroup_memory(
+            &request,
+            DynamicWorkgroupMemoryRequestV1::new(0),
+            target,
+            limits,
+        )
+        .expect("zero-byte segment is valid when never dereferenced");
+    assert!(matches!(
+        module.preflight_with_dynamic_workgroup_memory(
+            &request,
+            DynamicWorkgroupMemoryRequestV1::new(10),
+            target,
+            limits,
+        ),
+        Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+            DynamicWorkgroupMemoryUnavailableV1::ByteExtentNotDivisible {
+                byte_extent: 10,
+                element_bytes: 4,
+                ..
+            }
+        ))
+    ));
+    assert!(matches!(
+        module.preflight_with_dynamic_workgroup_memory(
+            &request,
+            DynamicWorkgroupMemoryRequestV1::new(4),
+            target,
+            limits,
+        ),
+        Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+            DynamicWorkgroupMemoryUnavailableV1::ByteExtentNotAligned {
+                byte_extent: 4,
+                alignment: 8,
+                ..
+            }
+        ))
+    ));
+    assert_eq!(
+        module
+            .preflight_with_dynamic_workgroup_memory(
+                &request,
+                DynamicWorkgroupMemoryRequestV1::new(16),
+                target,
+                SimulationLimitsV1 {
+                    max_allocation_bytes: 15,
+                    ..limits
+                },
+            )
+            .unwrap_err(),
+        SimulationPreflightErrorV1::ResourceLimit {
+            resource: "dynamic workgroup allocation bytes",
+            actual: 16,
+            limit: 15,
+        }
+    );
+}
+
+#[test]
+fn explicit_dynamic_workgroup_memory_rejects_missing_ambiguous_and_undersized_bases() {
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let empty = admitted(empty_kernel_module(
+        "no_dynamic_lds",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ));
+    assert_eq!(
+        empty
+            .preflight_with_dynamic_workgroup_memory(
+                &SimulationRequestV1::new("no_dynamic_lds", [1, 1, 1], [1, 1, 1], vec![]),
+                DynamicWorkgroupMemoryRequestV1::new(0),
+                target,
+                limits,
+            )
+            .unwrap_err(),
+        SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+            DynamicWorkgroupMemoryUnavailableV1::MissingReachableBase
+        )
+    );
+
+    let called = admitted(called_dynamic_workgroup_memory_module(false));
+    called
+        .simulate_with_dynamic_workgroup_memory(
+            &SimulationRequestV1::new("unsupported_lds", [2, 1, 1], [2, 1, 1], vec![]),
+            DynamicWorkgroupMemoryRequestV1::new(8),
+            target,
+            limits,
+        )
+        .expect("one dynamic base in a reachable helper is unambiguous");
+    assert!(matches!(
+        admitted(called_dynamic_workgroup_memory_module(true))
+            .preflight_with_dynamic_workgroup_memory(
+                &SimulationRequestV1::new("unsupported_lds", [1, 1, 1], [1, 1, 1], vec![]),
+                DynamicWorkgroupMemoryRequestV1::new(8),
+                target,
+                limits,
+            ),
+        Err(SimulationPreflightErrorV1::DynamicWorkgroupMemory(
+            DynamicWorkgroupMemoryUnavailableV1::AmbiguousReachableBases { .. }
+        ))
+    ));
+
+    let exchange = admitted(dynamic_lds_exchange_module(true));
+    assert!(matches!(
+        exchange.simulate_with_dynamic_workgroup_memory(
+            &SimulationRequestV1::new(
+                "lds_exchange",
+                [4, 1, 1],
+                [4, 1, 1],
+                vec![SimulationArgumentV1::Buffer(u32_buffer(&[0; 4]))],
+            ),
+            DynamicWorkgroupMemoryRequestV1::new(8),
+            target,
+            limits,
+        ),
+        Err(SimulationErrorV1::Execution(
+            fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::OutOfBounds { .. },
+                ..
+            }
+        ))
+    ));
+}
+
+#[test]
+fn dynamic_workgroup_memory_preserves_partial_initialization_and_publication_failures() {
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let partial = admitted(dynamic_partial_write_module());
+    let error = partial
+        .simulate_with_dynamic_workgroup_memory(
+            &SimulationRequestV1::new("unsupported_lds", [1, 1, 1], [1, 1, 1], vec![]),
+            DynamicWorkgroupMemoryRequestV1::new(8),
+            target,
+            limits,
+        )
+        .expect_err("writing one element does not initialize adjacent LDS bytes");
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::UninitializedRead { .. },
+            ..
+        })
+    ));
+
+    let unpublished = admitted(dynamic_lds_exchange_module(false));
+    let error = unpublished
+        .simulate_with_dynamic_workgroup_memory(
+            &SimulationRequestV1::new(
+                "lds_exchange",
+                [2, 1, 1],
+                [2, 1, 1],
+                vec![SimulationArgumentV1::Buffer(u32_buffer(&[0; 2]))],
+            ),
+            DynamicWorkgroupMemoryRequestV1::new(8),
+            target,
+            limits,
+        )
+        .expect_err("cross-lane dynamic LDS requires barrier publication");
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::WorkgroupUseBeforePublish { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn dynamic_workgroup_memory_schedule_debug_and_reducer_bind_the_exact_extent() {
+    let admitted = admitted(dynamic_lds_exchange_module(true));
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [4, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 4]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let dynamic = DynamicWorkgroupMemoryRequestV1::new(16);
+    let recorded = admitted
+        .simulate_scheduled_with_dynamic_workgroup_memory(
+            &request,
+            dynamic,
+            target,
+            limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 91,
+                max_decisions: 32,
+            },
+        )
+        .unwrap();
+    let record = recorded.schedule_record().unwrap();
+    admitted
+        .simulate_scheduled_with_dynamic_workgroup_memory(
+            &request,
+            dynamic,
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(record),
+        )
+        .expect("same dynamic extent replays");
+    assert!(matches!(
+        admitted.simulate_scheduled_with_dynamic_workgroup_memory(
+            &request,
+            DynamicWorkgroupMemoryRequestV1::new(32),
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(record),
+        ),
+        Err(SimulationErrorV1::Execution(
+            fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                kind: SimulationExecutionErrorKindV1::ScheduleReplay(
+                    SimulationScheduleReplayErrorV1::ContextMismatch
+                ),
+                ..
+            }
+        ))
+    ));
+
+    let mut debug = DebugCollector::default();
+    admitted
+        .simulate_debugged_with_dynamic_workgroup_memory_and_sink(
+            &request,
+            dynamic,
+            target,
+            limits,
+            SimulationDebugCaptureLimitsV1::new(16, 256, 16, 1_024).unwrap(),
+            &mut debug,
+        )
+        .expect("dynamic LDS uses the normal debugger path");
+    assert!(!debug.0.is_empty());
+
+    let exploration = admitted
+        .explore_seeded_schedules_with_dynamic_workgroup_memory(
+            &request,
+            dynamic,
+            target,
+            limits,
+            SimulationExplorationRequestV1::new(17, 2, 32, 64).unwrap(),
+        )
+        .expect("dynamic LDS uses the bounded exploration path");
+    assert_eq!(exploration.attempted(), 2);
+    assert_eq!(exploration.completed(), 2);
+    assert_eq!(exploration.failures(), 0);
+    let witness = exploration
+        .first_no_race()
+        .expect("exploration retains a replayable dynamic LDS witness");
+    admitted
+        .simulate_scheduled_with_dynamic_workgroup_memory(
+            &request,
+            dynamic,
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(witness.schedule()),
+        )
+        .expect("dynamic LDS exploration witness replays");
+
+    let failing_dynamic = DynamicWorkgroupMemoryRequestV1::new(8);
+    let report = admitted
+        .reduce_simulation_failure_with_dynamic_workgroup_memory(
+            &request,
+            failing_dynamic,
+            target,
+            limits,
+            SimulationFailureScheduleV1::Canonical,
+            reduction_limits(32),
+        )
+        .expect("dynamic LDS memory fault reduces");
+    assert_eq!(report.fingerprint().class(), "out_of_bounds");
+    assert_eq!(
+        admitted
+            .replay_simulation_failure_reduction_with_dynamic_workgroup_memory(
+                &request,
+                failing_dynamic,
+                target,
+                limits,
+                &report,
+            )
+            .unwrap(),
+        report.fingerprint().clone()
+    );
+    assert!(matches!(
+        admitted.replay_simulation_failure_reduction_with_dynamic_workgroup_memory(
+            &request, dynamic, target, limits, &report,
+        ),
+        Err(fe2o3_kir_sim::SimulationFailureReductionErrorV1::ReproducerMismatch)
+    ));
 }
 
 #[test]
@@ -7082,5 +8199,201 @@ fn atomic_event_budget_and_sink_rejection_fail_before_a_committed_observation() 
             kind: SimulationExecutionErrorKindV1::EventSinkFailure(_),
             ..
         })
+    ));
+}
+
+#[test]
+fn failure_reducer_minimizes_and_replays_memory_fault() {
+    let admitted = admitted(indexed_store_module());
+    let request = SimulationRequestV1::new(
+        "store",
+        [2, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[9]))],
+    );
+    let limits = SimulationLimitsV1::default();
+    let report = admitted
+        .reduce_simulation_failure(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Canonical,
+            reduction_limits(16),
+        )
+        .unwrap();
+    assert_eq!(report.fingerprint().class(), "out_of_bounds");
+    assert!(report.coverage().is_locally_minimal());
+    assert!(report.minimized_prefix().is_empty());
+    assert!(!report.reproducer_schedule().is_empty());
+    assert_eq!(
+        admitted
+            .replay_simulation_failure_reduction(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                limits,
+                &report,
+            )
+            .unwrap(),
+        report.fingerprint().clone()
+    );
+    assert!(!report.grants_execution_authority());
+    assert!(!report.predicts_hardware_timing());
+}
+
+#[test]
+fn failure_reducer_never_emits_a_report_for_a_successful_schedule() {
+    let module = admitted(empty_kernel_module(
+        "successful_reduction_input",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ));
+    let result = module.reduce_simulation_failure(
+        &SimulationRequestV1::new("successful_reduction_input", [1, 1, 1], [1, 1, 1], vec![]),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        SimulationFailureScheduleV1::Canonical,
+        reduction_limits(8),
+    );
+    assert!(matches!(
+        result,
+        Err(fe2o3_kir_sim::SimulationFailureReductionErrorV1::OriginalScheduleDidNotFail)
+    ));
+}
+
+#[test]
+fn failure_reducer_covers_barrier_and_seeded_race_failures() {
+    let limits = SimulationLimitsV1::default();
+    let barrier = admitted(barrier_failure_module(false));
+    let barrier_request = SimulationRequestV1::new("barrier_failure", [2, 1, 1], [2, 1, 1], vec![]);
+    let barrier_report = barrier
+        .reduce_simulation_failure(
+            &barrier_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: 17 },
+            reduction_limits(16),
+        )
+        .unwrap();
+    assert_eq!(
+        barrier_report.fingerprint().class(),
+        "divergent_workgroup_barrier"
+    );
+    assert!(barrier_report.coverage().is_locally_minimal());
+
+    let race = admitted(conflicting_store_module());
+    let race_request = SimulationRequestV1::new(
+        "conflict",
+        [2, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let race_report = race
+        .reduce_simulation_failure(
+            &race_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: 9 },
+            reduction_limits(16),
+        )
+        .unwrap();
+    assert_eq!(race_report.fingerprint().class(), "data_race");
+    assert!(race_report.fingerprint().related_site().is_some());
+    assert!(race_report.coverage().is_locally_minimal());
+    let recorded = race
+        .simulate_scheduled(
+            &race_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 9,
+                max_decisions: 16,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        recorded.schedule_record().unwrap().decisions(),
+        race_report.original_decisions()
+    );
+    assert_eq!(
+        race.replay_simulation_failure_reduction(
+            &race_request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            &race_report,
+        )
+        .unwrap(),
+        race_report.fingerprint().clone()
+    );
+}
+
+#[test]
+fn failure_reduction_report_is_canonical_and_identity_bound() {
+    let admitted = admitted(indexed_store_module());
+    let request = SimulationRequestV1::new(
+        "store",
+        [2, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[9]))],
+    );
+    let limits = SimulationLimitsV1::default();
+    let report = admitted
+        .reduce_simulation_failure(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            limits,
+            SimulationFailureScheduleV1::Seeded { seed: u64::MAX },
+            reduction_limits(16),
+        )
+        .unwrap();
+    let bytes = report.to_canonical_bytes().unwrap();
+    let decoded = SimulationFailureReductionReportV1::from_canonical_bytes(&bytes).unwrap();
+    assert_eq!(decoded, report);
+    let mut whitespace = bytes.clone();
+    whitespace.insert(0, b' ');
+    assert!(SimulationFailureReductionReportV1::from_canonical_bytes(&whitespace).is_err());
+    let mut mutated = bytes;
+    let marker = b"\"report_sha256\":\"";
+    let position = mutated
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .unwrap()
+        + marker.len();
+    mutated[position] = if mutated[position] == b'0' {
+        b'1'
+    } else {
+        b'0'
+    };
+    assert!(SimulationFailureReductionReportV1::from_canonical_bytes(&mutated).is_err());
+
+    let different_request = SimulationRequestV1::new(
+        "store",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[9]))],
+    );
+    assert!(
+        admitted
+            .replay_simulation_failure_reduction(
+                &different_request,
+                SimulationTargetV1::amdgpu_64(),
+                limits,
+                &report,
+            )
+            .is_err()
+    );
+
+    let tiny_resident = SimulationLimitsV1 {
+        max_resident_bytes: 1,
+        ..limits
+    };
+    assert!(matches!(
+        admitted.reduce_simulation_failure(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            tiny_resident,
+            SimulationFailureScheduleV1::Canonical,
+            reduction_limits(16),
+        ),
+        Err(fe2o3_kir_sim::SimulationFailureReductionErrorV1::ResidentLimit { limit: 1, .. })
     ));
 }

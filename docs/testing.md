@@ -6,6 +6,7 @@ fork-safe preflight:
 
 ```text
 cargo fmt --all -- --check
+bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
 ```
@@ -16,6 +17,13 @@ the full generic core and codegen shards before merge and again on protected
 push. The full matrix is intentionally hour-scale; the preflight provides the
 fast feedback path without weakening the required generic qualification.
 
+Raw `cargo check --workspace --all-targets` is intentionally not the supported
+workspace check for namespace-free `#[kernel(typed)]` packages. Those packages
+need the sealed `cargo-fe2o3` driver to supply the compiler-owned crate binding.
+Use `scripts/ci-local.sh check` for workspace check coverage, or
+`cargo fe2o3 check --locked --all-targets -p <wrapper-managed-package>` for one
+wrapper-managed package.
+
 ## Generic validation
 
 This lane does not require ROCm or a GPU:
@@ -23,6 +31,67 @@ This lane does not require ROCm or a GPU:
 ```text
 scripts/ci-local.sh generic
 ```
+
+The issue #216 virtual-runtime slice has focused no-GPU coverage:
+
+```text
+cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
+cargo test --locked -p fe2o3-sim-runtime
+cargo test --locked -p fe2o3-sim-differential
+cargo test --locked -p fe2o3-kernel-ir simulation_bundle_v3
+cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact
+cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed -- --ignored --exact
+cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- --ignored --exact
+cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- --seed-start 0 --cases 256
+cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- semantic-run-v2 --seed 0
+cargo clippy --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-runtime -p fe2o3-sim-differential --all-targets -- -D warnings
+cargo doc --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli -p fe2o3-sim-runtime -p fe2o3-sim-differential --no-deps
+scripts/ci-local.sh workspace-policy
+scripts/ci-local.sh runtime-policy
+```
+
+The runtime-policy lane checks the virtual-runtime package closures, scalar
+differential command, and normal runtime simulator adapter. The syscall-free
+roots remain independent of HIP, HSA, DRM, KFD, device nodes, and GPU libraries.
+The adapter is separately checked through the pure-Rust runtime policy and ELF;
+it uses the public SPI owned by `fe2o3-runtime` but invokes no KFD path and links
+no GPU library. Its dedicated ELF policy permits libc `dlsym`, which
+`std::thread` imports for pthread compatibility, while rejecting `dlopen`, GPU
+library names, and device paths. These tests establish model and semantic CPU behavior only;
+they do not increase a hardware or parity pass count.
+
+The ignored V3 production test requires the pinned AMD target. It exports an
+ordinary Rust kernel through the production rustc transaction, decodes the
+exact semantic-MIR and storage-map sections, queries structured type layout and
+request-region state through `fe2o3-debug`, runs the same V3 bundle in the CPU
+debugger, and rejects a re-signed hostile target-layout substitution. This is
+source/unit evidence only. It neither adds aggregate execution semantics to
+KIR V7 nor claims GPU or compiler-authentication authority.
+
+The generic lane also runs the focused `kir-sim-capability-matrix` test before
+the broader CPU package set. It checks the stable JSON command and requires an
+exact simulator owner or typed unsupported reason for every top-level KIR
+operation, terminator, profile, and scalar operation/type combination. The
+matrix marks these as declared tool-contract facts with `authority: none`; its
+newline-terminated compact JSON is fixed at 4,746,086 bytes.
+Named GPU profiles select simulator data-layout semantics and do not claim
+compiler lowering, ISA support, hardware availability, or physical validation.
+
+The generic lane translates 256 deterministic wrapping-`i32` programs from the
+independent `fe2o3-differential` model into admitted KIR V7, executes them in
+the simulator, and compares every lane. It then runs the fixed-size V2 semantic
+family corpus over every admitted fixed-width integer type, both admitted
+target `index` widths, `bool`, exact
+finite additions for all four admitted float storage types, multi-block CFG and
+internal-call execution, global memory, overlapping shared views, and typed
+bounds/initialization/undefined-operation rejections. Stable JSON digests bind
+the exact cases, KIR identities, expected bytes, observations, and rejection
+dispositions. Failure records retain deterministic reduction and exact replay
+metadata. The capability query lists the deliberately untested or typed
+unsupported families, and the suite digest binds that capability/exclusion
+contract. This is model agreement with `authority: none`, not
+physical-GPU parity or performance evidence. Encoded responses fail closed
+above the compiled 1 MiB limit.
 
 The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest
@@ -319,8 +388,11 @@ Native Linux requires read/write access to `/dev/kfd`; WSL `/dev/dxg` is not a
 KFD substitute. The lane measures the pure-Rust KFD identity boundary, admits
 every visible `gfx942:xnack-` device, maps and releases host-visible memory on
 each device, and creates, validates, and destroys one isolated compute AQL
-queue per device without packet submission or MMIO stores. It does not execute
-a kernel or claim application-level Worker V3 dispatch coverage.
+queue per device without packet submission in those all-device checks. A
+separate step selects one admitted device, executes the repository-owned vecadd
+fixture through the direct-KFD runtime, publishes a bounded range-only runtime
+profile, and queries its exact capture identity and loss-free completeness.
+This does not claim application-level Worker V3 dispatch coverage.
 
 Supplying both diagnostic variables extends the lane with one exact-artifact
 packet in an isolated selected-device process:

@@ -1,9 +1,32 @@
 # fe2o3-kir-sim
 
 `fe2o3-kir-sim` is a bounded, deterministic CPU execution engine for an
-explicit subset of verified canonical Kernel IR V7. Admission consumes a
-`VerifiedCanonicalKernelIrV7`; raw in-memory modules and older wire formats are
-not execution inputs.
+explicit subset of verified canonical Kernel IR. The frozen
+`AdmittedSimulationModuleV1::admit` route consumes exact V7 custody;
+`admit_v9` consumes exact V9 custody for additive f32 wave collectives, and
+`admit_v10` consumes exact V10 custody for those collectives plus additive
+memory-intrinsic execution. Raw in-memory modules and other wire formats are
+not execution inputs. The production compiler's Bundle V4 exporter binds
+exact V7 KIR and its Bundle V5 exporter binds exact V10 KIR; neither bundle
+grants execution or hardware authority.
+
+The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
+ownership matrix as stable JSON. It covers every top-level KIR operation and
+terminator for each simulator-facing profile, plus every scalar
+unary/binary/compare/cast type combination. Rows name either the exact
+simulator owner or the typed preflight rejection; the document explicitly
+identifies V7, V9, and V10 separately, names those rows as declared tool-contract facts with no authority, and
+grants no hardware or performance authority. The complete newline-terminated
+compact V1 document is fixed at 4,751,390 bytes and its regression test rejects
+any unreviewed schema-size change.
+
+The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
+semantics only. An owned row describes execution of already-verified KIR; it
+does not assert that the compiler can lower that operation for the named GPU,
+that the ISA or hardware supports it, or that a physical execution was
+observed. Those remain separate compiler, artifact, runtime, and qualification
+contracts. In particular, V9/V10 f32 wave ownership must not be read as a
+`gfx942` hardware-availability claim.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
@@ -22,8 +45,12 @@ after that decode; it is not a pre-decode allocator cap.
 The execution profile supports integer, boolean, and F16/BF16/F32/F64 scalar
 operations, structured control flow, internal helper calls, private
 allocations, global buffer arguments, ordinary and guarded scalar loads, static scalar
+workgroup-memory declarations, explicitly sized canonical dynamic
 workgroup-memory declarations, convergent workgroup barriers, and one-, two-,
-or three-dimensional launch hierarchy intrinsics. A false guarded load
+or three-dimensional launch hierarchy intrinsics. V10 additionally executes
+scalar pointer distance, Rust-allocation volatile load/store, and
+non-overlapping copy with exact declared layouts over global, private, and
+workgroup memory. A false guarded load
 evaluates only its predicate and fallback; it does not validate the pointer,
 record a memory access, or emit a memory-read event. Workgroups and local slots
 are created in canonical Z/Y/X
@@ -34,6 +61,22 @@ are included in admission and execution accounting but never become barrier
 participants. The target profile enforces its legal workgroup volume before
 scheduling begins.
 
+Dynamic LDS is an additive request contract. Callers use
+`DynamicWorkgroupMemoryRequestV1` through the corresponding
+`*_with_dynamic_workgroup_memory` preflight, execution, schedule, exploration,
+debug, or reducer API. Admission requires exactly one canonical `Dynamic`
+declaration across the selected kernel's complete reachable call graph. The
+byte extent must be divisible by the scalar element width and declared
+alignment; it participates in allocation and residency limits and is bound into
+schedule, replay, reduction, and virtual-dispatch identities. Each workgroup
+receives a distinct segment with the normal generation, initialization,
+barrier-publication, race, debug, and lifetime semantics. Legacy
+`SimulationRequestV1` calls remain byte-stable and continue to reject dynamic
+LDS instead of inferring launch state. Zero or multiple reachable bases and
+`DynamicAtLeast` are typed unavailable because KIR does not encode the
+offset/alias/lifetime or authenticated-minimum authority needed for those
+forms.
+
 The V7 core wave profile executes `LaneId`, `Ballot`, `Any`, `All`, and
 integer `ShuffleIndex` with an explicit Wave32 or Wave64 contract. Logical lane
 identity uses X-fast local-linear invocation order. Every participating lane
@@ -41,6 +84,18 @@ must reach the same wave operation and semantics; divergence, mismatch,
 out-of-tile shuffle sources, and a final partial logical wave are exact typed
 failures. These are logical collective semantics, not ISA emulation or a claim
 about a hardware `EXEC` mask.
+
+V9 and V10 additionally execute already-verified `ReduceF32` sum/maximum and `BroadcastF32`
+over fixed contiguous power-of-two tiles. Reduction reproduces the canonical
+AMDGPU lowerer's stage-synchronous XOR butterfly in ascending distances for
+every lane. Sum uses software IEEE f32 round-to-nearest, ties-to-even. Maximum
+reproduces `fcmp olt` followed by `select`: an unordered comparison or an equal
+pair retains the exact left operand bits, including a NaN payload/sign or the
+sign of zero. Broadcast copies the exact bits from each invocation's bounded
+tile-local source lane. No collective uses native host floating-point
+arithmetic. KIR requires a full uniform physical wave; a partial final wave is
+therefore rejected with exact active and required masks instead of being
+silently filled.
 
 Each static `WorkgroupMemory` operation denotes one zeroed-but-uninitialized
 allocation site per workgroup. The allocation is shared by that workgroup and
@@ -109,6 +164,37 @@ The inline exploration result and all retained schedule, assessment, and first
 failure payloads are charged together with every later scheduled run under
 `max_resident_bytes`; decision retention is charged by actual compact capacity.
 
+`reduce_simulation_failure` accepts an exact canonical or seeded CPU schedule
+and reduces its first dynamic execution failure or exact first data race. Each
+candidate supplies a retained decision prefix and then uses the ordinary
+canonical cooperative scheduler for all remaining runnable choices; an
+incomplete successful-schedule replay is never treated as a reproducer. The
+deterministic linear suffix reducer stops only at an empty prefix or after the
+one-shorter prefix changes the exact failure fingerprint. That fingerprint
+binds the failure class, primary and related semantic sites and invocations,
+and a stable digest of representable details. Preflight failures, incomplete
+race assessments, configured resource-limit exhaustion, allocator failures,
+event-sink failures, replay failures, and internal scheduler failures are typed
+boundaries rather than reduction targets.
+
+`SimulationFailureReductionReportV1` independently binds the admitted V7, V9,
+or V10 KIR identity, full structured request context, target, every simulation
+and reduction limit, original schedule and decisions, minimized prefix,
+completed failure-terminating reproducer decisions, attempt coverage, exact
+failure fingerprint, and integrity identities. Its strict canonical JSON codec
+has byte, string, decision, allocation, and resident-memory bounds. Report
+replay re-admits the exact module/request/target/limit context, executes the
+completed reproducer, and requires both the decision sequence and fingerprint
+to match. The CLI exposes `--reduce-failure` and
+`--replay-failure-reduction REPORT`; these agent-readable operations use the
+same no-symlink snapshot input and durable no-replace output boundaries as
+other simulator artifacts. Reduction and replay remain CPU observations and
+grant no GPU scheduling, timing, performance, or execution authority.
+`matches_data_race` additionally lets a read-only consumer verify that a
+detailed race has the exact fingerprint retained by a canonical report. It
+does not authenticate the report producer or replay the report; consumers that
+need execution-backed custody must still use the replay API.
+
 `PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
 form for that same record. It adds exact raw-KIR versus simulation-bundle route,
 bundle subject when present, request byte identity, target profile, and every
@@ -157,10 +243,18 @@ and packed BF16x2 fused multiply-add use the same software evaluator. Operations
 are never implemented with host `f32`/`f64` arithmetic and are never implicitly
 contracted.
 
-Float atomics, generic-address-space atomics, external calls, generic barriers,
-dynamic or non-scalar workgroup memory, V9 F32 wave reductions and broadcasts,
-matrix operations, gfx950 LDS transpose operations, memory
-intrinsics, and inline assembly remain typed unsupported states. F32 square root
+The exact canonical terminating AMDGPU `Trap` call is admitted as a dynamic
+failure equivalent to reaching its required `Unreachable` terminator. It is
+never ignored when executed; this only permits compiler-generated failure
+blocks to remain in otherwise executable KIR. Float atomics,
+generic-address-space atomics, all other external calls, generic barriers,
+legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
+non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
+operations, V7 memory intrinsics,
+V10 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
+volatile access, target-layout mismatches, and inline assembly remain typed
+unsupported states. Pointer distance additionally rejects distinct logical
+allocations because the CPU model has no physical-address equality claim. F32 square root
 and the canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a
 distinct typed unsupported state because the pinned software evaluator does not
 provide their declared exact semantics. The sequential
@@ -168,7 +262,9 @@ CPU mutation and fence order model does not simulate physical waves, caches,
 GPU floating-point modes, GPU timing, GPU performance, or prove memory-model
 race freedom.
 
-Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
+Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, or
+an exact V9/V10 owner with `AdmittedSimulationModuleV1::admit_v9` or
+`AdmittedSimulationModuleV1::admit_v10`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
 byte-addressed buffer arguments in `SimulationRequestV1`. Index scalars,
 buffers, and views are bound to the 32- or 64-bit layout used to construct them;
@@ -199,8 +295,10 @@ Lifecycle begins reserve their matching end capacity, including private
 allocation releases on normal return and failure unwind. If a sink rejects a
 failure-closing event, the primary dynamic failure retains the first bounded
 secondary observation failure rather than discarding either fact.
-Every fallible store preparation step occurs before its memory-write event, and
-the accepted event is followed only by an infallible byte commit. These events
+Every fallible store or copy validation step occurs before its memory-write
+event, and the accepted event is followed only by an infallible byte commit.
+Positive-byte copies reserve one simulator step per copied byte before access
+observations, so a single intrinsic cannot bypass `max_steps`. These events
 are an adapter, not a stable serialization contract; storage retained by a sink
 is owned and budgeted by the sink. Sink-retained event copies and a sink's own
 error-detail allocation are external to `max_resident_bytes`; production

@@ -32,6 +32,8 @@ mod process_execution;
 mod production_cargo_plan;
 mod profile_command;
 mod profile_dispatch_import_v1;
+mod profile_live_qualification_v1;
+mod profile_wrapper_overhead_v1;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
@@ -72,6 +74,8 @@ const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1";
 const SOURCE_ISA_COLLECTION_STDERR_PREFIX_V1: &str =
     "[cargo-fe2o3] source-isa-observation-collection-v1";
+const SOURCE_ISA_CHARACTERISTIC_BROKER_STDERR_PREFIX_V3: &str =
+    "[cargo-fe2o3] source-isa-characteristic-broker-v3";
 const MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1: usize =
     fe2o3_source_isa_observation::wire_v1::MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1 + 256;
 const _: () = assert!(MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1 <= 2 * 1024 * 1024);
@@ -1780,8 +1784,8 @@ fn finish_capability_broker_observations_to(
         drop(broker);
         return;
     }
-    let collection = match broker.finish_source_isa_observations() {
-        Ok(collection) => collection,
+    let completed = match broker.finish_source_isa_observations() {
+        Ok(completed) => completed,
         Err(error) => {
             let _ = observer_telemetry::write_line_to(
                 output,
@@ -1790,6 +1794,7 @@ fn finish_capability_broker_observations_to(
             return;
         }
     };
+    let collection = completed.summary;
     debug_assert!(!collection.grants_compiler_authority());
     debug_assert!(!collection.grants_publication_authority());
     debug_assert!(!collection.grants_runtime_authority());
@@ -1813,6 +1818,42 @@ fn finish_capability_broker_observations_to(
             let frames = decoded.frames().len();
             let missing = decoded.missing_units().len();
             let failure = decoded.failure().map_or(0, |failure| failure.code());
+            if let Some((unit, characteristic)) = completed.characteristic {
+                if frames != 1 || missing != 0 || failure != 0 {
+                    let _ = observer_telemetry::write_line_to(
+                        output,
+                        format_args!(
+                            "[cargo-fe2o3] Source/ISA characteristic export rejected an incomplete summary"
+                        ),
+                    );
+                    return;
+                }
+                match source_isa_observation::encode_source_isa_characteristic_broker_v3(
+                    completed.config,
+                    unit,
+                    &characteristic,
+                )
+                .and_then(|cell| source_isa_characteristic_broker_hex(&cell))
+                {
+                    Ok(encoded) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "{SOURCE_ISA_CHARACTERISTIC_BROKER_STDERR_PREFIX_V3} encoding=hex:{encoded} authority=observation-only"
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "[cargo-fe2o3] Source/ISA characteristic Broker V3 encoding failed: {error}"
+                            ),
+                        );
+                        return;
+                    }
+                }
+            }
             match source_isa_collection_hex(&encoded) {
                 Ok(encoded) => {
                     let _ = observer_telemetry::write_line_to(
@@ -1853,6 +1894,31 @@ fn source_isa_collection_hex(bytes: &[u8]) -> Result<String, String> {
         encoded.push(HEX[(byte & 0x0f) as usize] as char);
     }
     Ok(encoded)
+}
+
+fn source_isa_characteristic_broker_hex(bytes: &[u8]) -> Result<String, String> {
+    let encoded_len = source_isa_characteristic_broker_hex_length(bytes.len())?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::new();
+    encoded.try_reserve_exact(encoded_len).map_err(|_| {
+        "cannot allocate bounded Source/ISA characteristic Broker V3 hex".to_owned()
+    })?;
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(encoded)
+}
+
+fn source_isa_characteristic_broker_hex_length(binary_len: usize) -> Result<usize, String> {
+    let maximum = fe2o3_source_isa_observation::characteristic_v1::MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+        .checked_add(256)
+        .and_then(|length| length.checked_mul(2))
+        .ok_or_else(|| "Source/ISA characteristic Broker V3 hex bound overflow".to_owned())?;
+    binary_len
+        .checked_mul(2)
+        .filter(|length| *length <= maximum)
+        .ok_or_else(|| "Source/ISA characteristic Broker V3 hex exceeds its bound".to_owned())
 }
 
 fn source_isa_collection_hex_length(binary_len: usize) -> Result<usize, String> {
@@ -3611,9 +3677,10 @@ mod tests {
         inject_binding_host_test_custody, is_cargo_target_runner_environment_name,
         normalize_invocation, parse_rustup_tool_path, reject_authority_configured_environment,
         reject_authority_rustup_proxy, reject_binding_test_invocation_config,
-        reject_obsolete_codegen_pipeline, selected_run_target, source_isa_collection_hex,
-        source_isa_collection_hex_length, validate_production_cargo_inputs,
-        validate_production_compilation_environment,
+        reject_obsolete_codegen_pipeline, selected_run_target,
+        source_isa_characteristic_broker_hex, source_isa_characteristic_broker_hex_length,
+        source_isa_collection_hex, source_isa_collection_hex_length,
+        validate_production_cargo_inputs, validate_production_compilation_environment,
     };
     use crate::observer_telemetry;
     use crate::pinned_executable_test_directory::TestDirectory;
@@ -4147,6 +4214,18 @@ mod tests {
             .is_err()
         );
         assert!(source_isa_collection_hex_length(usize::MAX).is_err());
+        assert_eq!(
+            source_isa_characteristic_broker_hex(&[0x00, 0xab, 0xff]).unwrap(),
+            "00abff"
+        );
+        let maximum = fe2o3_source_isa_observation::characteristic_v1::MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+            + 256;
+        assert_eq!(
+            source_isa_characteristic_broker_hex_length(maximum),
+            Ok(maximum * 2)
+        );
+        assert!(source_isa_characteristic_broker_hex_length(maximum + 1).is_err());
+        assert!(source_isa_characteristic_broker_hex_length(usize::MAX).is_err());
     }
 
     #[test]

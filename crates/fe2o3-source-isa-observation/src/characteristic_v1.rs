@@ -3395,6 +3395,21 @@ mod tests {
         assert!(!exact.contains_decoded_isa());
         assert!(exact.has_sparse_final_hsaco_anchors());
     }
+
+    #[test]
+    fn public_self_claimed_archive_conversion_remains_authority_free() {
+        let exact = fixture();
+        let encoded = exact.encode_canonical().unwrap();
+        let inert = InertSourceIsaCharacteristicCollectionV1::decode_canonical(&encoded).unwrap();
+        assert!(!inert.grants_compiler_authority());
+        assert!(!inert.grants_runtime_authority());
+        assert!(!inert.grants_hardware_observation_authority());
+        let archive = inert.into_self_claimed_archive_for_agent_inspection_v1();
+        assert_eq!(archive.encode_canonical().unwrap(), encoded);
+        assert!(!archive.grants_compiler_authority());
+        assert!(!archive.grants_runtime_authority());
+        assert!(!archive.grants_hardware_observation_authority());
+    }
 }
 
 fn validate_collection_shape(
@@ -3815,13 +3830,19 @@ impl InertSourceIsaCharacteristicCollectionV1 {
     pub const fn grants_hardware_observation_authority(&self) -> bool {
         false
     }
-    pub(crate) fn into_self_claimed_archive_for_agent_inspection_v1(
+    /// Exposes the decoded self-claim for authority-free inspection only.
+    ///
+    /// This does not perform producer comparison and does not grant compiler, artifact,
+    /// publication, debugger, profiler, runtime, or hardware-observation authority. Consumers
+    /// that need an admitted producer projection must use the producer-owned exact-readmission
+    /// boundary instead.
+    pub fn into_self_claimed_archive_for_agent_inspection_v1(
         self,
     ) -> SourceIsaCharacteristicCollectionV1 {
         // Canonical decoding establishes the archive's internal structure and identity only.
-        // Keeping this conversion crate-private prevents a decoded archive from becoming a
-        // publicly admitted producer projection; the agent protocol separately emits explicit
-        // authority and archive-authentication nonclaims for every response.
+        // The method name and return type retain the self-claimed distinction; the agent protocol
+        // separately emits explicit authority and archive-authentication nonclaims for every
+        // response.
         self.claimed
     }
     pub fn admit_exact_projection_v1(

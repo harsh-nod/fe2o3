@@ -36,9 +36,17 @@ fn workspace() -> PathBuf {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD targets"]
-fn ordinary_neutral_reduction_reaches_both_target_llvm_backends() {
+fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
     let example = workspace().join("examples/workgroup_sync_v1");
-    let sources = ["src/kernel.rs", "src/kernel_u32.rs", "src/kernel_f32.rs"].map(|relative| {
+    let sources = [
+        "src/kernel.rs",
+        "src/kernel_u32.rs",
+        "src/kernel_f32.rs",
+        "src/kernel_scan_u32.rs",
+        "src/kernel_scan_i32.rs",
+        "src/kernel_scan_f32.rs",
+    ]
+    .map(|relative| {
         let path = example.join(relative);
         let bytes = std::fs::read(&path).expect("read immutable ordinary Rust source");
         (path, bytes)
@@ -55,6 +63,21 @@ fn ordinary_neutral_reduction_reaches_both_target_llvm_backends() {
             (
                 "lds-f32-kernel",
                 "lds_publish_read_reduce_f32_v1",
+                "fadd float",
+            ),
+            (
+                "lds-scan-u32-kernel",
+                "lds_inclusive_scan_u32_v1",
+                "add i32",
+            ),
+            (
+                "lds-scan-i32-kernel",
+                "lds_exclusive_scan_i32_v1",
+                "add i32",
+            ),
+            (
+                "lds-scan-f32-kernel",
+                "lds_inclusive_scan_f32_v1",
                 "fadd float",
             ),
         ] {
@@ -117,7 +140,7 @@ fn ordinary_neutral_reduction_reaches_both_target_llvm_backends() {
                 );
             }
             let llvm = std::fs::read_to_string(&llvm_path)
-                .expect("production extraction emitted neutral reduction LLVM");
+                .expect("production extraction emitted neutral collective LLVM");
             for required in [
                 "target triple = \"amdgcn-amd-amdhsa\"",
                 symbol,

@@ -273,9 +273,13 @@ require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'runs-on: [self-hosted, linux, x64, f
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" "FE2O3_RUN_SOURCE_ISA_UNIT_MATRIX: '1'"
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'run: scripts/ci-local.sh source-isa-unit-matrix'
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'confirm_characteristic_contract_v2:'
-require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'name: Validate unexecuted lossless characteristic V2 contract'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'name: Validate lossless characteristic V2 contract and adapter'
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" "FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_CONTRACT_V2: '1'"
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'run: scripts/ci-local.sh source-isa-characteristic-contract-v2'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'confirm_characteristic_matrix_v2:'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'name: Observe exact characteristics for three ordinary units on gfx942 and gfx950'
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" "FE2O3_RUN_SOURCE_ISA_CHARACTERISTIC_MATRIX_V2: '1'"
+require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'run: scripts/ci-local.sh source-isa-characteristic-matrix-v2'
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'timeout-minutes: 120'
 require_text "${SOURCE_ISA_UNIT_WORKFLOW}" 'persist-credentials: false'
 if sed -n '/^on:/,/^permissions:/p' "${SOURCE_ISA_UNIT_WORKFLOW}" |
@@ -284,7 +288,7 @@ if sed -n '/^on:/,/^permissions:/p' "${SOURCE_ISA_UNIT_WORKFLOW}" |
   printf 'protected source/ISA unit workflow is not workflow_dispatch-only\n' >&2
   exit 1
 fi
-if rg -n 'source-isa-(unit-matrix|characteristic-contract-v2)|FE2O3_RUN_SOURCE_ISA_(UNIT_MATRIX|CHARACTERISTIC_CONTRACT_V2)' "${GENERIC_WORKFLOW}"; then
+if rg -n 'source-isa-(unit-matrix|characteristic-(contract|matrix)-v2)|FE2O3_RUN_SOURCE_ISA_(UNIT_MATRIX|CHARACTERISTIC_(CONTRACT|MATRIX)_V2)' "${GENERIC_WORKFLOW}"; then
   printf 'generic hosted CI unexpectedly schedules a protected source/ISA contract or matrix\n' >&2
   exit 1
 fi

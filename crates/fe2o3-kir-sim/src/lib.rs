@@ -1,15 +1,25 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod capability;
 mod debug;
 mod execute;
 mod explore;
 mod model;
 mod preflight;
+mod reduce;
 mod resident;
 mod schedule;
 mod soft_float;
 
+pub use capability::{
+    SCALAR_CAPABILITY_ROWS_V1, SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
+    SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1, SimulationCapabilityDispositionV1,
+    SimulationCapabilityMatrixV1, SimulationCapabilityProfileV1, SimulationKirWireVersionV1,
+    SimulationOperationCapabilityRowV1, SimulationOperationSurfaceV1,
+    SimulationScalarCapabilityRowV1, SimulationScalarOperationFamilyV1, SimulationSemanticOwnerV1,
+    SimulationUnsupportedReasonCodeV1, TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
+};
 pub use debug::{
     MAX_DEBUG_ALLOCATIONS_PER_CHECKPOINT_V1, MAX_DEBUG_FRAMES_PER_CHECKPOINT_V1,
     MAX_DEBUG_MEMORY_BYTES_PER_CHECKPOINT_V1, MAX_DEBUG_VALUES_PER_CHECKPOINT_V1,
@@ -39,15 +49,25 @@ pub use explore::{
 };
 pub use model::{
     AdmittedSimulationModuleV1, BufferArgumentErrorV1, BufferArgumentV1, BufferBackingIdV1,
-    BufferViewArgumentV1, EventPolicyV1, GridShapeV1, IndexWidthV1, ScalarBitsErrorV1,
-    ScalarBitsV1, SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
-    SimulationInvocationV1, SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1,
-    SimulationSiteV1, SimulationTargetV1, WorkgroupShapeV1,
+    BufferViewArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, GridShapeV1,
+    IndexWidthV1, ScalarBitsErrorV1, ScalarBitsV1, SharedBufferV1, SimulationAdmissionErrorV1,
+    SimulationArgumentV1, SimulationInvocationV1, SimulationKernelIrIdentityV1,
+    SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1,
+    SimulationTargetV1, WorkgroupShapeV1,
 };
 pub use preflight::{
+    DynamicWorkgroupMemorySiteV1, DynamicWorkgroupMemoryUnavailableV1,
     MAX_REPORTED_UNSUPPORTED_FINDINGS_V1, MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1,
     SimulationPlanV1, SimulationPreflightErrorV1, UnsupportedFeatureV1,
     UnsupportedSimulationReportV1, UnsupportedSimulationSiteV1,
+};
+pub use reduce::{
+    MAX_FAILURE_REDUCTION_ATTEMPTS_V1, MAX_FAILURE_REDUCTION_RETAINED_DECISIONS_V1,
+    MAX_PERSISTED_FAILURE_REDUCTION_BYTES_V1, SimulationFailureFingerprintV1,
+    SimulationFailureReductionCodecErrorV1, SimulationFailureReductionCoverageV1,
+    SimulationFailureReductionErrorV1, SimulationFailureReductionLimitsV1,
+    SimulationFailureReductionReportV1, SimulationFailureReductionRequestErrorV1,
+    SimulationFailureScheduleV1,
 };
 pub use schedule::{
     MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,

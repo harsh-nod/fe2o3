@@ -49,6 +49,9 @@ pub(crate) enum ProductionPipelineError {
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
     SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
     SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
+    SimulationBundleV3(fe2o3_kernel_ir::SimulationBundleErrorV3),
+    SimulationBundleV4(fe2o3_kernel_ir::SimulationBundleErrorV4),
+    SimulationBundleV5(fe2o3_kernel_ir::SimulationBundleErrorV5),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
@@ -118,6 +121,18 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationBundleV2(error) => write!(
                 formatter,
                 "production compilation simulation bundle V2 failed: {error}"
+            ),
+            Self::SimulationBundleV3(error) => write!(
+                formatter,
+                "production compilation simulation bundle V3 failed: {error}"
+            ),
+            Self::SimulationBundleV4(error) => write!(
+                formatter,
+                "production compilation simulation bundle V4 failed: {error}"
+            ),
+            Self::SimulationBundleV5(error) => write!(
+                formatter,
+                "production compilation simulation bundle V5 failed: {error}"
             ),
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
@@ -223,6 +238,9 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
             Self::SimulationBundleV2(error) => Some(error),
+            Self::SimulationBundleV3(error) => Some(error),
+            Self::SimulationBundleV4(error) => Some(error),
+            Self::SimulationBundleV5(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
             Self::SemanticDebugMap(error) => Some(error),
             Self::SemanticDebugFragment(error) => Some(error),
@@ -558,8 +576,11 @@ impl TargetNeutralProductionCompilation {
     ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
         let (lowered, bindings, prepared) =
             self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
-        let debug_map =
-            compiler_debug_source_map_v1(&lowered, &bindings.debug_source_files, &prepared)?;
+        let debug_map = compiler_debug_source_map_v1(
+            &lowered,
+            &bindings.debug_source_files,
+            prepared.debug_source_map_binding(),
+        )?;
         prepared
             .finalize_with_source_map(debug_map)
             .map_err(ProductionPipelineError::SimulationBundle)
@@ -577,13 +598,201 @@ impl TargetNeutralProductionCompilation {
             &bindings.debug_source_files,
             &bindings.debug_source_scopes,
             &bindings.debug_source_variables,
-            &prepared,
+            prepared.debug_source_map_binding(),
         )?;
         let inner = prepared
             .finalize_without_source_map()
             .map_err(ProductionPipelineError::SimulationBundle)?;
         fe2o3_kernel_ir::VerifiedSimulationBundleV2::new(inner, debug_map)
             .map_err(ProductionPipelineError::SimulationBundleV2)
+    }
+
+    fn into_prepared_simulation_bundle_v3(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<
+        (
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+            AuthenticatedProductionBindings,
+            fe2o3_kernel_ir::VerifiedSimulationBundleV3,
+        ),
+        ProductionPipelineError,
+    > {
+        let (lowered, bindings, prepared) =
+            self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
+        let debug_map = compiler_debug_source_map_v2(
+            &lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            prepared.debug_source_map_binding(),
+        )?;
+        let inner_v1 = prepared
+            .finalize_without_source_map()
+            .map_err(ProductionPipelineError::SimulationBundle)?;
+        let inner_v2 = fe2o3_kernel_ir::VerifiedSimulationBundleV2::new(inner_v1, debug_map)
+            .map_err(ProductionPipelineError::SimulationBundleV2)?;
+        let semantic = lowered.semantic().semantic();
+        let mut semantic_mir = Vec::new();
+        semantic_mir
+            .try_reserve_exact(semantic.canonical_encoding().len())
+            .map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic MIR bundle allocation failed",
+                )
+            })?;
+        semantic_mir.extend_from_slice(semantic.canonical_encoding());
+        let storage_map = compiler_semantic_storage_map_v1(
+            &lowered,
+            &bindings.debug_source_variables,
+            SemanticStorageMapBindingInputV1 {
+                container_identity: *inner_v2.identity().as_bytes(),
+                subject_identity: *inner_v2.subject_identity(),
+                canonical_kir_digest: *inner_v2.canonical_kir_v7_identity().digest(),
+                canonical_kir_bytes: inner_v2.canonical_kir_v7_identity().canonical_length(),
+            },
+        )?;
+        let bundle =
+            fe2o3_kernel_ir::VerifiedSimulationBundleV3::new(inner_v2, semantic_mir, storage_map)
+                .map_err(ProductionPipelineError::SimulationBundleV3)?;
+        Ok((lowered, bindings, bundle))
+    }
+
+    fn into_simulation_bundle_v3(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV3, ProductionPipelineError> {
+        let (_, _, bundle) = self.into_prepared_simulation_bundle_v3(compiler_execution_binding)?;
+        Ok(bundle)
+    }
+
+    fn into_simulation_bundle_v4(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV4, ProductionPipelineError> {
+        let (lowered, _, inner) =
+            self.into_prepared_simulation_bundle_v3(compiler_execution_binding)?;
+        let storage_map = compiler_semantic_storage_map_v2(&lowered, *inner.identity().as_bytes())?;
+        fe2o3_kernel_ir::VerifiedSimulationBundleV4::new(inner, storage_map)
+            .map_err(ProductionPipelineError::SimulationBundleV4)
+    }
+
+    fn into_simulation_bundle_v5(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV5, ProductionPipelineError> {
+        let Self {
+            lowered,
+            ranked_verification: _,
+            bindings,
+        } = self;
+        lowered
+            .verify_equivalence()
+            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
+        if bindings
+            .rustc_preflight_plan
+            .rustc_identity_inventory_sha256()
+            != bindings.rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        let production = lowered.canonical_kernel_ir_identity();
+        let production = fe2o3_kernel_ir::SimulationProductionKirIdentityV5::new(
+            match production.version() {
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
+            },
+            *production.digest(),
+            production.canonical_length(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        let canonical_v10 =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_module(lowered.module().clone())
+                .map_err(|error| {
+                    ProductionPipelineError::SimulationBundleV5(
+                        fe2o3_kernel_ir::SimulationBundleErrorV5::CanonicalKir(error),
+                    )
+                })?;
+        let inventory_receipt =
+            fe2o3_compiler_lineage::InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+                bindings.rustc_identity_inventory.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let preflight_receipt =
+            fe2o3_compiler_lineage::InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+                bindings.rustc_preflight_plan.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let inventory_identity = inventory_receipt.identity();
+        let preflight_identity = preflight_receipt.identity();
+        let lineage = fe2o3_kernel_ir::SimulationSourceLineageV1::new(
+            *inventory_identity.sha256(),
+            inventory_identity.byte_len(),
+            *preflight_identity.sha256(),
+            preflight_identity.byte_len(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundle)?;
+        let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV5::new(
+            lineage,
+            production,
+            bindings.rustc_target.profile().device_target(),
+            canonical_v10,
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        let debug_map = compiler_debug_source_map_v2(
+            &lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            prepared.debug_source_map_binding(),
+        )?;
+        let semantic = lowered.semantic().semantic();
+        let mut semantic_mir = Vec::new();
+        semantic_mir
+            .try_reserve_exact(semantic.canonical_encoding().len())
+            .map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic MIR V5 bundle allocation failed",
+                )
+            })?;
+        semantic_mir.extend_from_slice(semantic.canonical_encoding());
+        let subject = *prepared.subject_identity();
+        let kir_digest = *prepared.canonical_kir_v10_digest();
+        let kir_bytes = prepared.canonical_kir_v10_length();
+        let legacy_storage = compiler_semantic_storage_map_v1(
+            &lowered,
+            &bindings.debug_source_variables,
+            SemanticStorageMapBindingInputV1 {
+                container_identity: subject,
+                subject_identity: subject,
+                canonical_kir_digest: kir_digest,
+                canonical_kir_bytes: kir_bytes,
+            },
+        )?;
+        let storage = fe2o3_kernel_ir::SemanticStorageMapV5::new(
+            subject,
+            semantic.wire_version().as_u16(),
+            *semantic.semantic_sha256().as_bytes(),
+            semantic.canonical_encoding().len() as u64,
+            *semantic.target_layout_identity().as_bytes(),
+            kir_digest,
+            kir_bytes,
+            legacy_storage.kernels().to_vec(),
+            legacy_storage.variables().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        let legacy_aggregate = compiler_semantic_storage_map_v2(&lowered, subject)?;
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV5::new(
+            subject,
+            kir_digest,
+            kir_bytes,
+            legacy_aggregate.kernels().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV5)?;
+        prepared
+            .finalize(debug_map, semantic_mir, storage, aggregate)
+            .map_err(ProductionPipelineError::SimulationBundleV5)
     }
 
     fn admit_formal_memory(
@@ -1162,25 +1371,159 @@ fn require_complete_simulation_debug_source_capture_v2(
     }
 }
 
-fn sole_debug_map_body_v1(
-    module: &fe2o3_kernel_ir::Module,
-) -> Result<(usize, &fe2o3_kernel_ir::FunctionBody), ProductionPipelineError> {
-    let mut bodies = module
+struct ExactDebugMapFunctionV1<'a> {
+    function_ordinal: u64,
+    body: &'a fe2o3_kernel_ir::FunctionBody,
+    block_ordinals: BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
+}
+
+fn exact_debug_map_functions_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+) -> Result<
+    BTreeMap<
+        (
+            fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+            fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+        ),
+        ExactDebugMapFunctionV1<'_>,
+    >,
+    ProductionPipelineError,
+> {
+    let defined_count = lowered
+        .module()
         .functions
         .iter()
-        .enumerate()
-        .filter_map(|(ordinal, function)| function.body.as_ref().map(|body| (ordinal, body)));
-    let body = bodies
-        .next()
-        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "lowered KIR has no function body",
-        ))?;
-    if bodies.next().is_some() {
+        .filter(|function| function.body.is_some())
+        .count();
+    if defined_count == 0 || lowered.correspondence().lowered_functions().len() < defined_count {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "V1 correspondence does not distinguish multiple KIR function bodies",
+            "live correspondence does not cover every defined KIR function",
         ));
     }
-    Ok(body)
+    let mut layouts = BTreeMap::new();
+    let mut ordinals = BTreeSet::new();
+    let mut physical_functions = BTreeMap::new();
+    for record in lowered.correspondence().lowered_functions() {
+        let mut matches = lowered
+            .module()
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| &function.id == record.kernel_ir_function());
+        let Some((ordinal, function)) = matches.next() else {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence names an unknown KIR function",
+            ));
+        };
+        if matches.next().is_some() || function.body.is_none() {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence has an ambiguous KIR function owner",
+            ));
+        }
+        let role_matches = matches!(
+            (record.role(), function.role),
+            (
+                fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::KernelEntry,
+                fe2o3_kernel_ir::FunctionRole::KernelEntry
+            ) | (
+                fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper,
+                fe2o3_kernel_ir::FunctionRole::InternalHelper
+            )
+        );
+        if !role_matches {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence KIR function role differs",
+            ));
+        }
+        if let Some((semantic_function, role)) =
+            physical_functions.insert(ordinal, (record.semantic_function(), record.role()))
+            && (semantic_function != record.semantic_function()
+                || role != fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper
+                || record.role()
+                    != fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::InternalHelper)
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "only one exact semantic helper may share a physical KIR function",
+            ));
+        }
+        ordinals.insert(ordinal);
+        let body = function.body.as_ref().expect("body checked");
+        let block_ordinals = body
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(block_ordinal, block)| (block.id, block_ordinal))
+            .collect::<BTreeMap<_, _>>();
+        if block_ordinals.len() != body.blocks.len() {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "KIR body has duplicate block identities",
+            ));
+        }
+        let key = (record.correspondence_owner(), record.semantic_function());
+        if layouts
+            .insert(
+                key,
+                ExactDebugMapFunctionV1 {
+                    function_ordinal: u64::try_from(ordinal).map_err(|_| {
+                        ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "KIR function ordinal does not fit the source-map wire",
+                        )
+                    })?,
+                    body,
+                    block_ordinals,
+                },
+            )
+            .is_some()
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "live correspondence has a duplicate semantic function owner",
+            ));
+        }
+    }
+    if ordinals.len() != defined_count {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "live correspondence omits a defined KIR function",
+        ));
+    }
+    Ok(layouts)
+}
+
+fn kernel_storage_map_body_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    selected_root: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    selected_body: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+) -> Result<(usize, &fe2o3_kernel_ir::FunctionBody), ProductionPipelineError> {
+    let layouts = exact_debug_map_functions_v1(lowered)?;
+    let mut entries = lowered
+        .correspondence()
+        .lowered_functions()
+        .iter()
+        .filter(|record| {
+            record.role() == fe2o3_lower_mir_kernel::SemanticKirFunctionRoleV1::KernelEntry
+                && record.correspondence_owner() == selected_root
+                && record.semantic_function() == selected_body
+        });
+    let entry = entries
+        .next()
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected semantic kernel has no exact KIR function correspondence",
+        ))?;
+    if entries.next().is_some() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected semantic kernel has ambiguous KIR function correspondence",
+        ));
+    }
+    let layout = layouts
+        .get(&(entry.correspondence_owner(), entry.semantic_function()))
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected semantic kernel has no exact KIR function layout",
+        ))?;
+    let ordinal = usize::try_from(layout.function_ordinal).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "selected KIR function ordinal does not fit this host",
+        )
+    })?;
+    Ok((ordinal, layout.body))
 }
 
 fn prepare_production_semantic_debug_inputs_v1(
@@ -1316,7 +1659,7 @@ fn compiler_production_semantic_debug_source_map_v1(
         captured_files,
         captured_scopes,
         captured_variables,
-        &prepared,
+        prepared.debug_source_map_binding(),
     )?;
     Ok((source_map, canonical_kir))
 }
@@ -1324,29 +1667,18 @@ fn compiler_production_semantic_debug_source_map_v1(
 fn compiler_debug_source_map_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
-    prepared: &fe2o3_kernel_ir::PreparedSimulationBundleV1,
+    binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV1, ProductionPipelineError> {
-    let (function_ordinal, body) = sole_debug_map_body_v1(lowered.module())?;
-    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
-        ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR function ordinal does not fit the source-map wire",
-        )
-    })?;
-    let block_ordinals = body
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(ordinal, block)| (block.id, ordinal))
-        .collect::<BTreeMap<_, _>>();
-    if block_ordinals.len() != body.blocks.len() {
-        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR body has duplicate block identities",
-        ));
-    }
+    let function_layouts = exact_debug_map_functions_v1(lowered)?;
 
     let mut mapped = BTreeMap::new();
     let mut eliminated = BTreeSet::new();
     for span in lowered.correspondence().statement_operation_spans() {
+        let layout = function_layouts
+            .get(&(span.correspondence_owner(), span.semantic_function()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement correspondence has no exact KIR function owner",
+            ))?;
         let source = lowered
             .semantic()
             .resolve_statement(
@@ -1359,9 +1691,15 @@ fn compiler_debug_source_map_v1(
             ))?
             .source();
         insert_debug_operation_range_v1(
-            function_ordinal,
-            body,
-            &block_ordinals,
+            layout.function_ordinal,
+            layout.body,
+            &layout.block_ordinals,
+            (
+                1,
+                span.semantic_function().index(),
+                span.semantic_block().index(),
+                span.statement_ordinal(),
+            ),
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1371,6 +1709,11 @@ fn compiler_debug_source_map_v1(
         )?;
     }
     for span in lowered.correspondence().terminator_operation_spans() {
+        let layout = function_layouts
+            .get(&(span.correspondence_owner(), span.semantic_function()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "terminator correspondence has no exact KIR function owner",
+            ))?;
         let source = lowered
             .semantic()
             .resolve_terminator(span.semantic_function(), span.semantic_block())
@@ -1379,9 +1722,15 @@ fn compiler_debug_source_map_v1(
             ))?
             .source();
         insert_debug_operation_range_v1(
-            function_ordinal,
-            body,
-            &block_ordinals,
+            layout.function_ordinal,
+            layout.body,
+            &layout.block_ordinals,
+            (
+                2,
+                span.semantic_function().index(),
+                span.semantic_block().index(),
+                0,
+            ),
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1391,11 +1740,16 @@ fn compiler_debug_source_map_v1(
         )?;
     }
 
-    let mut synthetic = BTreeSet::new();
+    let mut synthetic = BTreeMap::new();
     for span in lowered.correspondence().synthetic_operation_spans() {
+        let layout = function_layouts
+            .get(&(span.correspondence_owner(), span.semantic_function()))
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "synthetic correspondence has no exact KIR function owner",
+            ))?;
         let block_ordinal = debug_block_ordinal_v1(
-            body,
-            &block_ordinals,
+            layout.body,
+            &layout.block_ordinals,
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -1409,42 +1763,58 @@ fn compiler_debug_source_map_v1(
                 ))?
         {
             let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
-                function_ordinal,
+                layout.function_ordinal,
                 block_ordinal,
                 u64::from(operation),
             );
-            if !synthetic.insert(site) || mapped.contains_key(&site) {
+            let rule = match span.rule() {
+                fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => {
+                    1
+                }
+                fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => {
+                    2
+                }
+            };
+            let owner = (span.semantic_function().index(), rule);
+            if mapped.contains_key(&site)
+                || synthetic
+                    .insert(site, owner)
+                    .is_some_and(|previous| previous != owner)
+            {
                 return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                     "synthetic and semantic operation ranges overlap",
                 ));
             }
         }
     }
-    for (block_ordinal, block) in body.blocks.iter().enumerate() {
-        for operation_ordinal in 0..block.operations.len() {
-            let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
-                function_ordinal,
-                u64::try_from(block_ordinal).map_err(|_| {
-                    ProductionPipelineError::SimulationDebugMapCorrespondence(
-                        "KIR block ordinal does not fit the source-map wire",
-                    )
-                })?,
-                u64::try_from(operation_ordinal).map_err(|_| {
-                    ProductionPipelineError::SimulationDebugMapCorrespondence(
-                        "KIR operation ordinal does not fit the source-map wire",
-                    )
-                })?,
-            );
-            if mapped.contains_key(&site) == synthetic.contains(&site) {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "KIR operation is not covered exactly once by semantic or synthetic correspondence",
-                ));
+    for layout in function_layouts.values() {
+        for (block_ordinal, block) in layout.body.blocks.iter().enumerate() {
+            for operation_ordinal in 0..block.operations.len() {
+                let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
+                    layout.function_ordinal,
+                    u64::try_from(block_ordinal).map_err(|_| {
+                        ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "KIR block ordinal does not fit the source-map wire",
+                        )
+                    })?,
+                    u64::try_from(operation_ordinal).map_err(|_| {
+                        ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "KIR operation ordinal does not fit the source-map wire",
+                        )
+                    })?,
+                );
+                if mapped.contains_key(&site) == synthetic.contains_key(&site) {
+                    return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        "KIR operation is not covered exactly once by semantic or synthetic correspondence",
+                    ));
+                }
             }
         }
     }
 
     let referenced_files = mapped
         .values()
+        .map(|(_, span)| span)
         .chain(&eliminated)
         .map(|span| span.file_identity())
         .collect::<BTreeSet<_>>();
@@ -1464,13 +1834,13 @@ fn compiler_debug_source_map_v1(
         .collect::<Result<Vec<_>, _>>()?;
     let sites = mapped
         .into_iter()
-        .map(|(site, span)| {
+        .map(|(site, (_, span))| {
             fe2o3_kernel_ir::DebugSourceMapSiteV1::new(site, vec![span])
                 .map_err(ProductionPipelineError::SimulationDebugMap)
         })
         .collect::<Result<Vec<_>, _>>()?;
     fe2o3_kernel_ir::DebugSourceMapDocumentV1::new(
-        prepared.debug_source_map_binding(),
+        binding,
         files,
         sites,
         eliminated.into_iter().collect(),
@@ -1483,40 +1853,44 @@ fn compiler_debug_source_map_v2(
     captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
     captured_scopes: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2],
     captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
-    prepared: &fe2o3_kernel_ir::PreparedSimulationBundleV1,
+    binding: fe2o3_kernel_ir::DebugSourceMapBindingV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV2, ProductionPipelineError> {
-    let base = compiler_debug_source_map_v1(lowered, captured_files, prepared)?;
-    let (function_ordinal, _) = sole_debug_map_body_v1(lowered.module())?;
-    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
-        ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "KIR function ordinal does not fit the source-map V2 wire",
-        )
-    })?;
-    let selected_semantic_function = lowered
-        .correspondence()
-        .blocks()
-        .first()
-        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-            "lowering correspondence has no selected semantic function",
-        ))?
-        .semantic_function();
+    let base = compiler_debug_source_map_v1(lowered, captured_files, binding)?;
+    let function_layouts = exact_debug_map_functions_v1(lowered)?;
+    let mut function_by_semantic = BTreeMap::new();
+    for ((_, semantic_function), layout) in &function_layouts {
+        if let Some(previous) =
+            function_by_semantic.insert(*semantic_function, layout.function_ordinal)
+            && previous != layout.function_ordinal
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "one semantic function maps to different physical KIR functions",
+            ));
+        }
+    }
 
     let mut parameter_by_local = BTreeMap::new();
     for binding in lowered.correspondence().parameter_bindings() {
-        if binding.semantic_function() != selected_semantic_function
-            || parameter_by_local
-                .insert(binding.semantic_local(), binding.kernel_ir_value())
-                .is_some()
+        if !function_layouts
+            .contains_key(&(binding.correspondence_owner(), binding.semantic_function()))
         {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "KIR parameter correspondence is not unique for the selected semantic function",
+                "KIR parameter correspondence has no exact function instance",
+            ));
+        }
+        let key = (binding.semantic_function(), binding.semantic_local());
+        if let Some(previous) = parameter_by_local.insert(key, binding.kernel_ir_value())
+            && previous != binding.kernel_ir_value()
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "shared helper parameter correspondence differs across roots",
             ));
         }
     }
 
     let selected_scope_count = captured_scopes
         .iter()
-        .filter(|scope| scope.function == selected_semantic_function)
+        .filter(|scope| function_by_semantic.contains_key(&scope.function))
         .count();
     if selected_scope_count > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2 {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -1533,8 +1907,13 @@ fn compiler_debug_source_map_v2(
         })?;
     for scope in captured_scopes
         .iter()
-        .filter(|scope| scope.function == selected_semantic_function)
+        .filter(|scope| function_by_semantic.contains_key(&scope.function))
     {
+        let function_ordinal = *function_by_semantic.get(&scope.function).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source scope has no exact KIR function owner",
+            ),
+        )?;
         scopes.push(
             fe2o3_kernel_ir::DebugSourceScopeV2::new(
                 scope.identity,
@@ -1553,7 +1932,7 @@ fn compiler_debug_source_map_v2(
 
     let selected_variable_count = captured_variables
         .iter()
-        .filter(|variable| variable.function == selected_semantic_function)
+        .filter(|variable| function_by_semantic.contains_key(&variable.function))
         .count();
     if selected_variable_count > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 {
         return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -1570,8 +1949,13 @@ fn compiler_debug_source_map_v2(
         })?;
     for variable in captured_variables
         .iter()
-        .filter(|variable| variable.function == selected_semantic_function)
+        .filter(|variable| function_by_semantic.contains_key(&variable.function))
     {
+        let function_ordinal = *function_by_semantic.get(&variable.function).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source variable has no exact KIR function owner",
+            ),
+        )?;
         if !scope_identities.contains(&variable.scope_identity) {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "compiler source variable references an unretained lexical scope",
@@ -1585,7 +1969,7 @@ fn compiler_debug_source_map_v2(
         let (fallback, parameter) = match variable.class {
             crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Local(local) => {
                 match parameter_by_local
-                    .get(&local)
+                    .get(&(variable.function, local))
                     .copied()
                     .filter(|_| variable.entry_value_preserved)
                 {
@@ -1681,6 +2065,619 @@ fn compiler_debug_source_map_v2(
     .map_err(ProductionPipelineError::SimulationDebugMapV2)
 }
 
+#[derive(Clone, Copy)]
+struct SemanticStorageMapBindingInputV1 {
+    container_identity: [u8; 32],
+    subject_identity: [u8; 32],
+    canonical_kir_digest: [u8; 32],
+    canonical_kir_bytes: u64,
+}
+
+fn compiler_semantic_storage_map_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
+    binding: SemanticStorageMapBindingInputV1,
+) -> Result<fe2o3_kernel_ir::SemanticStorageMapV1, ProductionPipelineError> {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiPassModeV1, SemanticLocalRoleV1, SemanticSourceArgumentOwnershipV1,
+    };
+
+    let semantic = lowered.semantic().semantic();
+    let selection = semantic.select_kernel_body_v1().ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map requires one exact semantic kernel body",
+        ),
+    )?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map semantic body is absent",
+        ))?;
+    let (kir_function_ordinal, kir_body) =
+        kernel_storage_map_body_v1(lowered, selection.root(), selection.body())?;
+    let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map KIR function is absent",
+        ),
+    )?;
+    if kir_body.parameters.len() != kir_function.signature.parameters.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map KIR parameter identities and types differ in length",
+        ));
+    }
+
+    let parameter_bindings = lowered
+        .correspondence()
+        .parameter_bindings()
+        .iter()
+        .copied()
+        .filter(|binding| binding.semantic_function() == selection.body())
+        .collect::<Vec<_>>();
+    let source_types = function.abi().source_input_types();
+    let ownership = function.abi().source_argument_ownership();
+    if source_types.len() != ownership.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map source types and ownership differ in length",
+        ));
+    }
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve_exact(source_types.len())
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage argument allocation failed",
+            )
+        })?;
+    for (source_ordinal, (&semantic_type, &source_ownership)) in
+        source_types.iter().zip(ownership).enumerate()
+    {
+        let source_ordinal = u32::try_from(source_ordinal).map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage source ordinal does not fit the wire",
+            )
+        })?;
+        let semantic_local = function
+            .locals()
+            .iter()
+            .enumerate()
+            .find_map(|(index, local)| {
+                (local.role() == SemanticLocalRoleV1::Argument(source_ordinal)).then_some(index)
+            })
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage source argument has no exact semantic local",
+            ))?;
+        let semantic_local = u32::try_from(semantic_local).map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage semantic local does not fit the wire",
+            )
+        })?;
+        let abi_ignored = function
+            .abi()
+            .adjusted_arguments()
+            .get(source_ordinal as usize)
+            .is_some_and(|argument| matches!(argument.mode(), SemanticAbiPassModeV1::Ignore));
+        let storage = compiler_parameter_storage_v1(
+            semantic_local,
+            semantic_type.index(),
+            source_ownership,
+            abi_ignored,
+            &parameter_bindings,
+            kir_body,
+            &kir_function.signature.parameters,
+            semantic.types(),
+        )?;
+        arguments.push(fe2o3_kernel_ir::SemanticArgumentStorageV1::new(
+            source_ordinal,
+            semantic_local,
+            semantic_type.index(),
+            compiler_ownership_v1(source_ownership)?,
+            storage,
+        ));
+    }
+
+    let mut variables = Vec::new();
+    let selected_variable_count = captured_variables
+        .iter()
+        .filter(|variable| variable.function == selection.body())
+        .count();
+    variables
+        .try_reserve_exact(selected_variable_count)
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "typed storage variable allocation failed",
+            )
+        })?;
+    for variable in captured_variables
+        .iter()
+        .filter(|variable| variable.function == selection.body())
+    {
+        let (semantic_local, semantic_type, storage) = match variable.class {
+            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Local(local) => {
+                let declaration = function.locals().get(local.index() as usize).ok_or(
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        "typed source variable references an absent semantic local",
+                    ),
+                )?;
+                let variable_ownership = match declaration.role() {
+                    SemanticLocalRoleV1::Argument(source_ordinal) => ownership
+                        .get(source_ordinal as usize)
+                        .copied()
+                        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                            "typed source variable argument ownership is absent",
+                        ))?,
+                    SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => {
+                        SemanticSourceArgumentOwnershipV1::ByValue
+                    }
+                };
+                let storage = if variable.entry_value_preserved {
+                    compiler_parameter_storage_v1(
+                        local.index(),
+                        declaration.ty().index(),
+                        variable_ownership,
+                        false,
+                        &parameter_bindings,
+                        kir_body,
+                        &kir_function.signature.parameters,
+                        semantic.types(),
+                    )?
+                } else {
+                    fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+                        reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::OptimizedOut,
+                    }
+                };
+                (Some(local.index()), Some(declaration.ty().index()), storage)
+            }
+            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Unrepresented => (
+                None,
+                None,
+                fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+                    reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::UnrepresentedSourceVariable,
+                },
+            ),
+        };
+        variables.push(fe2o3_kernel_ir::SemanticVariableStorageV1::new(
+            variable.identity,
+            variable.function.index(),
+            semantic_local,
+            semantic_type,
+            storage,
+        ));
+    }
+
+    fe2o3_kernel_ir::SemanticStorageMapV1::new(
+        binding.container_identity,
+        binding.subject_identity,
+        semantic.wire_version().as_u16(),
+        *semantic.semantic_sha256().as_bytes(),
+        semantic.canonical_encoding().len() as u64,
+        *semantic.target_layout_identity().as_bytes(),
+        binding.canonical_kir_digest,
+        binding.canonical_kir_bytes,
+        vec![fe2o3_kernel_ir::SemanticKernelStorageV1::new(
+            selection.root().index(),
+            selection.body().index(),
+            u32::try_from(kir_function_ordinal).map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "typed storage KIR function ordinal does not fit the wire",
+                )
+            })?,
+            arguments,
+        )],
+        variables,
+    )
+    .map_err(ProductionPipelineError::SimulationBundleV3)
+}
+
+fn compiler_semantic_storage_map_v2(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    container_identity: [u8; 32],
+) -> Result<fe2o3_kernel_ir::SemanticStorageMapV2, ProductionPipelineError> {
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticAbiPassModeV1, SemanticLocalRoleV1};
+
+    const MAP_ERROR: &str = "aggregate storage map is not exact";
+    let semantic = lowered.semantic().semantic();
+    let selection = semantic.select_kernel_body_v1().ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ))?;
+    let (kir_function_ordinal, kir_body) =
+        kernel_storage_map_body_v1(lowered, selection.root(), selection.body())?;
+    let kir_function = lowered.module().functions.get(kir_function_ordinal).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+    if kir_body.parameters.len() != kir_function.signature.parameters.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ));
+    }
+
+    let mut slots = Vec::new();
+    slots
+        .try_reserve_exact(kir_function.signature.parameters.len())
+        .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+    let mut next = 0_u32;
+    let mut kernarg_alignment = 1_u32;
+    for ty in &kir_function.signature.parameters {
+        let (width, alignment, metadata_relative) = match ty {
+            fe2o3_kernel_ir::Type::Scalar(scalar) => {
+                let width = match scalar {
+                    fe2o3_kernel_ir::ScalarType::Bool
+                    | fe2o3_kernel_ir::ScalarType::I8
+                    | fe2o3_kernel_ir::ScalarType::U8 => 1,
+                    fe2o3_kernel_ir::ScalarType::I16
+                    | fe2o3_kernel_ir::ScalarType::U16
+                    | fe2o3_kernel_ir::ScalarType::F16
+                    | fe2o3_kernel_ir::ScalarType::Bf16 => 2,
+                    fe2o3_kernel_ir::ScalarType::I32
+                    | fe2o3_kernel_ir::ScalarType::U32
+                    | fe2o3_kernel_ir::ScalarType::F32 => 4,
+                    fe2o3_kernel_ir::ScalarType::I64
+                    | fe2o3_kernel_ir::ScalarType::U64
+                    | fe2o3_kernel_ir::ScalarType::F64
+                    | fe2o3_kernel_ir::ScalarType::Index => 8,
+                    fe2o3_kernel_ir::ScalarType::I128 | fe2o3_kernel_ir::ScalarType::U128 => 16,
+                };
+                (width, width, None)
+            }
+            fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
+            fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
+            fe2o3_kernel_ir::Type::Unit => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "unit KIR parameters have no physical simulator slot",
+                ));
+            }
+        };
+        next = align_up_u32_v1(next, alignment).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+        )?;
+        let value = fe2o3_kernel_ir::SemanticKernargSlotV2::new(next, width, alignment);
+        let metadata = metadata_relative
+            .map(|relative| {
+                next.checked_add(relative)
+                    .map(|offset| {
+                        fe2o3_kernel_ir::SemanticKernargSlotV2::new(offset, width, alignment)
+                    })
+                    .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        MAP_ERROR,
+                    ))
+            })
+            .transpose()?;
+        let total_width = metadata_relative.map_or(width, |relative| relative + width);
+        next = next.checked_add(total_width).ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+        )?;
+        kernarg_alignment = kernarg_alignment.max(alignment);
+        slots.push((value, metadata));
+    }
+    let explicit_kernarg_bytes = align_up_u32_v1(next, kernarg_alignment).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+
+    let source_types = function.abi().source_input_types();
+    let ownership = function.abi().source_argument_ownership();
+    if source_types.len() != ownership.len()
+        || source_types.len() != function.abi().adjusted_arguments().len()
+    {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ));
+    }
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve_exact(source_types.len())
+        .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+    for (source_ordinal, ((&semantic_type, &source_ownership), abi)) in source_types
+        .iter()
+        .zip(ownership)
+        .zip(function.abi().adjusted_arguments())
+        .enumerate()
+    {
+        let source_ordinal = u32::try_from(source_ordinal)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+        let semantic_local = function
+            .locals()
+            .iter()
+            .enumerate()
+            .find_map(|(local, declaration)| {
+                (declaration.role() == SemanticLocalRoleV1::Argument(source_ordinal))
+                    .then_some(local)
+            })
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                MAP_ERROR,
+            ))?;
+        let semantic_local_u32 = u32::try_from(semantic_local)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+        let direct_matches = lowered
+            .correspondence()
+            .parameter_bindings()
+            .iter()
+            .filter(|binding| {
+                binding.semantic_function() == selection.body()
+                    && binding.semantic_local().index() == semantic_local_u32
+            })
+            .copied();
+        let mut direct_probe = direct_matches.clone();
+        let direct = direct_probe.next();
+        let direct_is_unique = direct.is_some() && direct_probe.next().is_none();
+        let component_matches = lowered
+            .correspondence()
+            .parameter_component_bindings()
+            .iter()
+            .filter(|binding| {
+                binding.semantic_function() == selection.body()
+                    && binding.semantic_local().index() == semantic_local_u32
+            });
+        let component_count = component_matches.clone().count();
+        let ignored_matches = lowered
+            .correspondence()
+            .ignored_parameter_bindings()
+            .iter()
+            .filter(|binding| {
+                binding.semantic_function() == selection.body()
+                    && binding.semantic_local().index() == semantic_local_u32
+            })
+            .copied();
+        let mut ignored_probe = ignored_matches.clone();
+        let ignored = ignored_probe.next();
+        let ignored_is_unique = ignored.is_some() && ignored_probe.next().is_none();
+        let storage =
+            if direct_is_unique {
+                let binding = direct.expect("unique direct binding is present");
+                if component_count != 0 || ignored.is_some() {
+                    return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        MAP_ERROR,
+                    ));
+                }
+                let mut retained = Vec::new();
+                retained.try_reserve_exact(1).map_err(|_| {
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR)
+                })?;
+                retained.push(compiler_component_storage_v2(
+                    Vec::new(),
+                    binding.kernel_ir_value(),
+                    kir_body,
+                    &kir_function.signature.parameters,
+                    &slots,
+                )?);
+                fe2o3_kernel_ir::SemanticComponentStorageBindingV2::exact(retained)
+            } else if direct.is_none() && component_count != 0 && ignored.is_none() {
+                let mut retained = Vec::new();
+                retained.try_reserve_exact(component_count).map_err(|_| {
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR)
+                })?;
+                for component in component_matches {
+                    let mut path = Vec::new();
+                    path.try_reserve_exact(component.projection().len())
+                        .map_err(|_| {
+                            ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR)
+                        })?;
+                    path.extend(
+                        component.projection().iter().map(|projection| {
+                            match projection {
+                    fe2o3_lower_mir_kernel::SemanticKirParameterProjectionV1::Field(index) => {
+                        fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: *index }
+                    }
+                    fe2o3_lower_mir_kernel::SemanticKirParameterProjectionV1::ArrayIndex(index) => {
+                        fe2o3_kernel_ir::SemanticStorageProjectionV2::ArrayElement {
+                            index: u64::from(*index),
+                        }
+                    }
+                }
+                        }),
+                    );
+                    retained.push(compiler_component_storage_v2(
+                        path,
+                        component.kernel_ir_value(),
+                        kir_body,
+                        &kir_function.signature.parameters,
+                        &slots,
+                    )?);
+                }
+                fe2o3_kernel_ir::SemanticComponentStorageBindingV2::exact(retained)
+            } else if direct.is_none()
+                && component_count == 0
+                && ignored_is_unique
+                && matches!(abi.mode(), SemanticAbiPassModeV1::Ignore)
+            {
+                fe2o3_kernel_ir::SemanticComponentStorageBindingV2::exact(Vec::new())
+            } else {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    MAP_ERROR,
+                ));
+            };
+        arguments.push(fe2o3_kernel_ir::SemanticArgumentStorageV2::new(
+            source_ordinal,
+            semantic_local_u32,
+            semantic_type.index(),
+            compiler_ownership_v1(source_ownership)?,
+            storage,
+        ));
+    }
+
+    let mut kernels = Vec::new();
+    kernels
+        .try_reserve_exact(1)
+        .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?;
+    kernels.push(fe2o3_kernel_ir::SemanticKernelStorageV2::new(
+        selection.root().index(),
+        selection.body().index(),
+        u32::try_from(kir_function_ordinal)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?,
+        explicit_kernarg_bytes,
+        kernarg_alignment,
+        arguments,
+    ));
+    fe2o3_kernel_ir::SemanticStorageMapV2::new(container_identity, kernels)
+        .map_err(ProductionPipelineError::SimulationBundleV4)
+}
+
+fn compiler_component_storage_v2(
+    path: Vec<fe2o3_kernel_ir::SemanticStorageProjectionV2>,
+    value: fe2o3_kernel_ir::ValueId,
+    body: &fe2o3_kernel_ir::FunctionBody,
+    parameter_types: &[fe2o3_kernel_ir::Type],
+    slots: &[(
+        fe2o3_kernel_ir::SemanticKernargSlotV2,
+        Option<fe2o3_kernel_ir::SemanticKernargSlotV2>,
+    )],
+) -> Result<fe2o3_kernel_ir::SemanticKirComponentStorageV2, ProductionPipelineError> {
+    const MAP_ERROR: &str = "aggregate component has no exact KIR physical slot";
+    let ordinal = body
+        .parameters
+        .iter()
+        .position(|candidate| *candidate == value)
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ))?;
+    let (representation, expected_metadata) = match parameter_types.get(ordinal) {
+        Some(fe2o3_kernel_ir::Type::Scalar(_)) => (
+            fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::ScalarValue,
+            false,
+        ),
+        Some(fe2o3_kernel_ir::Type::Pointer(_)) => (
+            fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionPointer,
+            false,
+        ),
+        Some(fe2o3_kernel_ir::Type::Slice(_)) => (
+            fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionSlice,
+            true,
+        ),
+        Some(fe2o3_kernel_ir::Type::Unit) | None => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                MAP_ERROR,
+            ));
+        }
+    };
+    let (value_slot, metadata_slot) = slots.get(ordinal).copied().ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
+    )?;
+    if metadata_slot.is_some() != expected_metadata {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            MAP_ERROR,
+        ));
+    }
+    Ok(fe2o3_kernel_ir::SemanticKirComponentStorageV2::new(
+        path,
+        u32::try_from(ordinal)
+            .map_err(|_| ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR))?,
+        value.0,
+        representation,
+        value_slot,
+        metadata_slot,
+    ))
+}
+
+const fn align_up_u32_v1(value: u32, alignment: u32) -> Option<u32> {
+    let mask = alignment - 1;
+    match value.checked_add(mask) {
+        Some(value) => Some(value & !mask),
+        None => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compiler_parameter_storage_v1(
+    semantic_local: u32,
+    semantic_type: u32,
+    ownership: fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1,
+    abi_ignored: bool,
+    bindings: &[fe2o3_lower_mir_kernel::SemanticKirParameterBindingV1],
+    body: &fe2o3_kernel_ir::FunctionBody,
+    parameter_types: &[fe2o3_kernel_ir::Type],
+    semantic_types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+) -> Result<fe2o3_kernel_ir::SemanticStorageBindingV1, ProductionPipelineError> {
+    let matching = bindings
+        .iter()
+        .filter(|binding| binding.semantic_local().index() == semantic_local)
+        .collect::<Vec<_>>();
+    let [binding] = matching.as_slice() else {
+        return Ok(if matching.is_empty() {
+            fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+                reason: if abi_ignored {
+                    fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::AbiIgnored
+                } else {
+                    fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::NoRetainedKirStorage
+                },
+            }
+        } else {
+            fe2o3_kernel_ir::SemanticStorageBindingV1::Ambiguous
+        });
+    };
+    let Some(parameter_ordinal) = body
+        .parameters
+        .iter()
+        .position(|value| *value == binding.kernel_ir_value())
+    else {
+        return Ok(fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
+            reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::NoRetainedKirStorage,
+        });
+    };
+    let kir_type = parameter_types.get(parameter_ordinal).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage parameter type is absent",
+        ),
+    )?;
+    let semantic = semantic_types.get(semantic_type as usize).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage semantic type is absent",
+        ),
+    )?;
+    let representation = match (semantic.shape(), kir_type, ownership) {
+        (
+            fe2o3_mir_model::semantic_mir_v1::SemanticTypeShapeV1::Scalar(_)
+            | fe2o3_mir_model::semantic_mir_v1::SemanticTypeShapeV1::ValidityScalar(_),
+            fe2o3_kernel_ir::Type::Scalar(_),
+            _,
+        ) => fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::Scalar,
+        (_, fe2o3_kernel_ir::Type::Slice(_), ownership)
+            if ownership
+                != fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue =>
+        {
+            fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::RegionSlice
+        }
+        (_, fe2o3_kernel_ir::Type::Pointer(_), ownership)
+            if ownership
+                != fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue =>
+        {
+            fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::RegionPointer
+        }
+        _ => fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::OpaqueFlattened,
+    };
+    Ok(
+        fe2o3_kernel_ir::SemanticStorageBindingV1::ExactKirParameter {
+            kir_parameter_ordinal: u32::try_from(parameter_ordinal).map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "typed storage KIR parameter ordinal does not fit the wire",
+                )
+            })?,
+            kir_value_ordinal: binding.kernel_ir_value().0,
+            representation,
+        },
+    )
+}
+
+fn compiler_ownership_v1(
+    ownership: fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1,
+) -> Result<fe2o3_kernel_ir::SemanticArgumentOwnershipV1, ProductionPipelineError> {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1 as Source;
+    match ownership {
+        Source::ByValue => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::ByValue),
+        Source::SharedBorrow => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::SharedBorrow),
+        Source::UniqueBorrow => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::UniqueBorrow),
+        Source::ExclusiveOwner => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::ExclusiveOwner),
+        Source::RawPointer => Ok(fe2o3_kernel_ir::SemanticArgumentOwnershipV1::RawPointer),
+        Source::Unspecified => Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "typed storage map rejects unspecified source ownership",
+        )),
+    }
+}
+
 fn debug_source_scope_span_v2(
     source: fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1,
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapSpanV1, ProductionPipelineError> {
@@ -1702,19 +2699,26 @@ fn debug_source_scope_span_v2(
     .map_err(ProductionPipelineError::SimulationDebugMap)
 }
 
+type ExactDebugSemanticConstructV1 = (u8, u32, u32, u32);
+type ExactDebugMappedOperationsV1 = BTreeMap<
+    fe2o3_kernel_ir::DebugSourceMapKirSiteV1,
+    (
+        ExactDebugSemanticConstructV1,
+        fe2o3_kernel_ir::DebugSourceMapSpanV1,
+    ),
+>;
+
 #[allow(clippy::too_many_arguments)]
 fn insert_debug_operation_range_v1(
     function_ordinal: u64,
     body: &fe2o3_kernel_ir::FunctionBody,
     block_ordinals: &BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
+    semantic_owner: ExactDebugSemanticConstructV1,
     block: fe2o3_kernel_ir::BlockId,
     first_operation: u32,
     operation_count: u32,
     source: fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1,
-    mapped: &mut BTreeMap<
-        fe2o3_kernel_ir::DebugSourceMapKirSiteV1,
-        fe2o3_kernel_ir::DebugSourceMapSpanV1,
-    >,
+    mapped: &mut ExactDebugMappedOperationsV1,
     eliminated: &mut BTreeSet<fe2o3_kernel_ir::DebugSourceMapSpanV1>,
 ) -> Result<(), ProductionPipelineError> {
     // V1 intentionally resolves every macro-originated construct to rustc's
@@ -1773,7 +2777,10 @@ fn insert_debug_operation_range_v1(
             block_ordinal,
             u64::from(operation),
         );
-        if mapped.insert(site, source_span).is_some() {
+        if mapped
+            .insert(site, (semantic_owner, source_span))
+            .is_some_and(|previous| previous != (semantic_owner, source_span))
+        {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 "one KIR operation is attributed to multiple semantic constructs",
             ));
@@ -2069,6 +3076,52 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             )
     }
 
+    /// Emits V3 with the exact admitted semantic MIR and its independently
+    /// versioned semantic-local to KIR-storage projection.
+    pub(crate) fn export_simulation_bundle_v3(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV3, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v3(
+                fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+            )
+    }
+
+    /// Emits V4 with compiler-rederived one-to-many aggregate component and
+    /// physical simulator-kernarg correspondence. The KFD descriptor path is
+    /// intentionally not entered.
+    pub(crate) fn export_simulation_bundle_v4(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV4, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v4(
+                fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+            )
+    }
+
+    /// Emits self-contained V5 with the exact V10 re-encoding of the same
+    /// producer-owned V8/V9 module and independently bound debug/storage data.
+    /// This extraction-only path grants no compiler, artifact, load, launch,
+    /// proof, or hardware authority.
+    pub(crate) fn export_simulation_bundle_v5(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV5, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v5()
+    }
+
     /// Publishes the exact production compiler module into the managed,
     /// preselected attempt-scoped protocol. This grants no link, artifact, load,
     /// or launch authority.
@@ -2221,38 +3274,6 @@ impl RankedVerifiedProductionCompilation {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn debug_map_test_function(name: &str) -> fe2o3_kernel_ir::Function {
-        fe2o3_kernel_ir::Function::kernel_entry(
-            name,
-            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
-            vec![],
-            vec![fe2o3_kernel_ir::BasicBlock::new(fe2o3_kernel_ir::BlockId(
-                0,
-            ))],
-        )
-    }
-
-    #[test]
-    fn debug_map_body_selection_fails_closed_until_correspondence_names_functions() {
-        let empty = fe2o3_kernel_ir::Module::new("empty");
-        assert!(matches!(
-            sole_debug_map_body_v1(&empty),
-            Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "lowered KIR has no function body"
-            ))
-        ));
-
-        let mut multiple = fe2o3_kernel_ir::Module::new("multiple");
-        multiple.functions.push(debug_map_test_function("kernel"));
-        multiple.functions.push(debug_map_test_function("helper"));
-        assert!(matches!(
-            sole_debug_map_body_v1(&multiple),
-            Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "V1 correspondence does not distinguish multiple KIR function bodies"
-            ))
-        ));
-    }
 
     #[test]
     fn explicit_v2_simulation_export_requires_complete_source_capture() {
@@ -2607,7 +3628,7 @@ mod tests {
             .map(|offset| protected_prepare + offset)
             .expect("protected publication method remains explicit");
         let protected_pipeline_end = pipeline[protected_pipeline..]
-            .find("\nfn sole_debug_map_body_v1(")
+            .find("\nfn require_complete_simulation_debug_source_capture_v2(")
             .map(|offset| protected_pipeline + offset)
             .expect("protected publication method remains bounded");
         let protected_pipeline = &pipeline[protected_pipeline..protected_pipeline_end];
