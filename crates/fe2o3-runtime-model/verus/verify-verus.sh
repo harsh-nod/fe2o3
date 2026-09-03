@@ -15,6 +15,7 @@ r7_async_resources_proof="$script_dir/r7_async_resources_v1.rs"
 r8_execution_contracts_proof="$script_dir/r8_execution_contracts_v1.rs"
 r9_native_evidence_proof="$script_dir/r9_native_evidence_v1.rs"
 r10_closed_execution_proof="$script_dir/r10_closed_execution_v1.rs"
+r11_runtime_semantics_proof="$script_dir/r11_runtime_semantics_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -86,6 +87,14 @@ negative_r10_atomic_fence="$script_dir/negative/r10_closed_execution_v1_atomic_f
 negative_r10_atomic_return="$script_dir/negative/r10_closed_execution_v1_atomic_return.rs"
 negative_r10_wave_early="$script_dir/negative/r10_closed_execution_v1_wave_early.rs"
 negative_r10_scan_prefix="$script_dir/negative/r10_closed_execution_v1_scan_prefix.rs"
+negative_r11_atomic_capability="$script_dir/negative/r11_runtime_semantics_v1_atomic_capability.rs"
+negative_r11_callback_redischarge="$script_dir/negative/r11_runtime_semantics_v1_callback_redischarge.rs"
+negative_r11_compare_exchange_failure_order="$script_dir/negative/r11_runtime_semantics_v1_compare_exchange_failure_order.rs"
+negative_r11_collective_membership="$script_dir/negative/r11_runtime_semantics_v1_collective_membership.rs"
+negative_r11_collective_partial_tail="$script_dir/negative/r11_runtime_semantics_v1_collective_partial_tail.rs"
+negative_r11_event_substitution="$script_dir/negative/r11_runtime_semantics_v1_event_substitution.rs"
+negative_r11_mapping_early_release="$script_dir/negative/r11_runtime_semantics_v1_mapping_early_release.rs"
+negative_r11_mapping_uncertain="$script_dir/negative/r11_runtime_semantics_v1_mapping_uncertain.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -122,6 +131,7 @@ expected_r7_async_resources=$(read_pin "$pin_dir/R7_ASYNC_RESOURCES_SHA256")
 expected_r8_execution_contracts=$(read_pin "$pin_dir/R8_EXECUTION_CONTRACTS_SHA256")
 expected_r9_native_evidence=$(read_pin "$pin_dir/R9_NATIVE_EVIDENCE_SHA256")
 expected_r10_closed_execution=$(read_pin "$pin_dir/R10_CLOSED_EXECUTION_SHA256")
+expected_r11_runtime_semantics=$(read_pin "$pin_dir/R11_RUNTIME_SEMANTICS_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -193,6 +203,14 @@ expected_negative_r10_atomic_fence=$(read_pin "$pin_dir/NEGATIVE_R10_ATOMIC_FENC
 expected_negative_r10_atomic_return=$(read_pin "$pin_dir/NEGATIVE_R10_ATOMIC_RETURN_SHA256")
 expected_negative_r10_wave_early=$(read_pin "$pin_dir/NEGATIVE_R10_WAVE_EARLY_SHA256")
 expected_negative_r10_scan_prefix=$(read_pin "$pin_dir/NEGATIVE_R10_SCAN_PREFIX_SHA256")
+expected_negative_r11_atomic_capability=$(read_pin "$pin_dir/NEGATIVE_R11_ATOMIC_CAPABILITY_SHA256")
+expected_negative_r11_callback_redischarge=$(read_pin "$pin_dir/NEGATIVE_R11_CALLBACK_REDISCHARGE_SHA256")
+expected_negative_r11_compare_exchange_failure_order=$(read_pin "$pin_dir/NEGATIVE_R11_COMPARE_EXCHANGE_FAILURE_ORDER_SHA256")
+expected_negative_r11_collective_membership=$(read_pin "$pin_dir/NEGATIVE_R11_COLLECTIVE_MEMBERSHIP_SHA256")
+expected_negative_r11_collective_partial_tail=$(read_pin "$pin_dir/NEGATIVE_R11_COLLECTIVE_PARTIAL_TAIL_SHA256")
+expected_negative_r11_event_substitution=$(read_pin "$pin_dir/NEGATIVE_R11_EVENT_SUBSTITUTION_SHA256")
+expected_negative_r11_mapping_early_release=$(read_pin "$pin_dir/NEGATIVE_R11_MAPPING_EARLY_RELEASE_SHA256")
+expected_negative_r11_mapping_uncertain=$(read_pin "$pin_dir/NEGATIVE_R11_MAPPING_UNCERTAIN_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -232,6 +250,7 @@ check_sources() {
     check_digest "$expected_r8_execution_contracts" "$r8_execution_contracts_proof"
     check_digest "$expected_r9_native_evidence" "$r9_native_evidence_proof"
     check_digest "$expected_r10_closed_execution" "$r10_closed_execution_proof"
+    check_digest "$expected_r11_runtime_semantics" "$r11_runtime_semantics_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -303,6 +322,14 @@ check_sources() {
     check_digest "$expected_negative_r10_atomic_return" "$negative_r10_atomic_return"
     check_digest "$expected_negative_r10_wave_early" "$negative_r10_wave_early"
     check_digest "$expected_negative_r10_scan_prefix" "$negative_r10_scan_prefix"
+    check_digest "$expected_negative_r11_atomic_capability" "$negative_r11_atomic_capability"
+    check_digest "$expected_negative_r11_callback_redischarge" "$negative_r11_callback_redischarge"
+    check_digest "$expected_negative_r11_compare_exchange_failure_order" "$negative_r11_compare_exchange_failure_order"
+    check_digest "$expected_negative_r11_collective_membership" "$negative_r11_collective_membership"
+    check_digest "$expected_negative_r11_collective_partial_tail" "$negative_r11_collective_partial_tail"
+    check_digest "$expected_negative_r11_event_substitution" "$negative_r11_event_substitution"
+    check_digest "$expected_negative_r11_mapping_early_release" "$negative_r11_mapping_early_release"
+    check_digest "$expected_negative_r11_mapping_uncertain" "$negative_r11_mapping_uncertain"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -323,6 +350,7 @@ check_sources
     "$r8_execution_contracts_proof" \
     "$r9_native_evidence_proof" \
     "$r10_closed_execution_proof" \
+    "$r11_runtime_semantics_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -390,7 +418,15 @@ check_sources
     "$negative_r10_atomic_fence" \
     "$negative_r10_atomic_return" \
     "$negative_r10_wave_early" \
-    "$negative_r10_scan_prefix"
+    "$negative_r10_scan_prefix" \
+    "$negative_r11_atomic_capability" \
+    "$negative_r11_callback_redischarge" \
+    "$negative_r11_compare_exchange_failure_order" \
+    "$negative_r11_collective_membership" \
+    "$negative_r11_collective_partial_tail" \
+    "$negative_r11_event_substitution" \
+    "$negative_r11_mapping_early_release" \
+    "$negative_r11_mapping_uncertain"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -501,6 +537,7 @@ check_positive "$r7_async_resources_proof" 'verification results:: 8 verified, 0
 check_positive "$r8_execution_contracts_proof" 'verification results:: 10 verified, 0 errors' r8-execution-contracts
 check_positive "$r9_native_evidence_proof" 'verification results:: 14 verified, 0 errors' r9-native-evidence
 check_positive "$r10_closed_execution_proof" 'verification results:: 20 verified, 0 errors' r10-closed-execution
+check_positive "$r11_runtime_semantics_proof" 'verification results:: 18 verified, 0 errors' r11-runtime-semantics
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -572,13 +609,21 @@ check_negative "$negative_r10_atomic_fence" mutated_release_atomic_requires_pre_
 check_negative "$negative_r10_atomic_return" mutated_atomic_rmw_returns_old_value_v1 r10-atomic-return
 check_negative "$negative_r10_wave_early" mutated_incomplete_wave64_cannot_publish_v1 r10-wave-early
 check_negative "$negative_r10_scan_prefix" mutated_inclusive_scan_includes_current_lane_v1 r10-scan-prefix
+check_negative "$negative_r11_atomic_capability" mutated_atomic_execution_capability_fails_closed_v1 r11-atomic-capability
+check_negative "$negative_r11_callback_redischarge" mutated_repeated_completion_preserves_callback_count_v1 r11-callback-redischarge
+check_negative "$negative_r11_compare_exchange_failure_order" mutated_release_failure_order_is_rejected_v1 r11-compare-exchange-failure-order
+check_negative "$negative_r11_collective_membership" mutated_collective_membership_mismatch_is_rejected_v1 r11-collective-membership
+check_negative "$negative_r11_collective_partial_tail" mutated_partial_tail_collective_geometry_is_rejected_v1 r11-collective-partial-tail
+check_negative "$negative_r11_event_substitution" mutated_event_query_retains_source_status_v1 r11-event-substitution
+check_negative "$negative_r11_mapping_early_release" mutated_batch_retention_blocks_mapping_release_v1 r11-mapping-early-release
+check_negative "$negative_r11_mapping_uncertain" mutated_indeterminate_batch_blocks_mapping_release_v1 r11-mapping-uncertain
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 mutations=71'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 mutations=79'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

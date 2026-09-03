@@ -2,10 +2,11 @@
 
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, and R10 closed
-execution-composition models. The authenticated runner proves 101 obligations
-over finite abstract values and traces. The materialization input and image sequences are capped at 64 MiB
-and its phase trace has exactly four entries. The lifecycle-history sequence
-lengths are not bounded by these proofs.
+execution-composition and R11 runtime-semantics models. The authenticated runner
+proves 119 obligations and rejects 79 expected-negative mutations over finite
+abstract values and traces. The materialization input and image sequences are
+capped at 64 MiB and its phase trace has exactly four entries. The
+lifecycle-history sequence lengths are not bounded by these proofs.
 
 `runtime_lifecycle_v1.rs` proves:
 
@@ -345,6 +346,51 @@ and Wave64 wrapping reduction/scan results.
 | Wave convergence, barrier behavior, LDS, and machine arithmetic | **Contracted** | The model checks exact 64-lane arrival and computes host-side results; it does not establish GPU control-flow convergence or ISA behavior. |
 | KFD/HSA/HIP queues, mappings, coherence, completion, progress, and performance | **Contracted or measured** | Native adapters and hardware qualification must bind real resources and observations to the model. No model value grants native authority. |
 
+`r11_runtime_semantics_v1.rs` proves eighteen abstract facade-semantics
+obligations:
+
+1. a recorded event aliases its pending source submission;
+2. a conclusive observation becomes the shared event/submission status;
+3. first completion discharges every registered callback with the exact status;
+4. a repeated observation cannot discharge callbacks again;
+5. a live event prevents source-submission release;
+6. an exact atomic operation/scope/order/geometry contract with both capability
+   layers is admitted, including a base-valid partial grid;
+7. legal compare-exchange success/failure order and weak-mode contracts are
+   admitted;
+8. an illegal compare-exchange failure order is rejected;
+9. compare-exchange-only failure-order or weak controls reject on non-CAS
+   operations;
+10. any substituted atomic contract field is rejected;
+11. a missing execution-detail atomic capability fails closed;
+12. a workgroup collective admits its exact geometry-derived membership;
+13. a collective membership mismatch is rejected;
+14. a collective grid with a partial tail workgroup is rejected;
+15. a single-stream system collective is rejected;
+16. an active persistent mapping is retained by its exact batch;
+17. conclusive batch completion restores the same persistent mapping identity;
+    and
+18. indeterminate completion quarantines the mapping and blocks release.
+
+The executable `r11_runtime_semantics.rs` model additionally checks bounded
+event/source lookup, terminal callback registration, event-gated release,
+capability rejection, collective geometry validation, repeated persistent-map
+reuse, atomic partial-grid admission, the complete compare-exchange order
+lattice in weak and strong modes, non-CAS control rejection, and all-mapping
+quarantine. Complete workgroups are a collective-only requirement. It performs
+no callback, backend call, mapping syscall, atomic operation, collective, or
+device execution.
+
+## R11 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract shared completion, callback discharge, launch admission, and persistent-map custody | **Proved** | Eighteen theorems in `r11_runtime_semantics_v1.rs`; mathematical values only. Atomic admission includes compare-exchange failure-order and weak-mode legality. Collective geometry requires every grid dimension to contain at least one workgroup and divide exactly by its workgroup dimension. |
+| Executable bounded R11 model | **Checked** | Rust unit tests exercise independently implemented model transitions and rejection cases. |
+| Executable Rust to Verus correspondence | **Not established** | No theorem connects `src/r11_runtime_semantics.rs` or the runtime facade to the Verus structures. |
+| Native atomic, collective, callback, event, and persistent mapping behavior | **Not established** | Concrete adapters must authenticate capability and completion observations and retain native custody. |
+| Compiler, ISA, hardware progress, and performance | **Not established** | No R11 model value is execution authority or hardware evidence. |
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -396,7 +442,11 @@ release after uncertain XGMI completion; R10 dependency bypass, partial batch
 publication, pool-generation reuse, peer-owner reversal, post-publication
 cancellation release, quarantine release, atomic scope substitution, omitted
 release fence, wrong RMW return value, early Wave64 publication, and an
-inclusive-scan prefix off by one lane. The launcher
+inclusive-scan prefix off by one lane; R11 callback redischarge, event-status
+substitution, omitted atomic execution capability, admission of a release
+failure order for compare-exchange, collective membership mismatch, admission
+of a partial tail workgroup, mapping release during a live batch, and mapping
+release after indeterminate completion. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
