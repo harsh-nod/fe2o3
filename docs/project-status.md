@@ -1231,7 +1231,13 @@ is complete, and the recorded runs grant no current production authority.
   into safe dispatch. Default decisions require the exact move-only V4 proof
   inputs and compiler-currentness evidence, but default builds expose no
   downstream implementation or decision-construction route; they therefore
-  fail closed until the crate-owned protected verifier exists.
+  fail closed until the crate-owned protected verifier exists. The opt-in
+  physical-differential crate now composes only an already-authenticated
+  generated invocation with exact simulator state in one move-only
+  execute-and-compare transition. Its V2 qualification command enumerates the
+  absent protected backend/key/ledger/rollback and refinement-receipt producers
+  separately, accepts no caller pass counts, and cannot admit the synthetic
+  verifier feature.
   Retired Worker V2 test
   authority is not an alternate route and cannot be selected in any build.
 - Checked mutable views now support simultaneously live disjoint subviews via

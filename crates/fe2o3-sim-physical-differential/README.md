@@ -17,13 +17,28 @@ observation and is never converted into a mismatch.
 
 ```text
 fe2o3-sim-physical-differential physical-capabilities-v1
+fe2o3-sim-physical-differential protected-physical-qualification-v2
 ```
 
-The normal protected Worker V3 application verifier is not wired yet, so the
-capability response reports `protected_verifier_unavailable`. The legacy
-handwritten LLVM vecadd fixture is excluded and cannot be used as same-body
-parity evidence. Generated hosts can inspect
-`GeneratedWorkerV3KfdInvocation::differential_availability` before launch and
-can obtain a sealed observation only through `execute_for_differential`.
+The V2 qualification command enumerates every protected prerequisite without
+accepting caller claims or pass counts. The sealed verifier adapter, independent
+finalizer replay, and the invocation-to-comparison bridge are implemented. A
+concrete protected verifier backend, protected key and Worker-ledger deployment,
+an independently administered monotonic rollback authority, and authenticated
+proof-to-machine, Rust-layout, and Rust-effect refinement receipt producers are
+not provisioned. Per-invocation application handoff, compiler proof/target
+lineage, generated packing, checked device, and unambiguous completion can be
+decided only from their exact move-only owners.
+
+`prepare_generated_worker_v3_physical_differential_v1` accepts only an already
+authenticated `GeneratedWorkerV3KfdInvocation`; it accepts no verifier, HSACO,
+digest, token, or address. It binds the invocation's protected differential
+identity to exact simulator state, retains both owners in a single-use value,
+then calls `execute_for_differential` and compares only the sealed completed
+observation. Runtime, currentness, or completion failure returns an error and
+cannot become unavailable, discrepancy, or agreement evidence. The normal
+protected Worker V3 application verifier remains absent, so qualification is
+currently unavailable and the legacy handwritten LLVM vecadd fixture remains
+excluded.
 
 This crate is direct-KFD-only. It has no HIP or HSA runtime path.

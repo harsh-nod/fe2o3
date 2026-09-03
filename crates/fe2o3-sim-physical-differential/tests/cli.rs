@@ -40,3 +40,49 @@ fn physical_capabilities_report_exact_blocker_and_zero_passes() {
     assert_eq!(error["code"], "invalid_command_line");
     assert_eq!(error["hardware_observed"], false);
 }
+
+#[test]
+fn protected_qualification_enumerates_exact_unavailable_authority() {
+    let output = command()
+        .arg("protected-physical-qualification-v2")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(output.stdout.len() < 16 * 1024);
+    let qualification: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        qualification["schema"],
+        "fe2o3-simulator-direct-kfd-differential-qualification-v2"
+    );
+    assert_eq!(qualification["production_ready"], false);
+    assert_eq!(qualification["hardware_observed"], false);
+    assert_eq!(qualification["parity_observed"], false);
+    assert_eq!(qualification["grants_authority"], false);
+    assert_eq!(qualification["synthetic_verifier_admitted"], false);
+    assert_eq!(qualification["execution_failure_can_mint_report"], false);
+    assert_eq!(qualification["stale_publication_can_mint_report"], false);
+    assert_eq!(qualification["stale_device_can_mint_report"], false);
+    assert_eq!(qualification["ambiguous_completion_can_mint_report"], false);
+    assert_eq!(
+        qualification["available_boundary"],
+        "authenticated_generated_invocation_to_single_use_execute_and_compare"
+    );
+    assert_eq!(
+        qualification["current_blocker"],
+        "concrete_backend_not_implemented"
+    );
+    assert!(qualification.get("hardware_passes").is_none());
+    assert!(qualification.get("parity_passes").is_none());
+
+    let prerequisites = qualification["prerequisites"].as_array().unwrap();
+    assert_eq!(prerequisites.len(), 14);
+    assert!(prerequisites.iter().any(|record| {
+        record["prerequisite"] == "sealed_protected_verifier_adapter"
+            && record["status"] == "implemented_mechanism"
+    }));
+    assert!(prerequisites.iter().any(|record| {
+        record["prerequisite"] == "proof_to_executable_machine_refinement"
+            && record["unavailable_reason"] == "machine_refinement_receipt_producer_not_implemented"
+    }));
+}

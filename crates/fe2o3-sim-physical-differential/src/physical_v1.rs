@@ -90,14 +90,19 @@ pub struct PhysicalDifferentialCapabilitiesV1 {
 }
 
 pub const fn physical_differential_capabilities_v1() -> PhysicalDifferentialCapabilitiesV1 {
+    let qualification = crate::physical_differential_qualification_v2();
     PhysicalDifferentialCapabilitiesV1 {
         schema: PHYSICAL_DIFFERENTIAL_CAPABILITIES_SCHEMA_V1,
         direct_kfd_only: true,
         generated_worker_v3_only: true,
         legacy_llvm_fixture_excluded: true,
         hardware_unavailable_counts_as_pass: false,
-        hardware_passes: 0,
-        parity_passes: 0,
+        hardware_passes: if qualification.hardware_observed {
+            1
+        } else {
+            0
+        },
+        parity_passes: if qualification.parity_observed { 1 } else { 0 },
         parity_requires_sealed_completed_observation: true,
         executable_compare_surface: "generated-host-library-api-only",
         current_production_blocker: physical_differential_production_readiness_v1(),
