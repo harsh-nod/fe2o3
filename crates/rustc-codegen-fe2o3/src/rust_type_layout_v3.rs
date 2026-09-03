@@ -455,12 +455,15 @@ fn compiler_laid_out_by_value_argument<'tcx>(
     let abi_class = match layout.backend_repr {
         BackendRepr::Scalar(_) => RustcAbiClassV1::Scalar,
         BackendRepr::ScalarPair(..) => RustcAbiClassV1::ScalarPair,
-        BackendRepr::Memory { sized: true } if layout.size.bytes() == 0 => {
-            RustcAbiClassV1::Aggregate
+        BackendRepr::Memory { sized: true } => RustcAbiClassV1::Aggregate,
+        BackendRepr::Memory { sized: false } => {
+            return Err(GeneralTypedExtractError::new(format!(
+                "{argument} has an unsized aggregate ABI"
+            )));
         }
         _ => {
             return Err(GeneralTypedExtractError::new(format!(
-                "{argument} requires an unsupported cast or indirect aggregate ABI"
+                "{argument} requires an unsupported vector aggregate ABI"
             )));
         }
     };

@@ -87,7 +87,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "aggregate_zst",
     feature = "aggregate_nested",
     feature = "aggregate_enum",
-    feature = "aggregate_pointer"
+    feature = "aggregate_pointer",
+    feature = "aggregate_drop"
 )))]
 pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let input = [value; 64];
@@ -237,6 +238,27 @@ pub struct AggregatePointer {
 )]
 #[cfg(feature = "aggregate_pointer")]
 pub fn aggregate_pointer(_value: AggregatePointer, mut output: DisjointSlice<u64>, scale: u64) {
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = scale;
+    }
+}
+
+#[cfg(feature = "aggregate_drop")]
+pub struct AggregateDrop {
+    pub value: u64,
+}
+
+#[cfg(feature = "aggregate_drop")]
+impl Drop for AggregateDrop {
+    fn drop(&mut self) {}
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "aggregate_drop")]
+pub fn aggregate_drop(_value: AggregateDrop, mut output: DisjointSlice<u64>, scale: u64) {
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = scale;
     }

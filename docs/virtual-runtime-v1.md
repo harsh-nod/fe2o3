@@ -111,14 +111,22 @@ a lossless same-module V10 encoding. Address-free runtime bindings patch only
 the pointer slots authenticated by the
 storage map. The current packing rules admit scalar and thin global pointers
 with a direct ABI, global slices with the exact pointer/length pair ABI, and V4
-pointer-free by-value aggregates whose retained rustc ABI is exact `Direct`,
-`Pair`, or zero-sized `Ignore`. The V4 consumer independently rederives the
-canonical KIR physical packing and leaf order, and never reads aggregate
-padding. The one admitted owned RegionSlice wrapper requires exact
+pointer-free by-value arrays, tuples, and structs whose retained rustc ABI has
+an exact recursive logical-component rule. The admitted source modes are
+zero-sized `Ignore`, scalar `Direct`, `Pair`, GPU `Unadjusted`
+`Direct(Memory)`, simple Rust integer `Cast`, and sized non-stack,
+non-metadata `Indirect` with exact carrier attributes. The V4 consumer
+independently rederives the complete bounded leaf path, type, byte offset,
+validity, and canonical KIR physical packing. `Cast` and `Indirect` remain
+source-transport evidence only: the simulator accepts individual scalar leaves
+and never reads aggregate bytes, padding, or the indirect carrier. The one
+admitted owned RegionSlice wrapper requires exact
 compiler-retained pointer/usize/ZST layout, scalar-pair ABI, ownership/access,
-and physical slot evidence. Adjusted, cast, indirect, other pointer-containing,
-ambiguous, reordered, expanded, unsupported wrapper, and non-global forms fail
-typed admission.
+and physical slot evidence. Adjusted values, complex or foreign casts,
+metadata-bearing or stack indirect values, enums without exact variant and
+discriminant materialization, niches, other pointer-containing, ambiguous,
+reordered, expanded, unsupported wrapper, and non-global forms fail typed
+admission.
 
 One dedicated CPU worker retains the virtual runtime state behind a fixed
 64-command channel. Synchronous lifecycle commands wait for their response;
@@ -150,7 +158,7 @@ criteria. It is not a closure claim.
 | --- | --- | --- |
 | C0 semantics/baseline | `fe2o3-kir-sim-capabilities` derives a stable, CI-checked owner-or-typed-rejection matrix from the exhaustive admitted operation/terminator/request surface and exact scalar support predicates for every simulator-facing profile; its declared, authority-free compact JSON is fixed at 4,751,390 bytes | Future KIR or additive request surface changes must extend the exhaustive classifier and matrix before the generic lane can pass |
 | C1 scalar interpreter | Verified KIR admission, structured CFG/calls/scalars, canonical/seeded/replay schedules, bounded errors, generated wrapping-`i32` expressions, and a fixed V2 corpus covering every admitted fixed-width integer type, both target `index` widths, `bool`, exact finite additions for `f16`/`bf16`/`f32`/`f64`, multi-block CFG/block arguments/integer switch/internal calls, global memory, shared-view aliasing, and typed adversarial failures | Float rounding-edge/nonfinite matrices, casts, broader operation combinations, concurrency families, and universal coverage remain incomplete and are explicit typed exclusions |
-| C2 typed memory/Rust | Allocation provenance, initialization, bounds, alignment, and buffer views; V3 retains one-to-one semantic storage, while production V4 adds exact one-to-many leaf correspondence and canonical simulator-kernarg slots. Pointer-free ordinary Rust structs and tuples with exact `Direct`/`Pair` ABI and ZST `Ignore` are flattened by the sole lowering path, reconstructed for semantic operations, exported, and run by the standalone debugger. Runtime materialization rechecks rustc backend representation, component order, scalar validity, and padding independence | Arrays or nested aggregates using `Cast`/`Indirect`, enums, embedded pointers, adjusted ABIs, and wrapper regions without retained pointer-shape proof remain typed unavailable; broader generated corpus remains incomplete |
+| C2 typed memory/Rust | Allocation provenance, initialization, bounds, alignment, and buffer views; V3 retains one-to-one semantic storage, while production V4/V5 add exact one-to-many leaf correspondence and canonical simulator-kernarg slots. The sole production lowering recursively flattens pointer-free ordinary Rust arrays, tuples, and structs using exact rustc offsets/strides and validity. Exact scalar `Direct`, `Pair`, ZST `Ignore`, GPU `Unadjusted` `Direct(Memory)`, simple Rust integer `Cast`, and sized non-stack/non-metadata `Indirect` source modes are admitted as logical leaf input; no raw aggregate, padding, or indirect-carrier bytes are read. Existing ordinary array and nested-struct fixtures export on gfx942 and are admitted by the standalone debugger and normal simulator runtime. Runtime independently rederives the complete bounded component roster and rejects order, path, offset, type, slot, mode, or identity substitution | Variant-aware enum/discriminant and niche materialization, embedded-pointer provenance/ownership, adjusted values, complex or foreign `Cast`, metadata-bearing/on-stack/otherwise non-exact `Indirect`, dynamic by-value array indices, and the broader generated layout corpus remain typed unavailable |
 | C3 wave/workgroup | Wave32/Wave64 masks, ballot/any/all/integer shuffle, exact V9/V10 software-IEEE f32 XOR-butterfly sum/maximum and bit-preserving broadcast, static scalar LDS, and the additive explicit-byte dynamic LDS path for exactly one reachable canonical `Dynamic` base. Dynamic LDS reuses per-workgroup generation/lifetime, initialization, barriers, fences, races, debugging, schedule replay/exploration, reduction, virtual dispatch, and normal runtime launch propagation. The slice also includes integer atomics/fences, race/HB exploration, exact Wave64 16x16 XOR4 matrix LDS load/store, and exact V9/V10 gfx950 FP4/FP8 Current/Stage/Publish/Read transpose semantics. The transpose reads actual initialized LDS bytes, publishes through the normal workgroup epoch, retains schedule/debug evidence, and covers guarded overflow-to-zero behavior. An 8x8 LDS GEMM acceptance case uses only ordinary software-IEEE f32 multiply/add; it does not claim MFMA equivalence. | KIR requires full uniform waves and reports partial launch tails exactly. General divergence/reconvergence, scans, multiple/aliased dynamic LDS bases, `DynamicAtLeast`, and remaining intrinsics stay typed unsupported. BF16 and scaled MFMA are rejected as `unsupported_numerical_contract` until an executable target contract fixes rounding, association, nonfinite, denormal, and signed-zero behavior; the simulator does not approximate those instructions. |
 | C4 virtual runtime | This crate and CLI cover bounded allocation/copy/queue/dependency/dispatch/completion plus pre-publication cancellation, typed timeout ambiguity, early-release, quiesced recovery, and atomic full-generation reset. `fe2o3-sim-runtime` additionally runs exact admitted V3/V4/V5 bundles through the normal typed `RuntimeContextV1` lifecycle, including event dependencies, output copyback, exact aggregate leaf materialization, and the compiler-proven RegionSlice wrapper, without GPU probing or fallback | #182-defined multi-device plans and unsupported aggregate ABI forms remain outside this single-device adapter |
 | C5 debugger/agent | Bounded JSONL simulator debugger, semantic scopes, replay/reverse inspection, race/source evidence, direct V3/V4/V5 bundle admission, a one-shot agent-readable typed layout/region query with hostile correspondence substitution rejection, and exact canonical/seeded failure reduction with bounded canonical reports and context-bound reproducer replay. A separate fresh-process, read-only diagnosis service admits an exact reduction report plus its detailed race or a canonical virtual host-lifetime incident, binds every session/page to exact evidence and artifact identities, and returns typed diagnoses and bounded retained-witness pages without execution, file, network, or patch authority. Public `sim --bundle-v5` executes exact production V9 gfx950 f32 collectives through V10 custody | Broader diagnosis/query families, authenticated evidence production, input-value reduction, V10-only source production, and unsupported aggregate ABI forms remain incomplete |
@@ -170,7 +178,7 @@ The initial acceptance cases currently have these honest dispositions:
 | 8 unsupported operation | Implemented as typed rejection; unsupported operations are never approximated |
 
 Therefore issue #216 cannot yet truthfully close on this milestone alone. The
-remaining C1-C3/C5 semantic breadth, C6 physical
+remaining C1-C3/C5 semantic breadth, including the explicit C2 exclusions, C6 physical
 differential qualification, and #182-dependent multi-device work remain
 independent gates.
 

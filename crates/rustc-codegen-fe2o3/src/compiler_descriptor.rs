@@ -975,6 +975,10 @@ fn validate_production_v1_semantic_root_ownership_evidence(
                     SemanticAbiPassModeV1::Pair { .. }
                 )
                 | (RustcAbiClassV1::Aggregate, SemanticAbiPassModeV1::Ignore)
+                | (
+                    RustcAbiClassV1::Aggregate,
+                    SemanticAbiPassModeV1::Cast { .. } | SemanticAbiPassModeV1::Indirect { .. }
+                )
         );
         if semantic_type.layout().size_bytes() != Some(argument.source_size)
             || semantic_type.layout().alignment_bytes() != u64::from(argument.source_alignment)

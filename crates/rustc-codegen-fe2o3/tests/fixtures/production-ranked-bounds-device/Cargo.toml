@@ -39,6 +39,7 @@ aggregate_zst = []
 aggregate_nested = []
 aggregate_enum = []
 aggregate_pointer = []
+aggregate_drop = []
 
 [dependencies]
 fe2o3-device.workspace = true

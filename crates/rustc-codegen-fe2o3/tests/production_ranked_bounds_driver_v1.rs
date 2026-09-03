@@ -1695,11 +1695,32 @@ fn ordinary_rust_struct_argument_exports_exact_v4_components() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
+fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
+    use fe2o3_kernel_ir::SemanticStorageProjectionV2::{ArrayElement, Field};
+
     let target = ScratchTarget::new();
-    for (feature, expected_components) in [
-        ("aggregate_pair_tuple", 2_usize),
-        ("aggregate_zst", 0_usize),
+    for (feature, expected_paths) in [
+        (
+            "aggregate_pair_tuple",
+            vec![vec![Field { index: 0 }], vec![Field { index: 1 }]],
+        ),
+        ("aggregate_zst", vec![]),
+        (
+            "aggregate_pair_array",
+            vec![
+                vec![ArrayElement { index: 0 }],
+                vec![ArrayElement { index: 1 }],
+            ],
+        ),
+        (
+            "aggregate_nested",
+            vec![
+                vec![Field { index: 0 }, Field { index: 0 }],
+                vec![Field { index: 0 }, Field { index: 1 }],
+                vec![Field { index: 1 }, ArrayElement { index: 0 }],
+                vec![Field { index: 1 }, ArrayElement { index: 1 }],
+            ],
+        ),
     ] {
         let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
         let result = output(
@@ -1728,30 +1749,54 @@ fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
             .storage()
             .components()
             .unwrap();
-        assert_eq!(components.len(), expected_components);
-        if expected_components == 2 {
-            assert_eq!(
-                components[0].path(),
-                &[fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: 0 }]
-            );
-            assert_eq!(
-                components[1].path(),
-                &[fe2o3_kernel_ir::SemanticStorageProjectionV2::Field { index: 1 }]
-            );
+        assert_eq!(
+            components
+                .iter()
+                .map(|component| component.path().to_vec())
+                .collect::<Vec<_>>(),
+            expected_paths
+        );
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let abi = semantic.functions()[map.kernels()[0].semantic_body() as usize].abi();
+        match feature {
+            "aggregate_pair_array" | "aggregate_nested" => {
+                assert!(matches!(
+                    abi.adjusted_arguments()[0].mode(),
+                    fe2o3_mir_model::semantic_mir_v1::SemanticAbiPassModeV1::Indirect {
+                        metadata_attributes: None,
+                        on_stack: false,
+                        ..
+                    }
+                ));
+                let ty = abi.source_input_types()[0];
+                assert!(matches!(
+                    semantic.types()[ty.index() as usize]
+                        .layout()
+                        .backend_repr(),
+                    fe2o3_mir_model::semantic_mir_v1::SemanticBackendReprV1::Memory { sized: true }
+                ));
+            }
+            _ => {}
         }
     }
 
-    let tuple_request = target.path().join("aggregate-pair-tuple-request.json");
+    let nested_request = target.path().join("aggregate-nested-request.json");
     std::fs::write(
-        &tuple_request,
+        &nested_request,
         serde_json::to_vec(&json!({
             "schema": "fe2o3-simulation-request-v1",
-            "kernel": "aggregate_pair_tuple",
+            "kernel": "aggregate_nested",
             "grid": [64, 1, 1],
             "workgroup": [64, 1, 1],
             "arguments": [
                 {"kind": "scalar", "type": "u32", "bits": "0x11223344"},
                 {"kind": "scalar", "type": "u64", "bits": "0x0102030405060708"},
+                {"kind": "scalar", "type": "u16", "bits": "0x1234"},
+                {"kind": "scalar", "type": "u16", "bits": "0x5678"},
                 {
                     "kind": "buffer_view",
                     "backing": 7,
@@ -1774,7 +1819,7 @@ fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
         .unwrap(),
     )
     .unwrap();
-    let debug_target = target.path().join("aggregate-tuple-debug-target");
+    let debug_target = target.path().join("aggregate-recursive-debug-target");
     let build_debugger = Command::new(env!("CARGO"))
         .current_dir(workspace())
         .args([
@@ -1789,7 +1834,7 @@ fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
         ])
         .arg(&debug_target)
         .output()
-        .expect("build debugger for production V4 tuple integration");
+        .expect("build debugger for production recursive V4 integration");
     assert!(
         build_debugger.status.success(),
         "debugger build failed:\n{}",
@@ -1797,15 +1842,15 @@ fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
     );
     let mut simulator = Command::new(debug_target.join("debug/fe2o3-debug"))
         .args(["sim", "--bundle-v4"])
-        .arg(target.path().join("aggregate_pair_tuple-v4.fe2sim"))
+        .arg(target.path().join("aggregate_nested-v4.fe2sim"))
         .arg("--request")
-        .arg(&tuple_request)
+        .arg(&nested_request)
         .args(["--protocol", "jsonl"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start debugger simulator on compiler-produced tuple V4 bundle");
+        .expect("start debugger simulator on compiler-produced nested V4 bundle");
     simulator
         .stdin
         .take()
@@ -1815,18 +1860,52 @@ fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
     let simulated = simulator.wait_with_output().unwrap();
     assert!(
         simulated.status.success(),
-        "tuple V4 debugger simulation failed:\n{}",
+        "nested V4 debugger simulation failed:\n{}",
         String::from_utf8_lossy(&simulated.stderr)
     );
     let response: Value = serde_json::from_slice(&simulated.stdout).unwrap();
     assert_eq!(response["status"], "ok");
     assert_eq!(response["session"]["simulated"], true);
+    assert_eq!(response["session"]["hardware_observed"], false);
+
+    for feature in ["aggregate_pair_array", "aggregate_nested"] {
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV4::from_canonical_bytes(
+            std::fs::read(target.path().join(format!("{feature}-v4.fe2sim"))).unwrap(),
+        )
+        .unwrap();
+        let map =
+            fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
+                .unwrap();
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let abi_identity = *semantic.functions()[map.kernels()[0].semantic_root() as usize]
+            .abi()
+            .identity()
+            .as_bytes();
+        let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xb6; 32]).unwrap();
+        let module = fe2o3_runtime::RuntimeBackendV1::load_module_v1(
+            &mut backend,
+            1,
+            bundle.canonical_bytes(),
+        )
+        .unwrap();
+        fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
+            &mut backend,
+            module,
+            feature,
+            abi_identity,
+        )
+        .unwrap();
+        fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, module).unwrap();
+    }
 
     for (feature, typed_reason) in [
-        ("aggregate_pair_array", "aggregate ABI"),
-        ("aggregate_nested", "aggregate ABI"),
         ("aggregate_enum", "variant-aware packing evidence"),
         ("aggregate_pointer", "contains a pointer or reference"),
+        ("aggregate_drop", "Drop requiring drop glue"),
     ] {
         let result = output(
             simulation_export_command_for_feature(
@@ -1839,13 +1918,7 @@ fn ordinary_tuple_and_zst_export_while_array_and_nested_casts_fail_typed() {
             "reject unsupported ordinary attributed Rust aggregate ABI",
         );
         assert!(
-            !result.status.success()
-                && (result.stderr.contains(typed_reason)
-                    || result
-                        .stderr
-                        .contains("unsupported cast or indirect aggregate ABI")
-                    || result.stderr.contains("unsupported cast ABI")
-                    || result.stderr.contains("unsupported indirect ABI")),
+            !result.status.success() && result.stderr.contains(typed_reason),
             "{feature} did not fail at the typed ABI boundary:\n{}",
             result.stderr
         );
