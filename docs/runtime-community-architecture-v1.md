@@ -69,16 +69,22 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The direct backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, directional SDMA queues, serialized logical compute streams, and allocation-disjoint compute/copy overlap. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend uses PUBLIC HBM mapped to the exact two-GPU roster. | Concurrent compute on one device, unified compute plus native XGMI, device profiling timestamps, general atomic/collective facade operations |
+| KFD | The direct backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, directional SDMA queues, serialized logical compute streams, and allocation-disjoint compute/copy overlap. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. | Concurrent compute on one device, unified compute plus native XGMI, per-dispatch device timestamps, native-authorized atomic/collective execution |
 | HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy through host
 staging. The separate `KfdNativeXgmiRuntimeBackendV1` implements the same public
 peer-copy SPI with native XGMI for one exact pair, but exposes no compute or
 same-device copy operations. A single-device KFD child and the deprecated HSA
-adapter do not advertise peer copy. Atomics and collectives are capability
-vocabulary only; V1 defines no general atomic or collective operation. These
-rows are not HIP/HSA parity.
+adapter do not advertise peer copy. The V1 facade has typed atomic and
+collective launch wrappers with explicit operation, scope, ordering, geometry,
+and collective-participation contracts. Compare-exchange additionally binds
+weak/strong mode and a legal failure ordering distinct from its success
+ordering. They submit an already admitted typed
+kernel through the ordinary backend launch SPI; they neither synthesize a
+native operation nor grant artifact or execution authority. Both the stable and
+execution-detail KFD atomic/collective capability bits remain false, so those
+wrappers reject before KFD submission. These rows are not HIP/HSA parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
 kernel metadata at resolution, and shares those immutable bytes and descriptors
@@ -93,10 +99,20 @@ The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can
 withdraw only work still waiting before publication, and a published copy is
 reported as `TooLate` until it is drained. Compute and copy can overlap only
-when their allocation sets are disjoint. The separate XGMI facade currently
-maps and unmaps both peer buffers for every copy and publishes one packet per
-submission; its low-level KFD diagnostic can retain mappings and batch one
-doorbell, but that mechanism is not yet exposed by the facade.
+when their allocation sets are disjoint. The separate XGMI facade retains a
+successful exact-roster mapping for reuse across copies until host access or
+allocation release requires an explicit unmap. For each direction it selects
+submissions through a deterministic FIFO readiness queue, publishes at most 63 in one
+native reservation and doorbell store, and retains every mapping through exact
+completion. Polling a submission beyond the current batch advances a published
+ticket in front of it, so caller-driven polling or waiting cannot indefinitely
+ignore the batch that must drain first. This is bounded cooperative fairness,
+not background progress. The additive in-process `flush_stream` operation
+publishes a complete dependency-ready directional set of at most 63 before
+returning. This permits subsequent host work to overlap the DMA batch without
+waiting for its first poll. Oversubscription rejects before native mutation, and
+poll or wait remains the fallback; flush itself performs no dependency or
+completion progress and creates no background thread. Worker V3 is unchanged.
 
 The feature-gated gfx942 qualification lane is intentionally outside production
 authority. It re-hashes and loader-validates one repository-owned COV6 object,
@@ -117,7 +133,42 @@ relies on that adapter's unsafe-construction contract. The argument value
 produces an address-free kernarg image and
 allocation-relative memory effects. Launch dependencies name exact events from
 the same device. Submissions are nonblocking and may be polled or waited against
-a monotonic deadline.
+a monotonic deadline. `RuntimeCompletionStatusV1` is the central typed state:
+`Pending`, `Succeeded`, a typed backend-code or cancellation failure, or
+`QuiescentWithoutResult` when native references are gone without an observed
+execution result. Submission and event queries read that same state; event poll
+and wait update it through the same transition, so an event cannot disagree
+with its source submission. Completion callbacks are removed before invocation
+and run exactly once at the first conclusive transition across poll, wait,
+event observation, cancel, drain, cleanup, or release. Callback panics are
+contained and counted. Terminal backend ambiguity is not completion and does
+not discharge callbacks.
+
+`query_stream` aggregates every retained submission by typed status and reports
+the first failure deterministically by submission identity. `synchronize_stream`
+waits once for each pending submission using one shared monotonic deadline and
+returns the same aggregate observation; it may remain non-quiescent if the
+deadline expires. Rejected and quiescent wait errors are remembered while later
+pending submissions receive their one observation; terminal ambiguity stops
+the operation immediately. These operations do not create independent native streams:
+the current direct-KFD backend still serializes logical compute streams through
+one compute queue.
+
+`launch_atomic` and `launch_collective` match their contracts against the
+argument type before admission. Compare-exchange binds its success order,
+required failure order, and weak mode. A failure order cannot contain release
+semantics or be stronger than its success order; non-CAS operations require no
+failure order and `weak = false`. Collective participant count must equal the
+selected workgroup or grid geometry. Every collective grid dimension must be
+at least its workgroup dimension and divide exactly by it; partial tail
+workgroups reject before submission. Atomic launches retain base geometry
+validation and may use a partial final workgroup. System scope is rejected
+because one stream does not identify a cross-device membership set. Both
+wrappers require
+the stable and execution-detail backend capabilities and then use the ordinary
+typed-kernel launch path. This is executable facade validation, not proof of
+the kernel semantics, a native intrinsic, or Worker V3 authority; current KFD
+backends advertise neither capability.
 
 `RuntimeLaunchGeometryV1::grid` is the global work-item extent published in the
 AQL grid-size fields. `workgroup` is the per-group extent. For COV6 implicit
@@ -182,6 +233,15 @@ ambiguity.
   validation is constant per batch rather than per packet; packet construction
   is linear, while visible write-pointer publication and final doorbell
   notification are each one release operation per batch.
+- Native XGMI facade batches are direction-local and FIFO readiness ordered,
+  reuse exact-roster mappings after successful completion, and use the same
+  63-ticket ring bound. Ready dequeue and publication selection are O(batch),
+  with `batch <= 63`; focused in-flight selection is O(log batch). Dependency
+  wakeup is O(waiters for the completed dependency times the bounded 256-entry
+  dependency roster). Prepublication cancellation may remove an arbitrary
+  ready entry in O(ready), and allocation-overlap admission remains O(active).
+  A poll focused beyond the published batch advances its earliest published
+  predecessor; progress remains caller-driven.
 - KFD device, VM, allocation, mapping, and queue lifecycle transitions use the
   full contracted topology/aperture currentness composite. Active mapped-memory
   and queue operations use the retained process, reset-event, descriptor, UAPI,
@@ -208,6 +268,17 @@ deprecated HIP staging oracles, synchronized launch/wait, and HIP device-event
 intervals are reported separately. Results from unlike scopes must not be converted into parity
 ratios; even the KFD/HSA/HIP synchronized rows retain different currentness,
 allocation, signal, and readback policies.
+The XGMI facade benchmark likewise emits separate `remap-per-round` and
+`persistent-hot` rows. The persistent-hot row primes each direction once,
+performs no host allocation access between timed repetitions, and validates
+payloads and canaries only after the timed sequence. Mapping-reuse conclusions
+must use that row rather than the remap row.
+
+The low-level KFD queue can sample GPU, CPU, and system counters with one
+`GET_CLOCK_COUNTERS` observation bracketed by currentness checks. That sample
+is a clock-domain calibration input only. It does not identify dispatch
+publication, start, or completion and therefore is not a per-dispatch device
+timestamp. Runtime profiling continues to report such timestamps unavailable.
 
 ## Deprecated Qualification Backend
 
@@ -288,3 +359,19 @@ and eleven expected-negative mutations bring the pinned totals to 101 and 71.
 Six deterministic public-runtime traces compare the executable facade against
 the closed model. These are model and differential checks, not a Rust-to-Verus,
 compiler-to-ISA, firmware, or hardware proof.
+
+R11 adds executable abstract models for typed submission/event completion,
+exact-once callback discharge, atomic and compare-exchange order/weak contract
+matching, collective geometry/membership admission, and persistent-batch mapping
+custody. Eighteen additional Verus obligations and eight expected-negative mutations bring the
+pinned totals to 119 and 79. The proof covers the abstract model only: it makes
+no Rust-to-Verus refinement claim and supplies no compiler, KFD, firmware, or
+native execution authority.
+
+The remaining community-launch blockers are material. Direct KFD still owns one
+compute queue per child and serializes logical compute streams. Native XGMI is
+owned by a separate exact two-device, copy-only backend; there is no unified
+native multi-device compute owner. The repository has no reviewed production
+Worker V3 application verifier, and the Rust device-language path includes a
+bounded volatile-load/store bridge rather than broad Rust language support.
+Consequently, the runtime is not at HIP/HSA parity.

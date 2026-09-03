@@ -2,7 +2,8 @@
 
 fe2o3 is a developer preview. This matrix distinguishes a runnable or qualified
 engineering slice from a supported public platform. **No GPU target currently
-has a stable public support commitment.**
+has a stable public support commitment. This matrix makes no HIP/HSA parity
+claim.**
 
 ## Status definitions
 
@@ -49,12 +50,14 @@ policy must agree exactly.
 | --- | --- | --- | --- |
 | CPU KIR simulation | Verified canonical KIR V7 plus typed request | Qualified for the admitted subset | Deterministic semantic execution and observation only |
 | CPU source bundle simulation | Rust kernel exported through production source/MIR/KIR stages | Experimental | Exact authority-free bundle content and deterministic KIR execution |
-| Direct-KFD diagnostic | Exact admitted artifact and invocation | Bounded qualified lanes | The properties named by that test only |
+| Direct-KFD diagnostic | Exact admitted artifact and invocation | Bounded qualified lanes | The properties named by that test only; the current runtime child owns one compute queue and serializes logical compute streams |
 | Production application dispatch | Ordinary Rust application | Unavailable publicly | Missing general Worker V3 application verifier/release deployment |
 | HIP execution | N/A | Unavailable | Not a fallback runtime |
 | HSA execution | N/A | Unavailable on the production path | Legacy/qualification code does not define the public runtime |
-| Same-host multi-GPU peer copy | Exact admitted KFD devices | Experimental bounded lanes | Generic routing uses bounded host staging; an exact two-device copy-only backend admits native XGMI |
-| Distributed kernel execution | N/A | Unavailable | General multi-device kernels, synchronization, and overlap contracts remain open |
+| Runtime completion, events, and callbacks | Backend-neutral typed handles | Experimental | Submission/event query, poll, and bounded wait share one typed completion state; callbacks discharge exactly once on conclusive status, and stream query/synchronize returns an aggregate observation under one deadline |
+| Typed atomic/collective launch wrappers | Admitted typed kernel plus explicit contract | Experimental facade; unavailable on KFD | Operation, scope, success order, compare-exchange failure order/weak mode, geometry, and collective membership are checked before ordinary backend submission. CAS failure order cannot contain release semantics or exceed success; non-CAS requires no failure order and `weak = false`. Collective grids must contain at least one exactly dividing whole workgroup in every dimension, while atomic grids retain base validation and may be partial. Both KFD capability layers remain false, so this grants no native execution authority |
+| Same-host multi-GPU peer copy | Exact admitted KFD devices | Experimental bounded lanes | Generic routing uses bounded host staging; a separate exact two-device copy-only backend retains native XGMI mappings and publishes a deterministic FIFO ready queue in directional batches of at most 63. Its additive in-process `flush_stream` enables host/DMA overlap after a complete ready batch is published; poll/wait remains the fallback and there is no background progress or Worker V3 flush. Benchmark `outstanding_depth` is queued work on one ordered directional SDMA engine, not engine concurrency. |
+| Distributed kernel execution | N/A | Unavailable | General multi-device kernels, synchronization, and overlap contracts remain open; there is no unified native multi-device compute owner |
 
 The simulator does not model GPU time, occupancy, cache behavior, physical wave
 scheduling, or performance. It does not predict performance or prove GPU
@@ -69,8 +72,9 @@ equivalence or race freedom.
 | 1D/2D/3D launch indices | Qualified subsets | Typed logical indices; target layout is explicit |
 | Checked global buffers and views | Qualified subsets | Allocation-relative bounds, access, initialization, and provenance checks |
 | Workgroup memory and barriers | Qualified subsets | Static scalar LDS plus one explicitly sized reachable canonical dynamic LDS base, with convergent barriers and exact initialization/publication/lifetime checks within defined limits; multiple bases and `DynamicAtLeast` fail typed |
-| Integer atomics and fences | Qualified simulator subsets | Exact supported width/operation/ordering/scope combinations only |
-| Wave32/Wave64 collectives | Qualified simulator subsets | Logical collective semantics, not physical `EXEC` emulation |
+| Integer atomics and fences | Qualified simulator subsets; typed runtime contract only | Exact supported width/operation/ordering/scope combinations only; direct KFD advertises no atomic execution capability |
+| Wave32/Wave64 collectives | Qualified simulator subsets; typed runtime contract only | Logical collective semantics, not physical `EXEC` emulation; direct KFD advertises no collective execution capability |
+| Rust volatile memory bridge | Experimental bounded slice | Authenticated scalar volatile load/store with explicit bounds and access checks; not broad Rust or general device-language support |
 | Helpers and structured control flow | Qualified simulator/compiler subsets | Bounded call depth and explicit unsupported diagnostics |
 | General Rust `std`, allocation, unwind, dynamic dispatch | Unavailable | Device subset fails closed |
 | General inline assembly, external calls, generic address space | Unavailable | No inferred lowering |
@@ -106,7 +110,7 @@ authority.
 | --- | --- | --- |
 | rocprofv3 dispatch JSON/CSV import | Experimental, bounded implementation | Strict reviewed dialects, KFD identity join, bounded collector custody |
 | Dry-run collection planning | Experimental | Produces no fabricated collection recipe when prerequisites are unavailable |
-| Direct-KFD runtime observation | Experimental, MI300X-qualified slice | Opt-in bounded lifecycle, host staging, queue, AQL publication/completion, and host-monotonic timing; no device-clock or rocprof correlation claim |
+| Direct-KFD runtime observation | Experimental, MI300X-qualified slice | Opt-in bounded lifecycle, host staging, queue, AQL publication/completion, and host-monotonic timing. A low-level KFD GPU/CPU/system counter sample supports clock-domain calibration only; it is not a per-dispatch publication/start/completion timestamp or rocprof correlation claim |
 | rocprof wrapper host-wall comparison | Experimental, MI300X-observed slice | Explicitly authorized alternating raw/wrapped process timing with exact identities, bounded outputs, complete per-leg outcomes, and a caller candidate budget. This is wrapper-path wall time, not counter/PC/ATT/debugger or kernel-capture overhead; empty collector inventory keeps capture overhead and loss unavailable |
 | Real GPU-dispatch round trip | Unavailable as protected qualification | Current tests use deterministic/fake collector inputs plus real KFD observation where gated |
 | Runtime/copy attribution | Incomplete | Direct-KFD logical runtime and host staging are observed; device copy-engine events and full semantic treatment lineage remain unavailable |

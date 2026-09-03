@@ -30,6 +30,54 @@ virtual-memory remapping, IPC, and multi-host transport are outside V1. A
 backend must report these as unsupported; it must not emulate them silently or
 advertise their capability.
 
+## Current R11 Status
+
+R11 implements backend-neutral typed completion state for submissions and
+events, exact-once completion callbacks, and aggregate stream query and bounded
+synchronization. It also provides typed atomic and collective wrappers that
+match operation, scope, success ordering, optional failure ordering, weak mode,
+geometry, and collective membership before submitting an ordinary admitted
+typed kernel. Compare-exchange requires a failure order without release
+semantics that is no stronger than success; non-CAS operations require no
+failure order and `weak = false`. Collective grids must contain
+only complete workgroups: every grid dimension is at least and exactly
+divisible by its workgroup dimension. Atomic launch admission retains base
+geometry validation and permits a partial final workgroup. These are facade
+semantics, not a native-operation or authority claim: current KFD backends
+advertise both stable
+and execution-detail atomic/collective capabilities as false, so the wrappers
+reject before KFD submission.
+
+The exact two-device XGMI copy-only backend now retains successful peer mappings
+until host access or allocation release and publishes directional copies from a
+deterministic FIFO readiness queue in batches of at most 63 with caller-driven
+fairness. Ready selection is O(batch), bounded by 63, and focused in-flight
+selection is O(log batch), independent of the total active set. It remains
+separate from the single-device compute owner. Direct KFD still serializes
+logical compute streams through one compute queue, and there is no unified
+native multi-device compute backend.
+
+The additive in-process `flush_stream` extension publishes one complete ready
+XGMI directional batch before returning, so later host work can overlap that DMA
+without waiting for the first poll. A ready set larger than the 63-ticket ring
+admission rejects before publication. Poll and wait remain the fallback and the
+only completion-progress operations; there is no background progress thread and
+Worker V3 carries no flush request.
+
+The XGMI benchmark labels queued work as `outstanding_depth`; the native route
+uses one ordered SDMA engine per direction and does not claim that depth as
+engine concurrency.
+
+The low-level KFD clock-correlation observation is one currentness-bracketed
+GPU/CPU/system counter sample for calibration. It does not mark dispatch
+publication, start, or completion and is not a per-dispatch device timestamp.
+The production Worker V3 application verifier remains absent, and the current
+Rust device-language addition is a bounded volatile-load/store bridge rather
+than broad Rust support. The R11 executable model and Verus obligations cover
+abstract safety properties only; they make no Rust-to-Verus, compiler-to-ISA,
+firmware, or hardware refinement claim. The runtime therefore remains below
+this parity profile.
+
 ## Required Gates
 
 ### G1: API and ownership
@@ -47,6 +95,12 @@ dispatch. Copy and compute can overlap when the admitted device exposes the
 required queues. Dependencies are explicit events; submission is nonblocking;
 poll never blocks; wait observes a monotonic deadline. Progress storage is
 bounded by declared queue, submission, dependency, and staging limits.
+Submission and event observation share one typed completion state. Completion
+callbacks discharge exactly once on the first conclusive transition, and
+aggregate stream synchronization applies one shared deadline without obscuring
+failed or quiescent-without-result submissions. Nonterminal wait errors do not
+prevent later pending submissions from receiving their one bounded wait;
+terminal ambiguity stops immediately.
 
 ### G3: memory and copies
 
@@ -71,8 +125,19 @@ The source operation, memory order, memory scope, address space, width, return
 value, fences, and machine instruction sequence are part of one authenticated
 execution identity. Collective admission additionally binds wave size,
 participant mask, convergence point, LDS extent, barriers, and result layout.
+Compare-exchange separately binds success order, failure order, and weak mode;
+failure order has no release semantics and is no stronger than success, while
+non-CAS operations admit neither a failure order nor weak mode.
 System-scope and XGMI-visible claims require native litmus evidence; structural
 instruction matching alone is insufficient.
+Every grid dimension must contain at least one whole workgroup and divide
+exactly by its workgroup dimension; partial tail workgroups are not admitted.
+This complete-tiling restriction applies to collectives, not atomic launches.
+
+Typed facade contracts and ordinary typed-kernel submission are necessary but
+not sufficient for this gate. A backend must advertise both the stable and
+execution-detail capability, and the resulting execution must still carry the
+authenticated identity and native evidence required above.
 
 ### G6: executable refinement
 
@@ -91,6 +156,8 @@ boundary, and sample count for fe2o3, HIP, and HSA. Reports include p50, p95,
 throughput, failures, GPU topology, clocks, utilization, thermal state, ROCm and
 kernel versions, exact commit, and raw samples. A busy shared GPU invalidates a
 performance result rather than producing a parity claim.
+Clock-correlation calibration samples must be reported separately from actual
+per-dispatch device timestamps and cannot substitute for them.
 
 ## Claim Rule
 
