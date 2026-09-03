@@ -250,6 +250,8 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "declares 2 loop bounds but the kernel contains 1 direct loops",
                 "integer_switches supports only fixed-width",
                 "not a fixed-width integer switch",
+                "kernel match has no corresponding control_flow integer switch type",
+                "integer switch case suffix `u32` does not match declared `u64`",
                 "range patterns are unsupported in V1",
                 "guarded match arms are unsupported",
                 "break with a value is unsupported",

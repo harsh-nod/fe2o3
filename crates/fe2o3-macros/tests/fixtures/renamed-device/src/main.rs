@@ -39,6 +39,20 @@ pub fn structured_control_flow(mut value: u32) -> u32 {
     value
 }
 
+#[kernel(control_flow(loop_bounds(8), integer_switches(u32)))]
+pub fn optional_raw_u32_control(selector: u32) -> u32 {
+    let mut iteration = 0;
+    match selector {
+        0 => {}
+        _ => {
+            while iteration < 8 {
+                iteration += 1;
+            }
+        }
+    }
+    iteration
+}
+
 #[kernel(control_flow(loop_bounds(4)))]
 pub fn literal_for_unroll(mut value: u32) -> u32 {
     for i in 0u32..4u32 {
@@ -68,6 +82,9 @@ fn main() {
     assert_marker::<__fe2o3_kernel_marker_launch_bounded>();
     assert_marker::<__fe2o3_kernel_marker_assembly_declared>();
     assert_marker::<__fe2o3_kernel_marker_structured_control_flow>();
+    assert_marker::<__fe2o3_kernel_marker_optional_raw_u32_control>();
+    assert_eq!(optional_raw_u32_control(0), 0);
+    assert_eq!(optional_raw_u32_control(4), 8);
     assert_marker::<__fe2o3_kernel_marker_literal_for_unroll>();
     assert_eq!(
         <__fe2o3_kernel_marker_literal_for_unroll as KernelMarkerV1>::FUNCTION(10),

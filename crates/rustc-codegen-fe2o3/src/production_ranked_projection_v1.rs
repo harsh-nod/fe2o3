@@ -10632,6 +10632,63 @@ fn source_induction_update_v1<'a>(
     Ok(Some((update, step)))
 }
 
+fn exact_optional_induction_selector_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    discriminant: &SemanticOperandV1,
+    explicit_value: u128,
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    local_definitions: &[u8],
+    address_escaped: &[bool],
+) -> bool {
+    let Some(shape) = types
+        .get(discriminant.ty().index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return false;
+    };
+    if matches!(
+        shape,
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool)
+    ) {
+        return matches!(explicit_value, 0 | 1)
+            && (constant_operand_value(discriminant, constants).is_some()
+                || simple_operand_local(discriminant).is_some_and(|local| {
+                    stable_argument_origins
+                        .get(local.index() as usize)
+                        .copied()
+                        .flatten()
+                        .is_some()
+                }));
+    }
+    if !matches!(
+        shape,
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 32,
+        })
+    ) || explicit_value != 0
+    {
+        return false;
+    }
+    if matches!(discriminant, SemanticOperandV1::Constant(_)) {
+        return constant_operand_value(discriminant, constants).is_some();
+    }
+    let Some(local) = simple_operand_local(discriminant) else {
+        return false;
+    };
+    let index = local.index() as usize;
+    let Some(SemanticLocalRoleV1::Argument(argument)) =
+        function.locals().get(index).map(|local| local.role())
+    else {
+        return false;
+    };
+    local_definitions.get(index).copied() == Some(0)
+        && address_escaped.get(index).copied() == Some(false)
+        && stable_argument_origins.get(index).copied().flatten() == Some(argument)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_uniform_inductions_v1(
     callables: &[SemanticCallableDeclV1],
@@ -10744,24 +10801,18 @@ fn project_uniform_inductions_v1(
             ..
         } = &topology.preheader_control
         {
-            if !matches!(
-                types
-                    .get(discriminant.ty().index() as usize)
-                    .map(SemanticTypeDeclV1::shape),
-                Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool))
-            ) || !matches!(*explicit_value, 0 | 1)
-                || (constant_operand_value(discriminant, constants).is_none()
-                    && simple_operand_local(discriminant)
-                        .and_then(|local| {
-                            stable_argument_origins
-                                .get(local.index() as usize)
-                                .copied()
-                                .flatten()
-                        })
-                        .is_none())
-            {
+            if !exact_optional_induction_selector_v1(
+                types,
+                function,
+                discriminant,
+                *explicit_value,
+                constants,
+                stable_argument_origins,
+                local_definitions,
+                &semantic_ranges.address_escaped,
+            ) {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "an optional uniform induction preheader is not controlled by one exact lane-uniform boolean",
+                    "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
                 ));
             }
         }
@@ -21555,6 +21606,10 @@ mod tests {
     const CHECKED_U64_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
     const F64_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
     const U128_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(12);
+    const U16_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(13);
+    const CHAR_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(14);
+    const F32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(15);
+    const VALIDITY_U32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(16);
 
     #[test]
     fn blocked_launch_bound_checks_the_last_thread_and_component_without_wrapping() {
@@ -22930,6 +22985,48 @@ mod tests {
                 signed: false,
                 bits: 128,
             }),
+        ));
+        types
+    }
+
+    fn optional_selector_types() -> Vec<SemanticTypeDeclV1> {
+        let mut types = assertion_proof_types();
+        for (tag, bytes, scalar) in [
+            (
+                49,
+                2,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 16,
+                },
+            ),
+            (50, 4, SemanticScalarTypeV1::Char),
+            (51, 4, SemanticScalarTypeV1::Float { bits: 32 }),
+        ] {
+            types.push(SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(self::bytes(tag)),
+                SemanticLayoutIdentityV1::from_sha256(self::bytes(tag)),
+                SemanticTypeLayoutV1::new(Some(bytes), bytes).unwrap(),
+                SemanticTypeShapeV1::Scalar(scalar),
+            ));
+        }
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(52)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(52)),
+            SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+            SemanticTypeShapeV1::ValidityScalar(
+                SemanticValidityScalarTypeV1::new(
+                    SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32,
+                    },
+                    vec![SemanticScalarValidityRangeV1::new(
+                        0,
+                        u128::from(u32::MAX - 1),
+                    )],
+                )
+                .unwrap(),
+            ),
         ));
         types
     }
@@ -34731,6 +34828,31 @@ mod tests {
     fn optional_uniform_induction_function_with(
         explicit_to_header: bool,
         selector_role: SemanticLocalRoleV1,
+        extra_preheader: Vec<SemanticStatementV1>,
+        latch_terminator: SemanticTerminatorKindV1,
+        preheader_targets: Option<SemanticSwitchTargetsV1>,
+        exit_statements: Vec<SemanticStatementV1>,
+        exit_terminator: Option<SemanticTerminatorKindV1>,
+    ) -> SemanticFunctionDeclV1 {
+        optional_uniform_induction_function_with_selector(
+            explicit_to_header,
+            BOOL_TYPE,
+            typed_operand(4, BOOL_TYPE),
+            selector_role,
+            extra_preheader,
+            latch_terminator,
+            preheader_targets,
+            exit_statements,
+            exit_terminator,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn optional_uniform_induction_function_with_selector(
+        explicit_to_header: bool,
+        selector_type: SemanticTypeIdV1,
+        selector_operand: SemanticOperandV1,
+        selector_role: SemanticLocalRoleV1,
         mut extra_preheader: Vec<SemanticStatementV1>,
         latch_terminator: SemanticTerminatorKindV1,
         preheader_targets: Option<SemanticSwitchTargetsV1>,
@@ -34740,7 +34862,6 @@ mod tests {
         let induction = SemanticLocalIdV1::from_index(1);
         let predicate = SemanticLocalIdV1::from_index(2);
         let bound = SemanticLocalIdV1::from_index(3);
-        let selector = SemanticLocalIdV1::from_index(4);
         let place = |local, ty| SemanticPlaceV1::new(local, vec![], ty).unwrap();
         let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
         let assign = |destination, ty, value| {
@@ -34761,7 +34882,7 @@ mod tests {
                     180,
                     extra_preheader,
                     SemanticTerminatorKindV1::SwitchInt {
-                        discriminant: operand(selector, BOOL_TYPE),
+                        discriminant: selector_operand,
                         targets: preheader_targets.unwrap_or_else(|| {
                             SemanticSwitchTargetsV1::new(
                                 vec![SemanticSwitchTargetV1::new(
@@ -34821,7 +34942,7 @@ mod tests {
                 local(181, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
                 local(182, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
                 local(183, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
-                local(184, BOOL_TYPE, selector_role),
+                local(184, selector_type, selector_role),
                 local(185, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
                 local(186, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
                 local(187, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
@@ -36410,6 +36531,312 @@ mod tests {
     }
 
     #[test]
+    fn optional_uniform_induction_accepts_only_exact_raw_u32_zero_control() {
+        for explicit_to_header in [true, false] {
+            for selector in [
+                typed_operand(4, SCALAR_TYPE),
+                typed_constant(SCALAR_TYPE, 4, 4),
+            ] {
+                let raw_argument = matches!(&selector, SemanticOperandV1::Copy(_));
+                let function = optional_uniform_induction_function_with_selector(
+                    explicit_to_header,
+                    SCALAR_TYPE,
+                    selector.clone(),
+                    if raw_argument {
+                        SemanticLocalRoleV1::Argument(1)
+                    } else {
+                        SemanticLocalRoleV1::Temporary
+                    },
+                    Vec::new(),
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                    None,
+                    Vec::new(),
+                    None,
+                );
+                let (inductions, switches, operations, next_argument) =
+                    project_optional_uniform_induction_for_test(&function).unwrap();
+                let projected = switches[0]
+                    .as_ref()
+                    .expect("the raw u32 optional preheader must retain its switch");
+                assert!(projected.lane_uniform);
+                assert_eq!(projected.source_discriminant, selector);
+                assert_eq!(projected.targets[0].0, 0);
+                assert!(if raw_argument {
+                    matches!(projected.discriminant, ProductionRankedValueV1::Argument(_))
+                } else {
+                    matches!(projected.discriminant, ProductionRankedValueV1::Local(_))
+                });
+                let zero = projected.targets[0].1;
+                assert!(operations.iter().any(|operation| matches!(
+                    operation,
+                    ProductionRankedOperationV1::IndexConstant { result, value: 0 }
+                        if ProductionRankedValueV1::Local(*result) == zero
+                )));
+
+                let (blocks, _, _) = build_ranked_cfg(
+                    &assertion_proof_types(),
+                    &function,
+                    &[],
+                    &vec![None; function.locals().len()],
+                    &switches,
+                    &inductions,
+                    operations,
+                    (0..function.blocks().len())
+                        .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                        .collect(),
+                )
+                .unwrap();
+                assert!(matches!(
+                    blocks[1].terminator(),
+                    ProductionRankedTerminatorV1::IndexEqualArgs {
+                        lhs,
+                        rhs,
+                        true_arguments,
+                        false_arguments,
+                        true_block,
+                        false_block,
+                    } if *lhs == projected.discriminant
+                        && *rhs == zero
+                        && if explicit_to_header {
+                            true_arguments.len() == 1
+                                && false_arguments.is_empty()
+                                && *true_block == 2
+                                && *false_block == 4
+                        } else {
+                            true_arguments.is_empty()
+                                && false_arguments.len() == 1
+                                && *true_block == 4
+                                && *false_block == 2
+                        }
+                ));
+                ProductionRankedKernelV1::new("optional_raw_u32_loop", next_argument, blocks)
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn optional_uniform_induction_rejects_every_non_u32_or_nonraw_integer_selector() {
+        let selector_types = optional_selector_types();
+        for selector_type in [
+            U8_TYPE,
+            U16_TYPE,
+            U64_TYPE,
+            U128_TYPE,
+            I32_TYPE,
+            CHAR_TYPE,
+            F32_TYPE,
+            F64_TYPE,
+            VALIDITY_U32_TYPE,
+            ARRAY_TYPE,
+            POINTER_TYPE,
+            ENUM_TYPE,
+            CHECKED_U64_TYPE,
+        ] {
+            let function = optional_uniform_induction_function_with_selector(
+                false,
+                selector_type,
+                typed_operand(4, selector_type),
+                SemanticLocalRoleV1::Argument(1),
+                Vec::new(),
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                None,
+                Vec::new(),
+                None,
+            );
+            assert_incomplete(
+                project_test_inductions_with_types(&selector_types, &function),
+                "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+            );
+        }
+
+        let nonzero_targets = SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                1,
+                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
+            )],
+            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 1),
+        )
+        .unwrap();
+        let nonzero = optional_uniform_induction_function_with_selector(
+            false,
+            SCALAR_TYPE,
+            typed_operand(4, SCALAR_TYPE),
+            SemanticLocalRoleV1::Argument(1),
+            Vec::new(),
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            Some(nonzero_targets),
+            Vec::new(),
+            None,
+        );
+        assert_incomplete(
+            project_test_inductions_with_types(&selector_types, &nonzero),
+            "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+        );
+
+        for definition in [
+            SemanticRvalueKindV1::Use(typed_operand(3, SCALAR_TYPE)),
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand: typed_operand(3, SCALAR_TYPE),
+            },
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Add,
+                left: typed_operand(3, SCALAR_TYPE),
+                right: typed_constant(SCALAR_TYPE, 1, 4),
+            },
+            SemanticRvalueKindV1::Unary {
+                operation: SemanticUnaryOpV1::Not,
+                operand: typed_operand(3, SCALAR_TYPE),
+            },
+        ] {
+            let function = optional_uniform_induction_function_with_selector(
+                false,
+                SCALAR_TYPE,
+                typed_operand(4, SCALAR_TYPE),
+                SemanticLocalRoleV1::Temporary,
+                vec![typed_assignment(4, SCALAR_TYPE, definition)],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                None,
+                Vec::new(),
+                None,
+            );
+            assert_incomplete(
+                project_test_inductions_with_types(&selector_types, &function),
+                "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+            );
+        }
+
+        let mutated_argument = optional_uniform_induction_function_with_selector(
+            false,
+            SCALAR_TYPE,
+            typed_operand(4, SCALAR_TYPE),
+            SemanticLocalRoleV1::Argument(1),
+            vec![typed_assignment(
+                4,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(SCALAR_TYPE, 0, 4)),
+            )],
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            None,
+            Vec::new(),
+            None,
+        );
+        assert_incomplete(
+            project_test_inductions_with_types(&selector_types, &mutated_argument),
+            "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+        );
+
+        let escaped_argument = optional_uniform_induction_function_with_selector(
+            false,
+            SCALAR_TYPE,
+            typed_operand(4, SCALAR_TYPE),
+            SemanticLocalRoleV1::Argument(1),
+            vec![typed_assignment(
+                7,
+                POINTER_TYPE,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: typed_place(4, SCALAR_TYPE),
+                },
+            )],
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            None,
+            Vec::new(),
+            None,
+        );
+        assert_incomplete(
+            project_test_inductions_with_types(&selector_types, &escaped_argument),
+            "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+        );
+
+        let call_redefined_argument = optional_uniform_induction_function_with_selector(
+            false,
+            SCALAR_TYPE,
+            typed_operand(4, SCALAR_TYPE),
+            SemanticLocalRoleV1::Argument(1),
+            Vec::new(),
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            None,
+            Vec::new(),
+            Some(SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(0),
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        typed_place(4, SCALAR_TYPE),
+                        cfg_edge(SemanticEdgeRoleV1::CallReturn, 3),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )),
+        );
+        assert_incomplete(
+            project_test_inductions_with_types(&selector_types, &call_redefined_argument),
+            "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+        );
+
+        for derived_boolean in [
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Equal,
+                left: typed_operand(3, SCALAR_TYPE),
+                right: typed_constant(SCALAR_TYPE, 0, 4),
+            },
+            SemanticRvalueKindV1::Unary {
+                operation: SemanticUnaryOpV1::Not,
+                operand: typed_constant(BOOL_TYPE, 0, 1),
+            },
+        ] {
+            let function = optional_uniform_induction_function_with(
+                false,
+                SemanticLocalRoleV1::Temporary,
+                vec![typed_assignment(4, BOOL_TYPE, derived_boolean)],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                None,
+                Vec::new(),
+                None,
+            );
+            assert_incomplete(
+                project_test_inductions_with_types(&selector_types, &function),
+                "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+            );
+        }
+    }
+
+    #[test]
+    fn optional_raw_u32_induction_replays_the_exact_source_argument_identity() {
+        let function = optional_uniform_induction_function_with_selector(
+            false,
+            SCALAR_TYPE,
+            typed_operand(4, SCALAR_TYPE),
+            SemanticLocalRoleV1::Argument(1),
+            Vec::new(),
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            None,
+            Vec::new(),
+            None,
+        );
+        let (mut inductions, switches, _, _) =
+            project_optional_uniform_induction_for_test(&function).unwrap();
+        let ProjectedInductionPreheaderControlV1::Optional { discriminant, .. } =
+            &mut inductions[0].preheader_control
+        else {
+            panic!("expected optional u32 preheader");
+        };
+        *discriminant = typed_operand(3, SCALAR_TYPE);
+        assert_incomplete(
+            bind_optional_induction_preheaders_v1(
+                &function,
+                &vec![None; function.locals().len()],
+                &switches,
+                &inductions,
+            ),
+            "an optional uniform induction preheader changed discriminant or edge identity",
+        );
+    }
+
+    #[test]
     fn optional_uniform_induction_forwards_one_exact_outer_induction_on_both_arms() {
         for explicit_to_header in [true, false] {
             let function = nested_optional_uniform_induction_function(explicit_to_header);
@@ -36689,7 +37116,7 @@ mod tests {
             );
             assert_incomplete(
                 project_test_inductions_with_types(&assertion_proof_types(), &function),
-                "an optional uniform induction preheader is not controlled by one exact lane-uniform boolean",
+                "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
             );
         }
 
@@ -36727,7 +37154,7 @@ mod tests {
                 );
                 assert_incomplete(
                     project_test_inductions_with_types(&assertion_proof_types(), &function),
-                    "an optional uniform induction preheader is not controlled by one exact lane-uniform boolean",
+                    "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
                 );
             }
         }
