@@ -17,13 +17,13 @@ use fe2o3_semantic_trace::{
     BarrierScopeV1, CaptureBoundariesV1, DiagnosticEventV1, DiagnosticKindV1, DispatchEventV1,
     DispatchIdentityDomainV1, DispatchIdentityV1, DispatchOutcomeV1, DroppedEventCountV1,
     ExecutionKindV1, ExecutionScopeV1, FactProvenanceV1, InvocationEventV1,
-    KernelIrIdentityClaimV1, KirSiteClaimV1, KirSitePointV1, LaunchGeometryV1,
-    MAX_TRACE_RESIDENT_BYTES_V1, MemoryAccessKindV1, MemoryEventV1, MemoryOutcomeV1,
-    OpaqueIdentityV1, OperationEventV1, OperationOccurrenceIdV1, ProducerIdentityV1,
-    ProducerKindV1, ProducerTextV1, TimestampV1, TraceAllocationIdV1, TraceBoundsV1,
-    TraceCompletenessV1, TraceEventKindV1, TraceEventV1, TraceHeaderV1, TraceV1,
-    TraceValidationErrorV1, TruncationReasonV1, WaveWidthV1, encoded_event_len_v1,
-    encoded_trace_prefix_len_v1,
+    KernelIrIdentityClaimV1, KernelIrIdentityClaimV2, KernelIrWireVersionV2, KirSiteClaimV1,
+    KirSitePointV1, LaunchGeometryV1, MAX_TRACE_RESIDENT_BYTES_V1, MemoryAccessKindV1,
+    MemoryEventV1, MemoryOutcomeV1, OpaqueIdentityV1, OperationEventV1, OperationOccurrenceIdV1,
+    ProducerIdentityV1, ProducerKindV1, ProducerTextV1, TimestampV1, TraceAllocationIdV1,
+    TraceBoundsV1, TraceCompletenessV1, TraceEnvelopeV2, TraceEventKindV1, TraceEventV1,
+    TraceHeaderV1, TraceHeaderV2, TraceV1, TraceValidationErrorV1, TruncationReasonV1, WaveWidthV1,
+    encoded_event_len_v1, encoded_trace_prefix_len_v1, encoded_trace_prefix_len_v2,
 };
 use sha2::{Digest, Sha256};
 
@@ -382,6 +382,25 @@ impl TracedSimulationOutcomeV1 {
     }
 }
 
+/// V2 retains the V1 visualization profile and its exact bounded semantics.
+pub type SimulationTraceProfileV2 = SimulationTraceProfileV1;
+
+/// V9/V10 simulation result paired with its bounded V2 semantic observation.
+#[derive(Debug)]
+pub struct TracedSimulationOutcomeV2 {
+    pub execution: Result<SimulationExecutionV1, SimulationErrorV1>,
+    pub trace: TraceEnvelopeV2,
+    pub catalog: KirSiteCatalogV1,
+    /// Sensitive deterministic correlation digest over KIR, target, launch, and values.
+    pub configuration_identity: OpaqueIdentityV1,
+}
+
+impl TracedSimulationOutcomeV2 {
+    pub const fn grants_execution_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Adapter setup failure. Runtime simulation failures remain in the outcome.
 #[derive(Debug)]
 pub enum TraceAdapterErrorV1 {
@@ -425,6 +444,146 @@ pub fn simulate_with_semantic_trace_v1(
             version: module.identity().wire_version(),
         });
     }
+    let claim = KernelIrIdentityClaimV1::canonical_v7_claim(
+        OpaqueIdentityV1::new(*module.identity().digest())?,
+        module.identity().canonical_length(),
+    )?;
+    let collected = collect_semantic_trace(
+        module,
+        request,
+        target,
+        limits,
+        profile,
+        |dispatch, launch| {
+            let header = TraceHeaderV1::new(
+                producer_identity()?,
+                ExecutionKindV1::CpuKirSimulation,
+                claim,
+                None,
+                None,
+                None,
+                dispatch,
+                launch,
+                profile.bounds,
+                budget_completeness(),
+                CaptureBoundariesV1::FULL_DISPATCH,
+            )?;
+            encoded_trace_prefix_len_v1(&header)
+                .map_err(|_| TraceAdapterErrorV1::ByteBudgetTooSmall)
+        },
+    )?;
+    let header = TraceHeaderV1::new(
+        producer_identity()?,
+        ExecutionKindV1::CpuKirSimulation,
+        claim,
+        None,
+        None,
+        None,
+        collected.dispatch,
+        collected.launch,
+        profile.bounds,
+        collected.completeness,
+        CaptureBoundariesV1::FULL_DISPATCH,
+    )?;
+    let trace = TraceV1::new_with_resident_reservation(
+        header,
+        collected.events,
+        collected.catalog.resident_bytes,
+    )?;
+    Ok(TracedSimulationOutcomeV1 {
+        execution: collected.execution,
+        trace,
+        catalog: collected.catalog,
+        configuration_identity: collected.configuration_identity,
+    })
+}
+
+/// Runs an exact admitted V9/V10 module and records a canonical V2 semantic trace.
+pub fn simulate_with_semantic_trace_v2(
+    module: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+    profile: SimulationTraceProfileV2,
+) -> Result<TracedSimulationOutcomeV2, TraceAdapterErrorV1> {
+    let version = KernelIrWireVersionV2::from_u16(module.identity().wire_version()).ok_or(
+        TraceAdapterErrorV1::UnsupportedKernelIrWireVersion {
+            version: module.identity().wire_version(),
+        },
+    )?;
+    let claim = KernelIrIdentityClaimV2::exact_canonical_claim(
+        version,
+        OpaqueIdentityV1::new(*module.identity().digest())?,
+        module.identity().canonical_length(),
+    )?;
+    let collected = collect_semantic_trace(
+        module,
+        request,
+        target,
+        limits,
+        profile,
+        |dispatch, launch| {
+            let header = TraceHeaderV2::new(
+                producer_identity()?,
+                ExecutionKindV1::CpuKirSimulation,
+                claim,
+                None,
+                None,
+                None,
+                dispatch,
+                launch,
+                profile.bounds,
+                budget_completeness(),
+                CaptureBoundariesV1::FULL_DISPATCH,
+            )?;
+            encoded_trace_prefix_len_v2(&header)
+                .map_err(|_| TraceAdapterErrorV1::ByteBudgetTooSmall)
+        },
+    )?;
+    let header = TraceHeaderV2::new(
+        producer_identity()?,
+        ExecutionKindV1::CpuKirSimulation,
+        claim,
+        None,
+        None,
+        None,
+        collected.dispatch,
+        collected.launch,
+        profile.bounds,
+        collected.completeness,
+        CaptureBoundariesV1::FULL_DISPATCH,
+    )?;
+    let trace = TraceEnvelopeV2::new_with_resident_reservation(
+        header,
+        collected.events,
+        collected.catalog.resident_bytes,
+    )?;
+    Ok(TracedSimulationOutcomeV2 {
+        execution: collected.execution,
+        trace,
+        catalog: collected.catalog,
+        configuration_identity: collected.configuration_identity,
+    })
+}
+
+struct CollectedSemanticTraceV1 {
+    execution: Result<SimulationExecutionV1, SimulationErrorV1>,
+    events: Vec<TraceEventV1>,
+    catalog: KirSiteCatalogV1,
+    configuration_identity: OpaqueIdentityV1,
+    dispatch: DispatchIdentityV1,
+    launch: LaunchGeometryV1,
+    completeness: TraceCompletenessV1,
+}
+
+fn collect_semantic_trace(
+    module: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+    profile: SimulationTraceProfileV1,
+    prefix_bytes: impl FnOnce(DispatchIdentityV1, LaunchGeometryV1) -> Result<u64, TraceAdapterErrorV1>,
+) -> Result<CollectedSemanticTraceV1, TraceAdapterErrorV1> {
     for (axis, extent) in request.workgroup.0.into_iter().enumerate() {
         if extent == 0 {
             return Err(TraceAdapterErrorV1::ZeroWorkgroupDimension { axis });
@@ -441,30 +600,7 @@ pub fn simulate_with_semantic_trace_v1(
         profile.dispatch_occurrence,
     );
     let configuration_identity = configuration_identity(module, request, target)?;
-    let claim = KernelIrIdentityClaimV1::canonical_v7_claim(
-        OpaqueIdentityV1::new(*module.identity().digest())?,
-        module.identity().canonical_length(),
-    )?;
-    let budget_header = TraceHeaderV1::new(
-        producer_identity()?,
-        ExecutionKindV1::CpuKirSimulation,
-        claim,
-        None,
-        None,
-        None,
-        dispatch,
-        launch,
-        profile.bounds,
-        TraceCompletenessV1::Truncated {
-            reason: TruncationReasonV1::ByteLimit,
-            emitted_events: 0,
-            dropped_events: DroppedEventCountV1::Unknown,
-        },
-        CaptureBoundariesV1::FULL_DISPATCH,
-    )?;
-    let prefix_bytes = encoded_trace_prefix_len_v1(&budget_header)
-        .map_err(|_| TraceAdapterErrorV1::ByteBudgetTooSmall)?;
-    drop(budget_header);
+    let prefix_bytes = prefix_bytes(dispatch, launch)?;
     let footer_probe = TraceEventV1::new(
         0,
         TimestampV1::LogicalStep(0),
@@ -496,41 +632,32 @@ pub fn simulate_with_semantic_trace_v1(
     }
     collector.finish_execution(execution.is_ok());
     let (events, truncation) = collector.into_parts();
-    let (completeness, boundaries) = match truncation {
-        Some(reason) => (
-            TraceCompletenessV1::Truncated {
-                reason,
-                emitted_events: u64::try_from(events.len())
-                    .map_err(|_| TraceAdapterErrorV1::UnrepresentableCatalog)?,
-                dropped_events: DroppedEventCountV1::Unknown,
-            },
-            CaptureBoundariesV1::FULL_DISPATCH,
-        ),
-        None => (
-            TraceCompletenessV1::Complete,
-            CaptureBoundariesV1::FULL_DISPATCH,
-        ),
+    let completeness = match truncation {
+        Some(reason) => TraceCompletenessV1::Truncated {
+            reason,
+            emitted_events: u64::try_from(events.len())
+                .map_err(|_| TraceAdapterErrorV1::UnrepresentableCatalog)?,
+            dropped_events: DroppedEventCountV1::Unknown,
+        },
+        None => TraceCompletenessV1::Complete,
     };
-    let header = TraceHeaderV1::new(
-        producer_identity()?,
-        ExecutionKindV1::CpuKirSimulation,
-        claim,
-        None,
-        None,
-        None,
-        dispatch,
-        launch,
-        profile.bounds,
-        completeness,
-        boundaries,
-    )?;
-    let trace = TraceV1::new_with_resident_reservation(header, events, catalog.resident_bytes)?;
-    Ok(TracedSimulationOutcomeV1 {
+    Ok(CollectedSemanticTraceV1 {
         execution,
-        trace,
+        events,
         catalog,
         configuration_identity,
+        dispatch,
+        launch,
+        completeness,
     })
+}
+
+const fn budget_completeness() -> TraceCompletenessV1 {
+    TraceCompletenessV1::Truncated {
+        reason: TruncationReasonV1::ByteLimit,
+        emitted_events: 0,
+        dropped_events: DroppedEventCountV1::Unknown,
+    }
 }
 
 struct TraceCollectorV1<'a> {

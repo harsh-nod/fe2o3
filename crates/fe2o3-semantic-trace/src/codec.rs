@@ -4,6 +4,7 @@ use std::fmt;
 use crate::model::*;
 
 const TRACE_MAGIC_V1: [u8; 8] = *b"FE2O3TR1";
+const TRACE_MAGIC_V2: [u8; 8] = *b"FE2O3TR2";
 const MIN_EVENT_ENCODED_BYTES_V1: u64 = 57;
 
 /// Exact canonical encoded size of one already validated event.
@@ -19,6 +20,16 @@ pub fn encoded_trace_prefix_len_v1(header: &TraceHeaderV1) -> Result<u64, TraceE
     encoder.bytes(&TRACE_MAGIC_V1)?;
     encoder.u16(TRACE_SCHEMA_VERSION_V1)?;
     encode_header(&mut encoder, header)?;
+    encoder.u64(0)?;
+    Ok(encoder.encoded_len())
+}
+
+/// Exact canonical V2 envelope/header/count size before the first event.
+pub fn encoded_trace_prefix_len_v2(header: &TraceHeaderV2) -> Result<u64, TraceEncodeErrorV1> {
+    let mut encoder = Encoder::counter(header.bounds().max_encoded_bytes());
+    encoder.bytes(&TRACE_MAGIC_V2)?;
+    encoder.u16(TRACE_SCHEMA_VERSION_V2)?;
+    encode_header(&mut encoder, header.inner())?;
     encoder.u64(0)?;
     Ok(encoder.encoded_len())
 }
@@ -41,6 +52,45 @@ pub fn encode_trace_v1(trace: &TraceV1) -> Result<Vec<u8>, TraceEncodeErrorV1> {
         return Err(TraceEncodeErrorV1::MaterializationInvariant);
     }
     encoder.finish()
+}
+
+/// Encodes one canonical semantic trace V2 envelope without projecting its
+/// exact V9/V10 KIR claim through the frozen V1/V7 wire.
+pub fn encode_trace_v2(trace: &TraceEnvelopeV2) -> Result<Vec<u8>, TraceEncodeErrorV1> {
+    let inner = trace.inner();
+    inner.validate().map_err(TraceEncodeErrorV1::Validation)?;
+    let limit = inner.header().bounds().max_encoded_bytes();
+    let mut counter = Encoder::counter(limit);
+    encode_trace_envelope_v2(&mut counter, inner)?;
+    let exact_len =
+        usize::try_from(counter.encoded_len()).map_err(|_| TraceEncodeErrorV1::LengthOverflow)?;
+    let mut encoder = Encoder::materializer(limit, exact_len)?;
+    let output_resident = capacity_bytes::<u8>(encoder.materialized_capacity()?)
+        .map_err(TraceEncodeErrorV1::Validation)?;
+    ValidationResidentLedgerV1::new(inner, 0)
+        .and_then(|resident| resident.ensure_temporary(output_resident))
+        .map_err(TraceEncodeErrorV1::Validation)?;
+    encode_trace_envelope_v2(&mut encoder, inner)?;
+    if encoder.encoded_len() != counter.encoded_len() {
+        return Err(TraceEncodeErrorV1::MaterializationInvariant);
+    }
+    encoder.finish()
+}
+
+fn encode_trace_envelope_v2(
+    encoder: &mut Encoder,
+    trace: &TraceV1,
+) -> Result<(), TraceEncodeErrorV1> {
+    encoder.bytes(&TRACE_MAGIC_V2)?;
+    encoder.u16(TRACE_SCHEMA_VERSION_V2)?;
+    encode_header(encoder, trace.header())?;
+    encoder.u64(u64::try_from(trace.events().len()).map_err(|_| {
+        TraceEncodeErrorV1::Validation(TraceValidationErrorV1::EventCountOverflow)
+    })?)?;
+    for event in trace.events() {
+        encode_event(encoder, event)?;
+    }
+    Ok(())
 }
 
 fn encode_trace(encoder: &mut Encoder, trace: &TraceV1) -> Result<(), TraceEncodeErrorV1> {
@@ -133,6 +183,85 @@ pub fn decode_trace_v1(bytes: &[u8]) -> Result<TraceV1, TraceDecodeErrorV1> {
     Ok(trace)
 }
 
+/// Decodes the additive V2 envelope and rejects V7, unknown KIR versions,
+/// identity-policy drift, noncanonical bytes, and every V1 event hostility.
+pub fn decode_trace_v2(bytes: &[u8]) -> Result<TraceEnvelopeV2, TraceDecodeErrorV1> {
+    let actual_len = u64::try_from(bytes.len()).map_err(|_| TraceDecodeErrorV1::LengthOverflow)?;
+    if actual_len > MAX_TRACE_BYTES_V1 {
+        return Err(TraceDecodeErrorV1::InputTooLarge {
+            actual: actual_len,
+            max: MAX_TRACE_BYTES_V1,
+        });
+    }
+    let mut decoder = Decoder::new(bytes);
+    if decoder.array::<8>()? != TRACE_MAGIC_V2 {
+        return Err(TraceDecodeErrorV1::InvalidMagic);
+    }
+    let version = decoder.u16()?;
+    if version != TRACE_SCHEMA_VERSION_V2 {
+        return Err(TraceDecodeErrorV1::UnsupportedVersion(version));
+    }
+    let header = decode_header_v2(&mut decoder)?;
+    if actual_len > header.bounds().max_encoded_bytes() {
+        return Err(TraceDecodeErrorV1::DeclaredByteLimitExceeded {
+            actual: actual_len,
+            max: header.bounds().max_encoded_bytes(),
+        });
+    }
+    let event_count = decoder.u64()?;
+    if event_count > header.bounds().max_events() || event_count > MAX_TRACE_EVENTS_V1 {
+        return Err(TraceDecodeErrorV1::Validation(
+            TraceValidationErrorV1::TooManyEvents {
+                actual: event_count,
+                max: header.bounds().max_events().min(MAX_TRACE_EVENTS_V1),
+            },
+        ));
+    }
+    let remaining =
+        u64::try_from(decoder.remaining()).map_err(|_| TraceDecodeErrorV1::LengthOverflow)?;
+    let maximum_possible = remaining / MIN_EVENT_ENCODED_BYTES_V1;
+    if event_count > maximum_possible {
+        return Err(TraceDecodeErrorV1::ImpossibleEventCount {
+            declared: event_count,
+            remaining_bytes: remaining,
+            minimum_event_bytes: MIN_EVENT_ENCODED_BYTES_V1,
+        });
+    }
+    let capacity = usize::try_from(event_count).map_err(|_| TraceDecodeErrorV1::LengthOverflow)?;
+    let resident_events = event_count
+        .checked_mul(std::mem::size_of::<TraceEventV1>() as u64)
+        .ok_or(TraceDecodeErrorV1::LengthOverflow)?;
+    let resident_required = resident_events
+        .checked_add(header.bounds().max_encoded_bytes())
+        .ok_or(TraceDecodeErrorV1::LengthOverflow)?;
+    if resident_required > header.bounds().max_resident_bytes() {
+        return Err(TraceDecodeErrorV1::Validation(
+            TraceValidationErrorV1::ResidentLimitExceeded {
+                actual: resident_required,
+                max: header.bounds().max_resident_bytes(),
+            },
+        ));
+    }
+    let mut events = Vec::new();
+    events
+        .try_reserve_exact(capacity)
+        .map_err(|_| TraceDecodeErrorV1::AllocationFailed {
+            requested: capacity,
+        })?;
+    for _ in 0..event_count {
+        events.push(decode_event(&mut decoder)?);
+    }
+    if decoder.remaining() != 0 {
+        return Err(TraceDecodeErrorV1::TrailingBytes(decoder.remaining()));
+    }
+    let trace = TraceEnvelopeV2::new(header, events).map_err(TraceDecodeErrorV1::Validation)?;
+    let canonical = encode_trace_v2(&trace).map_err(TraceDecodeErrorV1::Reencode)?;
+    if canonical != bytes {
+        return Err(TraceDecodeErrorV1::NonCanonicalEncoding);
+    }
+    Ok(trace)
+}
+
 fn encode_header(encoder: &mut Encoder, header: &TraceHeaderV1) -> Result<(), TraceEncodeErrorV1> {
     encode_producer(encoder, header.producer())?;
     encoder.u8(execution_kind_tag(header.execution_kind()))?;
@@ -195,6 +324,46 @@ fn decode_header(decoder: &mut Decoder<'_>) -> Result<TraceHeaderV1, TraceDecode
     .map_err(TraceDecodeErrorV1::Validation)
 }
 
+fn decode_header_v2(decoder: &mut Decoder<'_>) -> Result<TraceHeaderV2, TraceDecodeErrorV1> {
+    let producer = decode_producer(decoder)?;
+    let execution_kind = decode_execution_kind(decoder.u8()?)?;
+    let kernel_ir_claim = decode_kernel_ir_claim_v2(decoder)?;
+    let semantic_mir = decode_optional_content_identity(decoder)?;
+    let lineage = decode_optional_content_identity(decoder)?;
+    let artifact = decode_optional_content_identity(decoder)?;
+    let dispatch = decode_dispatch_identity(decoder)?;
+    let launch = LaunchGeometryV1::new_exact(
+        decode_u64x3(decoder)?,
+        decode_u32x3(decoder)?,
+        decode_u32x3(decoder)?,
+        decode_wave_width(decoder.u8()?)?,
+    )
+    .map_err(TraceDecodeErrorV1::Validation)?;
+    let bounds = TraceBoundsV1::new_with_resident(
+        decoder.u64()?,
+        decoder.u64()?,
+        decoder.u64()?,
+        decoder.u16()?,
+    )
+    .map_err(TraceDecodeErrorV1::Validation)?;
+    let completeness = decode_completeness(decoder)?;
+    let boundaries = decode_capture_boundaries(decoder)?;
+    TraceHeaderV2::new(
+        producer,
+        execution_kind,
+        kernel_ir_claim,
+        semantic_mir,
+        lineage,
+        artifact,
+        dispatch,
+        launch,
+        bounds,
+        completeness,
+        boundaries,
+    )
+    .map_err(TraceDecodeErrorV1::Validation)
+}
+
 fn encode_producer(
     encoder: &mut Encoder,
     producer: &ProducerIdentityV1,
@@ -239,6 +408,31 @@ fn decode_kernel_ir_claim(
     }
     KernelIrIdentityClaimV1::canonical_v7_claim(decode_identity(decoder)?, decoder.u64()?)
         .map_err(TraceDecodeErrorV1::Validation)
+}
+
+fn decode_kernel_ir_claim_v2(
+    decoder: &mut Decoder<'_>,
+) -> Result<KernelIrIdentityClaimV2, TraceDecodeErrorV1> {
+    let wire_version = decoder.u16()?;
+    let identity_policy = decoder.u16()?;
+    let Some(version) = KernelIrWireVersionV2::from_u16(wire_version) else {
+        return Err(TraceDecodeErrorV1::UnsupportedKernelIrClaim {
+            wire_version,
+            identity_policy,
+        });
+    };
+    if identity_policy != KERNEL_IR_IDENTITY_POLICY_V1 {
+        return Err(TraceDecodeErrorV1::UnsupportedKernelIrClaim {
+            wire_version,
+            identity_policy,
+        });
+    }
+    KernelIrIdentityClaimV2::exact_canonical_claim(
+        version,
+        decode_identity(decoder)?,
+        decoder.u64()?,
+    )
+    .map_err(TraceDecodeErrorV1::Validation)
 }
 
 fn encode_optional_content_identity(

@@ -1,15 +1,19 @@
 # fe2o3-kir-sim-trace
 
 This crate adapts the deterministic cooperative CPU KIR simulator's ephemeral
-event stream to the collector-neutral semantic trace V1 model. It has no HIP,
-HSA, KFD, ROCgdb, or rocprof dependency and grants no compiler, proof, artifact,
-load, launch, or GPU-equivalence authority.
+event stream to the collector-neutral semantic trace model. Exact canonical KIR
+V7 uses frozen trace envelope V1. Exact canonical KIR V9 and V10 use additive
+trace envelope V2 with the same bounded event grammar. It has no HIP, HSA, KFD,
+ROCgdb, or rocprof dependency and grants no compiler, proof, artifact, load,
+launch, GPU-equivalence, or performance authority.
 
 ## Truth boundary
 
-- The KIR digest and length come from the admitted canonical V7 owner, but are
-  copied into an inert trace claim. A consumer must bind the claim back to an
-  independently owned canonical V7 module before resolving site ordinals.
+- The KIR version, digest, identity policy, and length come from the exact
+  admitted canonical owner, but are copied into an inert trace claim. A
+  consumer must bind the complete claim back to an independently owned
+  exact-version canonical module before resolving site ordinals. The V1 adapter
+  rejects V9/V10 and the V2 adapter rejects V7 rather than relabeling an owner.
 - Site claims are vector ordinals in a catalog built from that admitted module.
   Function names, block IDs, and source names never become occurrence identity.
 - All emitted facts are Observed by CpuKirSimulator during CpuKirSimulation.
@@ -37,7 +41,8 @@ load, launch, or GPU-equivalence authority.
 - Wave32 or Wave64 is an explicit visualization profile. Cooperative workgroup
   execution still does not simulate physical waves. Tail masks use the exact
   logical grid and canonical x-fastest D1-D3 linearization.
-- Event and byte budgets use exact canonical codec sizes. Dispatch closure is
+- Event and byte budgets use the selected envelope's exact canonical codec
+  sizes. Dispatch closure is
   reserved before execution. If a cooperative workgroup would cross a limit,
   every record from that active workgroup is removed, including partial lane,
   barrier, and LDS lifecycles. The rejected callback is reported to the

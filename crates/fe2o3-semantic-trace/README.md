@@ -1,16 +1,20 @@
 # fe2o3 semantic trace
 
-This crate defines the collector-neutral V1 semantic execution-trace model and
-its canonical binary encoding. A CPU Kernel-IR simulator is the first intended
-producer. Direct-KFD execution, debugger sessions, and profiler imports can add
-adapters without changing the trace envelope or truth model.
+This crate defines the collector-neutral semantic execution-trace model and its
+canonical binary encodings. Frozen envelope V1 binds exact canonical KIR V7.
+Additive envelope V2 binds exact canonical KIR V9 or V10 while retaining the V1
+event, provenance, scope, lifecycle, and bound semantics. Neither envelope is a
+projection to another KIR version. A CPU Kernel-IR simulator is the first
+producer; Direct-KFD execution, debugger sessions, and profiler imports can add
+adapters without changing the truth model.
 
 ## Truth rules
 
-- The Kernel-IR digest and length in a trace are untrusted producer claims. This
-  crate never upgrades them into verified-canonical identity. An external
-  adapter must compare the claim with an independently owned and validated V7
-  artifact.
+- The Kernel-IR wire version, digest, identity policy, and length in a trace are
+  untrusted producer claims. This crate never upgrades them into
+  verified-canonical identity. An external adapter must compare the complete
+  claim with an independently owned and validated exact-version artifact. V1
+  admits only V7; V2 admits only V9 or V10.
 - Function, block, and operation ordinals are unresolved site claims. This
   crate checks only their syntactic event role. An external catalog/CFG adapter
   must establish existence and source/IR correspondence after authenticating
@@ -62,6 +66,8 @@ adapters without changing the trace envelope or truth model.
   capture must be bounded, typed, and explicitly captured, redacted, or
   unavailable.
 
-The binary codec is little-endian and rejects unknown tags, invalid UTF-8,
+Each binary codec has distinct magic and schema bytes. The codecs are
+little-endian and reject cross-decoding, unknown KIR versions or identity
+policies, unknown tags, invalid UTF-8,
 noncanonical evidence ordering, trailing bytes, impossible event counts,
 noncanonical sequences, and any declared or global bound violation.
