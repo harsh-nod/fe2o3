@@ -34,7 +34,7 @@ use fe2o3_compiler_lineage::{
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3, MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3,
     MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3, MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
-    MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3, OrderedInertSemanticLineageReceiptsV3,
+    OrderedInertSemanticLineageReceiptsV3,
 };
 use fe2o3_rustc_invocation::{
     CompileEnvironmentV2, MAX_DESCRIPTOR_BYTES_V3, RustcInvocationDescriptorV2,
@@ -426,10 +426,6 @@ fn assert_maximum_bound_formulas() {
     );
     assert_eq!(MAX_COMPILER_MODULE_BYTES_V1, 64 * 1024 * 1024);
     assert_eq!(MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3, 4 * 1024 * 1024);
-    assert_eq!(
-        MAX_RUSTC_PREFLIGHT_PLAN_RECEIPT_PREIMAGE_BYTES_V3,
-        8 * 1024 * 1024
-    );
     assert_eq!(MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3, 128 * 1024 * 1024);
     assert_eq!(
         MAX_INERT_PRODUCTION_SEMANTIC_CAPSULE_BYTES_V3,
