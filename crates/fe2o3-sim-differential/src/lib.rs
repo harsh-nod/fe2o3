@@ -24,7 +24,19 @@ use fe2o3_kir_sim::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod production_bundle_v5;
 mod semantic_v2;
+
+pub use production_bundle_v5::{
+    ExactBufferExpectationV3, ExactBufferObservationV3, ExactBufferUnavailableV3,
+    MAX_PRODUCTION_CONFORMANCE_CASE_ID_BYTES_V3, MAX_PRODUCTION_CONFORMANCE_EXPECTED_BYTES_V3,
+    MAX_PRODUCTION_CONFORMANCE_OUTPUTS_V3, PRODUCTION_SEMANTIC_CAPABILITIES_SCHEMA_V3,
+    PRODUCTION_SEMANTIC_CONFORMANCE_SCHEMA_V3, ProductionSemanticCapabilitiesV3,
+    ProductionSemanticCapabilityV3, ProductionSemanticCaseV3, ProductionSemanticConformanceErrorV3,
+    ProductionSemanticConformanceV3, ProductionSemanticDispositionV3,
+    ProductionSemanticUnavailableReasonV3, production_semantic_capabilities_v3,
+    run_production_semantic_conformance_v3,
+};
 
 pub use semantic_v2::{
     SEMANTIC_DIFFERENTIAL_CAPABILITIES_SCHEMA_V2, SEMANTIC_DIFFERENTIAL_FAILURE_SCHEMA_V2,

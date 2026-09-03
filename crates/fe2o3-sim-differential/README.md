@@ -44,3 +44,38 @@ No encoded response may exceed the compiled 1 MiB limit.
 Agreement is a differential model observation only. It grants no compiler,
 artifact, load, launch, KFD, hardware, performance, parity, proof, or universal
 correctness authority.
+
+## Production Bundle V5 conformance
+
+`production_semantic_capabilities_v3` and
+`run_production_semantic_conformance_v3` add a production-source conformance
+boundary without changing either earlier differential wire. The runner accepts
+only an `AdmittedSimulationBundleInputV5`, revalidates its complete bundle,
+checks the retained Bundle V5 content/subject, source-lineage receipts, ABI, and
+canonical KIR V10 identities, then executes the already admitted request with
+its admitted target and limits. Expectations name unique physical KIR argument
+ordinals and compare exact bytes and initialization state. Case IDs, output
+count, and total expected bytes are hard bounded.
+
+The compiler integration suite exports ordinary attributed Rust and checks
+deterministically generated `i8/i16/i32/i64` and `u8/u16/u32/u64` scalar
+comparison/bitwise cases, exact f32/f64 IEEE corner tables, scalar/buffer
+layout, and checked `DisjointSlice` output bounds. This is narrower than the
+manual KIR V7 V2 corpus. In particular, the following ordinary producer paths
+remain explicitly unavailable even though lower-level KIR may model some of
+them:
+
+| Family | V3 production disposition |
+| --- | --- |
+| `i128`/`u128` source arguments | type not retained by the current typed frontend ABI |
+| f16/bf16 source arguments | type not retained by the current typed frontend ABI |
+| integer switch | emitted fallback trap remains an unsupported external call for simulator preflight |
+| core atomic RMW | ordinary semantic-to-ranked projection remains incomplete |
+| pointer distance | `MemoryOffsetFrom` is rejected by the ordinary semantic importer |
+| volatile load/store | ordinary intrinsic expansion is rejected |
+| copy-nonoverlap | ordinary intrinsic expansion is rejected |
+| recursive aggregate Bundle V5 input | outside this scalar conformance contract |
+
+These dispositions do not infer hardware behavior or performance. The suite
+does not compile on the CPU, predict GPU performance, use HIP/HSA, or grant
+artifact/load/launch authority.
