@@ -85,6 +85,10 @@ SCHEMA_CONTEXT_FIELDS = {
     ),
 }
 
+# Historical schema-V1 async-copy logs predate this explicit field. Those runners fixed the
+# multi-device KFD lane to the directional profile, so absence has that one legacy meaning.
+LEGACY_KFD_MULTI_PROFILE = "directional"
+
 CANONICAL_UNIQUE_ID = re.compile(r"[0-9a-f]{16}")
 CONTEXT_UNIQUE_ID = re.compile(r"0x[0-9a-f]{16}")
 CANONICAL_SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -220,6 +224,8 @@ def validate_context(context: dict[str, str], schema: str) -> tuple[str, ...]:
             raise CheckError("context sdma_manifest_sha256 must be canonical")
         if context["kfd_profile"] not in {"generic", "directional", "engine0", "engine1"}:
             raise CheckError("context kfd_profile is unsupported")
+        if context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE) != "directional":
+            raise CheckError("context kfd_multi_profile must be directional")
     elif (
         context["kfd_surface"] != "runtime-facade"
         or context["timing"] != "submit-through-observed-completion"
@@ -416,7 +422,7 @@ def check_rows(
             if kfd.get("profile") != context["kfd_profile"]:
                 raise CheckError("KFD copy row profile does not match benchmark context")
         elif schema == "fe2o3.async-copy-multi-device-benchmark.v1":
-            if context["kfd_profile"] != "directional":
+            if context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE) != "directional":
                 raise CheckError("multi-device KFD copy requires the directional profile")
         else:
             validate_xgmi_kfd_measurement(kfd, "persistent-hot")

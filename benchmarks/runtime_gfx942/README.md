@@ -123,7 +123,11 @@ also has an outer foreground timeout, controlled by
 `FE2O3_ASYNC_COPY_PHASE_TIMEOUT_SECONDS` and defaulting to 120 seconds.
 `FE2O3_ASYNC_COPY_KFD_PROFILE` selects the single-device KFD lane from
 `directional` (the default), `generic`, `engine0`, or `engine1`; the
-multi-device KFD lane remains directional.
+multi-device KFD lane remains directional. New schema-V1 records state both
+facts independently as `kfd_profile` and `kfd_multi_profile=directional`.
+Retained schema-V1 records made before the latter field was added remain
+admissible because that runner contract already fixed the multi-device lane to
+the directional profile.
 
 Single-device H2D and D2H rows include submission of the complete depth, host
 waiting for every completion, and no allocation. KFD defaults to two targeted
@@ -190,9 +194,20 @@ one-bit recommended XGMI engine. HSA uses `hsa_amd_memory_async_copy`; HIP uses
 separately. Allocation, access setup, changing per-round source patterns,
 destination poisoning, readback, canary checks, and teardown are outside
 timing. The KFD interval intentionally includes facade admission, per-copy peer
-mapping, publication, observed completion, and peer unmapping. Every timing row
-covers all depth submissions through observation of all completions and reports
-p50/p95 nanoseconds plus p50 aggregate GB/s.
+publication, explicit batch flush, and observed completion. Its
+`remap-per-round` diagnostic performs host writes before and readback after each
+timed interval; those host accesses retire retained peer mappings, so the next
+interval includes peer-map establishment. Mapping retirement and host
+validation remain outside timing. The `persistent-hot` parity row primes one
+mapped batch before timing, then performs no host access between timed rounds;
+its intervals reuse those mappings and exclude both map establishment and
+retirement. Final readback and canary validation occur after all timed hot
+rounds. Both rows cover all depth submissions through observation of every
+completion and report p50/p95 nanoseconds plus p50 aggregate GB/s. The checker
+requires both rows for completeness but ratios only `persistent-hot` against
+HSA and HIP, whose peer access and device allocations also persist across timed
+rounds. Their per-round data preparation policies remain different and outside
+the measured interval.
 
 The runner requires a clean checkout, prints the Git commit and complete
 software/device context, checks both GPUs immediately before and after every
@@ -211,9 +226,10 @@ cargo run --locked --release -p fe2o3-kfd --features live-validation \
 ```
 
 That diagnostic holds peer mappings across a round and submits the complete
-depth with one doorbell. Comparing it with the facade row isolates the current
-facade's per-copy mapping and publication overhead; it is not a substitute for
-the public API measurement.
+depth with one doorbell. Comparing it with the public facade's
+`persistent-hot` row isolates remaining facade admission, completion, and
+release overhead without conflating remapping; it is not a substitute for the
+public API measurement.
 
 This peer-copy harness does not exercise the separate structure-required
 Worker V3 dispatch wrapper and makes no atomic or collective

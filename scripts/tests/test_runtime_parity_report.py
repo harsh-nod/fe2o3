@@ -59,6 +59,7 @@ def benchmark_context(schema: str, depth: int) -> str:
     if "async-copy" in schema:
         fields.update(
             kfd_profile="directional",
+            kfd_multi_profile="directional",
             sdma_manifest_sha256="7" * 64,
         )
     else:
@@ -91,6 +92,32 @@ def evidence(rows: list[str], schema: str, depth: int = 16) -> list[str]:
                 )
             )
     return [benchmark_context(schema, depth), *phases, *rows]
+
+
+def multi_device_rows() -> list[str]:
+    rows = []
+    for backend in ("kfd", "hsa", "hip"):
+        rows.append(
+            " ".join(
+                (
+                    f"backend={backend}",
+                    "schema=fe2o3.async-copy-multi-device-benchmark.v1",
+                    "devices=2",
+                    "unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf",
+                    "bytes=1048576",
+                    "depth_per_device=8",
+                    "warmups=10",
+                    "samples=30",
+                    "h2d_p50_ns=100",
+                    "h2d_p95_ns=120",
+                    "h2d_aggregate_p50_GBps=40",
+                    "d2h_p50_ns=110",
+                    "d2h_p95_ns=130",
+                    "d2h_aggregate_p50_GBps=38",
+                )
+            )
+        )
+    return rows
 
 
 class CheckParityTests(unittest.TestCase):
@@ -304,30 +331,58 @@ class CheckParityTests(unittest.TestCase):
             )
 
     def test_accepts_multi_device_schema(self) -> None:
-        rows = []
-        for backend in ("kfd", "hsa", "hip"):
-            rows.append(
-                " ".join(
-                    (
-                        f"backend={backend}",
-                        "schema=fe2o3.async-copy-multi-device-benchmark.v1",
-                        "devices=2",
-                        "unique_ids=6ced1647a296545c,ab83d2ffef0d3cdf",
-                        "bytes=1048576",
-                        "depth_per_device=8",
-                        "warmups=10",
-                        "samples=30",
-                        "h2d_p50_ns=100",
-                        "h2d_p95_ns=120",
-                        "h2d_aggregate_p50_GBps=40",
-                        "d2h_p50_ns=110",
-                        "d2h_p95_ns=130",
-                        "d2h_aggregate_p50_GBps=38",
-                    )
-                )
-            )
         output = CHECK_PARITY.check_rows(
-            evidence(rows, "fe2o3.async-copy-multi-device-benchmark.v1", 8),
+            evidence(multi_device_rows(), "fe2o3.async-copy-multi-device-benchmark.v1", 8),
+            "fe2o3.async-copy-multi-device-benchmark.v1",
+            1.0,
+            1.0,
+        )
+        self.assertEqual(output[-1], "parity_status=pass")
+
+    def test_separates_single_and_multi_device_kfd_profiles(self) -> None:
+        single = evidence(
+            [row("kfd").replace("profile=directional", "profile=generic"), row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+        )
+        single[0] = single[0].replace("kfd_profile=directional", "kfd_profile=generic")
+        output = CHECK_PARITY.check_rows(
+            single,
+            "fe2o3.async-copy-benchmark.v1",
+            1.0,
+            1.0,
+        )
+        self.assertEqual(output[-1], "parity_status=pass")
+
+        multi = evidence(
+            multi_device_rows(),
+            "fe2o3.async-copy-multi-device-benchmark.v1",
+            8,
+        )
+        multi[0] = multi[0].replace("kfd_profile=directional", "kfd_profile=generic")
+        output = CHECK_PARITY.check_rows(
+            multi,
+            "fe2o3.async-copy-multi-device-benchmark.v1",
+            1.0,
+            1.0,
+        )
+        self.assertEqual(output[-1], "parity_status=pass")
+
+        substituted = multi.copy()
+        substituted[0] = substituted[0].replace(
+            "kfd_multi_profile=directional", "kfd_multi_profile=generic"
+        )
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "kfd_multi_profile"):
+            CHECK_PARITY.check_rows(
+                substituted,
+                "fe2o3.async-copy-multi-device-benchmark.v1",
+                1.0,
+                1.0,
+            )
+
+        legacy = multi.copy()
+        legacy[0] = legacy[0].replace(" kfd_multi_profile=directional", "")
+        output = CHECK_PARITY.check_rows(
+            legacy,
             "fe2o3.async-copy-multi-device-benchmark.v1",
             1.0,
             1.0,
