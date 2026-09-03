@@ -1800,6 +1800,7 @@ const fn supports_float_function(function: F32MathFunction) -> bool {
             | F32MathFunction::Ceil
             | F32MathFunction::Truncate
             | F32MathFunction::RoundTiesEven
+            | F32MathFunction::Abs
     )
 }
 

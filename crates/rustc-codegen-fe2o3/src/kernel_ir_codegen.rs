@@ -350,7 +350,8 @@ fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_
             | F32MathFunction::Floor
             | F32MathFunction::Ceil
             | F32MathFunction::Truncate
-            | F32MathFunction::RoundTiesEven => {
+            | F32MathFunction::RoundTiesEven
+            | F32MathFunction::Abs => {
                 unreachable!("canonical implementation excludes constrained LLVM from OCML")
             }
         })

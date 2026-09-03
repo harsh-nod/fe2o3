@@ -203,6 +203,25 @@ fn strict_ocml_call_has_exact_golden_ir() {
 }
 
 #[test]
+fn fabs_has_exact_llvm_intrinsic_observation() {
+    let module = math_kernel(
+        vec![Type::F32],
+        Type::F32,
+        FloatOperation::F32Math {
+            function: F32MathFunction::Abs,
+            implementation: F32MathImplementation::IeeeFabsV1,
+            arguments: vec![ValueId(0)],
+        },
+        [],
+    );
+    let llvm = lower_kernel_to_gfx942_llvm_ir(&module, &"math_kernel".into()).unwrap();
+    assert_eq!(llvm.matches("declare float @llvm.fabs.f32(float)").count(), 1);
+    assert_eq!(llvm.matches("call float @llvm.fabs.f32(float").count(), 1);
+    assert!(!llvm.contains("llvm.fabs.f64"));
+    assert!(!llvm.contains(" fast "));
+}
+
+#[test]
 fn baseline_missing_capability_and_mutated_contracts_fail_closed() {
     let module = packed_bf16_fma_module();
     assert!(

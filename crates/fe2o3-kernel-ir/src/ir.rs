@@ -1149,6 +1149,8 @@ pub enum F32MathFunction {
     Ln,
     Log2,
     Log10,
+    /// IEEE-754 absolute value with no arithmetic rounding.
+    Abs,
 }
 
 impl F32MathFunction {
@@ -1174,6 +1176,7 @@ impl F32MathFunction {
             | Self::Ln
             | Self::Log2
             | Self::Log10 => F32MathImplementation::OcmlAbiV1,
+            Self::Abs => F32MathImplementation::IeeeFabsV1,
         }
     }
 }
@@ -1191,6 +1194,8 @@ pub enum F32MathImplementation {
     /// `llvm.sqrt.f32` when its strict default floating-point environment has
     /// exactly these semantics.
     IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
+    /// LLVM `fabs` semantics for one `f32` value.
+    IeeeFabsV1,
 }
 
 /// A pure floating-point operation with no implicit contraction or target fallback.
@@ -1310,6 +1315,7 @@ impl FloatOperation {
                 F32MathFunction::Ln => "__fe2o3_ir_float_v1_log_f32",
                 F32MathFunction::Log2 => "__fe2o3_ir_float_v1_log2_f32",
                 F32MathFunction::Log10 => "__fe2o3_ir_float_v1_log10_f32",
+                F32MathFunction::Abs => "__fe2o3_ir_float_v1_fabs_f32",
             },
             Self::Bf16x2FusedMultiplyAdd { .. } => "__fe2o3_ir_float_v1_fma_bf16x2",
         })
@@ -1451,6 +1457,7 @@ impl FloatOperation {
             "__fe2o3_ir_float_v1_log_f32" => math(F32MathFunction::Ln),
             "__fe2o3_ir_float_v1_log2_f32" => math(F32MathFunction::Log2),
             "__fe2o3_ir_float_v1_log10_f32" => math(F32MathFunction::Log10),
+            "__fe2o3_ir_float_v1_fabs_f32" => math(F32MathFunction::Abs),
             "__fe2o3_ir_float_v1_fma_bf16x2" => Self::Bf16x2FusedMultiplyAdd {
                 value: values[0],
                 multiplier: values[1],

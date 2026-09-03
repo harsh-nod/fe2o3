@@ -1108,6 +1108,16 @@ fn terminal_operation_v1<'tcx>(
                 function: semantic_f32_math_function_v1(function),
             })
         }
+        ProductionTerminalExpansionV1::RustcFabsF32
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && inputs[0] == output
+                && semantic_f32_type_v1(types, output)
+                && matches!(rust_inputs[0].kind(), TyKind::Float(FloatTy::F32))
+                && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::FabsF32)
+        }
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             if inputs.len() != 1 || rust_inputs.len() != 1 {
                 return Err(body_owner_table_mismatch_v1("BF16 conversion arity"));
@@ -2766,6 +2776,7 @@ const fn semantic_f32_math_function_v1(
         Kernel::Ln => SemanticF32MathFunctionV1::Ln,
         Kernel::Log2 => SemanticF32MathFunctionV1::Log2,
         Kernel::Log10 => SemanticF32MathFunctionV1::Log10,
+        Kernel::Abs => unreachable!("rustc fabs has a distinct semantic intrinsic"),
     }
 }
 
@@ -3849,6 +3860,7 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
             TerminalIdentitySchemaV1::CombinedV3 => 112,
         },
+        ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -3890,6 +3902,7 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
         Function::Ln => 10,
         Function::Log2 => 11,
         Function::Log10 => 12,
+        Function::Abs => 77,
     }
 }
 
@@ -4136,9 +4149,13 @@ mod tests {
             [
                 ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
+                ProductionTerminalExpansionV1::RustcFabsF32,
+                ProductionTerminalExpansionV1::MathF32(
+                    fe2o3_kernel_ir::F32MathFunction::Abs,
+                ),
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
-            [111, 112]
+            [111, 112, 113, 114]
         );
         assert_eq!(
             [

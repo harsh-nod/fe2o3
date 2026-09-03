@@ -136,6 +136,9 @@ pub(crate) fn operation_for_call_v1(
         "__fe2o3_ir_float_v1_log10_f32" => {
             (SoftFloatOperationV1::F32Math(F32MathFunction::Log10), 1)
         }
+        "__fe2o3_ir_float_v1_fabs_f32" => {
+            (SoftFloatOperationV1::F32Math(F32MathFunction::Abs), 1)
+        }
         "__fe2o3_ir_float_v1_fma_bf16x2" => (SoftFloatOperationV1::Bf16x2FusedMultiplyAdd, 3),
         _ => return None,
     };
@@ -330,6 +333,10 @@ fn execute_f32_math(
                     Round::NearestTiesToEven,
                 )
                 .value
+        }
+        F32MathFunction::Abs => {
+            require_arity(operands, 1)?;
+            Single::from_bits(operands[0].bits() & 0x7fff_ffff)
         }
         F32MathFunction::Floor
         | F32MathFunction::Ceil
