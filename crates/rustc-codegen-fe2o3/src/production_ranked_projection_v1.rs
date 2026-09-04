@@ -12072,15 +12072,18 @@ impl<'a> SemanticAssertProofsV1<'a> {
         {
             return Ok(false);
         }
-        if checked.operation() == SemanticCheckedBinaryOpV1::Subtract
-            && self.proves_scaled_quotient_remainder_nonnegative_v1(
+        if checked.operation() == SemanticCheckedBinaryOpV1::Subtract {
+            if self.proves_scaled_quotient_remainder_nonnegative_v1(
                 checked.left(),
                 checked.right(),
                 site,
                 block,
-            )?
-        {
-            return Ok(true);
+            )? {
+                return Ok(true);
+            }
+            if self.proves_authenticated_unsigned_lower_bound_subtraction_v1(checked, site)? {
+                return Ok(true);
+            }
         }
         if checked.operation() == SemanticCheckedBinaryOpV1::Multiply
             && self.proves_strictly_bounded_unsigned_product_v1(checked, site)?
@@ -13657,6 +13660,249 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
         }
         Ok(false)
+    }
+
+    fn proves_authenticated_unsigned_lower_bound_subtraction_v1(
+        &mut self,
+        checked: &SemanticCheckedBinaryRvalueV1,
+        subtraction_site: ScalarAssignmentSiteV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if checked.operation() != SemanticCheckedBinaryOpV1::Subtract
+            || checked.left().ty() != checked.right().ty()
+            || self.unsigned_integer_bits(checked.left().ty()).is_none()
+        {
+            return Ok(false);
+        }
+
+        let block_count = self.function.blocks().len();
+        let can_reach_use = self.blocks_reaching(subtraction_site.block)?;
+        let mut stability_visited = Vec::new();
+        stability_visited
+            .try_reserve_exact(block_count)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "unsigned subtraction lower-bound stability storage cannot be reserved",
+                )
+            })?;
+        stability_visited.resize(block_count, 0_usize);
+        let mut stability_pending = VecDeque::new();
+        stability_pending.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "unsigned subtraction lower-bound stability worklist cannot be reserved",
+            )
+        })?;
+        let mut stability_generation = 0_usize;
+
+        for (switch_block, block) in self.function.blocks().iter().enumerate() {
+            self.charge(1)?;
+            let SemanticTerminatorKindV1::SwitchInt {
+                discriminant,
+                targets,
+            } = block.terminator().kind()
+            else {
+                continue;
+            };
+            let [zero_target] = targets.values() else {
+                continue;
+            };
+            if zero_target.value() != 0
+                || zero_target.edge().role() != SemanticEdgeRoleV1::SwitchValue
+                || targets.otherwise().role() != SemanticEdgeRoleV1::SwitchOtherwise
+                || zero_target.edge().target() == targets.otherwise().target()
+            {
+                continue;
+            }
+            let switch_use = ScalarAssignmentSiteV1 {
+                block: switch_block,
+                statement: block.statements().len(),
+            };
+            let Some(condition_local) = simple_operand_local(discriminant) else {
+                continue;
+            };
+            let Some(condition_site) =
+                self.exact_reaching_assignment_v1(condition_local.index() as usize, switch_use)?
+            else {
+                continue;
+            };
+            if condition_site.block != switch_block {
+                continue;
+            }
+            let SemanticStatementKindV1::Assign(condition) =
+                block.statements()[condition_site.statement].kind()
+            else {
+                continue;
+            };
+            let SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } = condition.value().kind()
+            else {
+                continue;
+            };
+            let false_target = zero_target.edge().target().index() as usize;
+            let true_target = targets.otherwise().target().index() as usize;
+            let (guarded_left, guarded_right, success_target) = match operation {
+                SemanticBinaryOpV1::GreaterOrEqual => (left, right, true_target),
+                SemanticBinaryOpV1::LessThan => (left, right, false_target),
+                SemanticBinaryOpV1::LessOrEqual => (right, left, true_target),
+                SemanticBinaryOpV1::GreaterThan => (right, left, false_target),
+                _ => continue,
+            };
+            if guarded_left.ty() != checked.left().ty()
+                || guarded_right.ty() != checked.right().ty()
+                || !self.same_edge_stable_unsigned_subtraction_value_v1(
+                    guarded_left,
+                    condition_site,
+                    checked.left(),
+                    success_target,
+                    subtraction_site,
+                    &can_reach_use,
+                    &mut stability_visited,
+                    &mut stability_pending,
+                    &mut stability_generation,
+                )?
+                || !self.same_edge_stable_unsigned_subtraction_value_v1(
+                    guarded_right,
+                    condition_site,
+                    checked.right(),
+                    success_target,
+                    subtraction_site,
+                    &can_reach_use,
+                    &mut stability_visited,
+                    &mut stability_pending,
+                    &mut stability_generation,
+                )?
+            {
+                continue;
+            }
+            if self.comparison_edge_authenticates_each_dynamic_use_v1(
+                switch_block,
+                success_target,
+                subtraction_site.block,
+            )? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn same_edge_stable_unsigned_subtraction_value_v1(
+        &mut self,
+        compared: &SemanticOperandV1,
+        comparison_site: ScalarAssignmentSiteV1,
+        expected: &SemanticOperandV1,
+        edge_target: usize,
+        use_site: ScalarAssignmentSiteV1,
+        can_reach_use: &[bool],
+        visited: &mut [usize],
+        pending: &mut VecDeque<usize>,
+        generation: &mut usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if compared.ty() != expected.ty() || self.unsigned_integer_bits(compared.ty()).is_none() {
+            return Ok(false);
+        }
+        if let (Some(compared), Some(expected)) = (
+            simple_operand_local(compared),
+            simple_operand_local(expected),
+        ) && compared == expected
+        {
+            let local = compared.index() as usize;
+            let Some(comparison_block) = self.function.blocks().get(comparison_site.block) else {
+                return Ok(false);
+            };
+            if comparison_site.statement >= comparison_block.statements().len()
+                || self.block_defines_local_in_statement_range_v1(
+                    comparison_site.block,
+                    local,
+                    comparison_site.statement,
+                    comparison_site.statement + 1,
+                )
+            {
+                return Ok(false);
+            }
+            return self.local_stable_after_comparison_and_edge_to_use_v1(
+                local,
+                comparison_site,
+                edge_target,
+                use_site,
+                can_reach_use,
+                visited,
+                pending,
+                generation,
+            );
+        }
+        self.same_edge_stable_unsigned_value_v1(
+            compared,
+            comparison_site,
+            expected,
+            use_site,
+            edge_target,
+            use_site,
+            can_reach_use,
+            visited,
+            pending,
+            generation,
+        )
+    }
+
+    fn comparison_edge_authenticates_each_dynamic_use_v1(
+        &mut self,
+        comparison_block: usize,
+        success_target: usize,
+        use_block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let block_count = self.function.blocks().len();
+        if comparison_block >= block_count
+            || success_target >= block_count
+            || use_block >= block_count
+        {
+            return Ok(false);
+        }
+        let mut success_edge = HashSet::new();
+        success_edge.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "unsigned subtraction lower-bound edge storage cannot be reserved",
+            )
+        })?;
+        success_edge.insert((comparison_block, success_target));
+        if !self.edge_set_dominates(&success_edge, use_block)? {
+            return Ok(false);
+        }
+
+        let mut visited = Vec::new();
+        visited.try_reserve_exact(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "unsigned subtraction reauthentication storage cannot be reserved",
+            )
+        })?;
+        visited.resize(block_count, false);
+        let mut pending = VecDeque::new();
+        pending.try_reserve(block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "unsigned subtraction reauthentication worklist cannot be reserved",
+            )
+        })?;
+        pending.push_back(use_block);
+        visited[use_block] = true;
+        while let Some(block) = pending.pop_front() {
+            self.charge(1)?;
+            self.charge(self.graph.successors[block].len())?;
+            for &successor in &self.graph.successors[block] {
+                if block == comparison_block && successor == success_target {
+                    continue;
+                }
+                if successor == use_block {
+                    return Ok(false);
+                }
+                if !visited[successor] {
+                    visited[successor] = true;
+                    pending.push_back(successor);
+                }
+            }
+        }
+        Ok(true)
     }
 
     fn same_exact_unsigned_value_v1(
@@ -29888,6 +30134,501 @@ mod tests {
                 .unwrap(),
             vec![false, true, false],
         );
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum UnsignedSubtractionBoundHostilityV1 {
+        ExactGreaterOrEqual,
+        ExactProjectedSourceSameLocal,
+        ExactLessThanFalse,
+        ExactReversedLessOrEqual,
+        ExactReversedGreaterThanFalse,
+        WrongLeft,
+        WrongRight,
+        RedefinedLeft,
+        RedefinedRight,
+        EscapedLeft,
+        EscapedRight,
+        WrongGreaterOrEqualPolarity,
+        WrongLessThanPolarity,
+        WrongReversedLessOrEqualPolarity,
+        WrongReversedGreaterThanPolarity,
+        NonDominatingMerge,
+        SameBlockRedefinedLeft,
+        BranchRedefinedLeft,
+        CallDestinationRedefinedLeft,
+        EscapedLeftAfterGuard,
+        LoopReauthenticatesAfterRedefinition,
+        BackedgeRedefinesLeftWithoutReauthentication,
+    }
+
+    fn unsigned_subtraction_bound_function(
+        hostility: UnsignedSubtractionBoundHostilityV1,
+    ) -> (SemanticFunctionDeclV1, usize) {
+        let (operation, guard_left, guard_right, zero_is_success) = match hostility {
+            UnsignedSubtractionBoundHostilityV1::ExactLessThanFalse => {
+                (SemanticBinaryOpV1::LessThan, 1, 2, true)
+            }
+            UnsignedSubtractionBoundHostilityV1::ExactReversedLessOrEqual => {
+                (SemanticBinaryOpV1::LessOrEqual, 2, 1, false)
+            }
+            UnsignedSubtractionBoundHostilityV1::ExactReversedGreaterThanFalse => {
+                (SemanticBinaryOpV1::GreaterThan, 2, 1, true)
+            }
+            UnsignedSubtractionBoundHostilityV1::WrongLeft => {
+                (SemanticBinaryOpV1::GreaterOrEqual, 6, 2, false)
+            }
+            UnsignedSubtractionBoundHostilityV1::WrongRight => {
+                (SemanticBinaryOpV1::GreaterOrEqual, 1, 6, false)
+            }
+            UnsignedSubtractionBoundHostilityV1::WrongGreaterOrEqualPolarity => {
+                (SemanticBinaryOpV1::GreaterOrEqual, 1, 2, true)
+            }
+            UnsignedSubtractionBoundHostilityV1::WrongLessThanPolarity => {
+                (SemanticBinaryOpV1::LessThan, 1, 2, false)
+            }
+            UnsignedSubtractionBoundHostilityV1::WrongReversedLessOrEqualPolarity => {
+                (SemanticBinaryOpV1::LessOrEqual, 2, 1, true)
+            }
+            UnsignedSubtractionBoundHostilityV1::WrongReversedGreaterThanPolarity => {
+                (SemanticBinaryOpV1::GreaterThan, 2, 1, false)
+            }
+            _ => (SemanticBinaryOpV1::GreaterOrEqual, 1, 2, false),
+        };
+        let mut guard_statements = Vec::new();
+        let escaped = match hostility {
+            UnsignedSubtractionBoundHostilityV1::EscapedLeft => Some(1),
+            UnsignedSubtractionBoundHostilityV1::EscapedRight => Some(2),
+            _ => None,
+        };
+        if let Some(escaped) = escaped {
+            guard_statements.push(typed_assignment(
+                7,
+                U64_POINTER_TYPE,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: typed_place(escaped, U64_TYPE),
+                },
+            ));
+        }
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::ExactProjectedSourceSameLocal
+        ) {
+            guard_statements.push(typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(checked_field_operand(8, 0, U64_TYPE)),
+            ));
+        }
+        guard_statements.push(typed_assignment(
+            3,
+            BOOL_TYPE,
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left: typed_operand(guard_left, U64_TYPE),
+                right: typed_operand(guard_right, U64_TYPE),
+            },
+        ));
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::SameBlockRedefinedLeft
+        ) {
+            guard_statements.push(typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+            ));
+        }
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::EscapedLeftAfterGuard
+        ) {
+            guard_statements.push(typed_assignment(
+                7,
+                U64_POINTER_TYPE,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: typed_place(1, U64_TYPE),
+                },
+            ));
+        }
+        let mut subtraction_statements = Vec::new();
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::RedefinedLeft
+        ) {
+            subtraction_statements.push(typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+            ));
+        }
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::RedefinedRight
+        ) {
+            subtraction_statements.push(typed_assignment(
+                2,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+            ));
+        }
+        subtraction_statements.push(typed_assignment(
+            4,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                SemanticCheckedBinaryOpV1::Subtract,
+                typed_operand(1, U64_TYPE),
+                typed_operand(2, U64_TYPE),
+            )),
+        ));
+        let subtraction_terminator = checked_overflow_terminator(
+            4,
+            SemanticBinaryOpV1::Subtract,
+            typed_operand(1, U64_TYPE),
+            typed_operand(2, U64_TYPE),
+            3,
+        );
+        let locals = vec![
+            local(210, U64_TYPE, SemanticLocalRoleV1::Return),
+            local(211, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+            local(212, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+            local(213, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+            local(214, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+            local(215, BOOL_TYPE, SemanticLocalRoleV1::Argument(2)),
+            local(216, U64_TYPE, SemanticLocalRoleV1::Argument(3)),
+            local(217, U64_POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            local(218, CHECKED_U64_TYPE, SemanticLocalRoleV1::Argument(4)),
+        ];
+
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::BranchRedefinedLeft
+        ) {
+            return (
+                projection_function_with_locals(
+                    vec![
+                        block(210, guard_statements, zero_switch(3, BOOL_TYPE, 5, 1)),
+                        block(211, vec![], zero_switch(5, BOOL_TYPE, 2, 3)),
+                        block(
+                            212,
+                            vec![typed_assignment(
+                                1,
+                                U64_TYPE,
+                                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+                            )],
+                            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                        ),
+                        block(
+                            213,
+                            vec![],
+                            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4)),
+                        ),
+                        block(
+                            214,
+                            subtraction_statements,
+                            checked_overflow_terminator(
+                                4,
+                                SemanticBinaryOpV1::Subtract,
+                                typed_operand(1, U64_TYPE),
+                                typed_operand(2, U64_TYPE),
+                                5,
+                            ),
+                        ),
+                        block(215, vec![], SemanticTerminatorKindV1::Return),
+                    ],
+                    locals,
+                ),
+                4,
+            );
+        }
+
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::CallDestinationRedefinedLeft
+        ) {
+            return (
+                projection_function_with_locals(
+                    vec![
+                        block(210, guard_statements, zero_switch(3, BOOL_TYPE, 3, 1)),
+                        block(
+                            211,
+                            vec![],
+                            SemanticTerminatorKindV1::Call(
+                                SemanticDirectCallV1::new_callable(
+                                    SemanticCallableIdV1::from_index(0),
+                                    vec![],
+                                    Some(SemanticCallDestinationV1::new(
+                                        typed_place(1, U64_TYPE),
+                                        cfg_edge(SemanticEdgeRoleV1::CallReturn, 2),
+                                    )),
+                                    SemanticUnwindActionV1::Unreachable,
+                                )
+                                .unwrap(),
+                            ),
+                        ),
+                        block(
+                            212,
+                            subtraction_statements,
+                            checked_overflow_terminator(
+                                4,
+                                SemanticBinaryOpV1::Subtract,
+                                typed_operand(1, U64_TYPE),
+                                typed_operand(2, U64_TYPE),
+                                3,
+                            ),
+                        ),
+                        block(213, vec![], SemanticTerminatorKindV1::Return),
+                    ],
+                    locals,
+                ),
+                2,
+            );
+        }
+
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::NonDominatingMerge
+        ) {
+            return (
+                projection_function_with_locals(
+                    vec![
+                        block(210, vec![], zero_switch(5, BOOL_TYPE, 1, 2)),
+                        block(211, guard_statements, zero_switch(3, BOOL_TYPE, 4, 3)),
+                        block(
+                            212,
+                            vec![],
+                            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                        ),
+                        block(
+                            213,
+                            subtraction_statements,
+                            checked_overflow_terminator(
+                                4,
+                                SemanticBinaryOpV1::Subtract,
+                                typed_operand(1, U64_TYPE),
+                                typed_operand(2, U64_TYPE),
+                                4,
+                            ),
+                        ),
+                        block(214, vec![], SemanticTerminatorKindV1::Return),
+                    ],
+                    locals,
+                ),
+                3,
+            );
+        }
+
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::BackedgeRedefinesLeftWithoutReauthentication
+        ) {
+            return (
+                projection_function_with_locals(
+                    vec![
+                        block(210, guard_statements, zero_switch(3, BOOL_TYPE, 3, 1)),
+                        block(
+                            211,
+                            subtraction_statements,
+                            checked_overflow_terminator(
+                                4,
+                                SemanticBinaryOpV1::Subtract,
+                                typed_operand(1, U64_TYPE),
+                                typed_operand(2, U64_TYPE),
+                                2,
+                            ),
+                        ),
+                        block(
+                            212,
+                            vec![typed_assignment(
+                                1,
+                                U64_TYPE,
+                                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+                            )],
+                            zero_switch(5, BOOL_TYPE, 1, 3),
+                        ),
+                        block(213, vec![], SemanticTerminatorKindV1::Return),
+                    ],
+                    locals,
+                ),
+                1,
+            );
+        }
+
+        if matches!(
+            hostility,
+            UnsignedSubtractionBoundHostilityV1::LoopReauthenticatesAfterRedefinition
+        ) {
+            return (
+                projection_function_with_locals(
+                    vec![
+                        block(210, guard_statements, zero_switch(3, BOOL_TYPE, 3, 1)),
+                        block(
+                            211,
+                            subtraction_statements,
+                            checked_overflow_terminator(
+                                4,
+                                SemanticBinaryOpV1::Subtract,
+                                typed_operand(1, U64_TYPE),
+                                typed_operand(2, U64_TYPE),
+                                2,
+                            ),
+                        ),
+                        block(
+                            212,
+                            vec![
+                                typed_assignment(
+                                    1,
+                                    U64_TYPE,
+                                    SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+                                ),
+                                typed_assignment(
+                                    2,
+                                    U64_TYPE,
+                                    SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+                                ),
+                            ],
+                            zero_switch(5, BOOL_TYPE, 0, 3),
+                        ),
+                        block(213, vec![], SemanticTerminatorKindV1::Return),
+                    ],
+                    locals,
+                ),
+                1,
+            );
+        }
+
+        let (zero_target, nonzero_target) = if zero_is_success { (1, 2) } else { (2, 1) };
+        (
+            projection_function_with_locals(
+                vec![
+                    block(
+                        210,
+                        guard_statements,
+                        zero_switch(3, BOOL_TYPE, zero_target, nonzero_target),
+                    ),
+                    block(211, subtraction_statements, subtraction_terminator),
+                    block(212, vec![], SemanticTerminatorKindV1::Return),
+                    block(213, vec![], SemanticTerminatorKindV1::Return),
+                ],
+                locals,
+            ),
+            1,
+        )
+    }
+
+    fn proves_unsigned_subtraction_bound_fixture_v1(
+        function: &SemanticFunctionDeclV1,
+        assertion_block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let (condition, expected, message) =
+            match function.blocks()[assertion_block].terminator().kind() {
+                SemanticTerminatorKindV1::Assert {
+                    condition,
+                    expected,
+                    message,
+                    ..
+                } => (condition.clone(), *expected, message.clone()),
+                _ => unreachable!("unsigned-subtraction fixture retains its overflow assertion"),
+            };
+        SemanticAssertProofsV1::new(&assertion_proof_types(), function)?
+            .proves_checked_overflow_assert_v1(&condition, expected, &message, assertion_block)
+    }
+
+    #[test]
+    fn unsigned_subtraction_lower_bound_requires_exact_reauthenticated_operands() {
+        for exact in [
+            UnsignedSubtractionBoundHostilityV1::ExactGreaterOrEqual,
+            UnsignedSubtractionBoundHostilityV1::ExactProjectedSourceSameLocal,
+            UnsignedSubtractionBoundHostilityV1::ExactLessThanFalse,
+            UnsignedSubtractionBoundHostilityV1::ExactReversedLessOrEqual,
+            UnsignedSubtractionBoundHostilityV1::ExactReversedGreaterThanFalse,
+            UnsignedSubtractionBoundHostilityV1::LoopReauthenticatesAfterRedefinition,
+        ] {
+            let (function, assertion) = unsigned_subtraction_bound_function(exact);
+            assert!(
+                proves_unsigned_subtraction_bound_fixture_v1(&function, assertion).unwrap(),
+                "{exact:?} did not prove its exact lower-bound edge",
+            );
+        }
+        for hostility in [
+            UnsignedSubtractionBoundHostilityV1::WrongLeft,
+            UnsignedSubtractionBoundHostilityV1::WrongRight,
+            UnsignedSubtractionBoundHostilityV1::RedefinedLeft,
+            UnsignedSubtractionBoundHostilityV1::RedefinedRight,
+            UnsignedSubtractionBoundHostilityV1::EscapedLeft,
+            UnsignedSubtractionBoundHostilityV1::EscapedRight,
+            UnsignedSubtractionBoundHostilityV1::WrongGreaterOrEqualPolarity,
+            UnsignedSubtractionBoundHostilityV1::WrongLessThanPolarity,
+            UnsignedSubtractionBoundHostilityV1::WrongReversedLessOrEqualPolarity,
+            UnsignedSubtractionBoundHostilityV1::WrongReversedGreaterThanPolarity,
+            UnsignedSubtractionBoundHostilityV1::NonDominatingMerge,
+            UnsignedSubtractionBoundHostilityV1::SameBlockRedefinedLeft,
+            UnsignedSubtractionBoundHostilityV1::BranchRedefinedLeft,
+            UnsignedSubtractionBoundHostilityV1::CallDestinationRedefinedLeft,
+            UnsignedSubtractionBoundHostilityV1::EscapedLeftAfterGuard,
+            UnsignedSubtractionBoundHostilityV1::BackedgeRedefinesLeftWithoutReauthentication,
+        ] {
+            let (function, assertion) = unsigned_subtraction_bound_function(hostility);
+            assert!(
+                !proves_unsigned_subtraction_bound_fixture_v1(&function, assertion).unwrap(),
+                "{hostility:?} authenticated a substituted lower bound",
+            );
+        }
+    }
+
+    #[test]
+    fn unsigned_subtraction_lower_bound_rejects_signed_mismatched_and_exhausted_proofs() {
+        let (function, _) = unsigned_subtraction_bound_function(
+            UnsignedSubtractionBoundHostilityV1::ExactGreaterOrEqual,
+        );
+        let types = assertion_proof_types();
+        let mut proof = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        let site = ScalarAssignmentSiteV1 {
+            block: 1,
+            statement: 0,
+        };
+        assert!(
+            !proof
+                .proves_authenticated_unsigned_lower_bound_subtraction_v1(
+                    &SemanticCheckedBinaryRvalueV1::new(
+                        SemanticCheckedBinaryOpV1::Subtract,
+                        typed_operand(1, I32_TYPE),
+                        typed_operand(2, I32_TYPE),
+                    ),
+                    site,
+                )
+                .unwrap()
+        );
+        assert!(
+            !proof
+                .proves_authenticated_unsigned_lower_bound_subtraction_v1(
+                    &SemanticCheckedBinaryRvalueV1::new(
+                        SemanticCheckedBinaryOpV1::Subtract,
+                        typed_operand(1, U64_TYPE),
+                        typed_operand(2, U8_TYPE),
+                    ),
+                    site,
+                )
+                .unwrap()
+        );
+
+        let mut exhausted = SemanticAssertProofsV1::new(&types, &function).unwrap();
+        exhausted.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1;
+        assert!(matches!(
+            exhausted.proves_authenticated_unsigned_lower_bound_subtraction_v1(
+                &SemanticCheckedBinaryRvalueV1::new(
+                    SemanticCheckedBinaryOpV1::Subtract,
+                    typed_operand(1, U64_TYPE),
+                    typed_operand(2, U64_TYPE),
+                ),
+                site,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "uniform induction CFG analysis exceeds its work limit"
+            ))
+        ));
     }
 
     #[derive(Clone, Copy, Debug)]
