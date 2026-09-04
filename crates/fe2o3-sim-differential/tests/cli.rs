@@ -168,3 +168,115 @@ fn semantic_replay_fails_closed_on_identity_and_argument_substitution() {
         assert_eq!(error["status"], "error");
     }
 }
+
+#[test]
+fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
+    let capabilities = command().arg("f32-capabilities-v3").output().unwrap();
+    assert!(capabilities.status.success());
+    assert!(capabilities.stderr.is_empty());
+    assert!(capabilities.stdout.len() < 16 * 1024);
+    let capabilities: Value = serde_json::from_slice(&capabilities.stdout).unwrap();
+    assert_eq!(
+        capabilities["schema"],
+        "fe2o3-sim-f32-differential-capabilities-v3"
+    );
+    assert_eq!(capabilities["authority"], "none");
+    assert_eq!(capabilities["case_limit"], 17);
+    assert_eq!(capabilities["maximum_rows_per_case"], 10);
+    assert_eq!(capabilities["hardware_observed"], false);
+    assert_eq!(capabilities["performance_prediction"], false);
+
+    let output = command().arg("f32-run-v3").output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(output.stdout.len() < 128 * 1024);
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema"], "fe2o3-sim-f32-differential-v3");
+    assert_eq!(report["status"], "agreement");
+    assert_eq!(
+        report["evidence_origin"],
+        "independent_exact_bit_table_agreement"
+    );
+    assert_eq!(report["authority"], "none");
+    assert_eq!(report["operation_cases"], 17);
+    assert_eq!(report["rows_compared"], 149);
+    assert_eq!(report["cases"].as_array().unwrap().len(), 17);
+    assert_eq!(report["hardware_observed"], false);
+    assert_eq!(report["performance_prediction"], false);
+
+    for case in report["cases"].as_array().unwrap() {
+        assert_eq!(case["oracle_sha256"], case["observed_sha256"]);
+        assert_eq!(
+            case["rows"].as_u64().unwrap(),
+            case["row_ids"].as_array().unwrap().len() as u64
+        );
+    }
+    let case = &report["cases"][12];
+    let replay = command()
+        .args([
+            "f32-replay-v3",
+            "--case",
+            case["case_id"].as_str().unwrap(),
+            "--kir-sha256",
+            case["kir_sha256"].as_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(replay.status.success());
+    assert!(replay.stderr.is_empty());
+    let replay: Value = serde_json::from_slice(&replay.stdout).unwrap();
+    assert_eq!(replay["schema"], "fe2o3-sim-f32-differential-replay-v3");
+    assert_eq!(replay["status"], "reproduced");
+    assert_eq!(replay["case"], *case);
+}
+
+#[test]
+fn f32_replay_fails_closed_on_identity_and_argument_substitution() {
+    let output = command()
+        .args([
+            "f32-replay-v3",
+            "--case",
+            "f32-add",
+            "--kir-sha256",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "replay_rejected");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("identity mismatch")
+    );
+
+    for arguments in [
+        vec!["f32-run-v3", "unexpected"],
+        vec!["f32-capabilities-v3", "unexpected"],
+        vec![
+            "f32-replay-v3",
+            "--case",
+            "f32-add",
+            "--kir-sha256",
+            "ABCDEF",
+        ],
+        vec![
+            "f32-replay-v3",
+            "--case",
+            "f32-add",
+            "--case",
+            "f32-add",
+            "--kir-sha256",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ],
+    ] {
+        let output = command().args(arguments).output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["status"], "error");
+    }
+}

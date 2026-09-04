@@ -865,6 +865,10 @@ assert_equals \
   "$(step_command kir-sim-semantic-differential)" \
   'generic core did not retain the exact semantic family differential gate'
 assert_equals \
+  'cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- f32-run-v3' \
+  "$(step_command kir-sim-f32-differential)" \
+  'generic core did not retain the exact binary32 differential gate'
+assert_equals \
   "python3 ${RUNTIME_PURE_RUST_AUDITOR} --policy ${VIRTUAL_RUNTIME_NO_GPU_POLICY} metadata --cargo --root fe2o3-virtual-runtime --root fe2o3-virtual-runtime-cli --root fe2o3-sim-differential" \
   "$(step_command virtual-runtime-no-gpu-metadata)" \
   'generic core did not audit every issue 216 no-GPU dependency closure'

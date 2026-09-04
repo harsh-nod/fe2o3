@@ -28,10 +28,35 @@ not host floating-point evaluation.
 Success evidence binds the capability/exclusion contract, every case ID,
 canonical KIR identity, expected bytes, observed bytes, and rejection disposition. Replay requires the exact seed,
 case ID, and lowercase KIR SHA-256. A mismatch retains the canonical KIR and a
-bounded first-mismatching-scalar reduction. The capability query lists the
+bounded first-mismatching-scalar reduction. The V2 capability query lists its
 intentional exclusions, including nonfinite/rounding-edge floats,
 transcendentals, concurrency families, and physical-GPU parity. Unsupported
 semantics are not approximated.
+
+The additive V3 binary32 matrix qualifies every currently admitted core scalar
+`f32` operation without changing V2:
+
+```text
+fe2o3-sim-differential f32-capabilities-v3
+fe2o3-sim-differential f32-run-v3
+fe2o3-sim-differential f32-replay-v3 --case CASE --kir-sha256 SHA256
+```
+
+Its 17 operation cases and 149 exact rows cover negate; add, subtract,
+multiply, divide, and remainder; all six comparisons; explicit fused
+multiply-add; and floor, ceil, truncate, and round-to-nearest-ties-to-even.
+Compile-time oracle tables enumerate exact binary32 input and result bits for
+signed zero, subnormals, infinities, quiet NaNs, rounding ties, overflow,
+unordered comparisons, and a fused single-rounding witness. The oracle never
+uses host floating-point evaluation. Each case binds its canonical KIR V7,
+ordered row IDs, oracle bytes, and observed bytes. Replay requires the exact
+case/KIR identity, and a mismatch retains the first failing row and its exact
+input, expected, and observed bits.
+
+V3 does not yet qualify float conversions/casts or f16, bf16, and f64 edge
+matrices. F32 functions that lack an admitted executable numerical contract
+remain typed unsupported. The result is CPU semantic evidence only: it makes
+no compiler, ISA, GPU, parity, or performance claim.
 
 The stable JSON result separates its evidence origin from an explicit
 `authority: none` and binds the generator configuration and a digest over the
