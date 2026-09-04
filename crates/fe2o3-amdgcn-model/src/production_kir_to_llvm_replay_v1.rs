@@ -1062,7 +1062,8 @@ fn snapshot_target_optimization_v4(
     report: &KernelIrPlironOptimizationReportV2,
 ) -> Result<ProductionTargetOptimizationAuditV4, ProductionKirToLlvmReplayErrorV1> {
     let optimizer_policy_version = match report.policy() {
-        KernelIrPlironOptimizationPolicyV2::ProductionV1 => {
+        KernelIrPlironOptimizationPolicyV2::ProductionV1 => 1,
+        KernelIrPlironOptimizationPolicyV2::ProductionV2 => {
             KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2
         }
         KernelIrPlironOptimizationPolicyV2::Configurable => {

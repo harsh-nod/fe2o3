@@ -3002,6 +3002,16 @@ mod tests {
         let exact_operation_count = (HARD_MAX_OPERATION_TREE_ITEMS - 12) / 2;
         let exact = capacity_module(exact_operation_count);
         assert_eq!(preflight(&exact).unwrap().0, HARD_MAX_OPERATION_TREE_ITEMS);
+        let exact_input = VerifiedCanonicalKernelIrV9::from_module(exact).unwrap();
+        let mut exact_limited = session();
+        exact_limited
+            .import_canonical_kir_v9_o0(&exact_input)
+            .expect("exact root boundary is admitted");
+        assert_eq!(
+            exact_limited.operation_tree_work,
+            HARD_MAX_OPERATION_TREE_ITEMS
+        );
+        assert!(!exact_limited.is_poisoned());
 
         let over = capacity_module(exact_operation_count + 1);
         let over_input = VerifiedCanonicalKernelIrV9::from_module(over).unwrap();

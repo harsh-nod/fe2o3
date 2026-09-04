@@ -24,7 +24,7 @@ use fe2o3_pliron::{
 pub const MAX_KERNEL_IR_PLIRON_OPTIMIZATION_MODULE_BYTES_V2: usize = MAX_MODULE_BYTES_V1;
 
 /// Version of the closed optimizer policy used for new production compilations.
-pub const KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2: u16 = 1;
+pub const KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2: u16 = 2;
 
 /// Stable pass identity owned by the V2 production optimizer policy.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -60,7 +60,7 @@ impl KernelIrPlironProductionPassV2 {
     }
 }
 
-/// Exact, ordered pass roster for production optimizer policy version 1.
+/// Exact, ordered pass roster shared by production optimizer policy versions 1 and 2.
 pub const KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2: [KernelIrPlironProductionPassV2;
     7] = [
     KernelIrPlironProductionPassV2::SparseConditionalConstantPropagation,
@@ -84,8 +84,10 @@ pub const KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE: bool = 
 pub enum KernelIrPlironOptimizationPolicyV2 {
     /// Caller-selected limits or mutation lineage.
     Configurable,
-    /// Closed production policy version 1 with its fixed limits and epoch.
+    /// Historical closed production policy version 1.
     ProductionV1,
+    /// Current closed production policy version 2 with its fixed limits and epoch.
+    ProductionV2,
 }
 
 /// Which canonical-byte admission limit was rejected.
@@ -160,18 +162,18 @@ impl Default for KernelIrPlironOptimizationLimitsV2 {
     }
 }
 
-/// Returns the frozen limits for production optimizer policy version 1.
+/// Returns the frozen limits for production optimizer policy version 2.
 ///
 /// Literal values keep the policy independent of mutable `Default`
 /// implementations. Construction will fail loudly if an underlying hard cap
 /// is ever reduced below the versioned policy.
 pub fn production_kernel_ir_pliron_optimization_limits_v2() -> KernelIrPlironOptimizationLimitsV2 {
     let shell = ShellLimits::new(32, 64, 512)
-        .expect("production optimizer V1 shell limits must remain supported");
-    let pliron = PlironOptimizationLimitsV1::new(256, 16_384, 12_636_160)
-        .expect("production optimizer V1 execution limits must remain supported");
+        .expect("production optimizer V2 shell limits must remain supported");
+    let pliron = PlironOptimizationLimitsV1::new(256, 32_768, 25_268_224)
+        .expect("production optimizer V2 execution limits must remain supported");
     KernelIrPlironOptimizationLimitsV2::new(16_777_216, 16_777_216, shell, pliron)
-        .expect("production optimizer V1 byte limits must remain supported")
+        .expect("production optimizer V2 byte limits must remain supported")
 }
 
 fn validate_byte_limit(
@@ -266,7 +268,7 @@ impl KernelIrPlironOptimizationReportV2 {
     /// Whether this report came from the exact policy admitted by production replay.
     pub fn is_production_replay_compatible(&self) -> bool {
         KERNEL_IR_PLIRON_OPTIMIZATION_V2_PRODUCTION_REPLAY_COMPATIBLE
-            && self.policy == KernelIrPlironOptimizationPolicyV2::ProductionV1
+            && self.policy == KernelIrPlironOptimizationPolicyV2::ProductionV2
             && self.limits == production_kernel_ir_pliron_optimization_limits_v2()
             && self.initial_epoch == 0
     }
@@ -452,7 +454,7 @@ pub fn optimize_production_kernel_ir_module_v2(
         input,
         0,
         production_kernel_ir_pliron_optimization_limits_v2(),
-        KernelIrPlironOptimizationPolicyV2::ProductionV1,
+        KernelIrPlironOptimizationPolicyV2::ProductionV2,
     )
 }
 
@@ -517,7 +519,8 @@ fn optimize_kernel_ir_module_with_policy_at_epoch_v2(
         KernelIrPlironOptimizationPolicyV2::Configurable => {
             PlironOptimizationPlanV1::standard().passes().to_vec()
         }
-        KernelIrPlironOptimizationPolicyV2::ProductionV1 => {
+        KernelIrPlironOptimizationPolicyV2::ProductionV1
+        | KernelIrPlironOptimizationPolicyV2::ProductionV2 => {
             KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2
                 .into_iter()
                 .map(KernelIrPlironProductionPassV2::pliron)

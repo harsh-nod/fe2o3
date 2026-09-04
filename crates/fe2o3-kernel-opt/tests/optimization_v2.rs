@@ -143,6 +143,59 @@ fn memory_intrinsic_module() -> Module {
     module
 }
 
+fn large_multiblock_production_kernel() -> Module {
+    const BLOCK_COUNT: usize = 217;
+    const OPERATION_COUNT: usize = 9_554;
+
+    let operations_per_block = OPERATION_COUNT / BLOCK_COUNT;
+    let blocks_with_one_more = OPERATION_COUNT % BLOCK_COUNT;
+    let mut next_value = 0_u32;
+    let blocks = (0..BLOCK_COUNT)
+        .map(|block_index| {
+            let mut block = BasicBlock::new(BlockId(
+                u32::try_from(block_index).expect("test block index fits in u32"),
+            ));
+            let count = operations_per_block + usize::from(block_index < blocks_with_one_more);
+            block.operations = (0..count)
+                .map(|_| {
+                    let value = next_value;
+                    next_value = next_value
+                        .checked_add(1)
+                        .expect("test value id fits in u32");
+                    Operation::effect_free(
+                        u32_value(value),
+                        OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(value)),
+                    )
+                })
+                .collect();
+            block.terminator = Some(if block_index + 1 == BLOCK_COUNT {
+                Terminator::Return { values: vec![] }
+            } else {
+                Terminator::Branch {
+                    target: BlockId(
+                        u32::try_from(block_index + 1).expect("test block index fits in u32"),
+                    ),
+                    arguments: vec![],
+                }
+            });
+            block
+        })
+        .collect();
+
+    let entry_function =
+        Function::kernel_entry("wide_impl", Signature::new(vec![], vec![]), vec![], blocks);
+    let mut module = Module::new("pliron-v2-wide-production-kernel");
+    module.functions.push(entry_function);
+    module.kernels.push(Kernel::new(
+        "wide",
+        "wide_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+    module
+}
+
 #[test]
 fn v10_memory_intrinsics_round_trip_through_the_production_optimizer() {
     let input = memory_intrinsic_module();
@@ -152,6 +205,19 @@ fn v10_memory_intrinsics_round_trip_through_the_production_optimizer() {
     assert_eq!(optimized.module(), &input);
     assert_eq!(optimized.canonical().canonical_bytes(), input_bytes);
     assert!(!optimized.report().changed());
+}
+
+#[test]
+fn production_optimizer_admits_measured_large_multiblock_kernel_shape() {
+    let input = large_multiblock_production_kernel();
+    verify_module(&input).unwrap();
+
+    let optimized = optimize_production_kernel_ir_module_v2(&input)
+        .expect("production V2 admits a valid graph above the former graph and child limits");
+
+    verify_module(optimized.module()).unwrap();
+    assert!(optimized.report().changed());
+    assert_eq!(optimized.report().pliron().initial_graph_work(), 19_765);
 }
 
 fn limits_with_pliron(pliron: PlironOptimizationLimitsV1) -> KernelIrPlironOptimizationLimitsV2 {
@@ -231,7 +297,7 @@ fn production_entry_uses_the_fixed_v2_pipeline() {
     assert_eq!(production.report().passes(), configured.report().passes());
     assert_eq!(
         production.report().policy(),
-        KernelIrPlironOptimizationPolicyV2::ProductionV1
+        KernelIrPlironOptimizationPolicyV2::ProductionV2
     );
     assert_eq!(
         configured.report().policy(),
@@ -240,7 +306,7 @@ fn production_entry_uses_the_fixed_v2_pipeline() {
     assert_eq!(production.report().passes().len(), 7);
     assert_eq!(
         KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2,
-        1
+        2
     );
     assert_eq!(
         production
@@ -498,6 +564,6 @@ fn only_the_closed_production_report_is_admitted_by_production_v4_replay() {
     assert_eq!(production_limits.shell().max_passes(), 64);
     assert_eq!(production_limits.shell().max_diagnostic_bytes(), 512);
     assert_eq!(production_limits.pliron().max_passes(), 256);
-    assert_eq!(production_limits.pliron().max_graph_work(), 16_384);
-    assert_eq!(production_limits.pliron().max_work_units(), 12_636_160);
+    assert_eq!(production_limits.pliron().max_graph_work(), 32_768);
+    assert_eq!(production_limits.pliron().max_work_units(), 25_268_224);
 }

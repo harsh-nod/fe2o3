@@ -111,12 +111,17 @@ pub const HARD_MAX_DIAGNOSTIC_BYTES: usize = 4_096;
 pub const HARD_MAX_OPERATION_HANDLES: usize = 4_096;
 pub const HARD_MAX_OPERATION_REGIONS: usize = 64;
 pub const HARD_MAX_OPERATION_BLOCKS: usize = 4_096;
-pub const HARD_MAX_OPERATION_CHILDREN: usize = 4_096;
+/// Maximum immediate fanout that can fit under the recursive tree-work cap.
+///
+/// A parent costs one tree item, and every immediate child costs both its
+/// parent edge and at least one operation item: `1 + 2 * children`.
+pub const HARD_MAX_OPERATION_CHILDREN: usize = (HARD_MAX_OPERATION_TREE_ITEMS - 1) / 2;
 pub const HARD_MAX_OPERATION_IMPORT_BYTES: usize = 1_048_576;
 pub const HARD_MAX_OPERATION_IMPORT_NESTING: usize = 256;
-pub const HARD_MAX_OPERATION_TREE_ITEMS: usize = 16_384;
+pub const HARD_MAX_OPERATION_TREE_ITEMS: usize = 32_768;
 pub const HARD_MAX_SESSION_OPERATION_IMPORT_BYTES: usize = 1_048_576;
-pub const HARD_MAX_SESSION_OPERATION_TREE_ITEMS: usize = 65_536;
+/// Aggregate capacity for four independently maximum-sized operation roots.
+pub const HARD_MAX_SESSION_OPERATION_TREE_ITEMS: usize = HARD_MAX_OPERATION_TREE_ITEMS * 4;
 
 /// Resource limits for one context and pass plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
