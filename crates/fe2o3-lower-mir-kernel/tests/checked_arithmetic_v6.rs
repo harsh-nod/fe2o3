@@ -702,14 +702,15 @@ fn checked_lowering_is_deterministic_in_module_and_correspondence_order() {
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
     assert_eq!(
-        first.canonical_kernel_ir_v8().canonical_bytes(),
-        second.canonical_kernel_ir_v8().canonical_bytes(),
+        first.canonical_kernel_ir_v8().unwrap().canonical_bytes(),
+        second.canonical_kernel_ir_v8().unwrap().canonical_bytes(),
     );
     assert_eq!(
         first.canonical_kernel_ir_v8_identity(),
         second.canonical_kernel_ir_v8_identity(),
     );
-    let decoded = decode_module_v8(first.canonical_kernel_ir_v8().canonical_bytes()).unwrap();
+    let decoded =
+        decode_module_v8(first.canonical_kernel_ir_v8().unwrap().canonical_bytes()).unwrap();
     assert_eq!(decoded, *first.module());
     assert!(
         decoded.functions[0]
