@@ -39,6 +39,7 @@ mod r18_persistent_local_sdma_adapter;
 mod r19_directional_persistent_local_sdma_adapter;
 mod r20_runtime_facade_directional_chunking;
 mod r21_runtime_scripted_failure_seam;
+mod r22_batched_directional_persistent_sdma_windows;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -65,6 +66,7 @@ pub use r18_persistent_local_sdma_adapter::*;
 pub use r19_directional_persistent_local_sdma_adapter::*;
 pub use r20_runtime_facade_directional_chunking::*;
 pub use r21_runtime_scripted_failure_seam::*;
+pub use r22_batched_directional_persistent_sdma_windows::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -107,6 +109,8 @@ mod r19_directional_persistent_local_sdma_adapter_tests;
 mod r20_runtime_facade_directional_chunking_tests;
 #[cfg(test)]
 mod r21_runtime_scripted_failure_seam_tests;
+#[cfg(test)]
+mod r22_batched_directional_persistent_sdma_windows_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

@@ -16,14 +16,35 @@ use crate::persistent_allocation::{
 use crate::persistent_sdma::Gfx942PersistentSdmaDirectionV1;
 use crate::queue::ComputeAqlQueueSessionErrorV1;
 use crate::sdma::{
-    GFX942_SDMA_D2H_ENGINE_INDEX_V1, GFX942_SDMA_H2D_ENGINE_INDEX_V1,
-    Gfx942DirectionalSdmaQueueObservationV1, Gfx942SdmaBufferKindV1,
-    Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
-    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyRequestV1, Gfx942SdmaCopyTicketV1,
+    CompletedPersistentSdmaWindowV1, GFX942_SDMA_D2H_ENGINE_INDEX_V1,
+    GFX942_SDMA_H2D_ENGINE_INDEX_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942DirectionalSdmaQueueObservationV1,
+    Gfx942SdmaBufferKindV1, Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1,
+    Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyRequestV1, Gfx942SdmaCopyTicketV1,
     planned_ticket_matches_queue_occurrence,
 };
 
 pub const GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_ALLOCATION_BYTES_V1: u64 = 256 * 1024 * 1024;
+pub const GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1: usize =
+    GFX942_SDMA_MAX_IN_FLIGHT_V1;
+pub const GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_BYTES_V1: u64 =
+    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1 as u64
+        * GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64;
+
+pub const GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_WINDOW_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-gfx942-kfd-persistent-directional-local-sdma-r22-window-v1\n",
+    "parent=fe2o3-gfx942-kfd-persistent-directional-local-sdma-r19-v1\n",
+    "window=one-homogeneous-direction,one-persistent-host-device-owner-pair,one-aggregate-ledger-use,1..63-contiguous-linear-copy-packets\n",
+    "publication=all-fallible-capacity-range-packet-completion-and-ticket-preflight-before-native-mutation,all-records-before-mapped-writes,one-release-write-pointer-publication,one-final-release-doorbell\n",
+    "completion=ordered-full-ticket-authentication,pending-and-timeout-retain-whole-window,no-independent-packet-retirement,exact-full-completion-restores-one-owner-pair-and-settles-one-frontier\n",
+    "failure=clean-prepublication-restores-exact-pair,retained-or-postpublication-ambiguity-quarantines-whole-window-for-process-teardown\n",
+    "limits=local-h2d-or-d2h-only,no-striped-set,no-peer-or-xgmi,no-compute,no-concurrent-range-borrows\n",
+    "evidence=native-neutral-host-tests-only,no-native-hardware-execution-or-performance-evidence\n",
+    "proof=abstract-model-separate,no-executable-rust-or-native-refinement\n",
+);
+
+pub const GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_WINDOW_MANIFEST_SHA256_V1: &str =
+    "44821351a14664f9be3db9fc406ee9f4961d4f40a4346fdb085886ecfc84c2aa";
 
 pub const GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_ADAPTER_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-gfx942-kfd-persistent-directional-local-sdma-r19-v1\n",
@@ -550,6 +571,295 @@ impl Gfx942DirectionalPersistentSdmaExecutionFailureV1 {
     }
 }
 
+#[must_use = "published directional persistent SDMA window custody must be observed"]
+pub struct Gfx942DirectionalPersistentSdmaWindowSubmissionV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    pub(crate) published: Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+    pub(crate) tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    pub(crate) host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+    pub(crate) direction: Gfx942PersistentSdmaDirectionV1,
+    pub(crate) host_offset: u64,
+    pub(crate) device_offset: u64,
+    pub(crate) copy_bytes: u32,
+    pub(crate) packet_count: usize,
+}
+
+impl Gfx942DirectionalPersistentSdmaWindowSubmissionV1 {
+    pub const fn request(&self) -> Gfx942PersistentUseRequestV1 {
+        self.published.request()
+    }
+
+    pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
+        self.direction
+    }
+
+    pub const fn copy_bytes(&self) -> u32 {
+        self.copy_bytes
+    }
+
+    pub const fn host_offset(&self) -> u64 {
+        self.host_offset
+    }
+
+    pub const fn device_offset(&self) -> u64 {
+        self.device_offset
+    }
+
+    pub const fn packet_count(&self) -> usize {
+        self.packet_count
+    }
+}
+
+impl fmt::Debug for Gfx942DirectionalPersistentSdmaWindowSubmissionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942DirectionalPersistentSdmaWindowSubmissionV1")
+            .field("request", &self.request())
+            .field("direction", &self.direction)
+            .field("host_offset", &self.host_offset)
+            .field("device_offset", &self.device_offset)
+            .field("copy_bytes", &self.copy_bytes)
+            .field("packet_count", &self.packet_count)
+            .finish_non_exhaustive()
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) enum Gfx942DirectionalPersistentSdmaWindowTerminalStateV1 {
+    AdmissionRestored {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+    },
+    PreparedRestored {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+    },
+    PreparedUnrestored {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        request: Gfx942SdmaCopyRequestV1,
+    },
+    PreparedQueueRetained {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    },
+    PublishedQueueRetained {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    },
+    CompletedUnrestored {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        completed: CompletedPersistentSdmaWindowV1,
+    },
+}
+
+#[must_use = "terminal native window custody must be retained until process teardown"]
+pub struct Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+    pub(crate) direction: Gfx942PersistentSdmaDirectionV1,
+    pub(crate) sequence: Option<u64>,
+    pub(crate) packet_count: usize,
+    pub(crate) state: Gfx942DirectionalPersistentSdmaWindowTerminalStateV1,
+}
+
+impl Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+    pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
+        self.direction
+    }
+
+    pub const fn sequence(&self) -> Option<u64> {
+        self.sequence
+    }
+
+    pub const fn packet_count(&self) -> usize {
+        self.packet_count
+    }
+
+    pub const fn stage(&self) -> Gfx942DirectionalPersistentSdmaTerminalStageV1 {
+        match self.state {
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::AdmissionRestored { .. } => {
+                Gfx942DirectionalPersistentSdmaTerminalStageV1::AdmissionRestored
+            }
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PreparedRestored { .. } => {
+                Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedRestored
+            }
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PreparedUnrestored { .. } => {
+                Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedUnrestored
+            }
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PreparedQueueRetained {
+                ..
+            } => Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedQueueRetained,
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PublishedQueueRetained {
+                ..
+            } => Gfx942DirectionalPersistentSdmaTerminalStageV1::PublishedQueueRetained,
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::CompletedUnrestored {
+                ..
+            } => Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored,
+        }
+    }
+}
+
+impl fmt::Debug for Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1")
+            .field("direction", &self.direction)
+            .field("sequence", &self.sequence)
+            .field("packet_count", &self.packet_count)
+            .field("stage", &self.stage())
+            .finish_non_exhaustive()
+    }
+}
+
+#[must_use = "inspect retryable or process-teardown window custody"]
+#[allow(clippy::large_enum_variant)]
+pub enum Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1 {
+    Retryable {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+    },
+    ProcessTeardown(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
+}
+
+#[must_use = "inspect the window failure and retain the returned custody"]
+pub struct Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1,
+}
+
+impl Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1 {
+    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+#[must_use = "completed directional persistent SDMA window custody must be retained or demoted"]
+pub struct Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+    allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    host: Gfx942SdmaBufferV1,
+    frontier: Gfx942PersistentDependencyFrontierV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+    packet_count: usize,
+}
+
+impl Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+    pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
+        self.direction
+    }
+
+    pub const fn copy_bytes(&self) -> u32 {
+        self.copy_bytes
+    }
+
+    pub const fn host_offset(&self) -> u64 {
+        self.host_offset
+    }
+
+    pub const fn device_offset(&self) -> u64 {
+        self.device_offset
+    }
+
+    pub const fn packet_count(&self) -> usize {
+        self.packet_count
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942SdmaBufferV1,
+        Gfx942PersistentDependencyFrontierV1,
+    ) {
+        (self.allocation, self.host, self.frontier)
+    }
+}
+
+#[must_use = "pending directional persistent SDMA window custody must be polled again"]
+pub enum Gfx942DirectionalPersistentSdmaWindowCopyPollV1 {
+    Pending(Gfx942DirectionalPersistentSdmaWindowSubmissionV1),
+    Completed(Gfx942DirectionalPersistentSdmaWindowCompletedV1),
+}
+
+#[must_use = "a window timeout returns the submission; terminal custody requires teardown"]
+pub enum Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1 {
+    Pending(Gfx942DirectionalPersistentSdmaWindowSubmissionV1),
+    ProcessTeardown(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
+}
+
+#[must_use = "inspect the window execution failure and retain its custody"]
+pub struct Gfx942DirectionalPersistentSdmaWindowExecutionFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1,
+}
+
+impl Gfx942DirectionalPersistentSdmaWindowExecutionFailureV1 {
+    pub fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+pub(crate) struct DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    pub(crate) prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    pub(crate) planned_tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    pub(crate) host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+    pub(crate) direction: Gfx942PersistentSdmaDirectionV1,
+    pub(crate) host_offset: u64,
+    pub(crate) device_offset: u64,
+    pub(crate) copy_bytes: u32,
+    pub(crate) packet_count: usize,
+}
+
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum DirectionalPersistentSdmaWindowPublicationObservationV1 {
+    Recoverable(Gfx942SdmaCopyRequestV1),
+    Retained(Vec<Gfx942SdmaCopyTicketV1>),
+    Confirmed(Vec<Gfx942SdmaCopyTicketV1>),
+}
+
+pub(crate) enum DirectionalPersistentSdmaWindowPublicationTransitionV1 {
+    Retryable {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+    },
+    Published(Gfx942DirectionalPersistentSdmaWindowSubmissionV1),
+    ProcessTeardown(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
+}
+
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum DirectionalPersistentSdmaWindowCompletionObservationV1 {
+    Pending,
+    Timeout,
+    QueueRetained,
+    Completed(CompletedPersistentSdmaWindowV1),
+}
+
+pub(crate) enum DirectionalPersistentSdmaWindowCompletionTransitionV1 {
+    Pending(Gfx942DirectionalPersistentSdmaWindowSubmissionV1),
+    Timeout(Gfx942DirectionalPersistentSdmaWindowSubmissionV1),
+    Completed(Gfx942DirectionalPersistentSdmaWindowCompletedV1),
+    ProcessTeardown(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
+}
+
 pub(crate) struct DirectionalPersistentSdmaPreparedCustodyV1 {
     pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
     pub(crate) prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
@@ -936,6 +1246,388 @@ pub(crate) fn transition_directional_persistent_sdma_completion_v1(
             state: Gfx942DirectionalPersistentSdmaTerminalStateV1::PublishedQueueRetained {
                 allocation,
                 ticket,
+            },
+        },
+    )
+}
+
+fn window_prepared_terminal_custody(
+    custody: DirectionalPersistentSdmaWindowPreparedCustodyV1,
+    request: Gfx942SdmaCopyRequestV1,
+    reason: Gfx942PersistentQuarantineReasonV1,
+) -> Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+    let DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+        allocation,
+        prepared,
+        host_binding,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+        packet_count,
+        ..
+    } = custody;
+    let sequence = prepared.sequence();
+    let state = match restore_directional_persistent_sdma_request_v1(
+        allocation,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+        host_binding,
+        request,
+    ) {
+        Ok((mut allocation, host)) => {
+            allocation
+                .owner
+                .quarantine_prepared(prepared, reason)
+                .expect("private prepared window use must quarantine");
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PreparedRestored {
+                allocation,
+                host,
+            }
+        }
+        Err((mut allocation, request)) => {
+            allocation
+                .owner
+                .quarantine_prepared(prepared, reason)
+                .expect("private prepared window use must quarantine");
+            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PreparedUnrestored {
+                allocation,
+                request,
+            }
+        }
+    };
+    Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+        direction,
+        sequence: Some(sequence),
+        packet_count,
+        state,
+    }
+}
+
+pub(crate) fn transition_directional_persistent_sdma_window_publication_v1(
+    custody: DirectionalPersistentSdmaWindowPreparedCustodyV1,
+    observation: DirectionalPersistentSdmaWindowPublicationObservationV1,
+    enclosing_operation_succeeded: bool,
+    closing_currentness_succeeded: bool,
+) -> DirectionalPersistentSdmaWindowPublicationTransitionV1 {
+    match observation {
+        DirectionalPersistentSdmaWindowPublicationObservationV1::Recoverable(request)
+            if enclosing_operation_succeeded && closing_currentness_succeeded =>
+        {
+            let DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+                allocation,
+                prepared,
+                planned_tickets,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                packet_count,
+            } = custody;
+            match restore_directional_persistent_sdma_request_v1(
+                allocation,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                request,
+            ) {
+                Ok((mut allocation, host)) => {
+                    allocation
+                        .owner
+                        .cancel_prepared(prepared)
+                        .expect("private prepared window use must cancel");
+                    DirectionalPersistentSdmaWindowPublicationTransitionV1::Retryable {
+                        allocation,
+                        host,
+                    }
+                }
+                Err((allocation, request)) => {
+                    DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(
+                        window_prepared_terminal_custody(
+                            DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+                                allocation,
+                                prepared,
+                                planned_tickets,
+                                host_binding,
+                                direction,
+                                host_offset,
+                                device_offset,
+                                copy_bytes,
+                                packet_count,
+                            },
+                            request,
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                        ),
+                    )
+                }
+            }
+        }
+        DirectionalPersistentSdmaWindowPublicationObservationV1::Recoverable(request) => {
+            DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(
+                window_prepared_terminal_custody(
+                    custody,
+                    request,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                ),
+            )
+        }
+        DirectionalPersistentSdmaWindowPublicationObservationV1::Retained(tickets) => {
+            let DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+                mut allocation,
+                prepared,
+                direction,
+                packet_count,
+                ..
+            } = custody;
+            let sequence = prepared.sequence();
+            allocation
+                .owner
+                .quarantine_prepared(
+                    prepared,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate,
+                )
+                .expect("private prepared window use must quarantine");
+            DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(
+                Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+                    direction,
+                    sequence: Some(sequence),
+                    packet_count,
+                    state:
+                        Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PreparedQueueRetained {
+                            allocation,
+                            tickets,
+                        },
+                },
+            )
+        }
+        DirectionalPersistentSdmaWindowPublicationObservationV1::Confirmed(tickets) => {
+            let DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+                mut allocation,
+                prepared,
+                planned_tickets,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                packet_count,
+            } = custody;
+            let expected_queue = allocation.attachment.pair.queue_id(direction);
+            let planned_roster_is_exact = planned_tickets.len() == packet_count
+                && planned_tickets.iter().all(|ticket| {
+                    planned_ticket_matches_queue_occurrence(
+                        *ticket,
+                        allocation.attachment.queue,
+                        expected_queue,
+                    )
+                });
+            let published = allocation
+                .owner
+                .publish(prepared)
+                .expect("private prepared window use publishes only after confirmation");
+            if enclosing_operation_succeeded
+                && closing_currentness_succeeded
+                && planned_roster_is_exact
+                && tickets == planned_tickets
+            {
+                return DirectionalPersistentSdmaWindowPublicationTransitionV1::Published(
+                    Gfx942DirectionalPersistentSdmaWindowSubmissionV1 {
+                        allocation,
+                        published,
+                        tickets,
+                        host_binding,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                        packet_count,
+                    },
+                );
+            }
+            let sequence = published.sequence();
+            allocation
+                .owner
+                .quarantine_published(
+                    published,
+                    if enclosing_operation_succeeded && closing_currentness_succeeded {
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate
+                    } else {
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss
+                    },
+                )
+                .expect("private published window use must quarantine");
+            DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(
+                Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+                    direction,
+                    sequence: Some(sequence),
+                    packet_count,
+                    state:
+                        Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PublishedQueueRetained {
+                            allocation,
+                            tickets,
+                        },
+                },
+            )
+        }
+    }
+}
+
+pub(crate) fn transition_directional_persistent_sdma_window_completion_v1(
+    mut submission: Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
+    observation: DirectionalPersistentSdmaWindowCompletionObservationV1,
+    enclosing_operation_succeeded: bool,
+) -> DirectionalPersistentSdmaWindowCompletionTransitionV1 {
+    match observation {
+        DirectionalPersistentSdmaWindowCompletionObservationV1::Pending
+            if enclosing_operation_succeeded =>
+        {
+            return DirectionalPersistentSdmaWindowCompletionTransitionV1::Pending(submission);
+        }
+        DirectionalPersistentSdmaWindowCompletionObservationV1::Timeout
+            if enclosing_operation_succeeded =>
+        {
+            let timeout = submission
+                .allocation
+                .owner
+                .observe_timeout(submission.published)
+                .expect("private published window use retains timeout custody");
+            submission.published = timeout.into_published();
+            return DirectionalPersistentSdmaWindowCompletionTransitionV1::Timeout(submission);
+        }
+        DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(completed) => {
+            let Gfx942DirectionalPersistentSdmaWindowSubmissionV1 {
+                allocation,
+                published,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                packet_count,
+                ..
+            } = submission;
+            let sequence = published.sequence();
+            if !enclosing_operation_succeeded || completed.packet_count != packet_count {
+                let mut allocation = allocation;
+                allocation
+                    .owner
+                    .quarantine_published(
+                        published,
+                        if enclosing_operation_succeeded {
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate
+                        } else {
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss
+                        },
+                    )
+                    .expect("private published window use must quarantine");
+                return DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(
+                    Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+                        direction,
+                        sequence: Some(sequence),
+                        packet_count,
+                        state:
+                            Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::CompletedUnrestored {
+                                allocation,
+                                completed,
+                            },
+                    },
+                );
+            }
+            return match restore_directional_persistent_sdma_request_v1(
+                allocation,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                completed.request,
+            ) {
+                Ok((mut allocation, host)) => {
+                    let completed_use = allocation
+                        .owner
+                        .complete(published)
+                        .expect("private published window use must complete");
+                    let frontier = allocation
+                        .owner
+                        .settle(completed_use)
+                        .expect("single aggregate window use must settle in order");
+                    DirectionalPersistentSdmaWindowCompletionTransitionV1::Completed(
+                        Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+                            allocation,
+                            host,
+                            frontier,
+                            direction,
+                            host_offset,
+                            device_offset,
+                            copy_bytes,
+                            packet_count,
+                        },
+                    )
+                }
+                Err((mut allocation, request)) => {
+                    allocation
+                        .owner
+                        .quarantine_published(
+                            published,
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                        )
+                        .expect("private published window use must quarantine");
+                    DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(
+                        Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+                            direction,
+                            sequence: Some(sequence),
+                            packet_count,
+                            state:
+                                Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::CompletedUnrestored {
+                                    allocation,
+                                    completed: CompletedPersistentSdmaWindowV1 {
+                                        request,
+                                        packet_count,
+                                    },
+                                },
+                        },
+                    )
+                }
+            };
+        }
+        DirectionalPersistentSdmaWindowCompletionObservationV1::Pending
+        | DirectionalPersistentSdmaWindowCompletionObservationV1::Timeout
+        | DirectionalPersistentSdmaWindowCompletionObservationV1::QueueRetained => {}
+    }
+
+    let Gfx942DirectionalPersistentSdmaWindowSubmissionV1 {
+        mut allocation,
+        published,
+        tickets,
+        direction,
+        packet_count,
+        ..
+    } = submission;
+    let sequence = published.sequence();
+    allocation
+        .owner
+        .quarantine_published(
+            published,
+            if enclosing_operation_succeeded {
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate
+            } else {
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss
+            },
+        )
+        .expect("private published window use must quarantine");
+    DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(
+        Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+            direction,
+            sequence: Some(sequence),
+            packet_count,
+            state: Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::PublishedQueueRetained {
+                allocation,
+                tickets,
             },
         },
     )
@@ -1411,6 +2103,94 @@ mod tests {
         }
     }
 
+    fn prepared_window_fixture(
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        packet_count: usize,
+    ) -> (
+        DirectionalPersistentSdmaWindowPreparedCustodyV1,
+        Gfx942SdmaCopyRequestV1,
+        Vec<Gfx942SdmaCopyTicketV1>,
+    ) {
+        let mut allocation = allocation;
+        let operation = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                Gfx942PersistentOperationV1::LocalSdmaDestination
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                Gfx942PersistentOperationV1::LocalSdmaSource
+            }
+        };
+        let reserved = allocation
+            .owner
+            .reserve(
+                Gfx942PersistentUseRequestV1::new(operation, 16, 32).unwrap(),
+                None,
+            )
+            .unwrap();
+        let prepared = allocation.owner.prepare(reserved).unwrap();
+        let lease = allocation.owner.detach_local_native_for_sdma().unwrap();
+        let device = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            allocation.attachment.queue,
+            allocation.attachment.pool_generation,
+            allocation.attachment.logical_bytes,
+        );
+        let host_binding =
+            Gfx942PersistentDirectionalSdmaHostBindingV1::capture(&host, queue_key());
+        let request = directional_persistent_sdma_request_v1(direction, host, 8, device, 16, 32);
+        let tickets = (0..packet_count)
+            .map(|index| {
+                persistent_sdma_ticket_coordinates_for_test(
+                    queue_key(),
+                    allocation.attachment.pair.queue_id(direction),
+                    index as u16,
+                    1,
+                )
+            })
+            .collect::<Vec<_>>();
+        (
+            DirectionalPersistentSdmaWindowPreparedCustodyV1 {
+                allocation,
+                prepared,
+                planned_tickets: tickets.clone(),
+                host_binding,
+                direction,
+                host_offset: 8,
+                device_offset: 16,
+                copy_bytes: 32,
+                packet_count,
+            },
+            request,
+            tickets,
+        )
+    }
+
+    fn published_window_fixture(
+        id: u64,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        packet_count: usize,
+    ) -> (
+        Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
+        Gfx942SdmaCopyRequestV1,
+    ) {
+        let (allocation, host) = promoted_fixture(id, 2048);
+        let (prepared, request, tickets) =
+            prepared_window_fixture(allocation, host, direction, packet_count);
+        let DirectionalPersistentSdmaWindowPublicationTransitionV1::Published(submission) =
+            transition_directional_persistent_sdma_window_publication_v1(
+                prepared,
+                DirectionalPersistentSdmaWindowPublicationObservationV1::Confirmed(tickets),
+                true,
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        (submission, request)
+    }
+
     #[test]
     fn manifest_digest_is_frozen() {
         let digest = Sha256::digest(GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_ADAPTER_MANIFEST_V1);
@@ -1418,6 +2198,219 @@ mod tests {
         assert_eq!(
             rendered,
             GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_ADAPTER_MANIFEST_SHA256_V1
+        );
+    }
+
+    #[test]
+    fn window_manifest_digest_is_frozen() {
+        let digest = Sha256::digest(GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_WINDOW_MANIFEST_V1);
+        let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            rendered,
+            GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_WINDOW_MANIFEST_SHA256_V1
+        );
+    }
+
+    #[test]
+    fn window_clean_recovery_restores_the_exact_owner_pair() {
+        for (id, direction) in [
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (allocation, host) = promoted_fixture(100 + id as u64, 2048);
+            let identity = allocation.attachment.storage_identity;
+            let (prepared, request, _) = prepared_window_fixture(allocation, host, direction, 3);
+            let DirectionalPersistentSdmaWindowPublicationTransitionV1::Retryable {
+                allocation,
+                host,
+            } = transition_directional_persistent_sdma_window_publication_v1(
+                prepared,
+                DirectionalPersistentSdmaWindowPublicationObservationV1::Recoverable(request),
+                true,
+                true,
+            )
+            else {
+                panic!("clean window rejection must restore exact custody")
+            };
+            assert_eq!(allocation.attachment.storage_identity, identity);
+            assert_eq!(host.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
+            assert!(allocation.owner.local_native_is_attached_for_sdma());
+        }
+    }
+
+    #[test]
+    fn window_retained_and_substituted_publications_quarantine_the_whole_roster() {
+        let (allocation, host) = promoted_fixture(110, 2048);
+        let (prepared, _, tickets) = prepared_window_fixture(
+            allocation,
+            host,
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            3,
+        );
+        let DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(custody) =
+            transition_directional_persistent_sdma_window_publication_v1(
+                prepared,
+                DirectionalPersistentSdmaWindowPublicationObservationV1::Retained(tickets),
+                true,
+                true,
+            )
+        else {
+            panic!("retained window publication must be terminal")
+        };
+        assert_eq!(custody.packet_count(), 3);
+        assert_eq!(
+            custody.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedQueueRetained
+        );
+
+        let (allocation, host) = promoted_fixture(111, 2048);
+        let (prepared, _, mut tickets) = prepared_window_fixture(
+            allocation,
+            host,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+            3,
+        );
+        tickets.swap(0, 1);
+        let DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(custody) =
+            transition_directional_persistent_sdma_window_publication_v1(
+                prepared,
+                DirectionalPersistentSdmaWindowPublicationObservationV1::Confirmed(tickets),
+                true,
+                true,
+            )
+        else {
+            panic!("reordered window tickets must be terminal")
+        };
+        assert_eq!(custody.packet_count(), 3);
+        assert_eq!(
+            custody.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::PublishedQueueRetained
+        );
+    }
+
+    #[test]
+    fn window_pending_timeout_and_exact_completion_are_aggregate() {
+        let (submission, request) =
+            published_window_fixture(120, Gfx942PersistentSdmaDirectionV1::DeviceToHost, 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Pending(submission) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Pending,
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        assert_eq!(submission.packet_count(), 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Timeout(submission) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Timeout,
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        assert_eq!(submission.packet_count(), 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Completed(completed) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 3,
+                    },
+                ),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        assert_eq!(completed.packet_count(), 3);
+        assert_eq!(completed.copy_bytes(), 32);
+        assert_eq!(completed.host_offset(), 8);
+        assert_eq!(completed.device_offset(), 16);
+        assert_eq!(
+            completed.direction(),
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost
+        );
+        let (allocation, _, frontier) = completed.into_parts();
+        let allocation = allocation.retire_settled_frontier_v1(frontier).unwrap();
+        assert!(allocation.owner.local_native_is_attached_for_sdma());
+    }
+
+    #[test]
+    fn window_completion_metadata_mismatch_is_terminal() {
+        let (submission, request) =
+            published_window_fixture(121, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(custody) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 2,
+                    },
+                ),
+                true,
+            )
+        else {
+            panic!("partial window completion must retain terminal custody")
+        };
+        assert_eq!(custody.packet_count(), 3);
+        assert_eq!(
+            custody.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
+        );
+    }
+
+    #[test]
+    fn window_completion_offset_substitution_is_terminal() {
+        let (submission, mut request) =
+            published_window_fixture(122, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
+        request.source_offset += 1;
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(custody) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 3,
+                    },
+                ),
+                true,
+            )
+        else {
+            panic!("host-offset substitution must retain terminal custody")
+        };
+        assert_eq!(
+            custody.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
+        );
+
+        let (submission, mut request) =
+            published_window_fixture(123, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
+        request.destination_offset += 1;
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(custody) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 3,
+                    },
+                ),
+                true,
+            )
+        else {
+            panic!("device-offset substitution must retain terminal custody")
+        };
+        assert_eq!(
+            custody.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
         );
     }
 
