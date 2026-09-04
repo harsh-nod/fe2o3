@@ -103,7 +103,8 @@ fn scalar_gemm_kernel_reaches_gfx942_llvm() {
     );
     assert!(
         stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
-            && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("composed formal/ranked memory -> target-KIR optimizer")
+            && stderr.contains("-> gfx942:xnack- LLVM")
             && stderr
                 .contains("1 semantic u32 induction certificate(s) for 3 checked addition(s)",)
             && stderr.contains("artifact/launch authority false"),
@@ -291,7 +292,8 @@ fn assert_workgroup_pipeline_reaches_gfx942_llvm(
     );
     assert!(
         stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
-            && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("composed formal/ranked memory -> target-KIR optimizer")
+            && stderr.contains("-> gfx942:xnack- LLVM")
             && stderr.contains("artifact/launch authority false"),
         "production extraction omitted its successful lowering receipt:\n{stderr}"
     );

@@ -466,7 +466,8 @@ fn assert_multi_root_extraction(
     );
     assert!(
         stderr.contains(&expected_kir_custody)
-            && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("composed formal/ranked memory -> target-KIR optimizer")
+            && stderr.contains("-> gfx942:xnack- LLVM")
             && stderr.contains("artifact/launch authority false"),
         "{features} extraction omitted its successful lowering receipt:\n{stderr}",
     );
