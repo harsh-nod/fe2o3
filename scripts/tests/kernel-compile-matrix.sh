@@ -112,44 +112,51 @@ case "${1:-}" in
               symbol=gfx950_fp8_attention_rust; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=4; lds=8192 ;;
-            kernel-kda-decode)
+            kernel-kda-decode | kernel-kda-decode-baseline-v1)
               symbol=gfx950_kda_decode ;;
-            kernel-kda-prefill)
+            kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
               symbol=gfx950_kda_chunkwise_prefill ;;
-            kernel-content-sparse-attention)
+            kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
               symbol=gfx950_content_sparse_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=1; lds=8192 ;;
             kernel-deepseek-sparse-attention)
               symbol=gfx950_deepseek_sparse_attention; ocml_calls=1 ;;
-            kernel-compressed-hybrid-attention)
+            kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
               symbol=gfx950_compressed_hybrid_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=1; lds=8192 ;;
-            kernel-attnres-aggregate)
+            kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
               symbol=gfx950_attnres_aggregate; ocml_calls=1 ;;
-            kernel-four-branch-residual)
+            kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
               symbol=gfx950_four_branch_residual; ocml_calls=1 ;;
-            kernel-mhc-sinkhorn-mix)
+            kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
               symbol=gfx950_mhc_sinkhorn_mix; ocml_calls=1 ;;
             kernel-moe-route)
               symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; ocml_calls=1 ;;
-            kernel-moe-expert-rank)
+            kernel-moe-expert-rank | kernel-moe-expert-rank,ablation-expert-serial)
               symbol=gfx950_moe_expert_rank_fp4_fp8_v1; mixed_mfma=3
               ocml_calls=1 ;;
             kernel-combine-expert-ranks)
               symbol=gfx950_combine_expert_ranks_v1 ;;
-            kernel-speculative-transaction)
+            kernel-speculative-transaction | kernel-speculative-transaction,ablation-speculative-recompute-prefix)
               symbol=gfx950_speculative_transaction_v1 ;;
-            kernel-qwen-ngram-gather)
+            kernel-qwen-ngram-gather | kernel-qwen-ngram-gather,ablation-ngram-reverse-probe)
               symbol=gfx950_qwen_ngram_gather_v1 ;;
             kernel-stage-gradient-shard)
               symbol=gfx950_stage_gradient_shard_v1 ;;
-            kernel-muon-update)
+            kernel-muon-update | kernel-muon-update,ablation-muon-broadcast16)
               symbol=gfx950_muon_update_4x4_v1 ;;
-            kernel-gpt-oss-decode)
+            kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
               fp4_mfma=4; bf16_mfma=4; ocml_calls=1 ;;
+            kernel-gpt-oss-router-component)
+              symbol=gfx950_gpt_oss_120b_router_v1 ;;
+            kernel-gpt-oss-attention-component)
+              symbol=gfx950_gpt_oss_120b_attention_v1
+              bf16_mfma=4; ocml_calls=1 ;;
+            kernel-gpt-oss-expert-component)
+              symbol=gfx950_gpt_oss_120b_expert_v1; fp4_mfma=4 ;;
             *) exit 94 ;;
           esac
           {
@@ -276,21 +283,21 @@ case "$key" in
     symbol=gfx950_fp4_attention_rust; kernarg=64; lds=4096 ;;
   gfx950-fp8-attention)
     symbol=gfx950_fp8_attention_rust; kernarg=64; lds=8192 ;;
-  kernel-kda-decode)
+  kernel-kda-decode | kernel-kda-decode-baseline-v1)
     symbol=gfx950_kda_decode; kernarg=128; workgroup=256 ;;
-  kernel-kda-prefill)
+  kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
     symbol=gfx950_kda_chunkwise_prefill; kernarg=144; workgroup=256 ;;
-  kernel-content-sparse-attention)
+  kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
     symbol=gfx950_content_sparse_attention; kernarg=96; lds=8192 ;;
   kernel-deepseek-sparse-attention)
     symbol=gfx950_deepseek_sparse_attention; kernarg=112 ;;
-  kernel-compressed-hybrid-attention)
+  kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
     symbol=gfx950_compressed_hybrid_attention; kernarg=80; lds=8192 ;;
-  kernel-attnres-aggregate)
+  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
     symbol=gfx950_attnres_aggregate; kernarg=48 ;;
-  kernel-four-branch-residual)
+  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
     symbol=gfx950_four_branch_residual; kernarg=64 ;;
-  kernel-mhc-sinkhorn-mix)
+  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
     symbol=gfx950_mhc_sinkhorn_mix; kernarg=48 ;;
   kernel-moe-route)
     symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; kernarg=96; workgroup=256 ;;
@@ -306,8 +313,14 @@ case "$key" in
     symbol=gfx950_stage_gradient_shard_v1; kernarg=32 ;;
   kernel-muon-update)
     symbol=gfx950_muon_update_4x4_v1; kernarg=48 ;;
-  kernel-gpt-oss-decode)
+  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kernarg=208 ;;
+  kernel-gpt-oss-router-component)
+    symbol=gfx950_gpt_oss_120b_router_v1; kernarg=48 ;;
+  kernel-gpt-oss-attention-component)
+    symbol=gfx950_gpt_oss_120b_attention_v1; kernarg=80 ;;
+  kernel-gpt-oss-expert-component)
+    symbol=gfx950_gpt_oss_120b_expert_v1; kernarg=96 ;;
   *) exit 99 ;;
 esac
 if [[ $key == kernel-* ]]; then
@@ -352,16 +365,21 @@ case "$key" in
   gfx950-fp8-gemm) symbol=gfx950_fp8_gemm_rust; kind=fp8 ;;
   gfx950-fp4-attention) symbol=gfx950_fp4_attention_rust; kind=fp4_attention ;;
   gfx950-fp8-attention) symbol=gfx950_fp8_attention_rust; kind=fp8_attention ;;
-  kernel-kda-decode) symbol=gfx950_kda_decode; kind=kda ;;
-  kernel-kda-prefill) symbol=gfx950_kda_chunkwise_prefill; kind=kda ;;
-  kernel-content-sparse-attention)
+  kernel-kda-decode | kernel-kda-decode-baseline-v1)
+    symbol=gfx950_kda_decode; kind=kda ;;
+  kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
+    symbol=gfx950_kda_chunkwise_prefill; kind=kda ;;
+  kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
     symbol=gfx950_content_sparse_attention; kind=fp8_attention ;;
   kernel-deepseek-sparse-attention) symbol=gfx950_deepseek_sparse_attention ;;
-  kernel-compressed-hybrid-attention)
+  kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
     symbol=gfx950_compressed_hybrid_attention; kind=fp8_attention ;;
-  kernel-attnres-aggregate) symbol=gfx950_attnres_aggregate ;;
-  kernel-four-branch-residual) symbol=gfx950_four_branch_residual ;;
-  kernel-mhc-sinkhorn-mix) symbol=gfx950_mhc_sinkhorn_mix ;;
+  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+    symbol=gfx950_attnres_aggregate ;;
+  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+    symbol=gfx950_four_branch_residual ;;
+  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+    symbol=gfx950_mhc_sinkhorn_mix ;;
   kernel-moe-route) symbol=gfx950_moe_route_fp4_t16_e4_k2_v1 ;;
   kernel-moe-expert-rank)
     symbol=gfx950_moe_expert_rank_fp4_fp8_v1; kind=mixed ;;
@@ -370,8 +388,14 @@ case "$key" in
   kernel-qwen-ngram-gather) symbol=gfx950_qwen_ngram_gather_v1 ;;
   kernel-stage-gradient-shard) symbol=gfx950_stage_gradient_shard_v1 ;;
   kernel-muon-update) symbol=gfx950_muon_update_4x4_v1 ;;
-  kernel-gpt-oss-decode)
+  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss ;;
+  kernel-gpt-oss-router-component)
+    symbol=gfx950_gpt_oss_120b_router_v1 ;;
+  kernel-gpt-oss-attention-component)
+    symbol=gfx950_gpt_oss_120b_attention_v1; kind=gpt_oss_attention ;;
+  kernel-gpt-oss-expert-component)
+    symbol=gfx950_gpt_oss_120b_expert_v1; kind=gpt_oss_expert ;;
   *) exit 99 ;;
 esac
 printf '0000000000000000 <%s>:\n' "$symbol"
@@ -398,6 +422,14 @@ case "$kind" in
     for _ in 1 2 3 4; do
       printf '%s\n' 'v_mfma_f32_16x16x16_bf16'
     done
+    for _ in 1 2 3 4; do
+      printf '%s\n' 'v_mfma_f32_16x16x128_f8f6f4 cbsz:4'
+    done ;;
+  gpt_oss_attention)
+    for _ in 1 2 3 4; do
+      printf '%s\n' 'v_mfma_f32_16x16x16_bf16'
+    done ;;
+  gpt_oss_expert)
     for _ in 1 2 3 4; do
       printf '%s\n' 'v_mfma_f32_16x16x128_f8f6f4 cbsz:4'
     done ;;
@@ -537,16 +569,16 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=20 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=37 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=20 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=37 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX LIMITATION gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
+  'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
   "${gfx950_output}" >/dev/null
 for name in \
   fp4-gemm \
@@ -554,26 +586,50 @@ for name in \
   fp4-attention \
   fp8-attention \
   kda-decode \
+  kda-decode-baseline \
   kda-prefill \
+  kda-prefill-baseline \
   content-sparse-attention \
+  content-sparse-attention-reciprocal-reuse \
   deepseek-sparse-attention \
   compressed-hybrid-attention \
+  compressed-hybrid-attention-division-baseline \
   attnres-aggregate \
+  attnres-aggregate-explicit-reuse \
   four-branch-residual \
+  four-branch-residual-explicit \
   mhc-sinkhorn-mix \
+  mhc-sinkhorn-mix-scalar \
   moe-route \
   moe-expert-rank \
+  moe-expert-rank-expert-serial \
   combine-expert-ranks \
   speculative-transaction \
+  speculative-transaction-recompute-prefix \
   qwen-ngram-gather \
+  qwen-ngram-gather-reverse-probe \
   stage-gradient-shard \
   muon-update \
-  gpt-oss-decode; do
+  muon-update-broadcast16 \
+  gpt-oss-decode \
+  gpt-oss-serial-router \
+  gpt-oss-held-fragments \
+  gpt-oss-interleaved-stores \
+  gpt-oss-materialized-router \
+  gpt-oss-materialized-attention \
+  gpt-oss-materialized-expert; do
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 20 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 37 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
+for features in \
+  'kernel-moe-expert-rank\,ablation-expert-serial' \
+  'kernel-speculative-transaction\,ablation-speculative-recompute-prefix' \
+  'kernel-qwen-ngram-gather\,ablation-ngram-reverse-probe' \
+  'kernel-muon-update\,ablation-muon-broadcast16'; do
+  [[ "$(grep -Fc -- "--features ${features}" "${LOG}")" -eq 1 ]]
+done
 if grep -F -- ' cargo test ' "${LOG}" >/dev/null; then
   printf '%s\n' 'gfx950 compile-only matrix unexpectedly executed a hardware test' >&2
   exit 1

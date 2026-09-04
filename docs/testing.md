@@ -421,8 +421,9 @@ and code-object tests. The generic lane runs the matrix's hermetic shell test,
 which substitutes fixture tools and verifies orchestration without requiring
 ROCm or a GPU.
 
-The separate gfx950 matrix covers the 20 production Rust kernels represented
-by the kernels site:
+The separate gfx950 matrix covers 37 production Rust kernel entries represented
+by the kernels site. Together with the five gfx942 entries, the compile-only
+matrices cover 42 entries:
 
 ```text
 scripts/kernel-compile-matrix.sh gfx950
@@ -431,17 +432,28 @@ scripts/kernel-compile-matrix.sh gfx950
 Low precision: `kernel-fp4-gemm`, `kernel-fp8-gemm`,
 `kernel-fp4-attention`, and `kernel-fp8-attention`.
 
-Advanced attention: `kernel-kda-decode`, `kernel-kda-prefill`,
-`kernel-content-sparse-attention`, `kernel-deepseek-sparse-attention`,
-`kernel-compressed-hybrid-attention`, `kernel-attnres-aggregate`,
-`kernel-four-branch-residual`, and `kernel-mhc-sinkhorn-mix`.
+Advanced attention: `kernel-kda-decode`, `kernel-kda-decode-baseline-v1`,
+`kernel-kda-prefill`, `kernel-kda-prefill-baseline-v1`,
+`kernel-content-sparse-attention`,
+`kernel-content-sparse-attention-reciprocal-reuse-v1`,
+`kernel-deepseek-sparse-attention`, `kernel-compressed-hybrid-attention`,
+`kernel-compressed-hybrid-attention-division-baseline-v1`,
+`kernel-attnres-aggregate`,
+`kernel-attnres-aggregate-explicit-reuse-v1`, `kernel-four-branch-residual`,
+`kernel-four-branch-residual-explicit-v1`, `kernel-mhc-sinkhorn-mix`, and
+`kernel-mhc-sinkhorn-mix-scalar-v1`.
 
 Advanced systems: `kernel-moe-route`, `kernel-moe-expert-rank`,
-`kernel-combine-expert-ranks`, `kernel-speculative-transaction`,
-`kernel-qwen-ngram-gather`, `kernel-stage-gradient-shard`, and
-`kernel-muon-update`.
+`kernel-moe-expert-rank` with `expert-serial`, `kernel-combine-expert-ranks`,
+`kernel-speculative-transaction` with its canonical and
+`speculative-recompute-prefix` bodies, `kernel-qwen-ngram-gather` with its
+canonical and `ngram-reverse-probe` bodies, `kernel-stage-gradient-shard`, and
+`kernel-muon-update` with its canonical and `muon-broadcast16` bodies.
 
-GPT-OSS: `kernel-gpt-oss-decode`.
+GPT-OSS: `kernel-gpt-oss-decode`, `kernel-gpt-oss-decode-router-serial`,
+`kernel-gpt-oss-decode-held-fragments`,
+`kernel-gpt-oss-decode-interleaved-stores`, `kernel-gpt-oss-router-component`,
+`kernel-gpt-oss-attention-component`, and `kernel-gpt-oss-expert-component`.
 
 Compile-only mode still validates the checked-in manifest and therefore
 requires an exact reviewed Clang, LLD, and device-library closure. ROCm 7.2.1
@@ -462,9 +474,13 @@ Every target and artifact directory is created under one private temporary
 root and removed when the command exits. The matrix deliberately stops before
 the qualification host runner, reports `hardware_observed=false`, and makes no
 numerical or execution claim. It does not cover the basic Cargo regression
-manifest, proof/source-model-only packages, gfx950 ablation variants, or HIP
-comparators. Neither cross-compilation target is hardware or numerical
-coverage.
+manifest, proof/source-model-only packages, or HIP comparators. Selected
+site-backed positive variants are listed above. Negative variants remain
+excluded: systems `combine-transposed` and `stage-tile4` fail compiler safety
+checks, the two route feature names have no live alternate Rust bodies, and
+GPT-OSS `scalar-attention` and `pipelined-attention` are absent from the
+admitted current-artifact table. Neither cross-compilation target is hardware
+or numerical coverage.
 
 ## Hardware smoke
 
