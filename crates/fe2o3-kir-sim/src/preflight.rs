@@ -10,6 +10,7 @@ use fe2o3_kernel_ir::{
     ScalarType, Terminator, Type, UnaryOp, ValueId, VolatileProvenanceContract,
 };
 
+use crate::f32_surface::{F32ScalarOperationV1, admits_f32_scalar_operation};
 use crate::resident::{
     ResidentLedger, conservative_hash_map_bytes_for_entries, geometric_vec_bytes,
     partitioned_geometric_vec_bytes, reserved_bool_vec_bytes, reserved_vec_bytes,
@@ -2013,6 +2014,9 @@ pub(crate) fn supported_cast(
 }
 
 pub(crate) fn supports_unary(op: UnaryOp, ty: ScalarType) -> bool {
+    if ty == ScalarType::F32 {
+        return admits_f32_scalar_operation(F32ScalarOperationV1::Unary(op));
+    }
     match op {
         UnaryOp::Not => ty == ScalarType::Bool || ty.is_integer(),
         UnaryOp::Negate => ty.is_signed_integer() || ty.is_float(),
@@ -2020,6 +2024,9 @@ pub(crate) fn supports_unary(op: UnaryOp, ty: ScalarType) -> bool {
 }
 
 pub(crate) fn supports_binary(op: BinaryOp, lhs: ScalarType, rhs: ScalarType) -> bool {
+    if lhs == ScalarType::F32 || rhs == ScalarType::F32 {
+        return lhs == rhs && admits_f32_scalar_operation(F32ScalarOperationV1::Binary(op));
+    }
     match op {
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
             if lhs == ScalarType::Bool && rhs == ScalarType::Bool =>
@@ -2046,6 +2053,9 @@ pub(crate) fn supports_compare(
     if lhs != rhs {
         return false;
     }
+    if lhs == ScalarType::F32 {
+        return admits_f32_scalar_operation(F32ScalarOperationV1::Compare(predicate));
+    }
     if lhs == ScalarType::Bool {
         matches!(
             predicate,
@@ -2056,15 +2066,8 @@ pub(crate) fn supports_compare(
     }
 }
 
-const fn supports_float_function(function: F32MathFunction) -> bool {
-    matches!(
-        function,
-        F32MathFunction::FusedMultiplyAdd
-            | F32MathFunction::Floor
-            | F32MathFunction::Ceil
-            | F32MathFunction::Truncate
-            | F32MathFunction::RoundTiesEven
-    )
+fn supports_float_function(function: F32MathFunction) -> bool {
+    admits_f32_scalar_operation(F32ScalarOperationV1::Math(function))
 }
 
 fn validate_arguments(

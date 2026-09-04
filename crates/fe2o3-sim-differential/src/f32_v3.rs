@@ -7,8 +7,9 @@ use fe2o3_kernel_ir::{
     ValueId, VerifiedCanonicalKernelIrV7,
 };
 use fe2o3_kir_sim::{
-    AdmittedSimulationModuleV1, BufferArgumentV1, ScalarBitsV1, SimulationArgumentV1,
-    SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, BufferArgumentV1, F32_SCALAR_OPERATION_ROSTER_V1,
+    F32ScalarOperationV1, ScalarBitsV1, SimulationArgumentV1, SimulationLimitsV1,
+    SimulationRequestV1, SimulationTargetV1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -21,7 +22,7 @@ pub const F32_DIFFERENTIAL_REPLAY_SCHEMA_V3: &str = "fe2o3-sim-f32-differential-
 
 const TARGET_NAME: &str = "amdgpu64-target-neutral";
 const WORKGROUP: [u32; 3] = [4, 1, 1];
-const CASE_LIMIT: usize = 17;
+const CASE_LIMIT: usize = F32_SCALAR_OPERATION_ROSTER_V1.len();
 const MAX_ROWS_PER_CASE: usize = 10;
 
 const PZERO: u32 = 0x0000_0000;
@@ -59,6 +60,7 @@ pub struct F32DifferentialCapabilitiesV3 {
     pub admitted_operations: Vec<&'static str>,
     pub edge_classes: Vec<&'static str>,
     pub oracle_contract: &'static str,
+    pub roster_contract: &'static str,
     pub case_limit: usize,
     pub maximum_rows_per_case: usize,
     pub exclusions: Vec<F32DifferentialExclusionV3>,
@@ -104,6 +106,7 @@ pub struct F32CaseEvidenceV3 {
     pub result_type: &'static str,
     pub kir_sha256: String,
     pub oracle_sha256: String,
+    pub oracle_corpus_sha256: String,
     pub observed_sha256: String,
 }
 
@@ -113,6 +116,7 @@ pub struct F32ReducerMetadataV3 {
     pub maximum_row_candidates: usize,
     pub preserves_case_identity: bool,
     pub replay_requires_kir_identity: bool,
+    pub replay_requires_oracle_corpus_identity: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -129,6 +133,7 @@ pub struct F32DifferentialFailureV3 {
     pub failure_class: &'static str,
     pub message: String,
     pub kir_sha256: String,
+    pub oracle_corpus_sha256: String,
     pub canonical_kir_v7_hex: String,
     pub oracle_hex: String,
     pub observed_hex: String,
@@ -166,7 +171,9 @@ pub enum F32DifferentialErrorV3 {
     Simulation(String),
     UnknownCase(String),
     InvalidKirIdentity,
+    InvalidOracleCorpusIdentity,
     KirIdentityMismatch { expected: String, actual: String },
+    OracleCorpusIdentityMismatch { expected: String, actual: String },
     EvidenceEncoding(String),
     CorpusInvariant(String),
 }
@@ -181,9 +188,16 @@ impl fmt::Display for F32DifferentialErrorV3 {
             Self::InvalidKirIdentity => {
                 formatter.write_str("KIR identity must be exactly 64 lowercase hexadecimal digits")
             }
+            Self::InvalidOracleCorpusIdentity => formatter.write_str(
+                "oracle corpus identity must be exactly 64 lowercase hexadecimal digits",
+            ),
             Self::KirIdentityMismatch { expected, actual } => write!(
                 formatter,
                 "f32 replay KIR identity mismatch: expected {expected}, observed {actual}"
+            ),
+            Self::OracleCorpusIdentityMismatch { expected, actual } => write!(
+                formatter,
+                "f32 replay oracle corpus identity mismatch: expected {expected}, observed {actual}"
             ),
             Self::EvidenceEncoding(message) => {
                 write!(formatter, "f32 evidence encoding failed: {message}")
@@ -239,9 +253,9 @@ pub fn f32_differential_capabilities_v3() -> F32DifferentialCapabilitiesV3 {
         kir_version: 7,
         target_profile: TARGET_NAME,
         scalar_type: "f32",
-        admitted_operations: case_specs()
+        admitted_operations: F32_SCALAR_OPERATION_ROSTER_V1
             .iter()
-            .map(|case| case.operation_name)
+            .map(|operation| operation.name())
             .collect(),
         edge_classes: vec![
             "signed_zero",
@@ -256,7 +270,8 @@ pub fn f32_differential_capabilities_v3() -> F32DifferentialCapabilitiesV3 {
             "division_by_zero",
             "invalid_operation",
         ],
-        oracle_contract: "compile-time exact IEEE-754 binary32 input/result bit tables; no host floating-point evaluation",
+        oracle_contract: "compile-time exact binary32 bit tables for pinned rustc_apfloat 0.2.3+llvm-462a31f5a5ab round-to-nearest-even, NaN sign/payload/canonicalization, integral rounding, comparisons, and C-style fmod semantics; no host floating-point evaluation",
+        roster_contract: "the ordered V3 corpus must exactly equal the shared f32 simulator-preflight roster",
         case_limit: CASE_LIMIT,
         maximum_rows_per_case: MAX_ROWS_PER_CASE,
         exclusions: exclusions(),
@@ -281,6 +296,7 @@ pub fn run_f32_differential_v3()
         let evidence = evidence_for(&observation);
         hash_field(&mut suite, evidence.case_id.as_bytes());
         hash_field(&mut suite, &observation.canonical_kir);
+        hash_field(&mut suite, evidence.oracle_corpus_sha256.as_bytes());
         hash_field(&mut suite, &observation.expected);
         hash_field(&mut suite, &observation.observed);
         rows_compared += evidence.rows;
@@ -302,7 +318,7 @@ pub fn run_f32_differential_v3()
         cases,
         capability_sha256: hex_plain(&Sha256::digest(&capability_bytes)),
         suite_sha256: hex(&suite.finalize()),
-        replay_contract: "f32-replay-v3 requires exact case ID and canonical KIR SHA-256",
+        replay_contract: "f32-replay-v3 requires exact case ID, canonical KIR SHA-256, and ordered oracle corpus SHA-256",
         reducer: reducer_metadata(),
         exclusions: capabilities.exclusions,
     }))
@@ -311,13 +327,13 @@ pub fn run_f32_differential_v3()
 pub fn replay_f32_differential_case_v3(
     case_id: &str,
     expected_kir_sha256: &str,
+    expected_oracle_corpus_sha256: &str,
 ) -> Result<F32DifferentialReplayV3, F32DifferentialErrorV3> {
-    if expected_kir_sha256.len() != 64
-        || !expected_kir_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !valid_sha256(expected_kir_sha256) {
         return Err(F32DifferentialErrorV3::InvalidKirIdentity);
+    }
+    if !valid_sha256(expected_oracle_corpus_sha256) {
+        return Err(F32DifferentialErrorV3::InvalidOracleCorpusIdentity);
     }
     let observation = observations()?
         .into_iter()
@@ -328,6 +344,13 @@ pub fn replay_f32_differential_case_v3(
         return Err(F32DifferentialErrorV3::KirIdentityMismatch {
             expected: expected_kir_sha256.to_owned(),
             actual,
+        });
+    }
+    let actual_corpus = oracle_corpus_sha256(observation.spec);
+    if actual_corpus != expected_oracle_corpus_sha256 {
+        return Err(F32DifferentialErrorV3::OracleCorpusIdentityMismatch {
+            expected: expected_oracle_corpus_sha256.to_owned(),
+            actual: actual_corpus,
         });
     }
     if let Some(failure) = mismatch(&observation) {
@@ -352,12 +375,33 @@ fn observations() -> Result<Vec<CaseObservation>, F32DifferentialErrorV3> {
             specs.len()
         )));
     }
+    let corpus_roster = specs
+        .iter()
+        .map(|spec| surface_operation(spec.operation))
+        .collect::<Vec<_>>();
+    if corpus_roster != F32_SCALAR_OPERATION_ROSTER_V1 {
+        return Err(F32DifferentialErrorV3::CorpusInvariant(format!(
+            "ordered corpus roster {:?} does not equal simulator-preflight roster {:?}",
+            corpus_roster, F32_SCALAR_OPERATION_ROSTER_V1
+        )));
+    }
     let mut observations = Vec::with_capacity(specs.len());
     for (index, spec) in specs.iter().copied().enumerate() {
         if specs[..index].iter().any(|prior| prior.id == spec.id) {
             return Err(F32DifferentialErrorV3::CorpusInvariant(format!(
                 "duplicate case ID {:?}",
                 spec.id
+            )));
+        }
+        let surface = surface_operation(spec.operation);
+        if spec.operation_name != surface.name() || spec.family != surface.family() {
+            return Err(F32DifferentialErrorV3::CorpusInvariant(format!(
+                "case {:?} names operation {}/{} but shared roster names it {}/{}",
+                spec.id,
+                spec.family,
+                spec.operation_name,
+                surface.family(),
+                surface.name()
             )));
         }
         if spec.rows.is_empty() || spec.rows.len() > MAX_ROWS_PER_CASE {
@@ -610,6 +654,15 @@ fn operation_arity(operation: CaseOperation) -> usize {
     }
 }
 
+fn surface_operation(operation: CaseOperation) -> F32ScalarOperationV1 {
+    match operation {
+        CaseOperation::Unary(operation) => F32ScalarOperationV1::Unary(operation),
+        CaseOperation::Binary(operation) => F32ScalarOperationV1::Binary(operation),
+        CaseOperation::Compare(operation) => F32ScalarOperationV1::Compare(operation),
+        CaseOperation::Math(operation) => F32ScalarOperationV1::Math(operation),
+    }
+}
+
 fn result_type(operation: CaseOperation) -> ScalarType {
     match operation {
         CaseOperation::Compare(_) => ScalarType::Bool,
@@ -631,6 +684,38 @@ fn encode_expected(spec: CaseSpec) -> Vec<u8> {
     }
 }
 
+fn oracle_corpus_sha256(spec: CaseSpec) -> String {
+    hex_plain(&Sha256::digest(canonical_oracle_corpus(spec)))
+}
+
+fn canonical_oracle_corpus(spec: CaseSpec) -> Vec<u8> {
+    canonical_oracle_corpus_rows(spec, spec.rows)
+}
+
+fn canonical_oracle_corpus_rows(spec: CaseSpec, rows: &[OracleRow]) -> Vec<u8> {
+    let arity = operation_arity(spec.operation);
+    let mut encoded = Vec::with_capacity(128 + rows.len() * (32 + arity * 4));
+    encoded.extend_from_slice(b"FE2O3/SIM-F32-ORACLE-CORPUS/V3\0");
+    append_field(&mut encoded, spec.id.as_bytes());
+    append_field(&mut encoded, spec.operation_name.as_bytes());
+    append_field(&mut encoded, spec.family.as_bytes());
+    encoded.push(arity as u8);
+    encoded.push(if result_type(spec.operation) == ScalarType::Bool {
+        1
+    } else {
+        4
+    });
+    encoded.extend_from_slice(&(rows.len() as u16).to_le_bytes());
+    for row in rows {
+        append_field(&mut encoded, row.id.as_bytes());
+        for input in &row.inputs[..arity] {
+            encoded.extend_from_slice(&input.to_le_bytes());
+        }
+        encoded.extend_from_slice(&row.expected.to_le_bytes());
+    }
+    encoded
+}
+
 fn evidence_for(observation: &CaseObservation) -> F32CaseEvidenceV3 {
     F32CaseEvidenceV3 {
         case_id: observation.spec.id,
@@ -646,6 +731,7 @@ fn evidence_for(observation: &CaseObservation) -> F32CaseEvidenceV3 {
         },
         kir_sha256: hex_plain(&Sha256::digest(&observation.canonical_kir)),
         oracle_sha256: hex_plain(&Sha256::digest(&observation.expected)),
+        oracle_corpus_sha256: oracle_corpus_sha256(observation.spec),
         observed_sha256: hex_plain(&Sha256::digest(&observation.observed)),
     }
 }
@@ -674,6 +760,7 @@ fn mismatch(observation: &CaseObservation) -> Option<F32DifferentialFailureV3> {
         })
     });
     let kir_sha256 = hex_plain(&Sha256::digest(&observation.canonical_kir));
+    let oracle_corpus_sha256 = oracle_corpus_sha256(observation.spec);
     Some(F32DifferentialFailureV3 {
         schema: F32_DIFFERENTIAL_FAILURE_SCHEMA_V3,
         status: "failure",
@@ -687,6 +774,7 @@ fn mismatch(observation: &CaseObservation) -> Option<F32DifferentialFailureV3> {
         failure_class: "output_mismatch",
         message: "independent exact-bit oracle differs from simulator output".to_owned(),
         kir_sha256: kir_sha256.clone(),
+        oracle_corpus_sha256: oracle_corpus_sha256.clone(),
         canonical_kir_v7_hex: hex(&observation.canonical_kir),
         oracle_hex: hex(&observation.expected),
         observed_hex: hex(&observation.observed),
@@ -714,8 +802,8 @@ fn mismatch(observation: &CaseObservation) -> Option<F32DifferentialFailureV3> {
             predicate_evaluations: retained.map_or(observation.spec.rows.len(), |row| row + 1),
         },
         replay: format!(
-            "fe2o3-sim-differential f32-replay-v3 --case {} --kir-sha256 {kir_sha256}",
-            observation.spec.id
+            "fe2o3-sim-differential f32-replay-v3 --case {} --kir-sha256 {kir_sha256} --oracle-corpus-sha256 {oracle_corpus_sha256}",
+            observation.spec.id,
         ),
     })
 }
@@ -737,6 +825,7 @@ fn reducer_metadata() -> F32ReducerMetadataV3 {
         maximum_row_candidates: MAX_ROWS_PER_CASE,
         preserves_case_identity: true,
         replay_requires_kir_identity: true,
+        replay_requires_oracle_corpus_identity: true,
     }
 }
 
@@ -778,6 +867,18 @@ fn exclusions() -> Vec<F32DifferentialExclusionV3> {
 fn hash_field(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value);
+}
+
+fn append_field(encoded: &mut Vec<u8>, value: &[u8]) {
+    encoded.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    encoded.extend_from_slice(value);
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1226,12 +1327,19 @@ mod tests {
         assert_eq!(first.operation_cases, CASE_LIMIT);
         assert_eq!(first.rows_compared, 149);
         assert_eq!(
+            case_specs()
+                .iter()
+                .map(|spec| surface_operation(spec.operation))
+                .collect::<Vec<_>>(),
+            F32_SCALAR_OPERATION_ROSTER_V1
+        );
+        assert_eq!(
             first.capability_sha256,
-            "7c1f98bb7582b01bf920b99b4c6f5db80eb63594abc0f4488b596a3b6a84b196"
+            "a3604a77c82013c0969c13501e1f7f5f7d9395efc3c550cf12ef228ee52305f0"
         );
         assert_eq!(
             first.suite_sha256,
-            "0x4af03e4ceb188fddddb8bc48a288f30e8a6a9e5a52e0b2e220e53cf45c4e6bef"
+            "0xae4d6b3760f4e3d76c2b76d56f6ebf3cac538898fd40d2090c5e9e453d2d662a"
         );
         assert_eq!(
             first
@@ -1253,22 +1361,107 @@ mod tests {
     fn exact_replay_rejects_case_and_kir_substitution() {
         let report = run_f32_differential_v3().unwrap().unwrap();
         let case = &report.cases[12];
-        let replay = replay_f32_differential_case_v3(case.case_id, &case.kir_sha256).unwrap();
+        let replay = replay_f32_differential_case_v3(
+            case.case_id,
+            &case.kir_sha256,
+            &case.oracle_corpus_sha256,
+        )
+        .unwrap();
         assert_eq!(replay.case, *case);
         assert!(matches!(
-            replay_f32_differential_case_v3("F32-FUSED-MULTIPLY-ADD", &case.kir_sha256),
+            replay_f32_differential_case_v3(
+                "F32-FUSED-MULTIPLY-ADD",
+                &case.kir_sha256,
+                &case.oracle_corpus_sha256,
+            ),
             Err(F32DifferentialErrorV3::UnknownCase(_))
         ));
         let mut substituted = case.kir_sha256.clone();
         substituted.replace_range(0..1, if &substituted[0..1] == "0" { "1" } else { "0" });
         assert!(matches!(
-            replay_f32_differential_case_v3(case.case_id, &substituted),
+            replay_f32_differential_case_v3(case.case_id, &substituted, &case.oracle_corpus_sha256,),
             Err(F32DifferentialErrorV3::KirIdentityMismatch { .. })
         ));
+        let mut substituted_corpus = case.oracle_corpus_sha256.clone();
+        substituted_corpus.replace_range(
+            0..1,
+            if &substituted_corpus[0..1] == "0" {
+                "1"
+            } else {
+                "0"
+            },
+        );
         assert!(matches!(
-            replay_f32_differential_case_v3(case.case_id, &case.kir_sha256.to_uppercase()),
+            replay_f32_differential_case_v3(case.case_id, &case.kir_sha256, &substituted_corpus,),
+            Err(F32DifferentialErrorV3::OracleCorpusIdentityMismatch { .. })
+        ));
+        assert!(matches!(
+            replay_f32_differential_case_v3(
+                case.case_id,
+                &case.kir_sha256.to_uppercase(),
+                &case.oracle_corpus_sha256,
+            ),
             Err(F32DifferentialErrorV3::InvalidKirIdentity)
         ));
+        assert!(matches!(
+            replay_f32_differential_case_v3(
+                case.case_id,
+                &case.kir_sha256,
+                &case.oracle_corpus_sha256.to_uppercase(),
+            ),
+            Err(F32DifferentialErrorV3::InvalidOracleCorpusIdentity)
+        ));
+    }
+
+    #[test]
+    fn oracle_corpus_identity_binds_ordered_rows_arity_inputs_and_expected_bits() {
+        let base = case_specs()[1];
+        let base_identity = oracle_corpus_sha256(base);
+
+        let mut reordered = ADD_ROWS;
+        reordered.swap(0, 1);
+        assert_ne!(
+            hex_plain(&Sha256::digest(canonical_oracle_corpus_rows(
+                base, &reordered
+            ))),
+            base_identity
+        );
+
+        let mut changed_input = ADD_ROWS;
+        changed_input[0].inputs[0] ^= 1;
+        assert_ne!(
+            hex_plain(&Sha256::digest(canonical_oracle_corpus_rows(
+                base,
+                &changed_input
+            ))),
+            base_identity
+        );
+
+        let mut changed_expected = ADD_ROWS;
+        changed_expected[0].expected ^= 1;
+        assert_ne!(
+            hex_plain(&Sha256::digest(canonical_oracle_corpus_rows(
+                base,
+                &changed_expected
+            ))),
+            base_identity
+        );
+
+        let mut changed_id = ADD_ROWS;
+        changed_id[0].id = "finite-exact-substituted";
+        assert_ne!(
+            hex_plain(&Sha256::digest(canonical_oracle_corpus_rows(
+                base,
+                &changed_id
+            ))),
+            base_identity
+        );
+
+        let different_arity = CaseSpec {
+            operation: CaseOperation::Math(F32MathFunction::FusedMultiplyAdd),
+            ..base
+        };
+        assert_ne!(oracle_corpus_sha256(different_arity), base_identity);
     }
 
     #[test]
@@ -1290,6 +1483,7 @@ mod tests {
         assert_eq!(failure.reduction.predicate_evaluations, 2);
         assert!(failure.replay.contains(observation.spec.id));
         assert!(failure.replay.contains(&failure.kir_sha256));
+        assert!(failure.replay.contains(&failure.oracle_corpus_sha256));
     }
 
     #[test]

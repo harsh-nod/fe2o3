@@ -864,14 +864,15 @@ pub fn main() -> ExitCode {
             };
         }
         Some("f32-replay-v3") => {
-            let (case, kir_sha256) = match parse_f32_replay(arguments) {
+            let (case, kir_sha256, oracle_corpus_sha256) = match parse_f32_replay(arguments) {
                 Ok(replay) => replay,
                 Err(error) => {
                     emit_command_error("invalid_command_line", &error);
                     return ExitCode::FAILURE;
                 }
             };
-            return match replay_f32_differential_case_v3(&case, &kir_sha256) {
+            return match replay_f32_differential_case_v3(&case, &kir_sha256, &oracle_corpus_sha256)
+            {
                 Ok(report) => write_json_stdout(&report),
                 Err(error) => {
                     emit_command_error("replay_rejected", &error.to_string());
@@ -946,10 +947,13 @@ fn parse_semantic_replay(
     ))
 }
 
-fn parse_f32_replay(arguments: impl Iterator<Item = OsString>) -> Result<(String, String), String> {
-    let usage = "usage: fe2o3-sim-differential f32-replay-v3 --case ID --kir-sha256 HEX";
+fn parse_f32_replay(
+    arguments: impl Iterator<Item = OsString>,
+) -> Result<(String, String, String), String> {
+    let usage = "usage: fe2o3-sim-differential f32-replay-v3 --case ID --kir-sha256 HEX --oracle-corpus-sha256 HEX";
     let mut case = None;
     let mut kir_sha256 = None;
+    let mut oracle_corpus_sha256 = None;
     let mut arguments = arguments;
     while let Some(name) = arguments.next() {
         let value = arguments.next().ok_or_else(|| usage.to_owned())?;
@@ -958,12 +962,14 @@ fn parse_f32_replay(arguments: impl Iterator<Item = OsString>) -> Result<(String
         match name {
             "--case" => assign(&mut case, value.to_owned(), name)?,
             "--kir-sha256" => assign(&mut kir_sha256, value.to_owned(), name)?,
+            "--oracle-corpus-sha256" => assign(&mut oracle_corpus_sha256, value.to_owned(), name)?,
             _ => return Err(usage.to_owned()),
         }
     }
     Ok((
         case.ok_or_else(|| usage.to_owned())?,
         kir_sha256.ok_or_else(|| usage.to_owned())?,
+        oracle_corpus_sha256.ok_or_else(|| usage.to_owned())?,
     ))
 }
 

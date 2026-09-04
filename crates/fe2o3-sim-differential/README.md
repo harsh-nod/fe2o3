@@ -33,25 +33,35 @@ intentional exclusions, including nonfinite/rounding-edge floats,
 transcendentals, concurrency families, and physical-GPU parity. Unsupported
 semantics are not approximated.
 
-The additive V3 binary32 matrix qualifies every currently admitted core scalar
-`f32` operation without changing V2:
+The additive V3 binary32 matrix qualifies the shared simulator-preflight
+roster's explicitly enumerated 17 core scalar `f32` operations without
+changing V2:
 
 ```text
 fe2o3-sim-differential f32-capabilities-v3
 fe2o3-sim-differential f32-run-v3
-fe2o3-sim-differential f32-replay-v3 --case CASE --kir-sha256 SHA256
+fe2o3-sim-differential f32-replay-v3 --case CASE --kir-sha256 SHA256 --oracle-corpus-sha256 SHA256
 ```
 
 Its 17 operation cases and 149 exact rows cover negate; add, subtract,
 multiply, divide, and remainder; all six comparisons; explicit fused
 multiply-add; and floor, ceil, truncate, and round-to-nearest-ties-to-even.
 Compile-time oracle tables enumerate exact binary32 input and result bits for
+the pinned `rustc_apfloat 0.2.3+llvm-462a31f5a5ab` software contract:
+round-to-nearest-even, its exact NaN sign/payload/canonicalization choices,
+integral rounding, comparisons, and C-style `fmod` remainder. Rows include
 signed zero, subnormals, infinities, quiet NaNs, rounding ties, overflow,
 unordered comparisons, and a fused single-rounding witness. The oracle never
 uses host floating-point evaluation. Each case binds its canonical KIR V7,
-ordered row IDs, oracle bytes, and observed bytes. Replay requires the exact
-case/KIR identity, and a mismatch retains the first failing row and its exact
-input, expected, and observed bits.
+ordered row IDs, arity, exact inputs and expected bits, oracle corpus identity,
+and observed bytes. Replay requires the exact case, KIR, and oracle-corpus
+identities; a mismatch retains the first failing row and its exact input,
+expected, and observed bits.
+
+The shared roster directly controls f32 unary, binary, comparison, and math
+preflight admission. The V3 corpus must equal that ordered roster, so adding an
+admitted core operation fails the corpus invariant until its exact table is
+provided.
 
 V3 does not yet qualify float conversions/casts or f16, bf16, and f64 edge
 matrices. F32 functions that lack an admitted executable numerical contract

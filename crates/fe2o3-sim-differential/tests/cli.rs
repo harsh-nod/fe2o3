@@ -206,6 +206,7 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
 
     for case in report["cases"].as_array().unwrap() {
         assert_eq!(case["oracle_sha256"], case["observed_sha256"]);
+        assert_eq!(case["oracle_corpus_sha256"].as_str().unwrap().len(), 64);
         assert_eq!(
             case["rows"].as_u64().unwrap(),
             case["row_ids"].as_array().unwrap().len() as u64
@@ -219,6 +220,8 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
             case["case_id"].as_str().unwrap(),
             "--kir-sha256",
             case["kir_sha256"].as_str().unwrap(),
+            "--oracle-corpus-sha256",
+            case["oracle_corpus_sha256"].as_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -232,6 +235,15 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
 
 #[test]
 fn f32_replay_fails_closed_on_identity_and_argument_substitution() {
+    let report = command().arg("f32-run-v3").output().unwrap();
+    assert!(report.status.success());
+    let report: Value = serde_json::from_slice(&report.stdout).unwrap();
+    let case = report["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["case_id"] == "f32-add")
+        .unwrap();
     let output = command()
         .args([
             "f32-replay-v3",
@@ -239,6 +251,8 @@ fn f32_replay_fails_closed_on_identity_and_argument_substitution() {
             "f32-add",
             "--kir-sha256",
             "0000000000000000000000000000000000000000000000000000000000000000",
+            "--oracle-corpus-sha256",
+            case["oracle_corpus_sha256"].as_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -253,6 +267,29 @@ fn f32_replay_fails_closed_on_identity_and_argument_substitution() {
             .contains("identity mismatch")
     );
 
+    let output = command()
+        .args([
+            "f32-replay-v3",
+            "--case",
+            "f32-add",
+            "--kir-sha256",
+            case["kir_sha256"].as_str().unwrap(),
+            "--oracle-corpus-sha256",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "replay_rejected");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("oracle corpus identity mismatch")
+    );
+
     for arguments in [
         vec!["f32-run-v3", "unexpected"],
         vec!["f32-capabilities-v3", "unexpected"],
@@ -262,6 +299,8 @@ fn f32_replay_fails_closed_on_identity_and_argument_substitution() {
             "f32-add",
             "--kir-sha256",
             "ABCDEF",
+            "--oracle-corpus-sha256",
+            case["oracle_corpus_sha256"].as_str().unwrap(),
         ],
         vec![
             "f32-replay-v3",
@@ -271,6 +310,17 @@ fn f32_replay_fails_closed_on_identity_and_argument_substitution() {
             "f32-add",
             "--kir-sha256",
             "0000000000000000000000000000000000000000000000000000000000000000",
+            "--oracle-corpus-sha256",
+            case["oracle_corpus_sha256"].as_str().unwrap(),
+        ],
+        vec![
+            "f32-replay-v3",
+            "--case",
+            "f32-add",
+            "--kir-sha256",
+            case["kir_sha256"].as_str().unwrap(),
+            "--oracle-corpus-sha256",
+            "ABCDEF",
         ],
     ] {
         let output = command().args(arguments).output().unwrap();
