@@ -67,7 +67,7 @@ fn option_capability_contract_v1(
         {
             Some(SemanticPromotedBindingV1::IndexWitness {
                 index_space: *output_space,
-                disjoint: false,
+                disjoint: true,
                 availability: Some(availability),
             })
         }

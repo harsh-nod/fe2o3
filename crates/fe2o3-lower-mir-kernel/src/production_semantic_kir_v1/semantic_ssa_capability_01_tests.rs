@@ -83,6 +83,73 @@
             None
         );
     }
+
+    #[test]
+    fn checked_shift_contract_mints_disjoint_output_from_thread_or_disjoint_input() {
+        let input = SemanticTypeIdV1::from_index(1);
+        let output = SemanticTypeIdV1::from_index(2);
+        let raw = SemanticTypeIdV1::from_index(3);
+        let shifted = SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 4 };
+        let availability = test_option_availability_v1();
+        let thread = SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness: input,
+            output_witness: output,
+            raw_index: raw,
+            input_space: SemanticDisjointIndexSpaceV1::Index1d,
+            output_space: shifted,
+            offset: 4,
+        };
+        let disjoint = SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness: input,
+            output_witness: output,
+            raw_index: raw,
+            input_space: SemanticDisjointIndexSpaceV1::Index1d,
+            output_space: shifted,
+            offset: 4,
+        };
+        let expected = Some(SemanticPromotedBindingV1::IndexWitness {
+            index_space: shifted,
+            disjoint: true,
+            availability: Some(SemanticCapabilityAvailabilityV1::Option(availability)),
+        });
+
+        assert_eq!(
+            option_capability_contract_v1(&thread, output, availability),
+            expected
+        );
+        assert_eq!(
+            option_capability_contract_v1(&disjoint, output, availability),
+            expected
+        );
+        assert_eq!(
+            option_capability_contract_v1(&thread, input, availability),
+            None
+        );
+        let wrong_output = SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
+            input_witness: input,
+            output_witness: output,
+            raw_index: raw,
+            input_space: SemanticDisjointIndexSpaceV1::Index1d,
+            output_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 5 },
+            offset: 4,
+        };
+        let wrong_input = SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
+            input_witness: input,
+            output_witness: output,
+            raw_index: raw,
+            input_space: shifted,
+            output_space: shifted,
+            offset: 4,
+        };
+        assert_eq!(
+            option_capability_contract_v1(&wrong_output, output, availability),
+            None
+        );
+        assert_eq!(
+            option_capability_contract_v1(&wrong_input, output, availability),
+            None
+        );
+    }
     fn nested_component_capability_fixture_v1(
         selected_result_variant: u32,
         projected_write: bool,

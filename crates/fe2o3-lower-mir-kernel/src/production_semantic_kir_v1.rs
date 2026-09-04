@@ -18150,7 +18150,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         input_space: SemanticDisjointIndexSpaceV1,
         output_space: SemanticDisjointIndexSpaceV1,
         offset: u64,
-        input_is_disjoint: bool,
+        expected_input_disjoint: bool,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         self.require_call_argument_count(block, call, 1)?;
         let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
@@ -18168,7 +18168,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "checked_shift receiver is not index authority",
             ));
         };
-        if actual != input_space || disjoint != input_is_disjoint {
+        if actual != input_space || disjoint != expected_input_disjoint {
             return Err(unsupported(
                 0,
                 Some(block.index()),
@@ -18261,7 +18261,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 })?,
             id: shifted,
             index_space: output_space,
-            disjoint: input_is_disjoint,
+            // Both checked-shift APIs return `DisjointIndex`; this flag only
+            // distinguishes their thread-index and disjoint-index receivers.
+            disjoint: true,
         })
     }
 
