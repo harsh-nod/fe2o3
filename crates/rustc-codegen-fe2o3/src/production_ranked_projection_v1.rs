@@ -4,6 +4,12 @@
 //! Dynamic slice facts come only from canonical Rust bounds asserts whose
 //! success edge uniquely controls an access to the same slice and index.
 
+mod analysis_multi_split_v1;
+
+use analysis_multi_split_v1::{
+    append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
+};
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
@@ -19595,119 +19601,6 @@ fn append_exact_switch_blocks(
     Ok(())
 }
 
-fn append_analysis_multi_split_blocks(
-    blocks: &mut Vec<ProductionRankedBlockV1>,
-    first_block: usize,
-    first_operations: Vec<ProductionRankedOperationV1>,
-    targets: &[usize],
-    base_blocks: &[Option<usize>],
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if targets.len() < 3 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "an analysis multi-split has fewer than three successors",
-        ));
-    }
-    let mut first_operations = Some(first_operations);
-    for index in 0..targets.len() - 1 {
-        let block = first_block.checked_add(index).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "analysis switch CFG block count overflow",
-            ),
-        )?;
-        let second_block = if index + 2 == targets.len() {
-            projected_target(base_blocks, targets[index + 1])?
-        } else {
-            block
-                .checked_add(1)
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "analysis switch CFG block count overflow",
-                ))?
-        };
-        push_block_at(
-            blocks,
-            block,
-            first_operations.take().unwrap_or_default(),
-            ProductionRankedTerminatorV1::AnalysisSplit {
-                control_dependencies: Vec::new(),
-                first_block: ranked_block_id(projected_target(base_blocks, targets[index])?)?,
-                second_block: ranked_block_id(second_block)?,
-            },
-        )?;
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_analysis_multi_split_blocks_with_arguments(
-    blocks: &mut Vec<ProductionRankedBlockV1>,
-    first_block: usize,
-    first_operations: Vec<ProductionRankedOperationV1>,
-    targets: &[usize],
-    base_blocks: &[Option<usize>],
-    live: &[usize],
-    live_inductions: &[Vec<usize>],
-) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if targets.len() < 3 {
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "an analysis multi-split has fewer than three successors",
-        ));
-    }
-    let argument_count = u32::try_from(live.len()).map_err(|_| {
-        ProductionRankedProjectionErrorV1::Unsupported(
-            "live induction argument count does not fit u32",
-        )
-    })?;
-    let mut first_operations = Some(first_operations);
-    for index in 0..targets.len() - 1 {
-        let block = first_block.checked_add(index).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "analysis switch CFG block count overflow",
-            ),
-        )?;
-        let block_id = ranked_block_id(block)?;
-        let first_live = live_inductions.get(targets[index]).ok_or(
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "an analysis switch successor is outside the live induction table",
-            ),
-        )?;
-        let (second_arguments, second_block) = if index + 2 == targets.len() {
-            let second = targets[index + 1];
-            let second_live = live_inductions.get(second).ok_or(
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "an analysis switch successor is outside the live induction table",
-                ),
-            )?;
-            (
-                forward_live_inductions(block_id, live, second_live)?,
-                projected_target(base_blocks, second)?,
-            )
-        } else {
-            (
-                live_induction_block_arguments(block_id, live)?,
-                block
-                    .checked_add(1)
-                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                        "analysis switch CFG block count overflow",
-                    ))?,
-            )
-        };
-        push_block_at_with_index_arguments(
-            blocks,
-            block,
-            argument_count,
-            first_operations.take().unwrap_or_default(),
-            ProductionRankedTerminatorV1::AnalysisSplitArgs {
-                control_dependencies: Vec::new(),
-                first_arguments: forward_live_inductions(block_id, live, first_live)?,
-                second_arguments,
-                first_block: ranked_block_id(projected_target(base_blocks, targets[index])?)?,
-                second_block: ranked_block_id(second_block)?,
-            },
-        )?;
-    }
-    Ok(())
-}
-
 fn push_block_at(
     blocks: &mut Vec<ProductionRankedBlockV1>,
     expected: usize,
@@ -22788,6 +22681,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
+    include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
@@ -28362,128 +28256,6 @@ mod tests {
                 }
             );
         }
-    }
-
-    #[test]
-    fn multiway_analysis_split_forwards_live_inductions_through_synthetic_blocks() {
-        let mut blocks = vec![ProductionRankedBlockV1::new(
-            vec![],
-            ProductionRankedTerminatorV1::Return,
-        )];
-        let base_blocks = [Some(1), Some(3), Some(4), Some(5)];
-        let live_inductions = [vec![0, 1], vec![0], vec![1], vec![0, 1]];
-        append_analysis_multi_split_blocks_with_arguments(
-            &mut blocks,
-            1,
-            vec![],
-            &[1, 2, 3],
-            &base_blocks,
-            &[0, 1],
-            &live_inductions,
-        )
-        .unwrap();
-
-        assert_eq!(blocks.len(), 3);
-        assert!(matches!(
-            blocks[1].terminator(),
-            ProductionRankedTerminatorV1::AnalysisSplitArgs {
-                first_arguments,
-                second_arguments,
-                first_block,
-                second_block,
-                ..
-            } if first_arguments == &[ProductionRankedValueV1::BlockArgument {
-                block: 1,
-                argument: 0,
-            }]
-                && second_arguments == &[
-                    ProductionRankedValueV1::BlockArgument {
-                        block: 1,
-                        argument: 0,
-                    },
-                    ProductionRankedValueV1::BlockArgument {
-                        block: 1,
-                        argument: 1,
-                    },
-                ]
-                && *first_block == 3
-                && *second_block == 2
-        ));
-        assert!(matches!(
-            blocks[2].terminator(),
-            ProductionRankedTerminatorV1::AnalysisSplitArgs {
-                first_arguments,
-                second_arguments,
-                first_block,
-                second_block,
-                ..
-            } if first_arguments == &[ProductionRankedValueV1::BlockArgument {
-                block: 2,
-                argument: 1,
-            }]
-                && second_arguments == &[
-                    ProductionRankedValueV1::BlockArgument {
-                        block: 2,
-                        argument: 0,
-                    },
-                    ProductionRankedValueV1::BlockArgument {
-                        block: 2,
-                        argument: 1,
-                    },
-                ]
-                && *first_block == 4
-                && *second_block == 5
-        ));
-    }
-
-    #[test]
-    fn multiway_analysis_split_expansion_enforces_the_ranked_block_limit() {
-        let exact_successors = MAX_RANKED_BOUNDS_BLOCKS / 2;
-        let exact = explicit_multi_switch(exact_successors);
-        let (blocks, _, _) = build_ranked_cfg(
-            &projection_types(),
-            &exact,
-            &[],
-            &[const { None }; 2],
-            &vec![None; exact.blocks().len()],
-            &[],
-            vec![],
-            (0..exact.blocks().len())
-                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
-                .collect(),
-        )
-        .unwrap();
-        assert_eq!(blocks.len(), MAX_RANKED_BOUNDS_BLOCKS);
-
-        let oversized = explicit_multi_switch(exact_successors + 1);
-        assert!(matches!(
-            build_ranked_cfg(
-                &projection_types(),
-                &oversized,
-                &[],
-                &[const { None }; 2],
-                &vec![None; oversized.blocks().len()],
-                &[],
-                vec![],
-                (0..oversized.blocks().len())
-                    .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
-                    .collect(),
-            ),
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "semantic CFG projection exceeds the ranked block limit"
-            ))
-        ));
-    }
-
-    #[test]
-    fn unresolved_switch_fanout_is_bounded_before_analysis_allocation() {
-        let function = explicit_multi_switch(MAX_RANKED_BOUNDS_BLOCKS + 1);
-        assert!(matches!(
-            projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],),
-            Err(ProductionRankedProjectionErrorV1::Unsupported(
-                "analysis switch successor count exceeds the ranked block limit"
-            ))
-        ));
     }
 
     #[test]
