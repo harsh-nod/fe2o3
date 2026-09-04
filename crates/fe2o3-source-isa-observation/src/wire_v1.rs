@@ -850,6 +850,7 @@ pub enum SourceIsaObservationUnavailableReasonV1 {
     AnchorCompilerInstrumentationAbsent = 105,
     SourceProjectionForKirV9 = 201,
     FinalizedEvidenceUnavailableFromReadyState = 202,
+    SourceProjectionForKirV11 = 203,
 }
 
 impl SourceIsaObservationUnavailableReasonV1 {
@@ -894,6 +895,7 @@ impl SourceIsaObservationUnavailableReasonV1 {
             Self::FinalizedEvidenceUnavailableFromReadyState => {
                 "finalized-evidence-unavailable-from-ready-state"
             }
+            Self::SourceProjectionForKirV11 => "source-projection-for-kir-v11",
         }
     }
 
@@ -920,6 +922,7 @@ impl SourceIsaObservationUnavailableReasonV1 {
             105 => Ok(Self::AnchorCompilerInstrumentationAbsent),
             201 => Ok(Self::SourceProjectionForKirV9),
             202 => Ok(Self::FinalizedEvidenceUnavailableFromReadyState),
+            203 => Ok(Self::SourceProjectionForKirV11),
             _ => Err(SourceIsaObservationFrameErrorV1::InvalidTag),
         }
     }
@@ -1914,6 +1917,9 @@ mod tests {
             frame(SourceIsaObservationOutcomeV1::Admitted(admitted())),
             frame(SourceIsaObservationOutcomeV1::Unavailable(
                 SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
+            )),
+            frame(SourceIsaObservationOutcomeV1::Unavailable(
+                SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV11,
             )),
             frame(SourceIsaObservationOutcomeV1::Error(
                 SourceIsaObservationErrorCodeV1::AllocationFailure,
