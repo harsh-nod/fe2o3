@@ -1012,6 +1012,19 @@ const FMA_ROWS: [OracleRow; 8] = [
     row3("underflow-half-ulp-tie-even", MIN_SUB, HALF, PZERO, PZERO),
 ];
 
+const ABS_ROWS: [OracleRow; 10] = [
+    row1("positive-zero", PZERO, PZERO),
+    row1("negative-zero", NZERO, PZERO),
+    row1("minimum-subnormal", MIN_SUB, MIN_SUB),
+    row1("negative-minimum-subnormal", NEG_MIN_SUB, MIN_SUB),
+    row1("positive-infinity", PINF, PINF),
+    row1("negative-infinity", NINF, PINF),
+    row1("quiet-nan-payload", QNAN, QNAN),
+    row1("negative-quiet-nan-payload", NEG_QNAN, QNAN),
+    row1("positive-finite", ONE, ONE),
+    row1("negative-finite", NEG_ONE, ONE),
+];
+
 const INTEGRAL_INPUTS: [u32; 10] = [
     PZERO,
     NZERO,
@@ -1312,6 +1325,14 @@ fn case_specs() -> [CaseSpec; CASE_LIMIT] {
             ],
             rows: &ROUND_EVEN_ROWS,
         },
+        CaseSpec {
+            id: "f32-abs",
+            operation_name: "abs",
+            family: "f32_math",
+            operation: CaseOperation::Math(F32MathFunction::Abs),
+            edge_classes: &["signed_zero", "subnormal", "infinity", "quiet_nan"],
+            rows: &ABS_ROWS,
+        },
     ]
 }
 
@@ -1325,7 +1346,7 @@ mod tests {
         let second = run_f32_differential_v3().unwrap().unwrap();
         assert_eq!(first, second);
         assert_eq!(first.operation_cases, CASE_LIMIT);
-        assert_eq!(first.rows_compared, 149);
+        assert_eq!(first.rows_compared, 159);
         assert_eq!(
             case_specs()
                 .iter()
@@ -1335,11 +1356,11 @@ mod tests {
         );
         assert_eq!(
             first.capability_sha256,
-            "a3604a77c82013c0969c13501e1f7f5f7d9395efc3c550cf12ef228ee52305f0"
+            "c19537f38504267a123696a731be2d8b41231cb293540141331e913036f126e8"
         );
         assert_eq!(
             first.suite_sha256,
-            "0xae4d6b3760f4e3d76c2b76d56f6ebf3cac538898fd40d2090c5e9e453d2d662a"
+            "0x69bf9ade6b55116cce2f2d829e96a778b61b18f8df19e30692ff933261f2cd77"
         );
         assert_eq!(
             first

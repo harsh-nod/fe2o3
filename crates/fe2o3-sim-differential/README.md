@@ -34,7 +34,7 @@ transcendentals, concurrency families, and physical-GPU parity. Unsupported
 semantics are not approximated.
 
 The additive V3 binary32 matrix qualifies the shared simulator-preflight
-roster's explicitly enumerated 17 core scalar `f32` operations without
+roster's explicitly enumerated 18 core scalar `f32` operations without
 changing V2:
 
 ```text
@@ -43,9 +43,10 @@ fe2o3-sim-differential f32-run-v3
 fe2o3-sim-differential f32-replay-v3 --case CASE --kir-sha256 SHA256 --oracle-corpus-sha256 SHA256
 ```
 
-Its 17 operation cases and 149 exact rows cover negate; add, subtract,
+Its 18 operation cases and 159 exact rows cover negate; add, subtract,
 multiply, divide, and remainder; all six comparisons; explicit fused
-multiply-add; and floor, ceil, truncate, and round-to-nearest-ties-to-even.
+multiply-add; floor, ceil, truncate, and round-to-nearest-ties-to-even; and
+absolute value.
 Compile-time oracle tables enumerate exact binary32 input and result bits for
 the pinned `rustc_apfloat 0.2.3+llvm-462a31f5a5ab` software contract:
 round-to-nearest-even, its exact NaN sign/payload/canonicalization choices,

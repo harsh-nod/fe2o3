@@ -37,4 +37,5 @@ API stabilizes. Developer-preview versions may make breaking changes.
   and tree to be reachable from the mirror's `main` branch before tagging and
   repeats actor, ref, tag, and mirror authorization at each remote write.
 - Semantic MIR V10 remains frozen; the compiler trap terminal now uses its
-  unambiguous additive V11 encoding.
+  unambiguous additive V11 encoding. V12 retains that encoding and adds the
+  checked scalar volatile-load terminal at tag 65.

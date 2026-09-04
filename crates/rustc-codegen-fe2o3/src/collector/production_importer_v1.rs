@@ -3959,18 +3959,20 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
             TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
+        ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 106,
             TerminalIdentitySchemaV1::CombinedV3 => 113,
+            TerminalIdentitySchemaV1::CombinedV4 => 116,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 107,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
+            TerminalIdentitySchemaV1::CombinedV4 => 117,
         },
-        ProductionTerminalExpansionV1::RustcFabsF32 => 113,
-        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -4277,11 +4279,23 @@ mod tests {
                 ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
-                ProductionTerminalExpansionV1::RustcFabsF32,
-                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs,),
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(expansion, combined_schema)),
-            [111, 112, 113, 114, 113, 114]
+            [111, 112, 113, 114]
+        );
+        assert_eq!(
+            [
+                ProductionTerminalExpansionV1::RustcFabsF32,
+                ProductionTerminalExpansionV1::MathF32(fe2o3_kernel_ir::F32MathFunction::Abs,),
+                ProductionTerminalExpansionV1::MemoryVolatileLoad,
+                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
+                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
+            ]
+            .map(|expansion| terminal_operation_tag_for_schema_v1(
+                expansion,
+                TerminalIdentitySchemaV1::CombinedV4,
+            )),
+            [113, 114, 115, 116, 117],
         );
         assert_eq!(
             [

@@ -211,7 +211,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "2a1c62604e290a3a45b923eac5ef8d0dfaf175a834d9931a9d19cd777adab819",
 )];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "ca1b560569cc9ef92b6416d92f6814879ede39d9cc7c4935fa0695ba4a90f8d3";
+    "8cc93f65c8d66564ef993613dafa29f93c638d829ff06c869bb33b126c36ae20";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
