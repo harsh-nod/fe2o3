@@ -1,4 +1,10 @@
 //! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//!
+//! Review the fused kernel by phases: launch-wide validation, wave/item
+//! ownership, checked input views, uniform router and attention collectives,
+//! gfx950 MFMA expert compute, then capability-checked stores. Keeping those
+//! boundaries visible is especially important in a megakernel, where an early
+//! return in only some lanes could otherwise invalidate a later collective.
 
 #![allow(missing_docs)]
 
@@ -17,6 +23,7 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
+/// Fuses top-4 routing, sink attention, and selected MXFP4 expert projection.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-gpt-oss-decode"))]
 #[kernel(
     typed,
@@ -39,6 +46,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     mut expert_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
     mut packed_top4: DisjointSlice<u32>,
 ) -> KernelResult {
+    // Validate the complete launch contract before any lane reaches a broadcast or MFMA.
     if hidden_f32.len() < crate::PROFILE_ITEMS * HIDDEN_SIZE
         || router_f32.len() < EXPERTS * HIDDEN_SIZE
         || query_bf16.len() < crate::PROFILE_ITEMS * MATRIX_ROWS * HEAD_DIM
@@ -57,6 +65,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // One Wave64 owns one independent profile item; lane identity stays wave-local.
     let index = thread::index_1d();
     let global_index = index.get();
     let lane_index = global_index % crate::WAVE_SIZE;
@@ -64,6 +73,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let lane = WaveLane::<Wave64>::current();
     let subgroup = Gfx950Subgroup::current();
 
+    // Checked views capture offsets and strides once, outside the router dot products.
     let Ok(hidden) = StridedReadView2D::from_shared_slice(
         hidden_f32,
         item_index.wrapping_mul(HIDDEN_SIZE),
@@ -78,6 +88,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     else {
         return Err(KernelError::InvalidArgument);
     };
+    // Each lane scores two experts, covering all 128 router rows without serializing lanes.
     let local_expert0 = lane_index.wrapping_mul(2);
     let local_expert1 = local_expert0.wrapping_add(1);
     let mut local_logit0 = 0.0_f32;
@@ -90,6 +101,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         depth += 1;
     }
 
+    // Every lane executes the same broadcasts and maintains the same deterministic top-4 list.
     let mut best0 = ROUTER_FLOOR;
     let mut best1 = ROUTER_FLOOR;
     let mut best2 = ROUTER_FLOOR;
@@ -222,8 +234,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         }
         source += 1;
     }
+    // The highest-ranked expert drives this bounded single-expert projection profile.
     let selected = (id0 as usize) & (EXPERTS - 1);
 
+    // Four BF16 MFMA operations cover K=64 while the accumulator remains in registers.
     let Ok(query) = Bf16MfmaAMatrix::row_major(
         query_bf16,
         item_index.wrapping_mul(MATRIX_ROWS * HEAD_DIM),
@@ -267,6 +281,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         )
         .into_values();
 
+    // Typed value/sink views make the Wave16 softmax and PV ownership explicit.
     let Ok(values) = StridedReadView2D::from_shared_slice(
         value_f32,
         item_index.wrapping_mul(CONTEXT_TOKENS * VALUE_TILE),
@@ -294,6 +309,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let sink1 = sinks.load_or(0, row1, 0.0);
     let sink2 = sinks.load_or(0, row2, 0.0);
     let sink3 = sinks.load_or(0, row3, 0.0);
+    // Include learned sinks in a max-subtracted FP32 softmax to avoid overflow.
     let reduced0 = subgroup.reduce_max_f32::<16>(scores[0] * ATTENTION_SCALE);
     let reduced1 = subgroup.reduce_max_f32::<16>(scores[1] * ATTENTION_SCALE);
     let reduced2 = subgroup.reduce_max_f32::<16>(scores[2] * ATTENTION_SCALE);
@@ -319,6 +335,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let probability1 = probability1 / denominator1;
     let probability2 = probability2 / denominator2;
     let probability3 = probability3 / denominator3;
+    // Each Wave16 subgroup broadcasts probabilities while lanes own value columns.
     let column = lane_index % VALUE_TILE;
     let mut attention0 = 0.0_f32;
     let mut attention1 = 0.0_f32;
@@ -334,6 +351,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         token += 1;
     }
 
+    // The selected expert uses four K=128 MXFP4 blocks with per-block product scales.
     let expert_reduction_base = selected
         .wrapping_mul(MXFP4_BLOCKS)
         .wrapping_mul(EXPERT_K_TILE);
@@ -387,6 +405,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let gfx950 = Gfx950Matrix::current();
 
     let activation_item_base = item_index.wrapping_mul(MXFP4_BLOCKS * MATRIX_ROWS * EXPERT_K_TILE);
+    // Consume each fragment before loading the next block to bound register pressure.
     let Ok(activation_matrix0) = Gfx950Fp4MfmaAMatrix::row_major(
         expert_activation_blocks_fp4,
         activation_item_base,
@@ -479,6 +498,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     expert_acc2 += expert3[2] * scale3;
     expert_acc3 += expert3[3] * scale3;
 
+    // Blocked capabilities assign four unique attention and expert elements per lane.
     let Some(output_block) = index.checked_block::<64, 4>() else {
         return Err(KernelError::OutOfBounds);
     };
@@ -506,6 +526,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     if let Some(slot) = expert_output.get_block_mut(&output_block, 3) {
         *slot = expert_acc3;
     }
+    // Every lane has the same top-4 list; the 1-D capability keeps item stores disjoint.
     let packed = id0 | (id1 << 7) | (id2 << 14) | (id3 << 21);
     if let Some(slot) = packed_top4.get_mut(thread::index_1d()) {
         *slot = packed;

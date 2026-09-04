@@ -1,4 +1,8 @@
 //! Safe Rust qualification kernel for dynamic strided matrix multiplication.
+//!
+//! Its review order is deliberate: validate dynamic extents, map a wave to a
+//! tile, build typed matrices, run a uniform double-buffered K pipeline, then
+//! perform edge-safe stores through a tiled disjoint capability.
 
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
@@ -46,6 +50,7 @@ pub fn tiled_gemm_general_v1(
     alpha: f32,
     beta: f32,
 ) -> KernelResult {
+    // Reject incompatible shapes and strides before every lane enters LDS barriers.
     let invalid_stride = (m != 0 && k != 0 && lda < k)
         || (k != 0 && n != 0 && ldb < n)
         || (m != 0 && n != 0 && ldc < n);
@@ -60,6 +65,7 @@ pub fn tiled_gemm_general_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // Grid coordinates assign one Wave64 to one 16x16 output tile.
     let thread_index = thread::index_1d();
     let raw_index = thread_index.get();
     let tiles_per_row = (n as usize + 15) / 16;
@@ -70,12 +76,14 @@ pub fn tiled_gemm_general_v1(
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
 
+    // Typed views centralize layout and padding; the output witness captures ownership.
     let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
     let a_matrix = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize)?;
     let b_matrix = Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize)?;
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
+    // Two LDS stages overlap fragment production for n+1 with MFMA consumption for n.
     let phase_count = (k as usize + 15) / 16;
     let lane = raw_index % 64;
     let mut pipeline_scope = WorkgroupLdsScope::current();
@@ -125,6 +133,7 @@ pub fn tiled_gemm_general_v1(
     rhs_pipeline.discard(phase_count);
     rhs_pipeline.release(phase_count);
 
+    // The tiled capability clips M/N edges while proving unique ownership of valid C.
     let values = accumulator.into_values();
     if let Some(output_tile) = output_tile {
         if let Some(output) =

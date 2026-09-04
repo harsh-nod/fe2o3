@@ -1,4 +1,11 @@
 //! Complete safe Rust kernel source for the bounded systems profiles.
+//!
+//! Read every entry point in the same order: validate the whole launch before
+//! subgroup operations, map the global thread to a batch/wave/lane owner, build
+//! checked typed views, run collectives under uniform control flow, and finish
+//! with a `DisjointSlice` store whose layout makes write ownership explicit.
+//! Comments emphasize those invariants and the reason for non-obvious code;
+//! they intentionally do not narrate ordinary Rust syntax.
 
 #![allow(missing_docs)] // The kernel macro emits helper modules.
 #![cfg_attr(target_arch = "amdgpu", allow(unused_imports))]
@@ -31,9 +38,11 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     mut expert_counts: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
     mut dispatch: DisjointSlice<i32, RowStriped2D<Index1D, 64, 2>>,
 ) {
+    // One Wave64 owns one batch. Every lane participates in the broadcasts below.
     let global_index = thread::index_1d().get();
     let batch = global_index / 64;
     let wave_lane = global_index & 63;
+    // Reject the complete buffer contract before any lane enters a collective.
     if batch >= SYSTEM_BATCHES
         || activations.len() != SYSTEM_BATCHES * TOKENS * HIDDEN
         || router_weights.len() != SYSTEM_BATCHES * EXPERTS * HIDDEN
@@ -44,6 +53,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     {
         return;
     }
+    // Typed views keep the batch offsets and row strides out of the dot-product loop.
     let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
     let router_base = batch.wrapping_mul(EXPERTS).wrapping_mul(HIDDEN);
     let Ok(router_weights) =
@@ -57,6 +67,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     else {
         return;
     };
+    // Decode packed E2M1 activations once per depth and score all four experts.
     let mut route_logit0 = 0.0_f32;
     let mut route_logit1 = 0.0_f32;
     let mut route_logit2 = 0.0_f32;
@@ -74,6 +85,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         route_logit3 += activation * router_weights.load_or(3, depth, 0.0);
         depth += 1;
     }
+    // A branch-light ranking network gives deterministic top-2 tie handling.
     let precedes12 = (route_logit1 >= route_logit2) as u32;
     let precedes13 = (route_logit1 >= route_logit3) as u32;
     let precedes23 = (route_logit2 >= route_logit3) as u32;
@@ -112,6 +124,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     } else {
         route_logit3
     };
+    // Normalize only the selected logits, using the max subtraction for stability.
     let maximum = if first_logit > second_logit {
         first_logit
     } else {
@@ -123,6 +136,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let denominator = first_exp + second_exp;
     let first_weight_local = first_exp / denominator;
     let second_weight_local = second_exp / denominator;
+    // Broadcast each token's route so lanes can form counts and dispatch metadata.
     let subgroup = Gfx950Subgroup::current();
     let top_source = ((wave_lane / TOP_K) & (TOKENS - 1)) as u32 & 63;
     let local_pair = first_local | (second_local << 2);
@@ -147,6 +161,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         | (subgroup.broadcast_f32::<64>(local_pair as f32, 13) as u64) << 52
         | (subgroup.broadcast_f32::<64>(local_pair as f32, 14) as u64) << 56
         | (subgroup.broadcast_f32::<64>(local_pair as f32, 15) as u64) << 60;
+    // Row-striped capabilities prove that route, count, and dispatch stores do not alias.
     if wave_lane < TOKENS * TOP_K {
         let choice = wave_lane & (TOP_K - 1);
         let selected = if choice == 0 { top_first } else { top_second };
@@ -281,10 +296,12 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     include_shared_expert: u32,
     mut output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
 ) {
+    // One Wave64 owns one batch; each lane ultimately writes four output elements.
     let thread_index = thread::index_1d();
     let global_index = thread_index.get();
     let batch = global_index / 64;
     let lane_index = global_index & 63;
+    // Validate every buffer and rank selector before the first MFMA or broadcast.
     if batch >= SYSTEM_BATCHES
         || activations.len() != SYSTEM_BATCHES * TOKENS * HIDDEN
         || expert_weights.len() != SYSTEM_BATCHES * ALL_EXPERTS * HIDDEN * OUTPUT
@@ -295,6 +312,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     {
         return;
     }
+    // Convert raw storage into typed MFMA views for two routed experts plus one shared expert.
     let second_expert = first_expert.wrapping_add(1);
     let lane = WaveLane::<Wave64>::current();
     let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
@@ -308,6 +326,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             .wrapping_mul(HIDDEN)
             .wrapping_mul(OUTPUT),
     );
+    // Keep the three independent fragment lifetimes overlapping in the production path.
     #[cfg(not(feature = "ablation-expert-serial"))]
     let (first_values, second_values, shared_values) = {
         let Ok(activations_view) =
@@ -431,6 +450,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     };
     let subgroup = Gfx950Subgroup::current();
     let math = DeviceMath::current();
+    // Redistribute MFMA accumulator fragments into token/channel output ownership.
     macro_rules! broadcast_component {
         (
             $output_component:literal,
@@ -482,6 +502,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         shared31, shared32, shared33
     );
 
+    // Apply the two route gates and optional shared expert after redistribution.
     macro_rules! compute_component {
         (
             $output_component:literal,
@@ -567,6 +588,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         3, first30, first31, first32, first33, second30, second31, second32, second33, shared30,
         shared31, shared32, shared33
     );
+    // The blocked capability assigns four unique output elements to every lane.
     let Some(output_block) = thread_index.checked_block::<64, 4>() else {
         return;
     };
@@ -605,6 +627,7 @@ pub fn gfx950_combine_expert_ranks_v1(
     rank1: &[f32],
     mut output: DisjointSlice<f32, RowStriped2D<Index1D, 256, 1>>,
 ) {
+    // This elementwise boundary has no collectives in the production path.
     let index = thread::index_1d();
     let element = index.get();
     if rank0.len() != COMBINE_BATCHES * TOKENS * OUTPUT
@@ -616,6 +639,7 @@ pub fn gfx950_combine_expert_ranks_v1(
     if element >= COMBINE_BATCHES * TOKENS * OUTPUT {
         return;
     }
+    // Fixed rank order makes the floating-point reference and device result reproducible.
     #[cfg(not(feature = "ablation-combine-transposed"))]
     let result = rank0[element] + rank1[element];
     #[cfg(feature = "ablation-combine-transposed")]
@@ -626,6 +650,7 @@ pub fn gfx950_combine_expert_ranks_v1(
         let source_result = rank0[source_element] + rank1[source_element];
         Gfx950Subgroup::current().broadcast_f32::<64>(source_result, source_lane as u32)
     };
+    // Row-striped ownership maps each in-range thread to exactly one result.
     let Some(output_row) = index.checked_row_striped_2d::<256, 1>() else {
         return;
     };
@@ -671,9 +696,11 @@ pub fn gfx950_speculative_transaction_v1(
     mut committed: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
     mut output_state: DisjointSlice<f32>,
 ) {
+    // One Wave64 owns a batch: lanes first evaluate candidates, then own state elements.
     let global_index = thread::index_1d().get();
     let batch = global_index / 64;
     let lane = global_index & 63;
+    // Establish the full transactional buffer contract before subgroup broadcasts.
     if batch >= SYSTEM_BATCHES
         || draft_tokens.len() != SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS
         || target_tokens.len() != SYSTEM_BATCHES * DRAFT_STEPS
@@ -687,6 +714,7 @@ pub fn gfx950_speculative_transaction_v1(
     {
         return;
     }
+    // Checked views name candidate/step structure and remove repeated stride arithmetic.
     let transaction_base = batch.wrapping_mul(CANDIDATES).wrapping_mul(DRAFT_STEPS);
     let target_base = batch.wrapping_mul(DRAFT_STEPS);
     let state_base = batch.wrapping_mul(STATE_WIDTH);
@@ -747,6 +775,7 @@ pub fn gfx950_speculative_transaction_v1(
                 .wrapping_add(accepts3 as usize)
         }};
     }
+    // Build a prefix: a later step can be accepted only when every earlier step was.
     let acceptance_candidate = lane & (CANDIDATES - 1);
     let accepts0 = (draft_tokens.load_or(acceptance_candidate, 0, 0)
         == target_tokens.load_or(0, 0, 0))
@@ -764,6 +793,7 @@ pub fn gfx950_speculative_transaction_v1(
         .wrapping_add(accepts1 as usize)
         .wrapping_add(accepts2 as usize)
         .wrapping_add(accepts3 as usize);
+    // Re-map lanes to candidate/state pairs and broadcast one decision per candidate.
     let candidate = lane / STATE_WIDTH;
     let state_element = lane.wrapping_sub(candidate.wrapping_mul(STATE_WIDTH));
     #[cfg(not(feature = "ablation-speculative-recompute-prefix"))]
@@ -772,6 +802,7 @@ pub fn gfx950_speculative_transaction_v1(
         as usize;
     #[cfg(feature = "ablation-speculative-recompute-prefix")]
     let accepted = accepted_prefix!(candidate);
+    // Commit status and all state deltas together; rejected candidates retain base state.
     if lane < CANDIDATES {
         let Some(status_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
             return;
@@ -821,6 +852,7 @@ pub fn gfx950_speculative_transaction_v1(
                 .wrapping_add(state_element),
         )];
     }
+    // The one-dimensional capability gives every lane a unique state destination.
     if let Some(slot) = output_state.get_mut(thread::index_1d()) {
         *slot = value;
     }
@@ -850,6 +882,7 @@ pub fn gfx950_qwen_ngram_gather_v1(
     priorities: &[i32],
     mut output: DisjointSlice<i32, RowStriped2D<Index1D, 64, 1>>,
 ) {
+    // Each in-range lane owns one query; no subgroup coordination is required.
     let global_index = thread::index_1d().get();
     let batch = global_index / 64;
     let query = global_index & 63;
@@ -866,6 +899,7 @@ pub fn gfx950_qwen_ngram_gather_v1(
     if query >= QUERIES {
         return;
     }
+    // Hash all three tokens; the full gram is still checked to reject collisions.
     let query_batch_base = batch.wrapping_mul(QUERIES).wrapping_mul(NGRAM);
     let table_batch_base = batch.wrapping_mul(TABLE_SIZE);
     let gram_batch_base = batch.wrapping_mul(TABLE_SIZE).wrapping_mul(NGRAM);
@@ -880,6 +914,7 @@ pub fn gfx950_qwen_ngram_gather_v1(
     let mut best_slot = usize::MAX;
     let mut best_priority = i32::MIN;
     let mut best_value = -1_i32;
+    // Probe the bounded table completely and resolve duplicate keys deterministically.
     macro_rules! probe {
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
@@ -955,6 +990,7 @@ pub fn gfx950_qwen_ngram_gather_v1(
         probe!(1);
         probe!(0);
     }
+    // Row-striped ownership assigns exactly one result slot to the query lane.
     let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
         return;
     };
@@ -985,6 +1021,7 @@ pub fn gfx950_stage_gradient_shard_v1(
     input: &[f32],
     mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
 ) {
+    // One wave stages one batch; only the first 16 lanes correspond to matrix elements.
     let global_index = thread::index_1d().get();
     let batch = global_index / 64;
     let element = global_index & 63;
@@ -998,6 +1035,7 @@ pub fn gfx950_stage_gradient_shard_v1(
         return;
     }
     let input_base = batch.wrapping_mul(MUON_ELEMENTS);
+    // The production path is a direct coalesced copy; the tile path is an ablation only.
     #[cfg(not(feature = "ablation-stage-tile4"))]
     let value = input[input_base.wrapping_add(element)];
     #[cfg(feature = "ablation-stage-tile4")]
@@ -1029,6 +1067,7 @@ pub fn gfx950_stage_gradient_shard_v1(
             value3
         }
     };
+    // Row-striped ownership prevents multiple waves from staging the same element.
     let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
         return;
     };
@@ -1060,9 +1099,11 @@ pub fn gfx950_muon_update_4x4_v1(
     mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
     mut output_norm: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
 ) {
+    // One Wave64 owns one 4x4 update; the first 16 lanes hold the matrix elements.
     let global_index = thread::index_1d().get();
     let batch = global_index / 64;
     let lane = global_index & 63;
+    // Validate every launch-wide shape before the norm reduction.
     if batch >= SYSTEM_BATCHES
         || shards.len() != SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS
         || output.len() != SYSTEM_BATCHES * MUON_ELEMENTS
@@ -1070,6 +1111,7 @@ pub fn gfx950_muon_update_4x4_v1(
     {
         return;
     }
+    // A checked two-row view makes the two-shard reduction explicit.
     let Ok(shards) = StridedReadView2D::from_shared_slice(
         shards,
         batch
@@ -1086,6 +1128,7 @@ pub fn gfx950_muon_update_4x4_v1(
     let mut matrix_value =
         active * (shards.load_or(0, matrix_element, 0.0) + shards.load_or(1, matrix_element, 0.0));
     let subgroup = Gfx950Subgroup::current();
+    // Reduce in FP32, then normalize before the Newton-Schulz iterations.
     #[cfg(not(feature = "ablation-muon-broadcast16"))]
     let squared_norm = subgroup.reduce_sum_f32::<64>(matrix_value * matrix_value);
     #[cfg(feature = "ablation-muon-broadcast16")]
@@ -1116,6 +1159,7 @@ pub fn gfx950_muon_update_4x4_v1(
     let column = matrix_element.wrapping_sub(row.wrapping_mul(4));
     let row_base = row.wrapping_mul(4);
     let column_base = column.wrapping_mul(4);
+    // Each uniform iteration forms X X^T and then X X^T X through wave broadcasts.
     macro_rules! muon_iteration {
         () => {{
             let mut gram = 0.0_f32;
@@ -1150,6 +1194,7 @@ pub fn gfx950_muon_update_4x4_v1(
     muon_iteration!();
     muon_iteration!();
     muon_iteration!();
+    // Matrix lanes own disjoint outputs; lane zero separately owns the reported norm.
     if lane < MUON_ELEMENTS {
         let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
             return;

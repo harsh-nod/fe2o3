@@ -1,4 +1,7 @@
 //! Safe Rust dynamic row-softmax qualification kernel.
+//!
+//! Review it as dynamic-contract validation, wave/row ownership, one uniform
+//! max reduction, one uniform sum reduction, and capability-checked row stores.
 
 #![allow(missing_docs)]
 
@@ -35,6 +38,7 @@ pub fn row_softmax_general_v1(
     input_stride: u32,
     output_stride: u32,
 ) -> KernelResult {
+    // Prove shape and stride extents before creating the checked input view.
     if columns == 0
         || columns as usize > ROW_SOFTMAX_MAX_COLUMNS_V1
         || input_stride < columns
@@ -53,6 +57,7 @@ pub fn row_softmax_general_v1(
         input_stride as usize,
     )?;
 
+    // One Wave64 owns one row; each lane owns a 64-column stripe.
     let thread_index = thread::index_1d();
     let raw = thread_index.get();
     let row = raw / 64;
@@ -64,6 +69,7 @@ pub fn row_softmax_general_v1(
     let subgroup = Subgroup::current();
     let math = Math::current();
 
+    // Max subtraction keeps the exponentials finite for large logits.
     let mut local_max = f32::NEG_INFINITY;
     let mut component = 0;
     while component < 64 {
@@ -76,7 +82,9 @@ pub fn row_softmax_general_v1(
     }
     let maximum = subgroup.subgroup_reduce_max_f32::<64>(local_max);
 
+    // The second uniform reduction forms the row's FP32 normalizer.
     let mut local_sum = 0.0_f32;
+    // The row-striped capability clips the logical edge and proves unique stores.
     component = 0;
     while component < 64 {
         let column = lane + component * 64;

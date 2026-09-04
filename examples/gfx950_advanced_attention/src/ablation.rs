@@ -1,4 +1,8 @@
 //! Exact-semantics gfx950 attention ablations selected one feature at a time.
+//!
+//! Each variant preserves the production input, ownership, numerical, and
+//! output contracts while changing one named implementation choice. This
+//! single-variable rule keeps an ablation interpretable and reviewable.
 
 use fe2o3_device::{
     DeviceMath, DisjointSlice, Index1D, KernelError, KernelResult, StridedReadView2D, kernel,
@@ -27,6 +31,7 @@ pub fn gfx950_attnres_aggregate(
     depth_logits: &[f32],
     mut output: DisjointSlice<f32, Index1D>,
 ) -> KernelResult {
+    // Preserve production shape validation so only reuse strategy changes.
     let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
     if depth_values.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || depth_logits.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
@@ -34,6 +39,7 @@ pub fn gfx950_attnres_aggregate(
     {
         return Err(KernelError::InvalidArgument);
     }
+    // One thread owns one (batch, channel) result.
     let index = thread::index_1d();
     let linear = index.get();
     let batch = linear / CHANNELS_V1;
@@ -47,6 +53,7 @@ pub fn gfx950_attnres_aggregate(
     else {
         return Err(KernelError::InvalidArgument);
     };
+    // Hoist each logit and exponential exactly once for this reuse experiment.
     let math = DeviceMath::current();
     let logit0 = logits.load_or(0, channel, f32::NEG_INFINITY);
     let logit1 = logits.load_or(1, channel, f32::NEG_INFINITY);
@@ -71,6 +78,7 @@ pub fn gfx950_attnres_aggregate(
         + weight1 * values.load_or(1, channel, 0.0)
         + weight2 * values.load_or(2, channel, 0.0)
         + weight3 * values.load_or(3, channel, 0.0);
+    // Publish through the same disjoint output capability as production.
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = value / denominator;
     }
@@ -89,6 +97,7 @@ pub fn gfx950_four_branch_residual(
     gate_logits: &[f32],
     mut output: DisjointSlice<f32, Index1D>,
 ) {
+    // Preserve production validation and ownership while making branches explicit.
     let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
     if residual.len() != batches * CHANNELS_V1
         || branches.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
@@ -102,6 +111,7 @@ pub fn gfx950_four_branch_residual(
     let batch = linear / CHANNELS_V1;
     let channel = linear % CHANNELS_V1;
     let batch_offset = batch.wrapping_mul(MIXING_STREAMS_V1 * CHANNELS_V1);
+    // Evaluate four fixed gates without changing their accumulation order.
     let math = DeviceMath::current();
     let branch0 = batch_offset.wrapping_add(channel);
     let offset1 = batch_offset.wrapping_add(CHANNELS_V1).wrapping_add(channel);
@@ -120,6 +130,7 @@ pub fn gfx950_four_branch_residual(
         + 0.25 * gate1 * branches[offset1]
         + 0.25 * gate2 * branches[offset2]
         + 0.25 * gate3 * branches[offset3];
+    // One linear thread index owns one channel store.
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = value;
     }
@@ -137,6 +148,7 @@ pub fn gfx950_mhc_sinkhorn_mix(
     mixing_logits: &[f32],
     mut output: DisjointSlice<f32, Index1D>,
 ) -> KernelResult {
+    // Preserve the WG256/grid4 contract while replacing subgroup Sinkhorn.
     let batches = MULTIGRID_WAVE_BATCHES_V1;
     if streams.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || mixing_logits.len() != batches * MIXING_STREAMS_V1 * MIXING_STREAMS_V1
@@ -167,6 +179,7 @@ pub fn gfx950_mhc_sinkhorn_mix(
     ) else {
         return Err(KernelError::InvalidArgument);
     };
+    // Materialize the 4x4 matrix so row and column normalization is explicit.
     let mut m00 = math.exp_f32(logits.load_or(0, 0, 0.0));
     let mut m01 = math.exp_f32(logits.load_or(0, 1, 0.0));
     let mut m02 = math.exp_f32(logits.load_or(0, 2, 0.0));
@@ -183,6 +196,7 @@ pub fn gfx950_mhc_sinkhorn_mix(
     let mut m31 = math.exp_f32(logits.load_or(0, 13, 0.0));
     let mut m32 = math.exp_f32(logits.load_or(0, 14, 0.0));
     let mut m33 = math.exp_f32(logits.load_or(0, 15, 0.0));
+    // Run the same fixed three Sinkhorn iterations as the production kernel.
     for _iteration in 0..3 {
         let row0 = m00 + m01 + m02 + m03;
         m00 /= row0;
@@ -248,6 +262,7 @@ pub fn gfx950_mhc_sinkhorn_mix(
             + m32 * streams.load_or(2, channel, 0.0)
             + m33 * streams.load_or(3, channel, 0.0)
     };
+    // Each lane publishes its one stream/channel result exactly once.
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = value;
     }

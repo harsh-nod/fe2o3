@@ -1,4 +1,10 @@
 //! Ordinary attributed Rust for the bounded advanced-attention profiles.
+//!
+//! Device entrypoints follow a common review order: validate whole-launch
+//! shapes before collectives, derive batch and lane ownership, create checked
+//! multidimensional views, run uniform subgroup or matrix operations, then
+//! write only through disjoint output capabilities. Host fallbacks deliberately
+//! call the independent references so simulation never masquerades as device ISA.
 
 #![allow(missing_docs)] // The kernel macro emits an undocumented helper module.
 
@@ -70,6 +76,8 @@ fn decode_fp8_e4m3_v1(value: u8) -> f32 {
     }
 }
 
+// Keep decoding as an expression macro because the admitted device subset does
+// not lower this helper as an ordinary call on every production path.
 #[cfg(any(target_arch = "amdgpu", test))]
 macro_rules! decode_fp8_e4m3_v1 {
     ($value:expr) => {{
@@ -101,6 +109,7 @@ macro_rules! decode_fp8_e4m3_v1 {
     }};
 }
 
+// Maintain the three best sparse candidates with deterministic rank order.
 #[cfg(target_arch = "amdgpu")]
 macro_rules! consider_sparse_candidate_v1 {
     ($id:expr, $rank:expr, $attention:expr, $id0:ident, $rank0:ident, $attention0:ident,
@@ -177,6 +186,8 @@ fn write_u32_v1(
     *slot = value;
 }
 #[cfg(target_arch = "amdgpu")]
+// One WY chunk advances four tokens while carrying one matrix-state element
+// per thread. Every Wave16 reduction must be reached uniformly by all lanes.
 macro_rules! kda_chunk_wy_v1 {
     ($base:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
      $subgroup:ident, $key_index:ident, $value_column:ident, $state:ident,
@@ -264,6 +275,7 @@ pub fn gfx950_kda_decode(
     mut final_state: DisjointSlice<f32, Index1D>,
     mut output: DisjointSlice<f32, Index1D>,
 ) {
+    // One workgroup owns one complete 16x16 matrix-state problem.
     let batches = MULTIGRID_WORKGROUPS_V1;
     let batch = thread::block_idx_x() as usize;
     if query.len() != batches * KDA_KEY_DIMENSION_V1
@@ -277,6 +289,7 @@ pub fn gfx950_kda_decode(
     {
         return;
     }
+    // Checked views separate batch offsets from the recurrence arithmetic.
     let Ok(query) = StridedReadView2D::from_shared_slice(
         query,
         batch.wrapping_mul(KDA_KEY_DIMENSION_V1),
@@ -327,6 +340,7 @@ pub fn gfx950_kda_decode(
     };
     #[cfg(not(feature = "kernel-kda-decode-baseline-v1"))]
     {
+        // The 256 threads map bijectively to (value column, key index).
         let linear = thread::thread_idx_x() as usize;
         let key_index = linear & 15;
         let value_column = linear >> 4;
@@ -337,10 +351,12 @@ pub fn gfx950_kda_decode(
         let value_input = value.load_or(0, value_column, 0.0);
         let step = beta.load_or(0, 0, 0.0);
         let decay = alpha_value * state.load_or(value_column, key_index, 0.0);
+        // Wave16 reductions implement the matrix-vector products over K=16.
         let prediction = subgroup.reduce_sum_f32::<16>(key_value * decay);
         let error = value_input - prediction;
         let updated = decay + step * key_value * error;
         let result = subgroup.reduce_sum_f32::<16>(0.25 * query_value * updated);
+        // Each thread publishes its state element and replicated output element.
         if let Some(slot) = final_state.get_mut(thread::index_1d()) {
             *slot = updated;
         }
@@ -351,6 +367,7 @@ pub fn gfx950_kda_decode(
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent safe reference for host simulation.
 pub fn gfx950_kda_decode(
     query: &[f32],
     key: &[f32],
@@ -361,6 +378,7 @@ pub fn gfx950_kda_decode(
     mut final_state: DisjointSlice<f32, GridExclusive>,
     mut output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Only the grid leader materializes the serial CPU reference result.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -405,6 +423,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     mut output_chunk0: DisjointSlice<f32, Index1D>,
     mut output_chunk1: DisjointSlice<f32, Index1D>,
 ) {
+    // One workgroup owns one eight-token problem and its carried matrix state.
     let batches = MULTIGRID_WORKGROUPS_V1;
     let batch = thread::block_idx_x() as usize;
     if query.len() != batches * PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
@@ -419,6 +438,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     {
         return;
     }
+    // Convert the workgroup batch to checked token-major input views.
     let token_base = batch.wrapping_mul(PREFILL_TOKENS_V1);
     let Ok(query) = StridedReadView2D::from_shared_slice(
         query,
@@ -468,6 +488,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     ) else {
         return;
     };
+    // The 256 threads map bijectively to (value column, key index).
     let linear = thread::thread_idx_x() as usize;
     let key_index = linear & 15;
     let value_column = linear >> 4;
@@ -477,6 +498,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     let mut c01 = 0.0;
     let mut c02 = 0.0;
     let mut c03 = 0.0;
+    // Execute two ordered four-token chunks; state0 is the explicit carry.
     kda_chunk_wy_v1!(
         0,
         query,
@@ -537,12 +559,14 @@ pub fn gfx950_kda_chunkwise_prefill(
     if let Some(slot) = output_chunk1.get_mut(thread::index_1d()) {
         *slot = selected1;
     }
+    // Publish the carried state and each chunk's final replicated output.
     if let Some(slot) = final_state.get_mut(thread::index_1d()) {
         *slot = state;
     }
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent safe prefill reference for host simulation.
 pub fn gfx950_kda_chunkwise_prefill(
     query: &[f32],
     key: &[f32],
@@ -553,6 +577,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     mut final_state: DisjointSlice<f32, GridExclusive>,
     mut output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Only the grid leader materializes the serial CPU reference result.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -690,6 +715,7 @@ pub fn gfx950_content_sparse_attention(
     mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
     mut selected_output: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
 ) {
+    // Reject malformed launch-wide storage before LDS and Wave16 collectives.
     if q.len() < MULTIGRID_WAVE_BATCHES_V1 * ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
         || k.len() < MULTIGRID_WAVE_BATCHES_V1 * ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
         || v.len() < MULTIGRID_WAVE_BATCHES_V1 * ATTENTION_TOKENS_V1 * CHANNELS_V1
@@ -699,10 +725,12 @@ pub fn gfx950_content_sparse_attention(
     {
         fe2o3_device::trap();
     }
+    // Each global Wave64 owns one attention item; its lanes cover 16 columns.
     let index = thread::index_1d();
     let batch = index.get() / 64;
     let column = index.get() % ATTENTION_TOKENS_V1;
     let lane = WaveLane::<Wave64>::current();
+    // Use typed Q and K layouts, with K transposed in wave-private LDS.
     let Ok(query) = Gfx950Fp8MfmaAMatrix::row_major(
         q,
         0,
@@ -741,6 +769,7 @@ pub fn gfx950_content_sparse_attention(
         fe2o3_device::trap();
     };
 
+    // Broadcast all 16 lane scores so block and token selection is deterministic.
     let subgroup = Gfx950Subgroup::current();
     let math = DeviceMath::current();
     let lane_content = content.load_or(0, column, f32::NEG_INFINITY);
@@ -1099,6 +1128,7 @@ pub fn gfx950_content_sparse_attention(
         selected2_rank,
         selected2_attention
     );
+    // Only the first three ranks write IDs; row-striped ownership prevents races.
     let selected_index = thread::index_1d();
     let selected_rank = selected_index.get() % 64;
     if selected_rank < SELECTED_TOKENS_V1 {
@@ -1132,6 +1162,7 @@ pub fn gfx950_content_sparse_attention(
     ) else {
         fe2o3_device::trap();
     };
+    // Normalize only the retained tokens with max-subtracted FP32 softmax.
     let mut maximum = selected0_attention;
     if selected1_attention > maximum {
         maximum = selected1_attention;
@@ -1156,6 +1187,7 @@ pub fn gfx950_content_sparse_attention(
             * reciprocal
     };
     let output_gate = 1.0 / (1.0 + math.exp_f32(-maximum * 0.01));
+    // Publish the gated PV result through the proven row-striped mapping.
     let Some(output_stripe) = index.checked_row_striped_2d::<64, 1>() else {
         fe2o3_device::trap();
     };
@@ -1171,6 +1203,7 @@ pub fn gfx950_content_sparse_attention(
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent serial sparse-attention reference on the host.
 pub fn gfx950_content_sparse_attention(
     q: &[u8],
     k: &[u8],
@@ -1179,6 +1212,7 @@ pub fn gfx950_content_sparse_attention(
     mut output: DisjointSlice<f32, GridExclusive>,
     mut selected_output: DisjointSlice<u32, GridExclusive>,
 ) {
+    // Host simulation is intentionally leader-only and uses no device collectives.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -1259,6 +1293,7 @@ pub fn gfx950_deepseek_sparse_attention(
     mut softmax_maximum_output: DisjointSlice<f32, Index1D>,
     mut softmax_normalizer_output: DisjointSlice<f32, Index1D>,
 ) {
+    // Validate all batch-major tensors before any Wave16 reduction.
     let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
     if q.len() != batches * HEAD_DIMENSION_V1
         || k.len() != batches * ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
@@ -1270,6 +1305,7 @@ pub fn gfx950_deepseek_sparse_attention(
         fe2o3_device::trap();
     }
 
+    // Convert sentinels to safe addresses, then carry validity as an explicit mask.
     let raw0 = index0;
     let raw1 = index1;
     let raw2 = index2;
@@ -1282,6 +1318,7 @@ pub fn gfx950_deepseek_sparse_attention(
     let token1 = raw1 as usize % ATTENTION_TOKENS_V1;
     let token2 = raw2 as usize % ATTENTION_TOKENS_V1;
     let token3 = raw3 as usize % ATTENTION_TOKENS_V1;
+    // Each Wave16 subgroup handles one batch; each lane owns one output channel.
     let linear_index = thread::index_1d().get();
     let batch = linear_index / CHANNELS_V1;
     let column = linear_index % CHANNELS_V1;
@@ -1309,6 +1346,7 @@ pub fn gfx950_deepseek_sparse_attention(
         fe2o3_device::trap();
     };
 
+    // Eight coalesced depth slices per lane cover the full 128-wide dot product.
     let depth0 = column;
     let depth1 = column + CHANNELS_V1;
     let depth2 = column + 2 * CHANNELS_V1;
@@ -1412,6 +1450,7 @@ pub fn gfx950_deepseek_sparse_attention(
         maximum = score3;
     }
 
+    // Mask invalid candidates and apply a stable softmax over the retained rows.
     let math = DeviceMath::current();
     let weight0 = if valid0 {
         math.exp_f32(score0 - maximum)
@@ -1447,6 +1486,7 @@ pub fn gfx950_deepseek_sparse_attention(
     if valid3 {
         numerator += weight3 * value_view.load_or(row3, column, 0.0);
     }
+    // Output, maximum, and normalizer share the same disjoint linear owner.
     if let Some(slot) = output.get_mut(thread::index_1d()) {
         *slot = numerator / normalizer;
     }
@@ -1459,6 +1499,7 @@ pub fn gfx950_deepseek_sparse_attention(
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent serial DeepSeek sparse-attention reference.
 pub fn gfx950_deepseek_sparse_attention(
     q: &[f32],
     k: &[f32],
@@ -1468,6 +1509,7 @@ pub fn gfx950_deepseek_sparse_attention(
     mut softmax_maximum_output: DisjointSlice<f32, GridExclusive>,
     mut softmax_normalizer_output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Host simulation is leader-only and preserves the device error policy.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -1574,6 +1616,7 @@ pub fn gfx950_compressed_hybrid_attention(
     token_bias: &[f32],
     mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
 ) {
+    // Validate exact fixed shapes before LDS publication and subgroup collectives.
     if q.len() != MULTIGRID_WAVE_BATCHES_V1 * ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
         || k.len() != MULTIGRID_WAVE_BATCHES_V1 * ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
         || v.len() != MULTIGRID_WAVE_BATCHES_V1 * ATTENTION_TOKENS_V1 * CHANNELS_V1
@@ -1582,10 +1625,12 @@ pub fn gfx950_compressed_hybrid_attention(
     {
         fe2o3_device::trap();
     }
+    // A global wave owns one item; lane modulo 16 selects its output channel.
     let index = thread::index_1d();
     let batch = index.get() / 64;
     let column = index.get() % ATTENTION_TOKENS_V1;
     let lane = WaveLane::<Wave64>::current();
+    // Compute the shared QK tile with typed E4M3 views and transposed K.
     let Ok(query) = Gfx950Fp8MfmaAMatrix::row_major(
         q,
         0,
@@ -1643,6 +1688,7 @@ pub fn gfx950_compressed_hybrid_attention(
     let score14 = subgroup.broadcast_f32::<16>(score, 14);
     let score15 = subgroup.broadcast_f32::<16>(score, 15);
 
+    // Normalize the exact four-token local window independently.
     let mut local_maximum = score12;
     if score13 > local_maximum {
         local_maximum = score13;
@@ -1673,6 +1719,7 @@ pub fn gfx950_compressed_hybrid_attention(
             * reciprocal
     };
 
+    // Normalize three compressed global blocks independently from the local path.
     let mut global_maximum = score0;
     if score4 > global_maximum {
         global_maximum = score4;
@@ -1708,6 +1755,7 @@ pub fn gfx950_compressed_hybrid_attention(
         + global_weight1 * compressed1
         + global_weight2 * compressed2)
         * (1.0 / global_sum);
+    // A learned gate blends the two normalized paths before one disjoint store.
     let mix = 1.0 / (1.0 + math.exp_f32(-score0 * 0.01));
     let Some(output_stripe) = index.checked_row_striped_2d::<64, 1>() else {
         fe2o3_device::trap();
@@ -1724,6 +1772,7 @@ pub fn gfx950_compressed_hybrid_attention(
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent serial compressed-hybrid reference.
 pub fn gfx950_compressed_hybrid_attention(
     q: &[u8],
     k: &[u8],
@@ -1731,6 +1780,7 @@ pub fn gfx950_compressed_hybrid_attention(
     token_bias: &[f32],
     mut output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Host simulation is leader-only and deliberately mirrors the fixed shape.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -1839,6 +1889,7 @@ pub fn gfx950_attnres_aggregate(
     depth_logits: &[f32],
     mut output: DisjointSlice<f32, Index1D>,
 ) -> KernelResult {
+    // Wave16 batches map one thread to one output channel.
     let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
     if depth_values.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || depth_logits.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
@@ -1859,6 +1910,7 @@ pub fn gfx950_attnres_aggregate(
     else {
         return Err(KernelError::InvalidArgument);
     };
+    // Use a max-subtracted four-way softmax before the weighted depth sum.
     let math = DeviceMath::current();
     let mut maximum = logits.load_or(0, channel, f32::NEG_INFINITY);
     for depth in 1..4 {
@@ -1874,6 +1926,7 @@ pub fn gfx950_attnres_aggregate(
         denominator += weight;
         value += weight * values.load_or(depth, channel, 0.0);
     }
+    // The linear index is the exclusive owner of this channel.
     if let Some(slot) = output.get_mut(index) {
         *slot = value / denominator;
     }
@@ -1881,11 +1934,13 @@ pub fn gfx950_attnres_aggregate(
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent serial AttnRes reference.
 pub fn gfx950_attnres_aggregate(
     depth_values: &[f32],
     depth_logits: &[f32],
     mut output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Host simulation is leader-only so it cannot imitate subgroup execution.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -1941,6 +1996,7 @@ pub fn gfx950_four_branch_residual(
     gate_logits: &[f32],
     mut output: DisjointSlice<f32, Index1D>,
 ) {
+    // Wave16 batches map one thread to one residual channel.
     let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
     if residual.len() != batches * CHANNELS_V1
         || branches.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
@@ -1955,6 +2011,7 @@ pub fn gfx950_four_branch_residual(
     let channel = linear % CHANNELS_V1;
     let batch_offset = batch.wrapping_mul(MIXING_STREAMS_V1 * CHANNELS_V1);
     let math = DeviceMath::current();
+    // Accumulate each sigmoid gate explicitly in stable branch order.
     let mut value = residual[batch.wrapping_mul(CHANNELS_V1).wrapping_add(channel)];
     for branch in 0_usize..4 {
         let offset = batch_offset
@@ -1963,18 +2020,21 @@ pub fn gfx950_four_branch_residual(
         let gate = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset]));
         value += 0.25 * gate * branches[offset];
     }
+    // The linear index is the exclusive owner of this channel.
     if let Some(slot) = output.get_mut(index) {
         *slot = value;
     }
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent serial four-branch residual reference.
 pub fn gfx950_four_branch_residual(
     residual: &[f32],
     branches: &[f32],
     gate_logits: &[f32],
     mut output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Host simulation is leader-only and retains the same finite-value checks.
     let Some(leader) = thread::grid_leader() else {
         return;
     };
@@ -2021,6 +2081,7 @@ pub fn gfx950_mhc_sinkhorn_mix(
     mixing_logits: &[f32],
     mut output: DisjointSlice<f32, Index1D>,
 ) -> KernelResult {
+    // One Wave64 owns one item: four rows by 16 channel lanes.
     let batches = MULTIGRID_WAVE_BATCHES_V1;
     if streams.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || mixing_logits.len() != batches * MIXING_STREAMS_V1 * MIXING_STREAMS_V1
@@ -2052,11 +2113,13 @@ pub fn gfx950_mhc_sinkhorn_mix(
     ) else {
         return Err(KernelError::InvalidArgument);
     };
+    // Map each lane to one 4x4 mixing coefficient and its output channel.
     let row = local / CHANNELS_V1;
     let local_lane = local % CHANNELS_V1;
     let matrix_index = local_lane.wrapping_add(row.wrapping_mul(MIXING_STREAMS_V1))
         % (MIXING_STREAMS_V1 * MIXING_STREAMS_V1);
     let mut matrix = math.exp_f32(logits.load_or(0, matrix_index, 0.0));
+    // Alternate row and column normalization for the fixed Sinkhorn depth.
     for _iteration in 0..3 {
         let row_reciprocal = 1.0 / subgroup.reduce_sum_f32::<4>(matrix);
         matrix *= row_reciprocal;
@@ -2068,6 +2131,7 @@ pub fn gfx950_mhc_sinkhorn_mix(
             + subgroup.broadcast_f32::<16>(matrix, column.wrapping_add(12) & 15);
         matrix *= 1.0 / column_sum;
     }
+    // Broadcast the normalized row and mix the four input streams.
     let weight0 = subgroup.broadcast_f32::<16>(matrix, 0);
     let weight1 = subgroup.broadcast_f32::<16>(matrix, 1);
     let weight2 = subgroup.broadcast_f32::<16>(matrix, 2);
@@ -2083,11 +2147,13 @@ pub fn gfx950_mhc_sinkhorn_mix(
 }
 
 #[cfg(not(target_arch = "amdgpu"))]
+/// Executes the independent serial mHC Sinkhorn reference.
 pub fn gfx950_mhc_sinkhorn_mix(
     streams: &[f32],
     mixing_logits: &[f32],
     mut output: DisjointSlice<f32, GridExclusive>,
 ) {
+    // Host simulation is leader-only and materializes the small matrix directly.
     let Some(leader) = thread::grid_leader() else {
         return;
     };

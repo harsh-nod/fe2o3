@@ -2,6 +2,8 @@
 //!
 //! The definitions are real source, not explanatory text and not
 //! `macro_rules!` expansions. Compiler and runtime authority remain absent.
+//! Both entry points make their validation, ownership, compute order, and
+//! disjoint commit phases explicit.
 
 #![allow(missing_docs)] // V1 generated typed-kernel modules lack rustdoc.
 
@@ -30,6 +32,7 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     weights: &[u16],
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) {
+    // One Wave64 owns the exact tile; reject any mismatch before MFMA.
     let thread_index = thread::index_1d();
     let lane_index = thread_index.get();
     if lane_index >= 64
@@ -40,6 +43,7 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         fe2o3_device::trap();
     }
 
+    // Typed A/B views encode the row-major layouts expected by the MFMA loads.
     let lane = WaveLane::<Wave64>::current();
     let Ok(activation_matrix) = Bf16MfmaAMatrix::row_major(
         activations,
@@ -59,6 +63,7 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     ) else {
         fe2o3_device::trap();
     };
+    // A single uniform MFMA covers the fixed 16x16x16 expert tile.
     let activation_fragment = activation_matrix.load_m16k16(&lane, 0, 0);
     let weight_fragment = weight_matrix.load_k16n16(&lane, 0, 0);
     let matrix = DeviceMatrix::current();
@@ -69,6 +74,7 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
             F32AccumulatorFragment::zero(&lane),
         )
         .into_values();
+    // Four-element blocked ownership makes every final store unique.
     let Some(output_block) = thread_index.checked_block::<16, 4>() else {
         fe2o3_device::trap();
     };
@@ -103,6 +109,7 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
     route_weights: &[f32],
     mut combined_output: DisjointSlice<f32>,
 ) {
+    // Each in-range thread owns one token/output-column pair.
     let index = thread::index_1d();
     let flat = index.get();
     if compact_output.len() != MOE_ROUTES_V1 * MOE_EXPERT_OUTPUT_WIDTH_V1
@@ -116,6 +123,7 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
         return;
     }
 
+    // Validate both route weights before accumulating in deterministic rank order.
     let token = flat / MOE_EXPERT_OUTPUT_WIDTH_V1;
     let output_column = flat % MOE_EXPERT_OUTPUT_WIDTH_V1;
     let first_route = token * MOE_ROUTES_PER_TOKEN_V1;
@@ -130,6 +138,7 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
         fe2o3_device::trap();
     }
 
+    // Dropped routes contribute zero; accepted slots are inverse-permuted here.
     let mut accumulator = 0.0_f32;
     let mut rank = 0;
     while rank < MOE_ROUTES_PER_TOKEN_V1 {
@@ -144,6 +153,7 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
         }
         rank += 1;
     }
+    // The one-dimensional capability carries the thread's unique store permission.
     if let Some(output) = combined_output.get_mut(index) {
         *output = accumulator;
     }

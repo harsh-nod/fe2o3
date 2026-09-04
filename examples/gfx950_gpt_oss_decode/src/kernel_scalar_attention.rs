@@ -1,4 +1,9 @@
 //! Safe Rust source for the scalar-attention GPT-OSS-120B gfx950 decode ablation.
+//!
+//! This file is a compiler-rejected counterexample, not a recommended kernel:
+//! replacing BF16 MFMA with scalar widening reaches a call terminator before the
+//! compiler has exact callable memory-effect summaries. The tutorial therefore
+//! reports no HSACO, numerical result, or latency for this source.
 
 #![allow(missing_docs)]
 
@@ -16,6 +21,7 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
+// Manual widening is intentionally local to this rejected scalar control.
 #[inline(always)]
 fn widen_bf16(bits: u16) -> f32 {
     let sign = if (bits & 0x8000) == 0 { 1.0 } else { -1.0 };
@@ -78,6 +84,7 @@ fn widen_bf16(bits: u16) -> f32 {
     sign * value
 }
 
+/// Experiments with scalar BF16 QK while keeping router, expert, and stores fixed.
 #[cfg(any(
     not(target_arch = "amdgpu"),
     feature = "kernel-gpt-oss-decode-scalar-attention"
@@ -103,6 +110,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     mut expert_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
     mut packed_top4: DisjointSlice<u32>,
 ) -> KernelResult {
+    // Validate the entire item contract before any router or softmax collective.
     if hidden_f32.len() < crate::PROFILE_ITEMS * HIDDEN_SIZE
         || router_f32.len() < EXPERTS * HIDDEN_SIZE
         || query_bf16.len() < crate::PROFILE_ITEMS * MATRIX_ROWS * HEAD_DIM
@@ -121,6 +129,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // One Wave64 owns one independent profile item.
     let index = thread::index_1d();
     let global_index = index.get();
     let lane_index = global_index % crate::WAVE_SIZE;
@@ -128,6 +137,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let lane = WaveLane::<Wave64>::current();
     let subgroup = Gfx950Subgroup::current();
 
+    // Checked views establish offsets and strides once for all phases.
     let Ok(hidden) = StridedReadView2D::from_shared_slice(
         hidden_f32,
         item_index.wrapping_mul(HIDDEN_SIZE),
@@ -154,6 +164,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         depth += 1;
     }
 
+    // The wave-parallel router remains identical to the production path.
     let mut best0 = ROUTER_FLOOR;
     let mut best1 = ROUTER_FLOOR;
     let mut best2 = ROUTER_FLOOR;
@@ -288,6 +299,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     }
     let selected = (id0 as usize) & (EXPERTS - 1);
 
+    // Scalar QK is the single changed variable; Wave16 softmax/PV stays unchanged.
     let Ok(query) = StridedReadView2D::from_shared_slice(
         query_bf16,
         item_index.wrapping_mul(MATRIX_ROWS * HEAD_DIM),
@@ -385,6 +397,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         token += 1;
     }
 
+    // The gfx950 MXFP4 expert path remains a control for the attention experiment.
     let expert_reduction_base = selected
         .wrapping_mul(MXFP4_BLOCKS)
         .wrapping_mul(EXPERT_K_TILE);
@@ -530,6 +543,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     expert_acc2 += expert3[2] * scale3;
     expert_acc3 += expert3[3] * scale3;
 
+    // Blocked capabilities would keep all output writes disjoint if lowering succeeded.
     let Some(output_block) = index.checked_block::<64, 4>() else {
         return Err(KernelError::OutOfBounds);
     };
