@@ -29,32 +29,33 @@ use fe2o3_lower_mir_kernel::{
     ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectOriginV1,
     ProductionRankedExecutableEffectSourceV1,
 };
-#[cfg(test)]
-use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
     SemanticAbiPointeeKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
     SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicScopeV1,
-    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1, SemanticBinaryOpV1,
-    SemanticBlockIdV1, SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1,
-    SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1,
-    SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1,
+    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1,
+    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
+    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
     SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1,
     SemanticKernelBodySelectionV1, SemanticLocalIdV1, SemanticLocalRoleV1,
     SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1,
     SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
-    SemanticProjectionKindV1, SemanticRustTypeKindV1, SemanticRustcVariantsV1,
-    SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
+    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
     SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticSwitchTargetsV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
-    SemanticWriteOnlyDisjointWriteKindV1,
+    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
+    SemanticWorkgroupScanKindV1, SemanticWriteOnlyDisjointWriteKindV1,
+    exact_transparent_scalar_carrier_field_v1,
+};
+#[cfg(test)]
+use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticAxisV1, SemanticBackendScalarV1, SemanticFieldsShapeV1, SemanticRustTypeKindV1,
+    SemanticRustcVariantsV1, SemanticTypeLayoutDetailsV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -1902,75 +1903,6 @@ fn scalar_defined_callable_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTyp
                 | SemanticTypeShapeV1::ValidityScalar(_)
         )
     })
-}
-
-fn exact_transparent_scalar_carrier_field_v1(
-    types: &[SemanticTypeDeclV1],
-    ty: SemanticTypeIdV1,
-) -> Option<SemanticTypeIdV1> {
-    let carrier = types.get(ty.index() as usize)?;
-    let SemanticTypeShapeV1::Aggregate(fields) = carrier.shape() else {
-        return None;
-    };
-    let [field] = fields.fields() else {
-        return None;
-    };
-    let field_decl = types.get(field.index() as usize)?;
-    if !matches!(field_decl.shape(), SemanticTypeShapeV1::Scalar(_)) {
-        return None;
-    }
-    let carrier_layout = carrier.layout();
-    let field_layout = field_decl.layout();
-    let exact_scalar_repr = matches!(
-        carrier_layout.backend_repr(),
-        SemanticBackendReprV1::Scalar(SemanticBackendScalarV1::Initialized { .. })
-    ) && carrier_layout.backend_repr() == field_layout.backend_repr();
-    let exact_fields = matches!(
-        carrier_layout.fields(),
-        SemanticFieldsShapeV1::Arbitrary {
-            source_order_offsets_bytes,
-            memory_order_source_indices,
-        } if source_order_offsets_bytes.as_ref() == [0]
-            && memory_order_source_indices.as_ref() == [0]
-    ) && matches!(field_layout.fields(), SemanticFieldsShapeV1::Primitive);
-    let exact_details = matches!(
-        carrier_layout.details(),
-        SemanticTypeLayoutDetailsV1::Aggregate(layout)
-            if layout.field_offsets() == [0] && layout.padding().is_empty()
-    ) && matches!(field_layout.details(), SemanticTypeLayoutDetailsV1::None);
-    let exact_variants = matches!(
-        carrier_layout.variants(),
-        SemanticRustcVariantsV1::Single { index: 0 }
-    ) && matches!(
-        field_layout.variants(),
-        SemanticRustcVariantsV1::Single { index: 0 }
-    );
-    let exact_layout = carrier_layout.size_bytes() == field_layout.size_bytes()
-        && carrier_layout.rustc_size_bytes() == field_layout.rustc_size_bytes()
-        && carrier_layout.alignment_bytes() == field_layout.alignment_bytes()
-        && carrier_layout.unadjusted_abi_alignment_bytes()
-            == field_layout.unadjusted_abi_alignment_bytes()
-        && carrier_layout.max_repr_alignment_bytes() == field_layout.max_repr_alignment_bytes()
-        && carrier_layout.largest_niche().is_none()
-        && field_layout.largest_niche().is_none()
-        && !carrier_layout.is_uninhabited()
-        && !field_layout.is_uninhabited();
-    let exact_abi_properties = [carrier, field_decl].into_iter().all(|ty| {
-        let properties = ty.abi_properties();
-        !properties.pass_indirectly_in_non_rustic_abis()
-            && !properties.has_unsized_foreign_tail()
-            && properties.rustc_layout_is_noundef()
-            && properties.first_pointee().is_none()
-            && properties.second_pointee().is_none()
-            && ty.rust_type_kind() == SemanticRustTypeKindV1::Ordinary
-    });
-    (exact_scalar_repr
-        && exact_fields
-        && exact_details
-        && exact_variants
-        && exact_layout
-        && exact_abi_properties)
-        .then_some(*field)
 }
 
 fn checked_scalar_carrier_type_v1(
@@ -11968,6 +11900,10 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 proved[block_index] = true;
                 continue;
             }
+            if proof.proves_literal_shift_assert_v1(condition, *expected, message, block_index)? {
+                proved[block_index] = true;
+                continue;
+            }
             if proof.proves_checked_overflow_assert_v1(
                 condition,
                 *expected,
@@ -12000,20 +11936,175 @@ impl<'a> SemanticAssertProofsV1<'a> {
             else {
                 continue;
             };
-            proved[block_index] = match message {
-                SemanticAssertMessageV1::Overflow { .. } => proof
-                    .proves_checked_overflow_assert_v1(
-                        condition,
-                        *expected,
-                        message,
-                        block_index,
-                    )?,
-                _ => proof
-                    .range_at_operand(condition, block_index, block.statements().len())?
-                    .is_some_and(|range| range.is_exact(u128::from(*expected))),
-            };
+            let literal_shift =
+                proof.proves_literal_shift_assert_v1(condition, *expected, message, block_index)?;
+            proved[block_index] = literal_shift
+                || match message {
+                    SemanticAssertMessageV1::Overflow { .. } => proof
+                        .proves_checked_overflow_assert_v1(
+                            condition,
+                            *expected,
+                            message,
+                            block_index,
+                        )?,
+                    _ => proof
+                        .range_at_operand(condition, block_index, block.statements().len())?
+                        .is_some_and(|range| range.is_exact(u128::from(*expected))),
+                };
         }
         Ok(proved)
+    }
+
+    fn proves_literal_shift_assert_v1(
+        &mut self,
+        condition: &SemanticOperandV1,
+        expected: bool,
+        message: &SemanticAssertMessageV1,
+        block: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if !expected {
+            return Ok(false);
+        }
+        let SemanticAssertMessageV1::Overflow {
+            operation,
+            left: message_left,
+            right: message_right,
+        } = message
+        else {
+            return Ok(false);
+        };
+        if !matches!(
+            operation,
+            SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+        ) {
+            return Ok(false);
+        }
+        let Some(bit_width) = self
+            .types
+            .get(message_left.ty().index() as usize)
+            .and_then(|ty| match ty.shape() {
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { bits, .. }) => {
+                    Some(*bits)
+                }
+                _ => None,
+            })
+        else {
+            return Ok(false);
+        };
+        let Some(message_shift_bits) = self
+            .types
+            .get(message_right.ty().index() as usize)
+            .and_then(|ty| match ty.shape() {
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: true,
+                    bits,
+                }) => Some(*bits),
+                _ => None,
+            })
+        else {
+            return Ok(false);
+        };
+        let SemanticOperandV1::Constant(message_shift) = message_right else {
+            return Ok(false);
+        };
+        let SemanticConstantValueV1::Scalar(message_shift) = message_shift.value() else {
+            return Ok(false);
+        };
+        if message_shift.bits() >= u128::from(bit_width) {
+            return Ok(false);
+        }
+
+        let Some(condition_local) = simple_operand_local(condition) else {
+            return Ok(false);
+        };
+        let Some(statement_count) = self
+            .function
+            .blocks()
+            .get(block)
+            .map(|block| block.statements().len())
+        else {
+            return Ok(false);
+        };
+        let Some(condition_site) = self.exact_reaching_assignment_v1(
+            condition_local.index() as usize,
+            ScalarAssignmentSiteV1 {
+                block,
+                statement: statement_count,
+            },
+        )?
+        else {
+            return Ok(false);
+        };
+        if condition_site.block != block {
+            return Ok(false);
+        }
+        let condition_statement =
+            &self.function.blocks()[block].statements()[condition_site.statement];
+        let SemanticStatementKindV1::Assign(condition_assignment) = condition_statement.kind()
+        else {
+            return Ok(false);
+        };
+        if !condition_assignment.destination().projections().is_empty()
+            || condition_assignment.destination().local() != condition_local
+        {
+            return Ok(false);
+        }
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left: compared_shift,
+            right: compared_width,
+        } = condition_assignment.value().kind()
+        else {
+            return Ok(false);
+        };
+        let Some(cast_local) = simple_operand_local(compared_shift) else {
+            return Ok(false);
+        };
+        let SemanticOperandV1::Constant(compared_width) = compared_width else {
+            return Ok(false);
+        };
+        let SemanticConstantValueV1::Scalar(compared_width_value) = compared_width.value() else {
+            return Ok(false);
+        };
+        let exact_rustc_shift_check_type = compared_shift.ty() == compared_width.ty()
+            && matches!(
+                self.types
+                    .get(compared_shift.ty().index() as usize)
+                    .map(|ty| ty.shape()),
+                Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits,
+                })) if *bits == message_shift_bits
+            );
+        if compared_width_value.bits() != u128::from(bit_width) || !exact_rustc_shift_check_type {
+            return Ok(false);
+        }
+
+        let Some(cast_site) =
+            self.exact_reaching_assignment_v1(cast_local.index() as usize, condition_site)?
+        else {
+            return Ok(false);
+        };
+        if cast_site.block != block || cast_site.statement >= condition_site.statement {
+            return Ok(false);
+        }
+        let cast_statement = &self.function.blocks()[block].statements()[cast_site.statement];
+        let SemanticStatementKindV1::Assign(cast_assignment) = cast_statement.kind() else {
+            return Ok(false);
+        };
+        if !cast_assignment.destination().projections().is_empty()
+            || cast_assignment.destination().local() != cast_local
+            || cast_assignment.value().result_type() != compared_shift.ty()
+        {
+            return Ok(false);
+        }
+        Ok(matches!(
+            cast_assignment.value().kind(),
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand,
+            } if same_semantic_operand_value_v1(operand, message_right)
+        ))
     }
 
     fn proves_checked_overflow_assert_v1(
@@ -22519,6 +22610,263 @@ mod tests {
                 .unwrap(),
             ProjectedCfgTerminatorV1::Branch(1)
         );
+    }
+
+    #[derive(Clone, Copy)]
+    enum LiteralShiftConditionFixtureV1 {
+        Exact,
+        Reversed,
+        ReassignedCast,
+        SignedCheckCarrier,
+        WrongWidthCheckCarrier,
+    }
+
+    fn literal_shift_assert_function(
+        operation: SemanticBinaryOpV1,
+        message_shift: u128,
+        cast_shift: u128,
+        compared_width: u128,
+        message_left_type: SemanticTypeIdV1,
+        expected: bool,
+        condition_fixture: LiteralShiftConditionFixtureV1,
+    ) -> SemanticFunctionDeclV1 {
+        let check_type = match condition_fixture {
+            LiteralShiftConditionFixtureV1::SignedCheckCarrier => I32_TYPE,
+            LiteralShiftConditionFixtureV1::WrongWidthCheckCarrier => U64_TYPE,
+            LiteralShiftConditionFixtureV1::Exact
+            | LiteralShiftConditionFixtureV1::Reversed
+            | LiteralShiftConditionFixtureV1::ReassignedCast => SCALAR_TYPE,
+        };
+        let check_bytes = if check_type == U64_TYPE { 8 } else { 4 };
+        let assertion_block = |source, target| {
+            let mut statements = vec![typed_assignment(
+                2,
+                check_type,
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Integer,
+                    operand: typed_constant(I32_TYPE, cast_shift, 4),
+                },
+            )];
+            if matches!(
+                condition_fixture,
+                LiteralShiftConditionFixtureV1::ReassignedCast
+            ) {
+                statements.push(typed_assignment(
+                    2,
+                    check_type,
+                    SemanticRvalueKindV1::Use(typed_constant(check_type, cast_shift, check_bytes)),
+                ));
+            }
+            let compared_shift = typed_operand(2, check_type);
+            let compared_width = typed_constant(check_type, compared_width, check_bytes);
+            let (left, right) =
+                if matches!(condition_fixture, LiteralShiftConditionFixtureV1::Reversed) {
+                    (compared_width, compared_shift)
+                } else {
+                    (compared_shift, compared_width)
+                };
+            statements.push(typed_assignment(
+                3,
+                BOOL_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left,
+                    right,
+                },
+            ));
+            block(
+                source,
+                statements,
+                SemanticTerminatorKindV1::Assert {
+                    condition: typed_operand(3, BOOL_TYPE),
+                    expected,
+                    message: SemanticAssertMessageV1::Overflow {
+                        operation,
+                        left: typed_operand(1, message_left_type),
+                        right: typed_constant(I32_TYPE, message_shift, 4),
+                    },
+                    target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, target),
+                    unwind: SemanticUnwindActionV1::Unreachable,
+                },
+            )
+        };
+        projection_function_with_locals(
+            vec![
+                block(211, vec![], zero_switch(4, BOOL_TYPE, 1, 2)),
+                assertion_block(212, 3),
+                assertion_block(213, 3),
+                block(214, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(211, message_left_type, SemanticLocalRoleV1::Return),
+                local(212, message_left_type, SemanticLocalRoleV1::Argument(0)),
+                local(213, check_type, SemanticLocalRoleV1::Temporary),
+                local(214, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(215, BOOL_TYPE, SemanticLocalRoleV1::Argument(1)),
+            ],
+        )
+    }
+
+    fn proves_literal_shift_fixture_v1(function: &SemanticFunctionDeclV1, block: usize) -> bool {
+        let SemanticTerminatorKindV1::Assert {
+            condition,
+            expected,
+            message,
+            ..
+        } = function.blocks()[block].terminator().kind()
+        else {
+            unreachable!("literal-shift fixture retains its assertion")
+        };
+        let types = assertion_proof_types();
+        let mut proofs = SemanticAssertProofsV1::new(&types, function).unwrap();
+        proofs
+            .proves_literal_shift_assert_v1(condition, *expected, message, block)
+            .unwrap()
+    }
+
+    #[test]
+    fn literal_shift_assert_requires_the_exact_rustc_cast_and_width_check() {
+        for (message_left_type, message_shift) in [
+            (SCALAR_TYPE, 0),
+            (SCALAR_TYPE, 8),
+            (SCALAR_TYPE, 31),
+            (U64_TYPE, 0),
+            (U64_TYPE, 8),
+            (U64_TYPE, 16),
+            (U64_TYPE, 24),
+            (U64_TYPE, 32),
+            (U64_TYPE, 40),
+            (U64_TYPE, 48),
+            (U64_TYPE, 56),
+            (U64_TYPE, 63),
+        ] {
+            for operation in [
+                SemanticBinaryOpV1::ShiftLeft,
+                SemanticBinaryOpV1::ShiftRight,
+            ] {
+                let function = literal_shift_assert_function(
+                    operation,
+                    message_shift,
+                    message_shift,
+                    if message_left_type == U64_TYPE {
+                        64
+                    } else {
+                        32
+                    },
+                    message_left_type,
+                    true,
+                    LiteralShiftConditionFixtureV1::Exact,
+                );
+                assert_eq!(local_definition_counts(&function)[2], 2);
+                assert_eq!(local_definition_counts(&function)[3], 2);
+                assert!(proves_literal_shift_fixture_v1(&function, 1));
+                assert!(proves_literal_shift_fixture_v1(&function, 2));
+                let types = assertion_proof_types();
+                let proofs = SemanticAssertProofsV1::analyze(&types, &function)
+                    .expect("exact reused rustc shift checks are analyzed");
+                assert!(proofs[1] && proofs[2]);
+                let callable_proofs =
+                    SemanticAssertProofsV1::analyze_defined_callable_asserts_v1(&types, &function)
+                        .expect("defined-callable shift checks are analyzed");
+                assert!(callable_proofs[1] && callable_proofs[2]);
+            }
+        }
+
+        for hostile in [
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                32,
+                32,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::Exact,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                8,
+                64,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::Exact,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                7,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::Exact,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::Add,
+                8,
+                8,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::Exact,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                8,
+                32,
+                SCALAR_TYPE,
+                false,
+                LiteralShiftConditionFixtureV1::Exact,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                8,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::Reversed,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                8,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::ReassignedCast,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                8,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::SignedCheckCarrier,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                8,
+                8,
+                32,
+                SCALAR_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::WrongWidthCheckCarrier,
+            ),
+            literal_shift_assert_function(
+                SemanticBinaryOpV1::ShiftRight,
+                64,
+                64,
+                64,
+                U64_TYPE,
+                true,
+                LiteralShiftConditionFixtureV1::Exact,
+            ),
+        ] {
+            assert!(!proves_literal_shift_fixture_v1(&hostile, 1));
+            assert!(!proves_literal_shift_fixture_v1(&hostile, 2));
+        }
     }
 
     #[derive(Clone, Copy)]

@@ -1920,6 +1920,80 @@ impl SemanticTypeDeclV1 {
     }
 }
 
+/// Returns the sole scalar field of an exact rustc transparent scalar carrier.
+///
+/// This is an ABI transport predicate, not a numerical-type classification.
+/// Every retained layout and ABI fact must agree before a consumer may replace
+/// the aggregate carrier with its physical scalar field.
+pub fn exact_transparent_scalar_carrier_field_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<SemanticTypeIdV1> {
+    let carrier = types.get(ty.index() as usize)?;
+    let SemanticTypeShapeV1::Aggregate(fields) = carrier.shape() else {
+        return None;
+    };
+    let [field] = fields.fields() else {
+        return None;
+    };
+    let field_decl = types.get(field.index() as usize)?;
+    if !matches!(field_decl.shape(), SemanticTypeShapeV1::Scalar(_)) {
+        return None;
+    }
+    let carrier_layout = carrier.layout();
+    let field_layout = field_decl.layout();
+    let exact_scalar_repr = matches!(
+        carrier_layout.backend_repr(),
+        SemanticBackendReprV1::Scalar(SemanticBackendScalarV1::Initialized { .. })
+    ) && carrier_layout.backend_repr() == field_layout.backend_repr();
+    let exact_fields = matches!(
+        carrier_layout.fields(),
+        SemanticFieldsShapeV1::Arbitrary {
+            source_order_offsets_bytes,
+            memory_order_source_indices,
+        } if source_order_offsets_bytes.as_ref() == [0]
+            && memory_order_source_indices.as_ref() == [0]
+    ) && matches!(field_layout.fields(), SemanticFieldsShapeV1::Primitive);
+    let exact_details = matches!(
+        carrier_layout.details(),
+        SemanticTypeLayoutDetailsV1::Aggregate(layout)
+            if layout.field_offsets() == [0] && layout.padding().is_empty()
+    ) && matches!(field_layout.details(), SemanticTypeLayoutDetailsV1::None);
+    let exact_variants = matches!(
+        carrier_layout.variants(),
+        SemanticRustcVariantsV1::Single { index: 0 }
+    ) && matches!(
+        field_layout.variants(),
+        SemanticRustcVariantsV1::Single { index: 0 }
+    );
+    let exact_layout = carrier_layout.size_bytes() == field_layout.size_bytes()
+        && carrier_layout.rustc_size_bytes() == field_layout.rustc_size_bytes()
+        && carrier_layout.alignment_bytes() == field_layout.alignment_bytes()
+        && carrier_layout.unadjusted_abi_alignment_bytes()
+            == field_layout.unadjusted_abi_alignment_bytes()
+        && carrier_layout.max_repr_alignment_bytes() == field_layout.max_repr_alignment_bytes()
+        && carrier_layout.largest_niche().is_none()
+        && field_layout.largest_niche().is_none()
+        && !carrier_layout.is_uninhabited()
+        && !field_layout.is_uninhabited();
+    let exact_abi_properties = [carrier, field_decl].into_iter().all(|ty| {
+        let properties = ty.abi_properties();
+        !properties.pass_indirectly_in_non_rustic_abis()
+            && !properties.has_unsized_foreign_tail()
+            && properties.rustc_layout_is_noundef()
+            && properties.first_pointee().is_none()
+            && properties.second_pointee().is_none()
+            && ty.rust_type_kind() == SemanticRustTypeKindV1::Ordinary
+    });
+    (exact_scalar_repr
+        && exact_fields
+        && exact_details
+        && exact_variants
+        && exact_layout
+        && exact_abi_properties)
+        .then_some(*field)
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticArmCallV1 {
     Aapcs,

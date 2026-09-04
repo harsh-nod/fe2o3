@@ -28,11 +28,11 @@ use fe2o3_kernel_ir::{
     verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiExtensionV1, SemanticAbiPassModeV1,
-    SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1, SemanticAbiRegisterKindV1,
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicOrderingV1,
-    SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1, SemanticAxisV1,
-    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
+    AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
+    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
+    SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
+    SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
+    SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
     SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
     SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
@@ -48,8 +48,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
     SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
-    SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
-    semantic_scalar_enum_variant_v1,
+    SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
+    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -152,7 +152,7 @@ pub struct SemanticKirParameterBindingV1 {
     kernel_ir_value: ValueId,
 }
 
-/// One exact source projection used to scalarize a by-value kernel argument.
+/// One exact source projection used to scalarize a by-value function argument.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticKirParameterProjectionV1 {
     /// A tuple or nominal aggregate field.
@@ -161,8 +161,8 @@ pub enum SemanticKirParameterProjectionV1 {
     ArrayIndex(u32),
 }
 
-/// Exact one-to-many correspondence from a by-value source argument to one
-/// canonical KIR function parameter.
+/// Exact one-to-many correspondence from a by-value source argument to
+/// canonical KIR function parameters.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticKirParameterComponentBindingV1 {
     correspondence_owner: SemanticFunctionIdV1,
@@ -6822,7 +6822,6 @@ fn guarded_accesses_have_structural_bounds_result(
             if matches!(
                 &operation.kind,
                 OperationKind::GuardedLoad { access, .. }
-                    | OperationKind::GuardedStore { access, .. }
                     if access.address_space != AddressSpace::Private
             ) {
                 let location = FunctionOperationLocation::new(block.id, ordinal);
@@ -9062,6 +9061,13 @@ struct LoweredFunctionPlanV1 {
 }
 
 #[derive(Clone)]
+struct LoweredFunctionSignatureV1 {
+    parameter_semantic_types: Vec<SemanticTypeIdV1>,
+    parameter_types: Vec<Type>,
+    result_types: Vec<Type>,
+}
+
+#[derive(Clone)]
 enum PlannedParameterLocalBindingV1 {
     Direct {
         local: usize,
@@ -9336,58 +9342,96 @@ fn direct_scalar_helper_plan_v1(
             "helper does not have an exact non-unwinding direct scalar ABI",
         ));
     }
-    let parameter_types = parameters
-        .iter()
-        .zip(abi.adjusted_arguments())
-        .zip(abi.source_input_types())
-        .map(|(((_, _, local_ty), argument), source_ty)| {
-            if local_ty != source_ty
-                || argument.ty() != *source_ty
-                || argument.value().adjusted().is_some()
-                || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
-            {
-                return Err(unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "helper parameter is not an exact direct scalar",
-                ));
-            }
-            lower_scalar_type(types, *source_ty)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let parameter_values = parameters
-        .iter()
-        .map(|(_, local, _)| {
-            u32::try_from(*local).map(ValueId).map_err(|_| {
-                unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "helper local identity exceeds Kernel IR",
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut parameter_types = Vec::with_capacity(parameters.len());
+    let mut parameter_values = Vec::with_capacity(parameters.len());
     let mut parameter_local_bindings = Vec::new();
     parameter_local_bindings
         .try_reserve_exact(parameters.len())
         .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
             resource: ProductionSemanticKirResourceV1::DebugBindings,
         })?;
-    parameter_local_bindings.extend(
-        parameters
-            .iter()
-            .zip(parameter_values.iter().copied())
-            .zip(parameter_types.iter().cloned())
-            .map(
-                |(((_, local, _), value), ty)| PlannedParameterLocalBindingV1::Direct {
+    let mut parameter_component_bindings = Vec::new();
+    parameter_component_bindings
+        .try_reserve_exact(parameters.len())
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+            resource: ProductionSemanticKirResourceV1::DebugBindings,
+        })?;
+    for (((source_argument, local, local_ty), argument), source_ty) in parameters
+        .iter()
+        .zip(abi.adjusted_arguments())
+        .zip(abi.source_input_types())
+    {
+        if local_ty != source_ty
+            || argument.ty() != *source_ty
+            || argument.value().adjusted().is_some()
+            || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+        {
+            return Err(unsupported(
+                function_id.index(),
+                None,
+                None,
+                "helper parameter is not an exact direct scalar or scalar carrier",
+            ));
+        }
+        let value = u32::try_from(*local).map(ValueId).map_err(|_| {
+            unsupported(
+                function_id.index(),
+                None,
+                None,
+                "helper local identity exceeds Kernel IR",
+            )
+        })?;
+        let (parameter_ty, local_binding) = match lower_scalar_type(types, *source_ty) {
+            Ok(parameter_ty) => (
+                parameter_ty.clone(),
+                PlannedParameterLocalBindingV1::Direct {
                     local: *local,
                     value,
-                    ty,
+                    ty: parameter_ty,
                 },
             ),
-    );
+            Err(scalar_error) => {
+                let Some(field) = exact_transparent_scalar_carrier_field_v1(types, *source_ty)
+                else {
+                    return Err(scalar_error);
+                };
+                if argument.role() != SemanticAbiArgumentRoleV1::Source
+                    || argument.value().pointee_override().is_some()
+                    || abi
+                        .source_argument_ownership()
+                        .get(*source_argument as usize)
+                        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+                {
+                    return Err(unsupported(
+                        function_id.index(),
+                        None,
+                        None,
+                        "helper scalar carrier lacks an exact by-value source ABI",
+                    ));
+                }
+                let parameter_ty = lower_scalar_type(types, field)?;
+                parameter_component_bindings.push(SemanticKirParameterComponentBindingV1 {
+                    correspondence_owner,
+                    semantic_function: function_id,
+                    semantic_local: SemanticLocalIdV1::from_index(*local as u32),
+                    semantic_component_type: field,
+                    projection: vec![SemanticKirParameterProjectionV1::Field(0)].into_boxed_slice(),
+                    kernel_ir_value: value,
+                });
+                (
+                    parameter_ty.clone(),
+                    PlannedParameterLocalBindingV1::Flattened {
+                        local: *local,
+                        semantic_type: *source_ty,
+                        values: vec![ValueDef::new(value, parameter_ty)],
+                    },
+                )
+            }
+        };
+        parameter_types.push(parameter_ty);
+        parameter_values.push(value);
+        parameter_local_bindings.push(local_binding);
+    }
 
     let return_locals = function
         .locals()
@@ -9444,7 +9488,7 @@ fn direct_scalar_helper_plan_v1(
         parameter_types,
         parameter_values,
         parameter_local_bindings,
-        parameter_component_bindings: Vec::new(),
+        parameter_component_bindings,
         ignored_parameter_bindings: Vec::new(),
         result_types,
     })
@@ -9466,7 +9510,7 @@ fn lower_one_semantic_function_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
     defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
-    defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+    defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,
     launch_rank: u8,
@@ -10428,7 +10472,15 @@ fn lower_single_root_module(
         .map(|plan| {
             (
                 plan.semantic_function,
-                (plan.parameter_types.clone(), plan.result_types.clone()),
+                LoweredFunctionSignatureV1 {
+                    parameter_semantic_types: plan
+                        .parameter_declarations
+                        .iter()
+                        .map(|(_, _, ty)| *ty)
+                        .collect(),
+                    parameter_types: plan.parameter_types.clone(),
+                    result_types: plan.result_types.clone(),
+                },
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -12701,7 +12753,7 @@ struct SemanticFunctionLoweringV1<'a> {
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
     defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
-    defined_function_signatures: BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+    defined_function_signatures: BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     result_types: Vec<Type>,
     locals: Vec<Option<SemanticValueBindingV1>>,
     option_dominance: SemanticOptionDominanceV1,
@@ -12780,7 +12832,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         correspondence_owner: SemanticFunctionIdV1,
         semantic_function: SemanticFunctionIdV1,
         defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
-        defined_function_signatures: BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+        defined_function_signatures: BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
         result_types: Vec<Type>,
         parameters: SemanticParameterBindingsV1<'_>,
         assert_failure_block: Option<BlockId>,
@@ -17553,7 +17605,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call target is outside the lowered helper closure",
                 )
             })?;
-        let (parameter_types, result_types) = self
+        let signature = self
             .defined_function_signatures
             .get(&callee)
             .cloned()
@@ -17565,7 +17617,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call target has no exact KIR signature",
                 )
             })?;
-        if call.arguments().len() != parameter_types.len() || result_types.len() > 1 {
+        if call.arguments().len() != signature.parameter_types.len()
+            || signature.parameter_semantic_types.len() != signature.parameter_types.len()
+            || signature.result_types.len() > 1
+        {
             return Err(unsupported(
                 self.semantic_function.index(),
                 Some(block.index()),
@@ -17574,18 +17629,52 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         }
         let mut arguments = Vec::with_capacity(call.arguments().len());
-        for (argument, expected) in call.arguments().iter().zip(&parameter_types) {
-            let (value, actual) = self
-                .lower_operand(block, None, argument, operations)?
-                .value()
-                .map_err(|detail| {
-                    unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        detail,
-                    )
-                })?;
+        for ((argument, expected_semantic), expected) in call
+            .arguments()
+            .iter()
+            .zip(&signature.parameter_semantic_types)
+            .zip(&signature.parameter_types)
+        {
+            if semantic_operand_type(argument) != *expected_semantic {
+                return Err(unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "defined call source argument type changed",
+                ));
+            }
+            let binding = self.lower_operand(block, None, argument, operations)?;
+            let (value, actual) =
+                if exact_transparent_scalar_carrier_field_v1(self.types, *expected_semantic)
+                    .is_some()
+                {
+                    let values = binding.values().map_err(|detail| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            detail,
+                        )
+                    })?;
+                    let [(value, actual)] = values.as_slice() else {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            "defined call scalar carrier does not have one physical component",
+                        ));
+                    };
+                    (*value, actual.clone())
+                } else {
+                    binding.value().map_err(|detail| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            detail,
+                        )
+                    })?
+                };
             if &actual != expected {
                 return Err(unsupported(
                     self.semantic_function.index(),
@@ -17604,7 +17693,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "returning defined call has no continuation destination",
             )
         })?;
-        let binding = match result_types.as_slice() {
+        let binding = match signature.result_types.as_slice() {
             [] => {
                 self.push_operation(operations, || {
                     Operation::new(
@@ -27822,9 +27911,66 @@ mod resource_tests {
             .operations
     }
 
+    fn append_guarded_output_store(fixture: &mut GuardedAddressFixture) {
+        let output_slice = Type::slice(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::WriteOnly,
+        );
+        let output_pointer = Type::pointer(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::WriteOnly,
+        );
+        fixture.module.functions[0].signature.parameters[1] = output_slice;
+        let operations = guarded_fixture_operations_mut(fixture);
+        let next_value = operations
+            .iter()
+            .flat_map(|operation| operation.results.iter().map(|result| result.id.0))
+            .max()
+            .unwrap()
+            + 1;
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(next_value), output_pointer.clone()),
+            OperationKind::SliceData { slice: ValueId(1) },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(next_value + 1), output_pointer),
+            OperationKind::GetElementPointer {
+                base: ValueId(next_value),
+                offset: ValueId(5),
+            },
+        ));
+        operations.push(Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(next_value + 1),
+                predicate: ValueId(6),
+                value: ValueId(7),
+                access: MemoryAccess::new(AddressSpace::Global, 2),
+            },
+        ));
+        verify_module(&fixture.module)
+            .expect("guarded output store fixture must remain valid Kernel IR");
+    }
+
     #[test]
     fn generated_matrix_tail_guarded_loads_have_structural_address_proofs() {
         let fixture = generated_matrix_tail_fixture(4);
+        let operation_count = fixture.module.functions[0].body.as_ref().unwrap().blocks[0]
+            .operations
+            .len();
+        assert!(guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            operation_count,
+        ));
+    }
+
+    #[test]
+    fn guarded_load_audit_ignores_formally_analyzed_guarded_output_stores() {
+        let mut fixture = generated_matrix_tail_fixture(2);
+        append_guarded_output_store(&mut fixture);
         let operation_count = fixture.module.functions[0].body.as_ref().unwrap().blocks[0]
             .operations
             .len();
