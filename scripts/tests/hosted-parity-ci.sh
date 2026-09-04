@@ -14,6 +14,7 @@ readonly SHARD_POLICY="${ROOT}/scripts/rustc-codegen-shards.py"
 readonly HARDWARE_WORKFLOW="${ROOT}/.github/workflows/hardware-smoke.yml"
 readonly ROCM_WORKFLOW="${ROOT}/.github/workflows/rocm-compile.yml"
 readonly ROW_SOFTMAX_WORKFLOW="${ROOT}/.github/workflows/row-softmax-v1.yml"
+readonly PR_PREFLIGHT_WORKFLOW="${ROOT}/.github/workflows/pr-preflight.yml"
 readonly SOURCE_ISA_UNIT_WORKFLOW="${ROOT}/.github/workflows/source-isa-unit-matrix.yml"
 readonly CHANGE_POLICY="${ROOT}/scripts/parity-protected-change-policy.sh"
 readonly CODEOWNERS="${ROOT}/.github/CODEOWNERS"
@@ -108,6 +109,14 @@ require_text "${PROTECTED_WORKFLOW}" '/files?per_page=100'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py check-trust-update'
 require_text "${PROTECTED_WORKFLOW}" '--protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'name: PR preflight'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'merge_group:'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'pull_request:'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'scripts/ci-local.sh workspace-policy'
+require_text "${PR_PREFLIGHT_WORKFLOW}" 'scripts/ci-local.sh hygiene-delta "${BASE_SHA}" "${HEAD_SHA}"'
 require_text "${PROTECTED_WORKFLOW}" 'pull_request_review:'
 require_text "${PROTECTED_WORKFLOW}" 'types: [submitted, edited, dismissed]'
 require_text "${PROTECTED_WORKFLOW}" 'BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}'
@@ -308,7 +317,7 @@ fi
 if rg -n 'actions/checkout@(v[0-9]+|main|master)' \
   "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}" \
   "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}" "${ROW_SOFTMAX_WORKFLOW}" \
-  "${SOURCE_ISA_UNIT_WORKFLOW}"; then
+  "${SOURCE_ISA_UNIT_WORKFLOW}" "${PR_PREFLIGHT_WORKFLOW}"; then
   printf 'hosted CI uses a mutable checkout action reference\n' >&2
   exit 1
 fi
