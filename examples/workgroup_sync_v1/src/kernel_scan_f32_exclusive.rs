@@ -42,7 +42,12 @@ macro_rules! exclusive_scan_f32_body {
 /// Computes the exclusive prefix sum of one exact 3-element `f32` row.
 #[kernel(
     typed,
-    launch(required = [3, 1, 1], max = [3, 1, 1], static_shared_memory_bytes = 12)
+    launch(
+        required = [3, 1, 1],
+        max = [3, 1, 1],
+        max_grid = [1, 1, 1],
+        static_shared_memory_bytes = 12
+    )
 )]
 pub fn lds_exclusive_scan_f32_3_v1(values: &[f32], mut output: DisjointSlice<f32>) {
     exclusive_scan_f32_body!(values, output, 3);
@@ -52,7 +57,12 @@ pub fn lds_exclusive_scan_f32_3_v1(values: &[f32], mut output: DisjointSlice<f32
 /// Computes the exclusive prefix sum of one exact 65-element `f32` row.
 #[kernel(
     typed,
-    launch(required = [65, 1, 1], max = [65, 1, 1], static_shared_memory_bytes = 260)
+    launch(
+        required = [65, 1, 1],
+        max = [65, 1, 1],
+        max_grid = [1, 1, 1],
+        static_shared_memory_bytes = 260
+    )
 )]
 pub fn lds_exclusive_scan_f32_v1(values: &[f32], mut output: DisjointSlice<f32>) {
     exclusive_scan_f32_body!(values, output, 65);
@@ -65,6 +75,7 @@ pub fn lds_exclusive_scan_f32_v1(values: &[f32], mut output: DisjointSlice<f32>)
     launch(
         required = [255, 1, 1],
         max = [255, 1, 1],
+        max_grid = [1, 1, 1],
         static_shared_memory_bytes = 1020
     )
 )]

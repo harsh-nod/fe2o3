@@ -642,7 +642,8 @@ fn execute_scan_through_sim_runtime(
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
     use fe2o3_kernel_ir::{
-        AddressSpace, OperationKind, SemanticKirComponentRepresentationV2, WorkgroupMemoryExtent,
+        AddressSpace, LaunchExtent, OperationKind, SemanticKirComponentRepresentationV2,
+        WorkgroupMemoryExtent,
     };
     use fe2o3_kir_sim::{
         PersistedSimulationScheduleDocumentV1, SimulationExecutionErrorKindV1,
@@ -704,6 +705,12 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
             .iter()
             .find(|kernel| kernel.id.as_str() == case.kernel)
             .unwrap();
+        let mut launch_extents = kernel.domain.extents();
+        assert_eq!(
+            launch_extents.next(),
+            Some(LaunchExtent::Static(case.extent as u32))
+        );
+        assert_eq!(launch_extents.next(), None);
         let operations = kir
             .function(&kernel.entry)
             .unwrap()
@@ -961,7 +968,45 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
             execution.schedule_record().unwrap(),
         )
         .unwrap();
-        std::fs::write(&schedule_path, schedule_bytes).unwrap();
+        let persisted =
+            PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&schedule_bytes).unwrap();
+        assert_eq!(
+            persisted.binding(),
+            admitted.input().persisted_schedule_binding()
+        );
+        assert_eq!(persisted.record(), execution.schedule_record().unwrap());
+        assert_eq!(persisted.to_canonical_bytes().unwrap(), schedule_bytes);
+        let replay = admitted
+            .input()
+            .module
+            .simulate_scheduled(
+                &admitted.input().request,
+                admitted.input().simulation_target(),
+                admitted.input().simulation_limits,
+                SimulationScheduleRequestV1::Replay(persisted.record()),
+            )
+            .unwrap();
+        assert_eq!(replay.schedule(), execution.schedule());
+        assert_eq!(
+            replay.schedule_transcript_identity(),
+            execution.schedule_transcript_identity()
+        );
+        assert_eq!(replay.schedule_coverage(), execution.schedule_coverage());
+        assert_eq!(
+            replay.schedule_coverage().decisions(),
+            u64::try_from(persisted.record().decisions().len()).unwrap()
+        );
+        assert_eq!(replay.schedule_coverage().workgroups(), 1);
+        assert!(replay.schedule_coverage().barrier_releases() > 0);
+        assert!(replay.schedule_coverage().is_complete());
+        assert_eq!(replay.invocations_executed(), case.extent as u64);
+        assert_scan_rows(
+            case,
+            replay.buffer(1).unwrap().bytes(),
+            &expected,
+            "persisted seeded schedule replay",
+        );
+        std::fs::write(&schedule_path, &schedule_bytes).unwrap();
         if case_index == 0 {
             first_schedule = Some(schedule_path);
         } else if case_index == 1 {
@@ -1026,6 +1071,44 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
                 fe2o3_kir_sim::SimulationPreflightErrorV1::WorkgroupMismatch { .. }
             ))
         ));
+
+        for (label, hostile_extent) in [
+            ("short-grid", case.extent - 1),
+            ("long-grid", case.extent + 1),
+        ] {
+            let hostile_grid_path = scratch.0.join(format!("{}-{label}.json", case.feature));
+            let mut hostile_grid: Value =
+                serde_json::from_slice(&std::fs::read(&request_path).unwrap()).unwrap();
+            hostile_grid["grid"] = json!([hostile_extent, 1, 1]);
+            std::fs::write(
+                &hostile_grid_path,
+                serde_json::to_vec(&hostile_grid).unwrap(),
+            )
+            .unwrap();
+            let hostile_grid = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(
+                &bundle_path,
+                &hostile_grid_path,
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    hostile_grid.input().module.simulate(
+                        &hostile_grid.input().request,
+                        hostile_grid.input().simulation_target(),
+                        hostile_grid.input().simulation_limits,
+                    ),
+                    Err(fe2o3_kir_sim::SimulationErrorV1::Preflight(
+                        fe2o3_kir_sim::SimulationPreflightErrorV1::StaticLaunchMismatch {
+                            axis: 0,
+                            expected,
+                            actual,
+                        }
+                    )) if expected == case.extent as u64 && actual == hostile_extent as u64
+                ),
+                "{} admitted its {label} extent {hostile_extent}",
+                case.feature
+            );
+        }
     }
 
     let substituted = Command::new(debug_target.join("debug/fe2o3-debug"))
