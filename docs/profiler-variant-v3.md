@@ -42,6 +42,9 @@ The service accepts newline-delimited requests under
 4. `compare_complete_structural_catalogs` accepts the same inputs, recomputes
    Variant V3, and considers an add/remove claim only from two complete
    admitted producer catalogs in one exact comparison domain.
+5. `explain_regression` recomputes the complete comparison, projects the exact
+   replayed production optimizer audit when present, and ranks bounded
+   evidence-linked co-observation hypotheses plus the next missing measurement.
 
 An exact replay that encounters absent compiler instrumentation or another
 supported production projection gap returns `structural_archive_unavailable`
@@ -57,6 +60,14 @@ only through the JSONL request. It grants no execution, replay of a GPU
 schedule, attach, collection, decoder, publication, load, launch, dispatch, or
 runtime authority. "Replay" here means deterministic compiler-finalizer
 evidence validation, not kernel execution or live capture.
+
+The explanation response is separately versioned as
+`fe2o3-profiler-regression-explanation-v1` and capped at 20 MiB. Its fixed-rule
+ranking can connect longer dispatch ticks with replayed optimizer decisions,
+HSACO resource deltas, counter deltas, positive source/IR/ISA changes, and
+complete structural multiplicity deltas. Every hypothesis remains `inferred`,
+retains supporting and contradicting evidence IDs, and lists missing facts.
+See [Profiler Regression Explanation V1](profiler-regression-explanation-v1.md).
 
 ## Exact join
 

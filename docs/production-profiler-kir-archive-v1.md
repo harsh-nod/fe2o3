@@ -43,6 +43,15 @@ Only after that replay succeeds does admission derive:
 - `ProductionKirV7StructuralBridgeV1`; and
 - `ProductionSourceIsaCharacteristicCollectionV1`.
 
+Admission also independently decodes the existing production KIR-to-LLVM
+replay receipt and validates it against the exact neutral KIR. Current replay
+V4 receipts expose their optimizer audit through
+`ProductionProfilerOptimizationEvidenceV1`: policy, exact pre/final target KIR,
+bridge and correspondence identities, bounds, epoch and work accounting, and
+the ordered pass decisions. This is a new read-only projection from existing
+archive bytes, not a change to Archive V1 framing. Legacy receipts retain
+`None`; no optimizer history is reconstructed from output shape.
+
 Successful admission returns those fresh owners and retains no compiler,
 publication, module-load, launch, or collection handle. A valid finalizer
 replay can still return a typed-unavailable semantic-debug carrier,
@@ -54,7 +63,8 @@ has a stable class and reason code; it is not collapsed into malformed input.
 `fe2o3-profiler-service variant-v3-jsonl` accepts an archive as canonical
 lowercase hex together with its caller-pinned `ContentIdentityRecordV1`. The
 service verifies that identity before replay and retains at most two admitted
-owners for later `compare_variants` requests. Duplicate opens, unknown cited
+owners for later `compare_variants`, `compare_complete_structural_catalogs`,
+and `explain_regression` requests. Duplicate opens, unknown cited
 identities, uppercase or malformed hex, stale revisions, duplicate request
 IDs, and request or owner-budget exhaustion fail closed. Typed-unavailable
 archives are reported but not retained.

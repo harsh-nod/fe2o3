@@ -1986,10 +1986,11 @@ fn additive_variant_v2_jsonl_is_deterministic_strict_and_v1_independent() {
 fn additive_variant_v3_jsonl_replays_v2_and_withholds_complete_deltas_without_owners() {
     let workload = b"variant-v3-service-workload";
     let source = dispatch_source(140, 260);
+    let candidate_source = dispatch_source(170, 310);
     let baseline = treatment(
         workload,
         &source,
-        hsaco(7, 0),
+        hsaco_with_kernels(vec![kernel("row_softmax_v1", 7, 0)]),
         1,
         b"schedule-a",
         b"isa-a",
@@ -1997,8 +1998,8 @@ fn additive_variant_v3_jsonl_replays_v2_and_withholds_complete_deltas_without_ow
     );
     let candidate = treatment(
         workload,
-        &source,
-        hsaco(8, 1),
+        &candidate_source,
+        hsaco_with_kernels(vec![kernel("row_softmax_v1", 8, 1)]),
         2,
         b"schedule-b",
         b"isa-b",
@@ -2034,10 +2035,18 @@ fn additive_variant_v3_jsonl_replays_v2_and_withholds_complete_deltas_without_ow
             "candidate": treatment_v3(&candidate),
         }),
         serde_json::json!({
-            "operation": "compare_complete_structural_catalogs",
+            "operation": "explain_regression",
             "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
             "request_id": 4,
             "expected_revision": 3,
+            "baseline": treatment_v3(&baseline),
+            "candidate": treatment_v3(&candidate),
+        }),
+        serde_json::json!({
+            "operation": "compare_complete_structural_catalogs",
+            "schema": AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3,
+            "request_id": 5,
+            "expected_revision": 4,
             "baseline": {
                 "treatment_v2": treatment_json(&baseline),
                 "structural_archive": {
@@ -2055,7 +2064,7 @@ fn additive_variant_v3_jsonl_replays_v2_and_withholds_complete_deltas_without_ow
     assert!(first.status.success(), "{:?}", first.stderr);
     assert_eq!(first.stdout, second.stdout);
     let responses = output_json_lines(&first.stdout);
-    assert_eq!(responses.len(), 4);
+    assert_eq!(responses.len(), 5);
     for line in first
         .stdout
         .split_inclusive(|byte| *byte == b'\n')
@@ -2121,9 +2130,45 @@ fn additive_variant_v3_jsonl_replays_v2_and_withholds_complete_deltas_without_ow
                 .any(|fact| fact["kind"] == kind && fact["reason_code"] == code)
         );
     }
-    assert_eq!(responses[3]["status"], "error");
-    assert_eq!(responses[3]["code"], "unknown_structural_archive");
-    assert_eq!(responses[3]["terminal"], false);
+    let explanation = &responses[3]["value"]["explanation"];
+    assert_eq!(
+        responses[3]["value"]["explanation_schema"],
+        "fe2o3-profiler-regression-explanation-v1"
+    );
+    assert_eq!(explanation["schema_version"], 1);
+    assert_eq!(explanation["causal_attribution"], "unavailable");
+    assert_eq!(
+        explanation["compiler_optimization"][0]["unavailable"]["reason_code"],
+        "production_profiler_archive_not_supplied"
+    );
+    assert!(
+        explanation["ranked_hypotheses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |hypothesis| hypothesis["kind"] == "static_resource_co_observation"
+                    && hypothesis["origin"] == "inferred"
+            )
+    );
+    let measurements = explanation["next_measurements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|measurement| measurement["kind"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        measurements,
+        vec![
+            "counter_collection",
+            "pc_sampling",
+            "schedule_execution_observation",
+            "controlled_variant_replicates",
+        ]
+    );
+    assert_eq!(responses[4]["status"], "error");
+    assert_eq!(responses[4]["code"], "unknown_structural_archive");
+    assert_eq!(responses[4]["terminal"], false);
 }
 use std::io::Write;
 use std::process::{Command, Stdio};

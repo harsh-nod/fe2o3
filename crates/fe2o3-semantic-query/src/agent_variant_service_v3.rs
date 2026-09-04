@@ -17,12 +17,13 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     AgentProfilerVariantErrorCodeV2, AgentProfilerVariantTreatmentHexV2,
-    MAX_PROFILER_COMPLETE_STRUCTURAL_RESULT_BYTES_V1, ProfilerCompleteStructuralComparisonV1,
-    ProfilerCompleteStructuralTreatmentInputV1, ProfilerVariantComparisonV3,
-    ProfilerVariantProductionKirEvidenceV3, ProfilerVariantStructuralContentIdentityV3,
-    ProfilerVariantTreatmentInputV3, agent_variant_service_v2::OwnedTreatmentV2,
-    build_profiler_complete_structural_request_v1, build_profiler_variant_request_v3,
-    compare_profiler_complete_structural_v1, compare_profiler_variants_v3,
+    MAX_PROFILER_REGRESSION_EXPLANATION_BYTES_V1, ProfilerCompleteStructuralComparisonV1,
+    ProfilerCompleteStructuralTreatmentInputV1, ProfilerRegressionExplanationV1,
+    ProfilerVariantComparisonV3, ProfilerVariantProductionKirEvidenceV3,
+    ProfilerVariantStructuralContentIdentityV3, ProfilerVariantTreatmentInputV3,
+    agent_variant_service_v2::OwnedTreatmentV2, build_profiler_complete_structural_request_v1,
+    build_profiler_variant_request_v3, compare_profiler_complete_structural_v1,
+    compare_profiler_variants_v3, explain_profiler_regression_v1,
 };
 
 pub const AGENT_PROFILER_VARIANT_REQUEST_SCHEMA_V3: &str =
@@ -35,10 +36,10 @@ pub const MAX_AGENT_PROFILER_VARIANT_ARCHIVES_V3: usize = 2;
 pub const MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V3: u64 =
     (MAX_PRODUCTION_PROFILER_KIR_ARCHIVE_BYTES_V1 as u64 * 2) + (64 * 1024);
 pub const MAX_AGENT_PROFILER_VARIANT_RESPONSE_BYTES_V3: u64 =
-    MAX_PROFILER_COMPLETE_STRUCTURAL_RESULT_BYTES_V1 + (32 * 1024);
+    MAX_PROFILER_REGRESSION_EXPLANATION_BYTES_V1 + (32 * 1024);
 
 const CONTRACT_DOMAIN_V3: &[u8] = b"fe2o3.agent-profiler.variant-service.contract.v3\0";
-const CONTRACT_BYTES_V3: &[u8] = b"variant-v3;strict-finalizer-replay-archive;exact-v7-v8-catalog-characteristic-owners;separate-bounded-open;strict-lowercase-hex;positive-structural-co-observation;complete-catalog-same-domain-structural-multiset-delta;typed-unavailable;no-external-provenance;read-only-no-execution-attach-scheduling-collection-decoder-publication-load-launch-dispatch-or-runtime-authority";
+const CONTRACT_BYTES_V3: &[u8] = b"variant-v3;strict-finalizer-replay-archive;exact-v7-v8-catalog-characteristic-owners;replayed-production-optimizer-audit;separate-bounded-open;strict-lowercase-hex;positive-structural-co-observation;complete-catalog-same-domain-structural-multiset-delta;bounded-ranked-regression-hypotheses;typed-next-measurement;typed-unavailable;no-external-provenance;read-only-no-execution-attach-scheduling-collection-decoder-publication-load-launch-dispatch-or-runtime-authority";
 const RESPONSE_DOMAIN_V3: &[u8] = b"fe2o3.agent-profiler.variant-service.response.v3\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -48,6 +49,7 @@ pub enum AgentProfilerVariantOperationV3 {
     OpenStructuralArchive,
     CompareVariants,
     CompareCompleteStructuralCatalogs,
+    ExplainRegression,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -109,6 +111,13 @@ pub enum AgentProfilerVariantRequestV3 {
         baseline: Box<AgentProfilerVariantTreatmentHexV3>,
         candidate: Box<AgentProfilerVariantTreatmentHexV3>,
     },
+    ExplainRegression {
+        schema: String,
+        request_id: u64,
+        expected_revision: u64,
+        baseline: Box<AgentProfilerVariantTreatmentHexV3>,
+        candidate: Box<AgentProfilerVariantTreatmentHexV3>,
+    },
 }
 
 impl AgentProfilerVariantRequestV3 {
@@ -117,7 +126,8 @@ impl AgentProfilerVariantRequestV3 {
             Self::DiscoverCapabilities { schema, .. }
             | Self::OpenStructuralArchive { schema, .. }
             | Self::CompareVariants { schema, .. }
-            | Self::CompareCompleteStructuralCatalogs { schema, .. } => schema,
+            | Self::CompareCompleteStructuralCatalogs { schema, .. }
+            | Self::ExplainRegression { schema, .. } => schema,
         }
     }
 
@@ -126,7 +136,8 @@ impl AgentProfilerVariantRequestV3 {
             Self::DiscoverCapabilities { request_id, .. }
             | Self::OpenStructuralArchive { request_id, .. }
             | Self::CompareVariants { request_id, .. }
-            | Self::CompareCompleteStructuralCatalogs { request_id, .. } => *request_id,
+            | Self::CompareCompleteStructuralCatalogs { request_id, .. }
+            | Self::ExplainRegression { request_id, .. } => *request_id,
         }
     }
 
@@ -142,6 +153,9 @@ impl AgentProfilerVariantRequestV3 {
                 expected_revision, ..
             }
             | Self::CompareCompleteStructuralCatalogs {
+                expected_revision, ..
+            }
+            | Self::ExplainRegression {
                 expected_revision, ..
             } => *expected_revision,
         }
@@ -202,6 +216,12 @@ pub enum AgentProfilerVariantResultV3 {
         baseline_archive: Option<ContentIdentityRecordV1>,
         candidate_archive: Option<ContentIdentityRecordV1>,
         comparison: Box<ProfilerCompleteStructuralComparisonV1>,
+    },
+    RegressionExplanation {
+        explanation_schema: &'static str,
+        baseline_archive: Option<ContentIdentityRecordV1>,
+        candidate_archive: Option<ContentIdentityRecordV1>,
+        explanation: Box<ProfilerRegressionExplanationV1>,
     },
 }
 
@@ -347,11 +367,12 @@ impl AgentProfilerVariantServiceV3 {
                             AgentProfilerVariantOperationV3::OpenStructuralArchive,
                             AgentProfilerVariantOperationV3::CompareVariants,
                             AgentProfilerVariantOperationV3::CompareCompleteStructuralCatalogs,
+                            AgentProfilerVariantOperationV3::ExplainRegression,
                         ],
                         authority: AgentProfilerVariantAuthorityV3::ReadOnlyNoExecutionAttachSchedulingCollectionDecoderPublicationLoadLaunchDispatchOrRuntimeAuthority,
                         exact_input_encoding: "canonical_lowercase_hex_of_exact_bytes",
                         archive_admission: "checksum_and_content_identity_then_complete_worker_v3_finalizer_replay_and_exact_catalog_bridge_characteristic_reconstruction",
-                        comparison_semantics: "positive_exact_structural_co_observation;added_removed_only_as_exact_structural_multiset_deltas_from_two_complete_admitted_catalogs_in_one_workload_and_stable_source_mir_universe;partial_or_sampled_absence_excluded;no_schedule_execution_or_causality",
+                        comparison_semantics: "positive_exact_structural_co_observation;added_removed_only_as_exact_structural_multiset_deltas_from_two_complete_admitted_catalogs_in_one_workload_and_stable_source_mir_universe;replayed_optimizer_decisions_and_observed_resource_duration_counter_source_ir_isa_deltas_feed_deterministic_ranked_hypotheses;partial_or_sampled_absence_excluded;no_schedule_execution_or_causality",
                         external_provenance: "not_authenticated_by_this_archive_or_service",
                         maximum_requests: MAX_AGENT_PROFILER_VARIANT_REQUESTS_V3,
                         maximum_request_bytes: MAX_AGENT_PROFILER_VARIANT_REQUEST_BYTES_V3,
@@ -376,6 +397,11 @@ impl AgentProfilerVariantServiceV3 {
                 candidate,
                 ..
             } => self.compare_complete_structural_catalogs(request_id, *baseline, *candidate),
+            AgentProfilerVariantRequestV3::ExplainRegression {
+                baseline,
+                candidate,
+                ..
+            } => self.explain_regression(request_id, *baseline, *candidate),
         }
     }
 
@@ -598,6 +624,79 @@ impl AgentProfilerVariantServiceV3 {
                 baseline_archive,
                 candidate_archive,
                 comparison: Box::new(comparison),
+            },
+        )
+    }
+
+    fn explain_regression(
+        &mut self,
+        request_id: u64,
+        baseline: AgentProfilerVariantTreatmentHexV3,
+        candidate: AgentProfilerVariantTreatmentHexV3,
+    ) -> Result<AgentProfilerVariantResponseV3, AgentProfilerVariantServiceErrorV3> {
+        let baseline_archive = baseline.structural_archive;
+        let candidate_archive = candidate.structural_archive;
+        let baseline_treatment = match OwnedTreatmentV2::decode(*baseline.treatment_v2) {
+            Ok(value) => value,
+            Err(code) => return self.error(Some(request_id), map_v2_error(code), false),
+        };
+        let candidate_treatment = match OwnedTreatmentV2::decode(*candidate.treatment_v2) {
+            Ok(value) => value,
+            Err(code) => return self.error(Some(request_id), map_v2_error(code), false),
+        };
+        let explanation = {
+            let baseline_owner = match find_archive(&self.archives, baseline_archive) {
+                Ok(value) => value,
+                Err(code) => return self.error(Some(request_id), code, false),
+            };
+            let candidate_owner = match find_archive(&self.archives, candidate_archive) {
+                Ok(value) => value,
+                Err(code) => return self.error(Some(request_id), code, false),
+            };
+            let baseline_input = ProfilerCompleteStructuralTreatmentInputV1 {
+                treatment: baseline_treatment.input(),
+                archive: baseline_owner,
+            };
+            let candidate_input = ProfilerCompleteStructuralTreatmentInputV1 {
+                treatment: candidate_treatment.input(),
+                archive: candidate_owner,
+            };
+            let comparison_request = match build_profiler_complete_structural_request_v1(
+                baseline_treatment.input().treatment.semantic_workload,
+                baseline_input,
+                candidate_input,
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return self.error(
+                        Some(request_id),
+                        AgentProfilerVariantErrorCodeV3::EvidenceAdmissionFailed,
+                        false,
+                    );
+                }
+            };
+            match explain_profiler_regression_v1(
+                comparison_request,
+                baseline_input,
+                candidate_input,
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return self.error(
+                        Some(request_id),
+                        AgentProfilerVariantErrorCodeV3::EvidenceAdmissionFailed,
+                        false,
+                    );
+                }
+            }
+        };
+        self.ok(
+            request_id,
+            AgentProfilerVariantResultV3::RegressionExplanation {
+                explanation_schema: crate::PROFILER_REGRESSION_EXPLANATION_SCHEMA_V1,
+                baseline_archive,
+                candidate_archive,
+                explanation: Box::new(explanation),
             },
         )
     }
@@ -1084,11 +1183,16 @@ mod tests {
         else {
             panic!("capabilities request did not succeed")
         };
-        assert_eq!(capabilities.operations.len(), 4);
+        assert_eq!(capabilities.operations.len(), 5);
         assert!(
             capabilities
                 .operations
                 .contains(&AgentProfilerVariantOperationV3::CompareCompleteStructuralCatalogs)
+        );
+        assert!(
+            capabilities
+                .operations
+                .contains(&AgentProfilerVariantOperationV3::ExplainRegression)
         );
         assert_eq!(capabilities.maximum_open_archives, 2);
         assert_eq!(

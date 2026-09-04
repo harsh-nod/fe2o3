@@ -109,7 +109,8 @@ pub use production_profiler_kir_archive_v1::{
     PRODUCTION_PROFILER_KIR_ARCHIVE_VERSION_V1, PreparedProductionProfilerKirArchiveV1,
     ProductionProfilerKirArchiveAdmissionV1, ProductionProfilerKirArchiveErrorV1,
     ProductionProfilerKirArchiveIdentityV1, ProductionProfilerKirArchiveUnavailableClassV1,
-    ProductionProfilerKirArchiveUnavailableV1, prepare_production_profiler_kir_archive_v1,
+    ProductionProfilerKirArchiveUnavailableV1, ProductionProfilerOptimizationEvidenceV1,
+    prepare_production_profiler_kir_archive_v1,
 };
 pub use production_semantic_anchor_v1::{
     AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,
