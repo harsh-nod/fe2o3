@@ -30655,6 +30655,24 @@ mod resource_tests {
         global_extents: [u64; 3],
         full_physical_workgroups: bool,
     ) -> ProductionRankedSemanticProjectionRootV1 {
+        noop_ranked_root_with_ranked_layout(
+            selected_root,
+            export,
+            1,
+            global_extents,
+            [64, 1, 1],
+            full_physical_workgroups,
+        )
+    }
+
+    fn noop_ranked_root_with_ranked_layout(
+        selected_root: SemanticFunctionIdV1,
+        export: &str,
+        launch_rank: u8,
+        global_extents: [u64; 3],
+        workgroup_extents: [u64; 3],
+        full_physical_workgroups: bool,
+    ) -> ProductionRankedSemanticProjectionRootV1 {
         let kernel = ProductionRankedKernelV1::new(
             export,
             0,
@@ -30662,7 +30680,7 @@ mod resource_tests {
                 vec![ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 1,
                     global_extents,
-                    workgroup_extents: [64, 1, 1],
+                    workgroup_extents,
                     subgroup_size: 64,
                     full_physical_workgroups,
                 }],
@@ -30678,7 +30696,7 @@ mod resource_tests {
         .unwrap();
         ProductionRankedSemanticProjectionRootV1::new(
             selected_root,
-            1,
+            launch_rank,
             lowering,
             format!("func @{export} {{\n}}\n"),
             vec![],
@@ -30738,9 +30756,77 @@ mod resource_tests {
         }
     }
 
-    fn noop_semantic_owner_candidate(
+    #[test]
+    fn ranked_launch_layout_retains_static_and_dynamic_axes_for_d2_and_d3() {
+        for (rank, workgroup, global, expected) in [
+            (
+                2,
+                [8, 4, 1],
+                [8, 4, 1],
+                LaunchDomain::D2 {
+                    x: LaunchExtent::Static(8),
+                    y: LaunchExtent::Static(4),
+                },
+            ),
+            (
+                2,
+                [8, 4, 1],
+                [16, 4, 1],
+                LaunchDomain::D2 {
+                    x: LaunchExtent::Dynamic,
+                    y: LaunchExtent::Static(4),
+                },
+            ),
+            (
+                3,
+                [4, 2, 8],
+                [4, 2, 8],
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Static(4),
+                    y: LaunchExtent::Static(2),
+                    z: LaunchExtent::Static(8),
+                },
+            ),
+            (
+                3,
+                [4, 2, 8],
+                [4, 6, 16],
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Static(4),
+                    y: LaunchExtent::Dynamic,
+                    z: LaunchExtent::Dynamic,
+                },
+            ),
+        ] {
+            let receipt = ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+                noop_semantic_owner_with_workgroup(
+                    &["single_entry"],
+                    workgroup.map(|extent| u32::try_from(extent).unwrap()),
+                ),
+                vec![noop_ranked_root_with_ranked_layout(
+                    SemanticFunctionIdV1::from_index(0),
+                    "single_entry",
+                    rank,
+                    global,
+                    workgroup,
+                    true,
+                )],
+            )
+            .unwrap();
+            let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+                receipt,
+                ProductionSemanticKirLimitsV1::default(),
+            )
+            .unwrap();
+            assert_eq!(lowered.module().kernels[0].domain, expected);
+            lowered.verify_equivalence().unwrap();
+        }
+    }
+
+    fn noop_semantic_owner_candidate_with_workgroup(
         exports: &[&str],
         cross_root_call: bool,
+        workgroup: [u32; 3],
     ) -> Option<ProductionSemanticMirOwnerV1> {
         let unit = SemanticTypeIdV1::from_index(0);
         let source = SemanticSourceProvenanceV1::unavailable();
@@ -30801,7 +30887,7 @@ mod resource_tests {
                 vec![body],
             )
             .unwrap();
-            let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+            let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
             let launch =
                 SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
                     .unwrap();
@@ -30832,8 +30918,22 @@ mod resource_tests {
             .ok()
     }
 
+    fn noop_semantic_owner_candidate(
+        exports: &[&str],
+        cross_root_call: bool,
+    ) -> Option<ProductionSemanticMirOwnerV1> {
+        noop_semantic_owner_candidate_with_workgroup(exports, cross_root_call, [64, 1, 1])
+    }
+
     fn noop_semantic_owner(exports: &[&str]) -> ProductionSemanticMirOwnerV1 {
         noop_semantic_owner_candidate(exports, false).unwrap()
+    }
+
+    fn noop_semantic_owner_with_workgroup(
+        exports: &[&str],
+        workgroup: [u32; 3],
+    ) -> ProductionSemanticMirOwnerV1 {
+        noop_semantic_owner_candidate_with_workgroup(exports, false, workgroup).unwrap()
     }
 
     fn helper_closure_semantic_owner() -> ProductionSemanticMirOwnerV1 {

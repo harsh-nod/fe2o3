@@ -793,6 +793,10 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
             fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
         )
         .unwrap();
+        assert_eq!(
+            semantic.wire_version(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V11
+        );
         let runtime_layout = ScanRuntimeLayout {
             signature: *semantic.functions()[kernel_map.semantic_root() as usize]
                 .abi()

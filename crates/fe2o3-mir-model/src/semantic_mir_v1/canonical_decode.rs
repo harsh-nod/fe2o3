@@ -150,7 +150,7 @@ impl AdmittedInertSemanticMirV1 {
     ///
     /// Production collection deliberately selects at least V5 even when an
     /// older schema could represent the same model. This decoder preserves the
-    /// declared V5, V6, or V7 schema instead of re-admitting under the minimum
+    /// declared production schema instead of re-admitting under the minimum
     /// compatible version. It grants no producer, proof, compiler, artifact,
     /// publication, load, or launch authority.
     pub fn decode_current_production_canonical(
@@ -269,6 +269,19 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes bytes canonical specifically under the closed V11 schema that
+    /// adds the compiler trap terminal at its unique tag.
+    pub fn decode_exact_v11_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V11),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -304,6 +317,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V8
                         | SemanticMirWireVersionV1::V9
                         | SemanticMirWireVersionV1::V10
+                        | SemanticMirWireVersionV1::V11
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1551,8 +1565,10 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V10 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V11 {
             64
+        } else if self.wire_version == SemanticMirWireVersionV1::V10 {
+            63
         } else if self.wire_version == SemanticMirWireVersionV1::V9 {
             62
         } else if self.wire_version == SemanticMirWireVersionV1::V8 {
@@ -2832,7 +2848,7 @@ mod tests {
     }
 
     #[test]
-    fn current_production_decoder_preserves_exact_v5_through_v9_custody() {
+    fn current_production_decoder_preserves_exact_v5_through_v11_custody() {
         let limits = SemanticMirLimitsV1::default();
         let admitted = [
             minimal_request().admit_exact_v5(limits).unwrap(),
@@ -2840,6 +2856,8 @@ mod tests {
             minimal_request().admit_exact_v7(limits).unwrap(),
             minimal_request().admit_exact_v8(limits).unwrap(),
             minimal_request().admit_exact_v9(limits).unwrap(),
+            minimal_request().admit_exact_v10(limits).unwrap(),
+            minimal_request().admit_exact_v11(limits).unwrap(),
         ];
         for original in admitted {
             let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
@@ -3757,7 +3775,7 @@ mod tests {
     }
 
     #[test]
-    fn neutral_workgroup_reduce_round_trips_only_under_v9() {
+    fn neutral_workgroup_reduce_retains_its_v9_encoding_under_v11() {
         let operation = SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
             context: SemanticTypeIdV1::from_index(0),
             dynamic_lds: SemanticTypeIdV1::from_index(1),
@@ -3766,6 +3784,10 @@ mod tests {
         };
         let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V9);
         assert_eq!(encoded[0], 62);
+        assert_eq!(
+            compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V11),
+            encoded
+        );
 
         for wire_version in [
             SemanticMirWireVersionV1::V6,
@@ -3788,7 +3810,7 @@ mod tests {
     }
 
     #[test]
-    fn neutral_workgroup_scan_kinds_round_trip_only_under_v10() {
+    fn neutral_workgroup_scan_kinds_retain_their_v10_encoding_under_v11() {
         for (kind, tag) in [
             (SemanticWorkgroupScanKindV1::Inclusive, 0_u8),
             (SemanticWorkgroupScanKindV1::Exclusive, 1_u8),
@@ -3803,6 +3825,10 @@ mod tests {
             let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V10);
             assert_eq!(encoded[0], 63);
             assert_eq!(encoded.last().copied(), Some(tag));
+            assert_eq!(
+                compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V11),
+                encoded
+            );
 
             for wire_version in [
                 SemanticMirWireVersionV1::V7,
@@ -3835,21 +3861,22 @@ mod tests {
     }
 
     #[test]
-    fn trap_round_trips_at_its_unique_v10_tag() {
+    fn trap_round_trips_only_at_its_unique_v11_tag() {
         let operation = SemanticCompilerIntrinsicOperationV1::Trap;
-        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V10);
+        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V11);
         assert_eq!(encoded, [64]);
 
         for wire_version in [
             SemanticMirWireVersionV1::V7,
             SemanticMirWireVersionV1::V8,
             SemanticMirWireVersionV1::V9,
+            SemanticMirWireVersionV1::V10,
         ] {
             let mut writer = CanonicalWriterV1::new(1);
             assert!(matches!(
                 encode_compiler_intrinsic_operation(&mut writer, operation, wire_version),
                 Err(SemanticMirErrorV1::WireVersionCannotRepresent {
-                    required: SemanticMirWireVersionV1::V10,
+                    required: SemanticMirWireVersionV1::V11,
                     ..
                 })
             ));
@@ -3861,16 +3888,32 @@ mod tests {
     }
 
     #[test]
-    fn non_scan_trap_selects_and_round_trips_current_production_v10() {
+    fn non_scan_trap_selects_and_round_trips_current_production_v11() {
         let request = non_scan_trap_request();
         assert_eq!(
             minimum_wire_version(&request),
-            SemanticMirWireVersionV1::V10
+            SemanticMirWireVersionV1::V11
         );
         let admitted = request
             .admit_current_production(SemanticMirLimitsV1::default())
             .unwrap();
-        assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V10);
+        assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V11);
+        assert!(matches!(
+            AdmittedInertSemanticMirV1::decode_exact_v10_canonical(
+                admitted.canonical_encoding(),
+                SemanticMirLimitsV1::default(),
+            ),
+            Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected: SemanticMirWireVersionV1::V10,
+                actual: SemanticMirWireVersionV1::V11,
+            })
+        ));
+        let exact = AdmittedInertSemanticMirV1::decode_exact_v11_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(exact.canonical_encoding(), admitted.canonical_encoding());
         let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
             admitted.canonical_encoding(),
             SemanticMirLimitsV1::default(),

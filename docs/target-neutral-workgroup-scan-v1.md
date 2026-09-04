@@ -30,6 +30,11 @@ comparison, select, add, and acquire-release workgroup-barrier operations.
 The expansion uses guarded subtraction, so inactive ranks never rely on
 unsigned index underflow.
 
+Semantic MIR V10 remains byte-for-byte closed at intrinsic tags `0..=63`.
+Ordinary scan sources that also use the compiler trap terminal select the
+additive V11 schema, which retains all V10 operation encodings and assigns Trap
+its unique tag 64.
+
 The ranked projection records every generated LDS access and barrier in exact
 order. For `N` lanes it records `3 * ceil(log2(N)) + 2` memory effects and
 `2 * ceil(log2(N)) + 2` barriers. A domain-separated recipe identity binds the

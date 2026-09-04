@@ -30,6 +30,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V7: u16 = 7;
 pub const INERT_SEMANTIC_MIR_VERSION_V8: u16 = 8;
 pub const INERT_SEMANTIC_MIR_VERSION_V9: u16 = 9;
 pub const INERT_SEMANTIC_MIR_VERSION_V10: u16 = 10;
+pub const INERT_SEMANTIC_MIR_VERSION_V11: u16 = 11;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -47,6 +48,7 @@ pub enum SemanticMirWireVersionV1 {
     V8,
     V9,
     V10,
+    V11,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -61,6 +63,7 @@ impl SemanticMirWireVersionV1 {
             Self::V8 => INERT_SEMANTIC_MIR_VERSION_V8,
             Self::V9 => INERT_SEMANTIC_MIR_VERSION_V9,
             Self::V10 => INERT_SEMANTIC_MIR_VERSION_V10,
+            Self::V11 => INERT_SEMANTIC_MIR_VERSION_V11,
         }
     }
 
@@ -75,6 +78,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V8 => Some(Self::V8),
             INERT_SEMANTIC_MIR_VERSION_V9 => Some(Self::V9),
             INERT_SEMANTIC_MIR_VERSION_V10 => Some(Self::V10),
+            INERT_SEMANTIC_MIR_VERSION_V11 => Some(Self::V11),
             _ => None,
         }
     }
@@ -5992,11 +5996,20 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V10, limits)
     }
 
+    /// Admits under the exact closed V11 schema that retains the V10 operation
+    /// encodings and adds the compiler trap terminal at its unique tag.
+    pub fn admit_exact_v11(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V11, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
-    /// workgroup pipelines occur together, and V10 for target-neutral scans
-    /// or the compiler trap terminal.
+    /// workgroup pipelines occur together, V10 for target-neutral scans, and
+    /// V11 when the compiler trap terminal is present.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -16308,13 +16321,24 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. }
-                    | SemanticCompilerIntrinsicOperationV1::Trap,
+                operation: SemanticCompilerIntrinsicOperationV1::Trap,
                 ..
             }
         )
     }) {
-        required = SemanticMirWireVersionV1::V10;
+        required = SemanticMirWireVersionV1::V11;
+    }
+
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum { .. },
+                ..
+            }
+        )
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V10);
     }
 
     if request.callables.iter().any(|callable| {
@@ -17274,10 +17298,10 @@ fn encode_compiler_intrinsic_operation(
             encode_axis(writer, axis)
         }
         SemanticCompilerIntrinsicOperationV1::Trap => {
-            if wire_version != SemanticMirWireVersionV1::V10 {
+            if wire_version != SemanticMirWireVersionV1::V11 {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
-                    required: SemanticMirWireVersionV1::V10,
+                    required: SemanticMirWireVersionV1::V11,
                 });
             }
             writer.u8(64)
@@ -17603,7 +17627,9 @@ fn encode_compiler_intrinsic_operation(
             element_storage,
             element,
         } => {
-            if wire_version != SemanticMirWireVersionV1::V9 {
+            if wire_version != SemanticMirWireVersionV1::V9
+                && wire_version != SemanticMirWireVersionV1::V11
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V9,
@@ -17622,7 +17648,9 @@ fn encode_compiler_intrinsic_operation(
             element,
             kind,
         } => {
-            if wire_version != SemanticMirWireVersionV1::V10 {
+            if wire_version != SemanticMirWireVersionV1::V10
+                && wire_version != SemanticMirWireVersionV1::V11
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V10,
