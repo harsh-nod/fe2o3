@@ -5,9 +5,10 @@ asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
 logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
 persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
-directional-persistent-local-SDMA-adapter, and R20 runtime-facade directional
-chunking, and R21 runtime scripted-failure-seam models. The authenticated runner
-proves 373 obligations and rejects 209
+directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
+chunking, R21 runtime scripted-failure-seam, and R22 batched directional
+persistent-SDMA-window models. The authenticated runner proves 414 obligations
+and rejects 228
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -942,6 +943,61 @@ visibility, cleanup liveness, hardware behavior, HIP/HSA parity, or performance.
 | Independent move-only executable failure model | **Checked** | Seventeen focused Rust tests; request-type reuse and snapshot binding without a Verus or concrete-runtime correspondence theorem. |
 | Boundary countermodels | **Rejected** | Fifteen pinned expected-negative files fail only at their named postconditions. |
 | R20, executable runtime/KFD, native fault injection, hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R21 proof boundary. |
+
+## R22 batched directional persistent SDMA windows
+
+`r22_batched_directional_persistent_sdma_windows_v1.rs` proves 41 obligations
+for an independent abstract directional window machine. A prepared window has
+one through 63 packets, exact packet-count arithmetic, contiguous packet
+offsets, exact full-window coverage, distinct modulo-64 slots, generations
+derived by incrementing each selected slot's independent prior counter, the
+selected directional child, and one aggregate lease. A wrapped witness advances
+previously unused slot 63 from generation zero to one, reused slot zero from one
+to two, and leaves unselected slot one unchanged.
+Preparation has no publication effect. Confirmed publication commits the exact
+packet count while incrementing the write-pointer and doorbell counters exactly
+once each.
+
+Retry before queue custody restores ready custody without consuming the
+aggregate lease or changing publication counters. Once published, pending and
+timeout observations preserve the whole window. A partial completion retains
+published custody and cannot expose a continuation. Recovered publication
+without an exact terminal result becomes quiescent and preserves the entire
+possibly-mutated extent, including the host extent for D2H. Retained or
+substituted publication/completion state becomes opaque process teardown while
+retaining exactly one authority.
+
+Exact terminal completion creates a frontier containing the complete window
+roster. Continuation and directional dirty progress become visible only after
+exact frontier retirement. The bounded 256 MiB witness requires two windows,
+63 plus two packets, 65 packets total, and an exact final 2,048-byte packet.
+Terminal release preserves reuse for repeated or opposite directions.
+
+The executable R22 model has 18 focused Rust tests. It derives its immutable
+binding from an idle R19 snapshot, but independently owns a private aggregate
+custody enum with no `Clone` or `Copy` implementation. Public plans, completion
+metadata, and frontiers are observations and do not carry authority. Nineteen
+pinned expected-negative mutations cover the window bound, exact coverage,
+contiguity, slot uniqueness, independent per-slot generation, ticket child,
+preparation visibility, pointer and doorbell counts, prepublication restoration,
+postpublication classification,
+D2H host mutation, partial and timeout custody, completion identity, frontier
+roster, early continuation, opaque custody, and the 256 MiB window count.
+
+R22 is not a correspondence theorem for executable R19 or R22 Rust. Its
+write-pointer and doorbell counters are mathematical transition fields, not
+evidence of CPU atomics, ordering, coherence, firmware consumption, or DMA.
+It proves no native KFD execution, hardware completion truth, liveness,
+HIP/HSA parity, or performance.
+
+## R22 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Window bounds, coverage, per-slot ticket generations, ticket roster, one publication/doorbell action, custody, mutation extent, exact frontier retirement, and ordered continuation | **Proved** | Forty-one obligations in `r22_batched_directional_persistent_sdma_windows_v1.rs`; finite mathematical values only. |
+| Independent move-only executable window model | **Checked** | Eighteen focused Rust tests; R19 identity reuse without a Rust-to-Verus or R19 state-machine correspondence theorem. |
+| Boundary countermodels | **Rejected** | Nineteen pinned expected-negative files fail only at their named postconditions. |
+| Executable R19/R22, runtime/KFD, native hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R22 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

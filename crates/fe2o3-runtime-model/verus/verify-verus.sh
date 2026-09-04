@@ -25,6 +25,7 @@ r18_persistent_local_sdma_adapter_proof="$script_dir/r18_persistent_local_sdma_a
 r19_directional_persistent_local_sdma_adapter_proof="$script_dir/r19_directional_persistent_local_sdma_adapter_v1.rs"
 r20_runtime_facade_directional_chunking_proof="$script_dir/r20_runtime_facade_directional_chunking_v1.rs"
 r21_runtime_scripted_failure_seam_proof="$script_dir/r21_runtime_scripted_failure_seam_v1.rs"
+r22_batched_directional_persistent_sdma_windows_proof="$script_dir/r22_batched_directional_persistent_sdma_windows_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -234,6 +235,25 @@ negative_r21_recycle="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_
 negative_r21_continuation="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_continuation.rs"
 negative_r21_hidden_cleanup="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_hidden_cleanup.rs"
 negative_r21_teardown_release="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_teardown_release.rs"
+negative_r22_window_bound="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_window_bound.rs"
+negative_r22_packet_coverage="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_packet_coverage.rs"
+negative_r22_packet_contiguity="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_packet_contiguity.rs"
+negative_r22_slot_uniqueness="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_slot_uniqueness.rs"
+negative_r22_slot_generation="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_slot_generation.rs"
+negative_r22_ticket_child="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_ticket_child.rs"
+negative_r22_preparation_visibility="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_preparation_visibility.rs"
+negative_r22_write_pointer_count="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_write_pointer_count.rs"
+negative_r22_doorbell_count="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_doorbell_count.rs"
+negative_r22_prepublication_restore="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_prepublication_restore.rs"
+negative_r22_initial_partial_classification="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_initial_partial_classification.rs"
+negative_r22_d2h_host_mutation="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_d2h_host_mutation.rs"
+negative_r22_partial_completion="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_partial_completion.rs"
+negative_r22_timeout_custody="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_timeout_custody.rs"
+negative_r22_completion_metadata="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_completion_metadata.rs"
+negative_r22_frontier_roster="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_frontier_roster.rs"
+negative_r22_early_continuation="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_early_continuation.rs"
+negative_r22_opaque_custody="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_opaque_custody.rs"
+negative_r22_window_count="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_window_count.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -280,6 +300,7 @@ expected_r18_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R18_PERSISTENT_L
 expected_r19_directional_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R19_DIRECTIONAL_PERSISTENT_LOCAL_SDMA_ADAPTER_SHA256")
 expected_r20_runtime_facade_directional_chunking=$(read_pin "$pin_dir/R20_RUNTIME_FACADE_DIRECTIONAL_CHUNKING_SHA256")
 expected_r21_runtime_scripted_failure_seam=$(read_pin "$pin_dir/R21_RUNTIME_SCRIPTED_FAILURE_SEAM_SHA256")
+expected_r22_batched_directional_persistent_sdma_windows=$(read_pin "$pin_dir/R22_BATCHED_DIRECTIONAL_PERSISTENT_SDMA_WINDOWS_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -489,6 +510,25 @@ expected_negative_r21_recycle=$(read_pin "$pin_dir/NEGATIVE_R21_RECYCLE_SHA256")
 expected_negative_r21_continuation=$(read_pin "$pin_dir/NEGATIVE_R21_CONTINUATION_SHA256")
 expected_negative_r21_hidden_cleanup=$(read_pin "$pin_dir/NEGATIVE_R21_HIDDEN_CLEANUP_SHA256")
 expected_negative_r21_teardown_release=$(read_pin "$pin_dir/NEGATIVE_R21_TEARDOWN_RELEASE_SHA256")
+expected_negative_r22_window_bound=$(read_pin "$pin_dir/NEGATIVE_R22_WINDOW_BOUND_SHA256")
+expected_negative_r22_packet_coverage=$(read_pin "$pin_dir/NEGATIVE_R22_PACKET_COVERAGE_SHA256")
+expected_negative_r22_packet_contiguity=$(read_pin "$pin_dir/NEGATIVE_R22_PACKET_CONTIGUITY_SHA256")
+expected_negative_r22_slot_uniqueness=$(read_pin "$pin_dir/NEGATIVE_R22_SLOT_UNIQUENESS_SHA256")
+expected_negative_r22_slot_generation=$(read_pin "$pin_dir/NEGATIVE_R22_SLOT_GENERATION_SHA256")
+expected_negative_r22_ticket_child=$(read_pin "$pin_dir/NEGATIVE_R22_TICKET_CHILD_SHA256")
+expected_negative_r22_preparation_visibility=$(read_pin "$pin_dir/NEGATIVE_R22_PREPARATION_VISIBILITY_SHA256")
+expected_negative_r22_write_pointer_count=$(read_pin "$pin_dir/NEGATIVE_R22_WRITE_POINTER_COUNT_SHA256")
+expected_negative_r22_doorbell_count=$(read_pin "$pin_dir/NEGATIVE_R22_DOORBELL_COUNT_SHA256")
+expected_negative_r22_prepublication_restore=$(read_pin "$pin_dir/NEGATIVE_R22_PREPUBLICATION_RESTORE_SHA256")
+expected_negative_r22_initial_partial_classification=$(read_pin "$pin_dir/NEGATIVE_R22_INITIAL_PARTIAL_CLASSIFICATION_SHA256")
+expected_negative_r22_d2h_host_mutation=$(read_pin "$pin_dir/NEGATIVE_R22_D2H_HOST_MUTATION_SHA256")
+expected_negative_r22_partial_completion=$(read_pin "$pin_dir/NEGATIVE_R22_PARTIAL_COMPLETION_SHA256")
+expected_negative_r22_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R22_TIMEOUT_CUSTODY_SHA256")
+expected_negative_r22_completion_metadata=$(read_pin "$pin_dir/NEGATIVE_R22_COMPLETION_METADATA_SHA256")
+expected_negative_r22_frontier_roster=$(read_pin "$pin_dir/NEGATIVE_R22_FRONTIER_ROSTER_SHA256")
+expected_negative_r22_early_continuation=$(read_pin "$pin_dir/NEGATIVE_R22_EARLY_CONTINUATION_SHA256")
+expected_negative_r22_opaque_custody=$(read_pin "$pin_dir/NEGATIVE_R22_OPAQUE_CUSTODY_SHA256")
+expected_negative_r22_window_count=$(read_pin "$pin_dir/NEGATIVE_R22_WINDOW_COUNT_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -538,6 +578,7 @@ check_sources() {
     check_digest "$expected_r19_directional_persistent_local_sdma_adapter" "$r19_directional_persistent_local_sdma_adapter_proof"
     check_digest "$expected_r20_runtime_facade_directional_chunking" "$r20_runtime_facade_directional_chunking_proof"
     check_digest "$expected_r21_runtime_scripted_failure_seam" "$r21_runtime_scripted_failure_seam_proof"
+    check_digest "$expected_r22_batched_directional_persistent_sdma_windows" "$r22_batched_directional_persistent_sdma_windows_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -747,6 +788,25 @@ check_sources() {
     check_digest "$expected_negative_r21_continuation" "$negative_r21_continuation"
     check_digest "$expected_negative_r21_hidden_cleanup" "$negative_r21_hidden_cleanup"
     check_digest "$expected_negative_r21_teardown_release" "$negative_r21_teardown_release"
+    check_digest "$expected_negative_r22_window_bound" "$negative_r22_window_bound"
+    check_digest "$expected_negative_r22_packet_coverage" "$negative_r22_packet_coverage"
+    check_digest "$expected_negative_r22_packet_contiguity" "$negative_r22_packet_contiguity"
+    check_digest "$expected_negative_r22_slot_uniqueness" "$negative_r22_slot_uniqueness"
+    check_digest "$expected_negative_r22_slot_generation" "$negative_r22_slot_generation"
+    check_digest "$expected_negative_r22_ticket_child" "$negative_r22_ticket_child"
+    check_digest "$expected_negative_r22_preparation_visibility" "$negative_r22_preparation_visibility"
+    check_digest "$expected_negative_r22_write_pointer_count" "$negative_r22_write_pointer_count"
+    check_digest "$expected_negative_r22_doorbell_count" "$negative_r22_doorbell_count"
+    check_digest "$expected_negative_r22_prepublication_restore" "$negative_r22_prepublication_restore"
+    check_digest "$expected_negative_r22_initial_partial_classification" "$negative_r22_initial_partial_classification"
+    check_digest "$expected_negative_r22_d2h_host_mutation" "$negative_r22_d2h_host_mutation"
+    check_digest "$expected_negative_r22_partial_completion" "$negative_r22_partial_completion"
+    check_digest "$expected_negative_r22_timeout_custody" "$negative_r22_timeout_custody"
+    check_digest "$expected_negative_r22_completion_metadata" "$negative_r22_completion_metadata"
+    check_digest "$expected_negative_r22_frontier_roster" "$negative_r22_frontier_roster"
+    check_digest "$expected_negative_r22_early_continuation" "$negative_r22_early_continuation"
+    check_digest "$expected_negative_r22_opaque_custody" "$negative_r22_opaque_custody"
+    check_digest "$expected_negative_r22_window_count" "$negative_r22_window_count"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -777,6 +837,7 @@ check_sources
     "$r19_directional_persistent_local_sdma_adapter_proof" \
     "$r20_runtime_facade_directional_chunking_proof" \
     "$r21_runtime_scripted_failure_seam_proof" \
+    "$r22_batched_directional_persistent_sdma_windows_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -982,7 +1043,26 @@ check_sources
     "$negative_r21_recycle" \
     "$negative_r21_continuation" \
     "$negative_r21_hidden_cleanup" \
-    "$negative_r21_teardown_release"
+    "$negative_r21_teardown_release" \
+    "$negative_r22_window_bound" \
+    "$negative_r22_packet_coverage" \
+    "$negative_r22_packet_contiguity" \
+    "$negative_r22_slot_uniqueness" \
+    "$negative_r22_slot_generation" \
+    "$negative_r22_ticket_child" \
+    "$negative_r22_preparation_visibility" \
+    "$negative_r22_write_pointer_count" \
+    "$negative_r22_doorbell_count" \
+    "$negative_r22_prepublication_restore" \
+    "$negative_r22_initial_partial_classification" \
+    "$negative_r22_d2h_host_mutation" \
+    "$negative_r22_partial_completion" \
+    "$negative_r22_timeout_custody" \
+    "$negative_r22_completion_metadata" \
+    "$negative_r22_frontier_roster" \
+    "$negative_r22_early_continuation" \
+    "$negative_r22_opaque_custody" \
+    "$negative_r22_window_count"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1103,6 +1183,7 @@ check_positive "$r18_persistent_local_sdma_adapter_proof" 'verification results:
 check_positive "$r19_directional_persistent_local_sdma_adapter_proof" 'verification results:: 46 verified, 0 errors' r19-directional-persistent-local-sdma-adapter
 check_positive "$r20_runtime_facade_directional_chunking_proof" 'verification results:: 31 verified, 0 errors' r20-runtime-facade-directional-chunking
 check_positive "$r21_runtime_scripted_failure_seam_proof" 'verification results:: 37 verified, 0 errors' r21-runtime-scripted-failure-seam
+check_positive "$r22_batched_directional_persistent_sdma_windows_proof" 'verification results:: 41 verified, 0 errors' r22-batched-directional-persistent-sdma-windows
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1312,13 +1393,32 @@ check_negative "$negative_r21_recycle" mutated_successful_recycle_advances_gener
 check_negative "$negative_r21_continuation" mutated_continuation_waits_for_recycle_v1 r21-continuation
 check_negative "$negative_r21_hidden_cleanup" mutated_hidden_cleanup_retry_retains_authority_v1 r21-hidden-cleanup
 check_negative "$negative_r21_teardown_release" mutated_teardown_blocks_release_v1 r21-teardown-release
+check_negative "$negative_r22_window_bound" mutated_sixty_four_packets_fit_one_window_v1 r22-window-bound
+check_negative "$negative_r22_packet_coverage" mutated_window_packets_may_leave_gap_v1 r22-packet-coverage
+check_negative "$negative_r22_packet_contiguity" mutated_adjacent_packets_may_have_a_gap_v1 r22-packet-contiguity
+check_negative "$negative_r22_slot_uniqueness" mutated_distinct_packets_may_share_a_slot_v1 r22-slot-uniqueness
+check_negative "$negative_r22_slot_generation" mutated_ticket_generation_may_ignore_slot_counter_v1 r22-slot-generation
+check_negative "$negative_r22_ticket_child" mutated_window_ticket_may_bind_wrong_child_v1 r22-ticket-child
+check_negative "$negative_r22_preparation_visibility" mutated_preparation_may_publish_v1 r22-preparation-visibility
+check_negative "$negative_r22_write_pointer_count" mutated_window_may_update_pointer_per_packet_v1 r22-write-pointer-count
+check_negative "$negative_r22_doorbell_count" mutated_window_may_ring_doorbell_per_packet_v1 r22-doorbell-count
+check_negative "$negative_r22_prepublication_restore" mutated_prepublication_retry_may_retain_lease_v1 r22-prepublication-restore
+check_negative "$negative_r22_initial_partial_classification" mutated_initial_postpublication_recovery_may_be_conclusive_v1 r22-initial-partial-classification
+check_negative "$negative_r22_d2h_host_mutation" mutated_d2h_recovery_may_erase_host_mutation_v1 r22-d2h-host-mutation
+check_negative "$negative_r22_partial_completion" mutated_partial_completion_may_release_continuation_v1 r22-partial-completion
+check_negative "$negative_r22_timeout_custody" mutated_timeout_may_release_published_window_v1 r22-timeout-custody
+check_negative "$negative_r22_completion_metadata" mutated_completion_metadata_substitution_may_continue_v1 r22-completion-metadata
+check_negative "$negative_r22_frontier_roster" mutated_frontier_may_substitute_window_roster_v1 r22-frontier-roster
+check_negative "$negative_r22_early_continuation" mutated_continuation_may_precede_frontier_retirement_v1 r22-early-continuation
+check_negative "$negative_r22_opaque_custody" mutated_opaque_failure_may_drop_authority_v1 r22-opaque-custody
+check_negative "$negative_r22_window_count" mutated_256_mib_may_fit_one_window_and_64_packets_v1 r22-window-count
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 mutations=209'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 mutations=228'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

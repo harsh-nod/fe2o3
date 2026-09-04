@@ -275,6 +275,40 @@ facade evidence but does not satisfy this parity profile. H2H, D2D, batched
 local publication, unified persistent compute/XGMI storage, hardware
 correctness, and matched performance evidence remain open.
 
+## Current R22 Status
+
+R22 replaces the facade's packet-at-a-time local H2D and D2H publication with
+bounded directional windows. One window owns one aggregate allocation lease and
+one host/device pair, contains one through 63 canonical contiguous SDMA packets,
+and becomes visible through one write-pointer publication and one doorbell. The
+lower KFD owner authenticates the complete ordered ticket roster and retains the
+whole window across pending and timeout observations; it does not retire packet
+prefixes. Exact completion restores the owner pair, settles one frontier, and
+requires exact frontier retirement before the facade publishes a continuation.
+A 256 MiB transfer is therefore 65 packets published as two windows of 63 and
+two packets, with an exact 2,048-byte tail.
+
+The runtime seam validates canonical request order before publication and then
+validates KFD-authenticated direction, host and device offsets, byte length, and
+packet count at pending, failure, and completion boundaries. Recoverable
+rejection before the first publication restores retryable custody;
+a recoverable rejection after an earlier completed window becomes quiescent
+without result. Ambiguous or substituted published custody remains terminal.
+Synchronous staging remains packet-bounded but uses the same one-request window
+path.
+
+The independent R22 executable model has 18 focused tests. Its abstract Verus
+artifact adds 41 obligations and 19 rejected mutations for pinned totals of 414
+and 228. The proof models one publication and doorbell transition per window,
+but it is not a theorem about the executable Rust, CPU atomics, mapped-memory
+ordering, firmware consumption, DMA, or hardware completion. Native-neutral KFD
+and facade tests cover window planning, ring wrap, exclusive occupancy, exact
+rosters, custody, and failure classification. No MI300X result has yet qualified
+this exact commit. R22 closes batched local publication only; H2H, D2D, unified
+persistent compute/XGMI storage, background native progress, hardware
+correctness, and matched performance evidence remain open. It therefore does
+not satisfy this parity profile.
+
 ## Required Gates
 
 ### G1: API and ownership

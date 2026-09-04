@@ -174,6 +174,39 @@ condition. This harness does not benchmark peer copy: the KFD facade peer
 operation is host staged, while HIP/HSA native peer operations would be a
 different mechanism.
 
+### Large Directional Window Qualification
+
+Run the R22 public-facade large-copy comparison on an idle MI300X system:
+
+```sh
+benchmarks/runtime_gfx942/run-directional-window-mi300x.sh
+```
+
+The default is a 256 MiB H2D-then-D2H transfer with three warmups and ten
+samples. `FE2O3_DIRECTIONAL_WINDOW_GPU_INDEX`,
+`FE2O3_DIRECTIONAL_WINDOW_BYTES`, `FE2O3_DIRECTIONAL_WINDOW_WARMUPS`, and
+`FE2O3_DIRECTIONAL_WINDOW_SAMPLES` select the measured device and controls.
+The size is intentionally restricted to 264,239,137 through 268,435,456 bytes,
+so every run crosses the 63-packet R22 window boundary. At 256 MiB, the facade
+publishes 65 packets as windows of 63 and two packets; the last packet is 2,048
+bytes. Each window uses one write-pointer publication and one doorbell.
+
+The KFD interval starts before `copy_async` and ends only after facade wait plus
+any explicit continuation flush has observed the complete transfer. Allocation,
+pattern writes, readback validation, submission release, and teardown stay
+outside the interval. The HSA and HIP comparators use the existing schema-V1
+copy programs with the same device identity, byte length, direction ordering,
+warmups, samples, and host-observed completion boundary. The runner requires a
+clean checkout, tests the frozen R22 manifest, records the exact commit and
+software stack, applies a default 5% load ceiling before and after each phase,
+and deletes its unique temporary build directory on exit.
+
+This is a depth-one large-transfer diagnostic. It does not establish
+concurrency, peer-copy, H2H, D2D, hardware-refinement, or runtime-wide
+performance parity. No result is admissible while the shared GPU is busy, and
+no speedup claim may be made until raw output from the exact commit passes the
+same qualification checks as the retained asynchronous-copy results.
+
 ## Native XGMI Peer Qualification
 
 Run the matched public-runtime-facade KFD, HSA, and HIP native peer-copy harness

@@ -842,6 +842,18 @@ struct XgmiSdmaCopyRecordV1 {
     copy_bytes: u32,
 }
 
+#[derive(Clone, Copy)]
+struct PersistentSdmaWindowSlotV1 {
+    anchor_slot: usize,
+    generation: u32,
+    completion_value: u32,
+}
+
+struct PersistentSdmaWindowRecordV1 {
+    request: Gfx942SdmaCopyRequestV1,
+    packet_count: usize,
+}
+
 pub struct Gfx942XgmiCompletedCopyV1 {
     pub source: Gfx942XgmiMappedDeviceMemoryV1,
     pub destination: Gfx942XgmiMappedDeviceMemoryV1,
@@ -903,6 +915,50 @@ pub(crate) struct PreparedSingleSdmaV1 {
     copy: PreparedSdmaCopyV1,
     ticket: Gfx942SdmaCopyTicketV1,
     request: Gfx942SdmaCopyRequestV1,
+}
+
+/// One persistent host/device owner pair prepared as a bounded packet window.
+pub(crate) struct PreparedPersistentSdmaWindowV1 {
+    queue_id: u32,
+    write: u64,
+    write_end: u64,
+    copies: Vec<PreparedSdmaCopyV1>,
+    tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    request: Gfx942SdmaCopyRequestV1,
+    doorbell_failure: String,
+}
+
+impl PreparedPersistentSdmaWindowV1 {
+    pub(crate) fn tickets(&self) -> &[Gfx942SdmaCopyTicketV1] {
+        &self.tickets
+    }
+
+    pub(crate) fn into_request(self) -> Gfx942SdmaCopyRequestV1 {
+        self.request
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum PreparedPersistentSdmaWindowPublicationFailureV1 {
+    Recoverable {
+        error: Gfx942SdmaErrorV1,
+        prepared: PreparedPersistentSdmaWindowV1,
+    },
+    Retained {
+        error: Gfx942SdmaErrorV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    },
+}
+
+pub(crate) struct CompletedPersistentSdmaWindowV1 {
+    pub(crate) request: Gfx942SdmaCopyRequestV1,
+    pub(crate) packet_count: usize,
+}
+
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum PersistentSdmaWindowPollV1 {
+    Pending,
+    Completed(CompletedPersistentSdmaWindowV1),
 }
 
 impl PreparedSingleSdmaV1 {
@@ -1159,6 +1215,8 @@ pub(crate) struct Gfx942SdmaQueueOwnerV1 {
     doorbell: Option<LinuxDoorbellSliceV1>,
     records: Vec<Option<SdmaCopyRecordV1>>,
     xgmi_records: Vec<Option<XgmiSdmaCopyRecordV1>>,
+    persistent_window_slots: Vec<Option<PersistentSdmaWindowSlotV1>>,
+    persistent_window_records: Vec<Option<PersistentSdmaWindowRecordV1>>,
     uncertain_xgmi_ticket: Option<Gfx942SdmaCopyTicketV1>,
     generations: [u32; GFX942_SDMA_RING_SLOT_COUNT_V1],
     destroyed: bool,
@@ -1223,6 +1281,16 @@ impl Gfx942SdmaQueueOwnerV1 {
             .try_reserve_exact(GFX942_SDMA_RING_SLOT_COUNT_V1)
             .map_err(|_| Gfx942SdmaErrorV1::Contract("XGMI SDMA record roster allocation"))?;
         xgmi_records.resize_with(GFX942_SDMA_RING_SLOT_COUNT_V1, || None);
+        let mut persistent_window_slots = Vec::new();
+        persistent_window_slots
+            .try_reserve_exact(GFX942_SDMA_RING_SLOT_COUNT_V1)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("persistent SDMA window slot roster"))?;
+        persistent_window_slots.resize_with(GFX942_SDMA_RING_SLOT_COUNT_V1, || None);
+        let mut persistent_window_records = Vec::new();
+        persistent_window_records
+            .try_reserve_exact(GFX942_SDMA_RING_SLOT_COUNT_V1)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("persistent SDMA window owner roster"))?;
+        persistent_window_records.resize_with(GFX942_SDMA_RING_SLOT_COUNT_V1, || None);
         memory.check_queue_currentness()?;
         let mut ring = memory.allocate_aql_queue(GFX942_SDMA_RING_BYTES_V1 as usize)?;
         memory.with_bytes_mut(&mut ring, |bytes| bytes.fill(0))?;
@@ -1321,6 +1389,8 @@ impl Gfx942SdmaQueueOwnerV1 {
             doorbell: Some(doorbell),
             records,
             xgmi_records,
+            persistent_window_slots,
+            persistent_window_records,
             uncertain_xgmi_ticket: None,
             generations: [0; GFX942_SDMA_RING_SLOT_COUNT_V1],
             destroyed: false,
@@ -1385,7 +1455,10 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
         for index in 0..count {
             let slot = batch_ring_slot(write, index)?;
-            if self.records[slot].is_some() || self.xgmi_records[slot].is_some() {
+            if self.records[slot].is_some()
+                || self.xgmi_records[slot].is_some()
+                || self.persistent_window_slots[slot].is_some()
+            {
                 return Err(Gfx942SdmaErrorV1::QueueFull);
             }
         }
@@ -1434,7 +1507,10 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
         let ring_slot = ((write % u64::from(GFX942_SDMA_RING_BYTES_V1))
             / GFX942_SDMA_SUBMISSION_BYTES_V1 as u64) as usize;
-        if self.records[ring_slot].is_some() || self.xgmi_records[ring_slot].is_some() {
+        if self.records[ring_slot].is_some()
+            || self.xgmi_records[ring_slot].is_some()
+            || self.persistent_window_slots[ring_slot].is_some()
+        {
             return Err(Gfx942SdmaErrorV1::QueueFull);
         }
         let generation =
@@ -1554,7 +1630,10 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
         let ring_slot = ((write % u64::from(GFX942_SDMA_RING_BYTES_V1))
             / GFX942_SDMA_SUBMISSION_BYTES_V1 as u64) as usize;
-        if self.records[ring_slot].is_some() || self.xgmi_records[ring_slot].is_some() {
+        if self.records[ring_slot].is_some()
+            || self.xgmi_records[ring_slot].is_some()
+            || self.persistent_window_slots[ring_slot].is_some()
+        {
             return Err(Gfx942SdmaErrorV1::QueueFull);
         }
         let generation =
@@ -1961,6 +2040,19 @@ impl Gfx942SdmaQueueOwnerV1 {
                 prepared,
             });
         }
+        let prepared_slot_is_free = self.records[prepared.copy.slot].is_none()
+            && self.xgmi_records[prepared.copy.slot].is_none()
+            && self.persistent_window_slots[prepared.copy.slot].is_none()
+            && self.generations[prepared.copy.slot]
+                .checked_add(1)
+                .filter(|generation| *generation != 0)
+                == Some(prepared.copy.generation);
+        if !prepared_slot_is_free {
+            return Err(PreparedSingleSdmaPublicationFailureV1::Recoverable {
+                error: Gfx942SdmaErrorV1::Contract("SDMA prepared single slot occupancy"),
+                prepared,
+            });
+        }
         let PreparedSingleSdmaV1 {
             write,
             write_end,
@@ -2010,6 +2102,396 @@ impl Gfx942SdmaQueueOwnerV1 {
             }
             Err(error) => Err(PreparedSingleSdmaPublicationFailureV1::Retained { error, ticket }),
         }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn prepare_persistent_window_recoverable(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942SdmaCopyRequestV1,
+    ) -> Result<PreparedPersistentSdmaWindowV1, (Gfx942SdmaErrorV1, Gfx942SdmaCopyRequestV1)> {
+        let prepared = (|| {
+            self.require_live()?;
+            let packet_count = persistent_sdma_window_packet_count(request.copy_bytes)?;
+            let write = self.observe_batch_start(memory, packet_count)?;
+            let write_end = checked_sdma_write_end(
+                write,
+                submission_batch_bytes(packet_count)?,
+                &mut self.poisoned,
+            )?;
+            let (source_address, destination_address) = Self::checked_copy_addresses(
+                memory,
+                &request.source,
+                request.source_offset,
+                &request.destination,
+                request.destination_offset,
+                request.copy_bytes,
+            )?;
+            let completion_base = memory
+                .mapped_resource_facts(self.completions.as_ref().ok_or(
+                    Gfx942SdmaErrorV1::Contract("missing persistent SDMA window completion arena"),
+                )?)?
+                .gpu_va();
+            let mut copies = Vec::new();
+            copies
+                .try_reserve_exact(packet_count)
+                .map_err(|_| Gfx942SdmaErrorV1::Contract("persistent SDMA window packets"))?;
+            let mut tickets = Vec::new();
+            tickets
+                .try_reserve_exact(packet_count)
+                .map_err(|_| Gfx942SdmaErrorV1::Contract("persistent SDMA window tickets"))?;
+            for index in 0..packet_count {
+                let packet_offset = (index as u64)
+                    .checked_mul(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))
+                    .ok_or(Gfx942SdmaErrorV1::Contract(
+                        "persistent SDMA window packet offset",
+                    ))?;
+                let remaining = u64::from(request.copy_bytes)
+                    .checked_sub(packet_offset)
+                    .ok_or(Gfx942SdmaErrorV1::Contract(
+                        "persistent SDMA window packet extent",
+                    ))?;
+                let packet_bytes =
+                    u32::try_from(remaining.min(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)))
+                        .map_err(|_| {
+                        Gfx942SdmaErrorV1::Contract("persistent SDMA window packet bytes")
+                    })?;
+                let slot = batch_ring_slot(write, index)?;
+                let generation =
+                    next_sdma_ticket_generation(self.generations[slot], &mut self.poisoned)?;
+                let completion_address = completion_base.checked_add((slot * 8) as u64).ok_or(
+                    Gfx942SdmaErrorV1::Contract("persistent SDMA window completion address"),
+                )?;
+                let packet_source = source_address.checked_add(packet_offset).ok_or(
+                    Gfx942SdmaErrorV1::Contract("persistent SDMA window source address"),
+                )?;
+                let packet_destination = destination_address.checked_add(packet_offset).ok_or(
+                    Gfx942SdmaErrorV1::Contract("persistent SDMA window destination address"),
+                )?;
+                copies.push(PreparedSdmaCopyV1 {
+                    packet: Gfx942SdmaCopySubmissionV1::new(
+                        packet_source,
+                        packet_destination,
+                        packet_bytes,
+                        completion_address,
+                        generation,
+                    )?,
+                    slot,
+                    generation,
+                    completion_value: generation,
+                });
+                tickets.push(Gfx942SdmaCopyTicketV1 {
+                    owner: self.owner,
+                    queue_id: self.queue_id,
+                    slot: slot as u16,
+                    generation,
+                });
+            }
+            Ok((
+                write,
+                write_end,
+                copies,
+                tickets,
+                preallocate_doorbell_failure_message()?,
+            ))
+        })();
+        match prepared {
+            Ok((write, write_end, copies, tickets, doorbell_failure)) => {
+                Ok(PreparedPersistentSdmaWindowV1 {
+                    queue_id: self.queue_id,
+                    write,
+                    write_end,
+                    copies,
+                    tickets,
+                    request,
+                    doorbell_failure,
+                })
+            }
+            Err(error) => Err((error, request)),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn submit_prepared_persistent_window_with_custody(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared: PreparedPersistentSdmaWindowV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, PreparedPersistentSdmaWindowPublicationFailureV1> {
+        let recover = |error, prepared| {
+            PreparedPersistentSdmaWindowPublicationFailureV1::Recoverable { error, prepared }
+        };
+        if prepared.queue_id != self.queue_id
+            || prepared.copies.len() != prepared.tickets.len()
+            || prepared.copies.is_empty()
+        {
+            return Err(recover(
+                Gfx942SdmaErrorV1::Contract("persistent SDMA window queue or roster"),
+                prepared,
+            ));
+        }
+        let publication_plan = match admit_sdma_batch_publication_plan(
+            prepared.write,
+            prepared.write_end,
+            prepared.copies.len(),
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return Err(recover(error, prepared)),
+        };
+        if self.completions.is_none()
+            || self.ring.is_none()
+            || self.control.is_none()
+            || self.doorbell.is_none()
+        {
+            return Err(recover(
+                Gfx942SdmaErrorV1::Contract("missing persistent SDMA window authority"),
+                prepared,
+            ));
+        }
+        for (index, (copy, ticket)) in prepared
+            .copies
+            .iter()
+            .zip(prepared.tickets.iter())
+            .enumerate()
+        {
+            let expected_slot = match batch_ring_slot(prepared.write, index) {
+                Ok(slot) => slot,
+                Err(error) => return Err(recover(error, prepared)),
+            };
+            if copy.slot != expected_slot
+                || usize::from(ticket.slot) != expected_slot
+                || ticket.owner != self.owner
+                || ticket.queue_id != self.queue_id
+                || ticket.generation != copy.generation
+                || copy.completion_value != copy.generation
+                || self.generations[copy.slot]
+                    .checked_add(1)
+                    .filter(|generation| *generation != 0)
+                    != Some(copy.generation)
+                || self.records[copy.slot].is_some()
+                || self.xgmi_records[copy.slot].is_some()
+                || self.persistent_window_slots[copy.slot].is_some()
+                || self.persistent_window_records[copy.slot].is_some()
+            {
+                return Err(recover(
+                    Gfx942SdmaErrorV1::Contract("persistent SDMA window prepared identity"),
+                    prepared,
+                ));
+            }
+        }
+
+        let PreparedPersistentSdmaWindowV1 {
+            copies,
+            tickets,
+            request,
+            doorbell_failure,
+            ..
+        } = prepared;
+        let anchor_slot = copies[0].slot;
+        let packet_count = copies.len();
+        self.persistent_window_records[anchor_slot] = Some(PersistentSdmaWindowRecordV1 {
+            request,
+            packet_count,
+        });
+        for copy in &copies {
+            self.generations[copy.slot] = copy.generation;
+            self.persistent_window_slots[copy.slot] = Some(PersistentSdmaWindowSlotV1 {
+                anchor_slot,
+                generation: copy.generation,
+                completion_value: copy.completion_value,
+            });
+        }
+        self.poisoned = true;
+        let publication = (|| {
+            let completions = self
+                .completions
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing persistent SDMA window completion arena",
+                ))?;
+            for copy in &copies {
+                memory.overwrite_mapped_host_visible_subrange_in_current_scope(
+                    completions,
+                    (copy.slot * 8) as u64,
+                    &[0; 8],
+                )?;
+            }
+            let ring = self.ring.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
+                "missing persistent SDMA window ring",
+            ))?;
+            for copy in &copies {
+                memory.write_sdma_ring_slot_in_current_scope(
+                    ring,
+                    copy.slot as u32,
+                    copy.packet.bytes(),
+                )?;
+            }
+            memory.publish_sdma_control_write_release_in_current_scope(
+                self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing persistent SDMA window control",
+                ))?,
+                publication_plan.write,
+                publication_plan.write_end,
+            )?;
+            self.doorbell
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing persistent SDMA window doorbell",
+                ))?
+                .store_packet_id_release(publication_plan.write_end)
+                .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))
+        })();
+        match publication {
+            Ok(()) => {
+                self.poisoned = false;
+                Ok(tickets)
+            }
+            Err(error) => {
+                Err(PreparedPersistentSdmaWindowPublicationFailureV1::Retained { error, tickets })
+            }
+        }
+    }
+
+    fn validate_persistent_window_tickets(
+        &self,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<usize, Gfx942SdmaErrorV1> {
+        if tickets.is_empty() || tickets.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "persistent SDMA window ticket count",
+            ));
+        }
+        let anchor_slot = usize::from(tickets[0].slot);
+        let record = self
+            .persistent_window_records
+            .get(anchor_slot)
+            .and_then(Option::as_ref)
+            .ok_or(Gfx942SdmaErrorV1::Contract("stale persistent SDMA window"))?;
+        if record.packet_count != tickets.len() {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "persistent SDMA window ticket roster",
+            ));
+        }
+        for (index, ticket) in tickets.iter().copied().enumerate() {
+            if !ticket_matches_queue_occurrence(ticket, self.owner, self.queue_id) {
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "persistent SDMA window ticket queue occurrence",
+                ));
+            }
+            let expected_slot = (anchor_slot + index) % GFX942_SDMA_RING_SLOT_COUNT_V1;
+            let slot = self
+                .persistent_window_slots
+                .get(expected_slot)
+                .and_then(Option::as_ref)
+                .ok_or(Gfx942SdmaErrorV1::Contract(
+                    "stale persistent SDMA window ticket",
+                ))?;
+            if usize::from(ticket.slot) != expected_slot
+                || slot.anchor_slot != anchor_slot
+                || slot.generation != ticket.generation
+            {
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "persistent SDMA window ticket generation or order",
+                ));
+            }
+        }
+        Ok(anchor_slot)
+    }
+
+    fn observe_persistent_window_completion(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<bool, Gfx942SdmaErrorV1> {
+        let anchor_slot = self.validate_persistent_window_tickets(tickets)?;
+        let mut all_ready = true;
+        for ticket in tickets {
+            let slot_index = usize::from(ticket.slot);
+            let expected = self.persistent_window_slots[slot_index]
+                .as_ref()
+                .expect("validated persistent window slot")
+                .completion_value;
+            let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
+                self.completions
+                    .as_mut()
+                    .ok_or(Gfx942SdmaErrorV1::Contract(
+                        "missing persistent SDMA window completion arena",
+                    ))?,
+                (slot_index * 8) as u64,
+            )?;
+            if observed == 0 {
+                all_ready = false;
+            } else if observed != i64::from(expected) {
+                self.poisoned = true;
+                return Err(Gfx942SdmaErrorV1::Contract(
+                    "unexpected persistent SDMA window completion value",
+                ));
+            }
+        }
+        debug_assert!(self.persistent_window_records[anchor_slot].is_some());
+        Ok(all_ready)
+    }
+
+    fn complete_persistent_window(
+        &mut self,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> CompletedPersistentSdmaWindowV1 {
+        let anchor_slot = usize::from(tickets[0].slot);
+        for ticket in tickets {
+            self.persistent_window_slots[usize::from(ticket.slot)] = None;
+        }
+        let record = self.persistent_window_records[anchor_slot]
+            .take()
+            .expect("validated persistent SDMA window owner");
+        CompletedPersistentSdmaWindowV1 {
+            request: record.request,
+            packet_count: record.packet_count,
+        }
+    }
+
+    fn poll_persistent_window(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<PersistentSdmaWindowPollV1, Gfx942SdmaErrorV1> {
+        self.require_live()?;
+        memory.check_queue_operational_currentness()?;
+        if !self.observe_persistent_window_completion(memory, tickets)? {
+            memory.check_queue_operational_currentness()?;
+            return Ok(PersistentSdmaWindowPollV1::Pending);
+        }
+        memory.check_queue_operational_currentness()?;
+        Ok(PersistentSdmaWindowPollV1::Completed(
+            self.complete_persistent_window(tickets),
+        ))
+    }
+
+    fn wait_persistent_window_for(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<CompletedPersistentSdmaWindowV1, Gfx942SdmaErrorV1> {
+        self.require_live()?;
+        self.validate_persistent_window_tickets(tickets)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(Gfx942SdmaErrorV1::Contract(
+                "persistent SDMA window wait deadline",
+            ))?;
+        let mut wait = MonotonicWaitV1::until(deadline);
+        memory.check_queue_operational_currentness()?;
+        loop {
+            if self.observe_persistent_window_completion(memory, tickets)? {
+                break;
+            }
+            if wait.expired() {
+                memory.check_queue_operational_currentness()?;
+                return Err(Gfx942SdmaErrorV1::Timeout);
+            }
+            wait.pause();
+        }
+        memory.check_queue_operational_currentness()?;
+        Ok(self.complete_persistent_window(tickets))
     }
 
     #[allow(clippy::type_complexity)]
@@ -2125,6 +2607,21 @@ impl Gfx942SdmaQueueOwnerV1 {
                 });
             }
         };
+        let prepared_slots_are_free = prepared_batch.copies.iter().all(|copy| {
+            self.records[copy.slot].is_none()
+                && self.xgmi_records[copy.slot].is_none()
+                && self.persistent_window_slots[copy.slot].is_none()
+                && self.generations[copy.slot]
+                    .checked_add(1)
+                    .filter(|generation| *generation != 0)
+                    == Some(copy.generation)
+        });
+        if !prepared_slots_are_free {
+            return Err(PreparedSdmaPublicationFailureV1::Recoverable {
+                error: Gfx942SdmaErrorV1::Contract("SDMA prepared batch slot occupancy"),
+                prepared: prepared_batch,
+            });
+        }
         let PreparedSdmaBatchV1 {
             queue_id: _,
             write: _,
@@ -2658,7 +3155,10 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
         self.require_live()?;
-        if self.records.iter().any(Option::is_some) || self.xgmi_records.iter().any(Option::is_some)
+        if self.records.iter().any(Option::is_some)
+            || self.xgmi_records.iter().any(Option::is_some)
+            || self.persistent_window_slots.iter().any(Option::is_some)
+            || self.persistent_window_records.iter().any(Option::is_some)
         {
             return Err(Gfx942SdmaErrorV1::Pending);
         }
@@ -2695,6 +3195,8 @@ impl Gfx942SdmaQueueOwnerV1 {
             || self.poisoned
             || self.records.iter().any(Option::is_some)
             || self.xgmi_records.iter().any(Option::is_some)
+            || self.persistent_window_slots.iter().any(Option::is_some)
+            || self.persistent_window_records.iter().any(Option::is_some)
         {
             return Err(Gfx942SdmaErrorV1::Contract(
                 "SDMA resources are not releasable",
@@ -4013,6 +4515,19 @@ impl Gfx942SdmaQueueSetV1 {
         owner.prepare_single_recoverable(memory, request)
     }
 
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn prepare_persistent_window_recoverable(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942SdmaCopyRequestV1,
+    ) -> Result<PreparedPersistentSdmaWindowV1, (Gfx942SdmaErrorV1, Gfx942SdmaCopyRequestV1)> {
+        let owner = match self.owner_for_copy(request.source.kind(), request.destination.kind()) {
+            Ok(owner) => owner,
+            Err(error) => return Err((error, request)),
+        };
+        owner.prepare_persistent_window_recoverable(memory, request)
+    }
+
     pub(crate) fn submit(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
@@ -4102,6 +4617,55 @@ impl Gfx942SdmaQueueSetV1 {
             }
         };
         owner.submit_prepared_single_with_custody(memory, prepared)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn submit_prepared_persistent_window_with_custody(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared: PreparedPersistentSdmaWindowV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, PreparedPersistentSdmaWindowPublicationFailureV1> {
+        let Some(ticket) = prepared.tickets().first().copied() else {
+            return Err(
+                PreparedPersistentSdmaWindowPublicationFailureV1::Recoverable {
+                    error: Gfx942SdmaErrorV1::Contract(
+                        "persistent SDMA window prepared ticket roster",
+                    ),
+                    prepared,
+                },
+            );
+        };
+        let owner = match self.owner_for_ticket(ticket) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(
+                    PreparedPersistentSdmaWindowPublicationFailureV1::Recoverable {
+                        error,
+                        prepared,
+                    },
+                );
+            }
+        };
+        owner.submit_prepared_persistent_window_with_custody(memory, prepared)
+    }
+
+    pub(crate) fn poll_persistent_window(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Result<PersistentSdmaWindowPollV1, Gfx942SdmaErrorV1> {
+        self.owner_for_tickets(tickets)?
+            .poll_persistent_window(memory, tickets)
+    }
+
+    pub(crate) fn wait_persistent_window_for(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        timeout: Duration,
+    ) -> Result<CompletedPersistentSdmaWindowV1, Gfx942SdmaErrorV1> {
+        self.owner_for_tickets(tickets)?
+            .wait_persistent_window_for(memory, tickets, timeout)
     }
 
     pub(crate) fn poll(
@@ -4883,6 +5447,22 @@ fn submission_batch_bytes(count: usize) -> Result<u64, Gfx942SdmaErrorV1> {
         .ok_or(Gfx942SdmaErrorV1::Contract("SDMA batch byte count"))
 }
 
+pub(crate) fn persistent_sdma_window_packet_count(
+    copy_bytes: u32,
+) -> Result<usize, Gfx942SdmaErrorV1> {
+    if copy_bytes == 0 {
+        return Err(Gfx942SdmaErrorV1::Contract("empty persistent SDMA window"));
+    }
+    let maximum = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
+    let count = u64::from(copy_bytes).div_ceil(maximum);
+    let count = usize::try_from(count)
+        .map_err(|_| Gfx942SdmaErrorV1::Contract("persistent SDMA window packet count"))?;
+    if count > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
+        return Err(Gfx942SdmaErrorV1::QueueFull);
+    }
+    Ok(count)
+}
+
 fn sdma_ring_delta_is_below_capacity(later: u64, earlier: u64) -> bool {
     later
         .checked_sub(earlier)
@@ -5051,7 +5631,7 @@ mod tests {
             .split("fn submit_prepared_single_with_custody")
             .nth(1)
             .unwrap()
-            .split("fn prepare_batch")
+            .split("fn prepare_persistent_window_recoverable")
             .next()
             .unwrap();
         assert!(!prepare.contains("Vec<"));
@@ -5060,6 +5640,102 @@ mod tests {
         assert!(!publish.contains("Vec<"));
         assert!(!publish.contains("preallocate_doorbell_failure_message"));
         assert!(publish.contains("PreparedSingleSdmaPublicationFailureV1::Retained"));
+    }
+
+    #[test]
+    fn persistent_window_packet_limits_and_ring_wrap_are_exact() {
+        let maximum = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1;
+        assert!(persistent_sdma_window_packet_count(0).is_err());
+        assert_eq!(persistent_sdma_window_packet_count(1).unwrap(), 1);
+        assert_eq!(persistent_sdma_window_packet_count(maximum).unwrap(), 1);
+        assert_eq!(persistent_sdma_window_packet_count(maximum + 1).unwrap(), 2);
+        let sixty_three =
+            u32::try_from(u64::from(maximum) * GFX942_SDMA_MAX_IN_FLIGHT_V1 as u64).unwrap();
+        assert_eq!(
+            persistent_sdma_window_packet_count(sixty_three).unwrap(),
+            GFX942_SDMA_MAX_IN_FLIGHT_V1
+        );
+        assert!(persistent_sdma_window_packet_count(sixty_three + 1).is_err());
+
+        let write =
+            u64::from(GFX942_SDMA_RING_BYTES_V1) - 2 * GFX942_SDMA_SUBMISSION_BYTES_V1 as u64;
+        assert_eq!(batch_ring_slot(write, 0).unwrap(), 62);
+        assert_eq!(batch_ring_slot(write, 1).unwrap(), 63);
+        assert_eq!(batch_ring_slot(write, 2).unwrap(), 0);
+    }
+
+    #[test]
+    fn persistent_window_publication_is_one_pointer_and_one_doorbell() {
+        let source = include_str!("sdma.rs");
+        let publication = source
+            .split("fn submit_prepared_persistent_window_with_custody")
+            .nth(1)
+            .unwrap()
+            .split("fn validate_persistent_window_tickets")
+            .next()
+            .unwrap();
+        assert_eq!(
+            publication
+                .matches("publish_sdma_control_write_release_in_current_scope")
+                .count(),
+            1
+        );
+        assert_eq!(publication.matches("store_packet_id_release").count(), 1);
+        let records = publication
+            .find("persistent_window_records[anchor_slot]")
+            .unwrap();
+        let first_mapped_write = publication
+            .find("overwrite_mapped_host_visible_subrange_in_current_scope")
+            .unwrap();
+        assert!(records < first_mapped_write);
+        assert!(publication.contains("for copy in &copies"));
+        assert!(publication.contains("PreparedPersistentSdmaWindowPublicationFailureV1::Retained"));
+    }
+
+    #[test]
+    fn persistent_window_has_exclusive_occupancy_and_whole_window_retirement() {
+        let source = include_str!("sdma.rs");
+        let owner = source
+            .split("pub(crate) struct Gfx942SdmaQueueOwnerV1")
+            .nth(1)
+            .unwrap()
+            .split("impl Gfx942SdmaQueueOwnerV1")
+            .next()
+            .unwrap();
+        assert!(owner.contains("persistent_window_slots"));
+        assert!(owner.contains("persistent_window_records"));
+
+        let batch_start = source
+            .split("fn observe_batch_start")
+            .nth(1)
+            .unwrap()
+            .split("fn prepare_xgmi_batch")
+            .next()
+            .unwrap();
+        assert!(batch_start.contains("persistent_window_slots"));
+        let destroy = source.split("pub(crate) fn destroy_queue").nth(1).unwrap();
+        assert!(destroy.contains("persistent_window_slots"));
+        assert!(destroy.contains("persistent_window_records"));
+
+        let generic_validation = source
+            .split("fn validate_ticket")
+            .nth(1)
+            .unwrap()
+            .split("fn validate_xgmi_ticket")
+            .next()
+            .unwrap();
+        assert!(generic_validation.contains("self.records"));
+        assert!(!generic_validation.contains("persistent_window_slots"));
+
+        let completion = source
+            .split("fn complete_persistent_window")
+            .nth(1)
+            .unwrap()
+            .split("fn poll_persistent_window")
+            .next()
+            .unwrap();
+        assert!(completion.contains("for ticket in tickets"));
+        assert!(completion.contains("persistent_window_records[anchor_slot]"));
     }
 
     #[test]

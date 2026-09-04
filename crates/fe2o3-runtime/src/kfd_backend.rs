@@ -23,13 +23,13 @@ use fe2o3_kfd::topology::Gfx942XgmiRouteV1;
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
     ComputeAqlQueueSessionV1, DeviceSelector, GFX942_MAX_FIXED_DISPATCH_DATA_V1,
-    GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
-    Gfx942CompletedDispatchReadRequestV1, Gfx942DeviceContentDescriptorV1,
-    Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryUnmappedV1,
-    Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
+    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
+    Gfx942DeviceMemoryUnmappedV1, Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1,
-    Gfx942DirectionalPersistentSdmaTerminalCustodyV1, Gfx942DispatchBatchV1,
+    Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1, Gfx942DispatchBatchV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942NativeXgmiSdmaQueueV1, Gfx942PersistentSdmaDirectionV1,
     Gfx942RecycledDispatchWriteRequestV1, Gfx942SdmaBufferV1, Gfx942SdmaCopyTicketV1,
@@ -65,7 +65,7 @@ mod kfd_backend_sdma_seam;
 #[cfg(test)]
 use kfd_backend_sdma_seam::ScriptedSdmaDriverV1;
 use kfd_backend_sdma_seam::{
-    DirectionalSdmaCompletedOwnerV1, DirectionalSdmaDeviceOwnerV1,
+    DirectionalSdmaCompletedOwnerV1, DirectionalSdmaCopyRequestV1, DirectionalSdmaDeviceOwnerV1,
     DirectionalSdmaExecutionFailureV1, DirectionalSdmaPairOwnerV1, DirectionalSdmaPollV1,
     DirectionalSdmaSubmissionOwnerV1, SdmaBufferOwnerV1, SdmaRecycleFailureV1,
     SdmaTransitionFailureV1,
@@ -625,7 +625,8 @@ struct ActiveSdmaCopyV1 {
     destination_offset: u64,
     byte_len: u64,
     completed_bytes: u64,
-    packet_bytes: u32,
+    window_bytes: u64,
+    window_requests: Box<[DirectionalSdmaCopyRequestV1]>,
     dependencies: Vec<u64>,
     dependency_cursor: usize,
     dependency_depth: usize,
@@ -643,7 +644,7 @@ enum KfdRuntimeTerminalSdmaCustodyV1 {
     Buffer(SdmaBufferOwnerV1),
     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
     Demotion(Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1),
-    Submission(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+    Submission(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
     Pending(DirectionalSdmaSubmissionOwnerV1),
     Completed(DirectionalSdmaCompletedOwnerV1),
     Retirement {
@@ -748,38 +749,58 @@ fn directional_sdma_allocation_ids_v1(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectSdmaPacketPlanV1 {
-    host_offset: u64,
-    device_offset: u64,
-    copy_bytes: u32,
+#[derive(Debug, Eq, PartialEq)]
+struct DirectSdmaWindowPlanV1 {
+    requests: Box<[DirectionalSdmaCopyRequestV1]>,
+    copy_bytes: u64,
 }
 
-fn direct_sdma_packet_plan_v1(
+fn direct_sdma_window_plan_v1(
     active: &ActiveSdmaCopyV1,
     direction: Gfx942PersistentSdmaDirectionV1,
-) -> Option<DirectSdmaPacketPlanV1> {
-    let remaining = active.byte_len.checked_sub(active.completed_bytes)?;
-    let copy_bytes =
-        u32::try_from(remaining.min(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))).ok()?;
-    if copy_bytes == 0 {
+) -> Option<DirectSdmaWindowPlanV1> {
+    let mut remaining = active.byte_len.checked_sub(active.completed_bytes)?;
+    if remaining == 0 {
         return None;
     }
-    let source_offset = active.source_offset.checked_add(active.completed_bytes)?;
-    let destination_offset = active
+    let mut source_offset = active.source_offset.checked_add(active.completed_bytes)?;
+    let mut destination_offset = active
         .destination_offset
         .checked_add(active.completed_bytes)?;
-    Some(match direction {
-        Gfx942PersistentSdmaDirectionV1::HostToDevice => DirectSdmaPacketPlanV1 {
-            host_offset: source_offset,
-            device_offset: destination_offset,
+    let max_window_packets =
+        u64::try_from(GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1).ok()?;
+    let request_capacity = usize::try_from(
+        remaining
+            .div_ceil(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))
+            .min(max_window_packets),
+    )
+    .ok()?;
+    let mut requests = Vec::new();
+    requests.try_reserve_exact(request_capacity).ok()?;
+    let mut window_bytes = 0_u64;
+    while remaining != 0
+        && requests.len() < GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1
+    {
+        let copy_bytes =
+            u32::try_from(remaining.min(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))).ok()?;
+        let (host_offset, device_offset) = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => (source_offset, destination_offset),
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => (destination_offset, source_offset),
+        };
+        requests.push(DirectionalSdmaCopyRequestV1 {
+            host_offset,
+            device_offset,
             copy_bytes,
-        },
-        Gfx942PersistentSdmaDirectionV1::DeviceToHost => DirectSdmaPacketPlanV1 {
-            host_offset: destination_offset,
-            device_offset: source_offset,
-            copy_bytes,
-        },
+        });
+        let copy_bytes = u64::from(copy_bytes);
+        source_offset = source_offset.checked_add(copy_bytes)?;
+        destination_offset = destination_offset.checked_add(copy_bytes)?;
+        remaining -= copy_bytes;
+        window_bytes = window_bytes.checked_add(copy_bytes)?;
+    }
+    Some(DirectSdmaWindowPlanV1 {
+        requests: requests.into_boxed_slice(),
+        copy_bytes: window_bytes,
     })
 }
 
@@ -2295,6 +2316,9 @@ impl KfdRuntimeBackendV1 {
                 kfd_backend_sdma_seam::NativeDirectionalSdmaTerminalCustodyV1::Submission(
                     custody,
                 ) => KfdRuntimeTerminalSdmaCustodyV1::Submission(custody),
+                kfd_backend_sdma_seam::NativeDirectionalSdmaTerminalCustodyV1::PublishedWindow(
+                    custody,
+                ) => KfdRuntimeTerminalSdmaCustodyV1::Pending(custody),
                 kfd_backend_sdma_seam::NativeDirectionalSdmaTerminalCustodyV1::Retirement {
                     failure,
                     host,
@@ -2430,7 +2454,14 @@ impl KfdRuntimeBackendV1 {
                 return Err(self.terminal_error(detail));
             }
         };
-        if completed.direction() != direction || completed.copy_bytes() != active.packet_bytes {
+        if completed.direction() != direction
+            || u64::from(completed.copy_bytes()) != active.window_bytes
+            || completed.packet_count() != active.window_requests.len()
+            || active.window_requests.first().is_none_or(|expected| {
+                completed.host_offset() != expected.host_offset
+                    || completed.device_offset() != expected.device_offset
+            })
+        {
             self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
                 completed,
             ));
@@ -2463,13 +2494,14 @@ impl KfdRuntimeBackendV1 {
         )?;
         active.completed_bytes = active
             .completed_bytes
-            .checked_add(u64::from(active.packet_bytes))
+            .checked_add(active.window_bytes)
             .ok_or_else(|| self.terminal_error("SDMA copy progress overflow"))?;
         if active.completed_bytes < active.byte_len {
             // Poll only observes and returns exact custody. Explicit flush owns
             // every continuation publication.
             active.phase = ActiveDirectionalSdmaPhaseV1::Ready;
-            active.packet_bytes = 0;
+            active.window_bytes = 0;
+            active.window_requests = Box::new([]);
             self.active_sdma.insert(active.id, active);
             return Ok(BackendPollV1::Pending);
         }
@@ -2574,9 +2606,27 @@ impl KfdRuntimeBackendV1 {
             Ok(direction) => direction,
             Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
         };
-        let Some(packet) = direct_sdma_packet_plan_v1(&active, direction) else {
+        let Some(window) = direct_sdma_window_plan_v1(&active, direction) else {
             return Ok(self.fail_unpublished_sdma_copy_v1(active));
         };
+        // Duplicate only bounded, addressless descriptors before moving native
+        // allocation custody into the publication transition.
+        let mut publication_requests = Vec::new();
+        if publication_requests
+            .try_reserve_exact(window.requests.len())
+            .is_err()
+        {
+            if active.completed_bytes != 0 {
+                self.fail_quiescent_sdma_copy_v1(active);
+                return Err(Self::quiescent_error(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "KFD directional SDMA window metadata allocation failed",
+                ));
+            }
+            return Ok(self.fail_unpublished_sdma_copy_v1(active));
+        }
+        publication_requests.extend_from_slice(&window.requests);
+        let publication_requests = publication_requests.into_boxed_slice();
         let pair = match self.take_directional_sdma_storage_v1(
             &active,
             direction,
@@ -2594,15 +2644,13 @@ impl KfdRuntimeBackendV1 {
             }
             Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
         };
-        match self.directional_sdma_ops_v1().submit(
-            pair,
-            direction,
-            packet.host_offset,
-            packet.device_offset,
-            packet.copy_bytes,
-        ) {
+        match self
+            .directional_sdma_ops_v1()
+            .submit(pair, direction, publication_requests)
+        {
             Ok(submission) => {
-                active.packet_bytes = packet.copy_bytes;
+                active.window_bytes = window.copy_bytes;
+                active.window_requests = window.requests;
                 active.phase = ActiveDirectionalSdmaPhaseV1::Published(Box::new(submission));
                 self.active_sdma.insert(active.id, active);
                 Ok(BackendPollV1::Pending)
@@ -2901,12 +2949,16 @@ impl KfdRuntimeBackendV1 {
             KfdRuntimeSdmaStorageV1::Device(device) => *device,
             _ => unreachable!("preflighted synchronous device remains available"),
         };
-        let submission = match self.directional_sdma_ops_v1().submit(
-            DirectionalSdmaPairOwnerV1 { device, host },
-            direction,
+        let requests: Box<[_]> = [DirectionalSdmaCopyRequestV1 {
             host_offset,
             device_offset,
             copy_bytes,
+        }]
+        .into();
+        let submission = match self.directional_sdma_ops_v1().submit(
+            DirectionalSdmaPairOwnerV1 { device, host },
+            direction,
+            requests.clone(),
         ) {
             Ok(submission) => submission,
             Err(failure) => {
@@ -2947,7 +2999,12 @@ impl KfdRuntimeBackendV1 {
                 )));
             }
         };
-        if completed.direction() != direction || completed.copy_bytes() != copy_bytes {
+        if completed.direction() != direction
+            || completed.host_offset() != host_offset
+            || completed.device_offset() != device_offset
+            || completed.copy_bytes() != copy_bytes
+            || completed.packet_count() != 1
+        {
             self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
                 completed,
             ));
@@ -11748,7 +11805,8 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             destination_offset: destination.byte_offset,
             byte_len: source.byte_len,
             completed_bytes: 0,
-            packet_bytes: 0,
+            window_bytes: 0,
+            window_requests: Box::new([]),
             dependencies: dependency_submissions,
             dependency_cursor: 0,
             dependency_depth,
@@ -12279,6 +12337,18 @@ mod tests {
         }
     }
 
+    fn scripted_submit_window_step_v1(
+        direction: Gfx942PersistentSdmaDirectionV1,
+        requests: impl IntoIterator<Item = DirectionalSdmaCopyRequestV1>,
+        outcome: ScriptedFailureModeV1,
+    ) -> ScriptedSdmaStepV1 {
+        ScriptedSdmaStepV1::SubmitWindow {
+            direction,
+            requests: requests.into_iter().collect(),
+            outcome,
+        }
+    }
+
     fn scripted_direct_backend_v1(
         byte_len: usize,
         steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
@@ -12468,9 +12538,12 @@ mod tests {
                     host: SdmaBufferOwnerV1::Scripted(host),
                 },
                 Gfx942PersistentSdmaDirectionV1::HostToDevice,
-                0,
-                0,
-                8,
+                [DirectionalSdmaCopyRequestV1 {
+                    host_offset: 0,
+                    device_offset: 0,
+                    copy_bytes: 8,
+                }]
+                .into(),
             )
             .unwrap_err();
         assert!(matches!(
@@ -12640,6 +12713,55 @@ mod tests {
     }
 
     #[test]
+    fn scripted_sdma_clean_retry_after_prior_window_progress_is_quiescent() {
+        let mut steps = vec![scripted_submit_step_v1(
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            1,
+            1,
+            7,
+            ScriptedFailureModeV1::Retryable,
+        )];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(8, steps);
+        let dependency = backend.next_id().unwrap();
+        let event = backend.next_id().unwrap();
+        backend.submissions.insert(
+            dependency,
+            SubmissionRecordV1 {
+                stream,
+                status: BackendPollV1::Pending,
+            },
+        );
+        backend.events.insert(
+            event,
+            EventRecordV1 {
+                submission: dependency,
+            },
+        );
+        backend.event_submission_retain_counts.insert(dependency, 1);
+        let (source, destination) = scripted_copy_regions_v1(host, device, 8);
+        let submission = backend
+            .copy_async_v1(stream, source, destination, &[event])
+            .unwrap();
+        backend
+            .active_sdma
+            .get_mut(&submission)
+            .unwrap()
+            .completed_bytes = 1;
+        backend.submissions.get_mut(&dependency).unwrap().status = BackendPollV1::Succeeded;
+        assert!(matches!(
+            backend.flush_stream_v1(stream),
+            Err(RuntimeBackendFailureV1::Quiescent(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Native
+        ));
+        assert!(backend.quiescent_sdma_submissions.contains(&submission));
+        assert!(backend.active_sdma.is_empty());
+        backend.release_event_v1(event).unwrap();
+        backend.release_submission_v1(dependency).unwrap();
+        clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
+    }
+
+    #[test]
     fn scripted_sdma_poll_pending_retry_and_completion_preserve_facade_owner() {
         let mut steps = vec![
             scripted_submit_step_v1(
@@ -12679,29 +12801,32 @@ mod tests {
     }
 
     #[test]
-    fn scripted_sdma_partial_continuation_retry_becomes_exact_quiescent_marker() {
+    fn scripted_sdma_multi_packet_window_completes_as_one_owned_transition() {
         let first = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1;
         let byte_len = usize::try_from(first).unwrap() + 1;
         let mut steps = vec![
-            scripted_submit_step_v1(
+            scripted_submit_window_step_v1(
                 Gfx942PersistentSdmaDirectionV1::HostToDevice,
-                0,
-                0,
-                first,
+                [
+                    DirectionalSdmaCopyRequestV1 {
+                        host_offset: 0,
+                        device_offset: 0,
+                        copy_bytes: first,
+                    },
+                    DirectionalSdmaCopyRequestV1 {
+                        host_offset: u64::from(first),
+                        device_offset: u64::from(first),
+                        copy_bytes: 1,
+                    },
+                ],
                 ScriptedFailureModeV1::Success,
             ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Pending),
             ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
                 direction: None,
                 copy_bytes: None,
             }),
             ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
-            scripted_submit_step_v1(
-                Gfx942PersistentSdmaDirectionV1::HostToDevice,
-                u64::from(first),
-                u64::from(first),
-                1,
-                ScriptedFailureModeV1::Retryable,
-            ),
         ];
         steps.extend(scripted_release_steps_v1());
         let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
@@ -12710,18 +12835,11 @@ mod tests {
             .copy_async_v1(stream, source, destination, &[])
             .unwrap();
         assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
-        // Observation returned exact custody and did not publish packet two.
-        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 4);
-        assert!(matches!(
-            backend.flush_stream_v1(stream),
-            Err(RuntimeBackendFailureV1::Quiescent(error))
-                if error.kind() == KfdRuntimeBackendErrorKindV1::Native
-        ));
-        assert!(backend.quiescent_sdma_submissions.contains(&submission));
-        assert!(matches!(
-            backend.poll_v1(submission),
-            Err(RuntimeBackendFailureV1::Quiescent(_))
-        ));
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert!(!backend.quiescent_sdma_submissions.contains(&submission));
         assert!(backend.active_sdma.is_empty());
         clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
     }
@@ -12832,6 +12950,99 @@ mod tests {
                     if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
             ));
             assert!(backend.terminal);
+            assert!(backend.terminal_sdma_custody.is_some());
+            let driver = backend.scripted_sdma.as_ref().unwrap();
+            assert!(driver.is_exhausted());
+            assert_eq!(driver.live_owner_count(), 2);
+            assert_eq!(driver.unexpected_drops(), 0);
+            disarm_scripted_drop_after_inspection_v1(&mut backend);
+        }
+    }
+
+    #[test]
+    fn scripted_sdma_window_reordered_completion_is_terminal_with_exact_custody() {
+        let first = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1;
+        let byte_len = usize::try_from(first).unwrap() + 1;
+        let requests = [
+            DirectionalSdmaCopyRequestV1 {
+                host_offset: 0,
+                device_offset: 0,
+                copy_bytes: first,
+            },
+            DirectionalSdmaCopyRequestV1 {
+                host_offset: u64::from(first),
+                device_offset: u64::from(first),
+                copy_bytes: 1,
+            },
+        ];
+        let steps = [
+            scripted_submit_window_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                requests,
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::CompletedWindow {
+                direction: None,
+                copy_bytes: None,
+                requests: Some(vec![requests[1], requests[0]]),
+            }),
+        ];
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        let (source, destination) = scripted_copy_regions_v1(host, device, byte_len as u64);
+        let submission = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert!(matches!(
+            backend.poll_v1(submission),
+            Err(RuntimeBackendFailureV1::Terminal(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
+        ));
+        assert!(backend.terminal_sdma_custody.is_some());
+        let driver = backend.scripted_sdma.as_ref().unwrap();
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 2);
+        assert_eq!(driver.unexpected_drops(), 0);
+        disarm_scripted_drop_after_inspection_v1(&mut backend);
+    }
+
+    #[test]
+    fn scripted_sdma_window_aggregate_offset_substitution_is_terminal() {
+        for reported in [
+            DirectionalSdmaCopyRequestV1 {
+                host_offset: 1,
+                device_offset: 0,
+                copy_bytes: 8,
+            },
+            DirectionalSdmaCopyRequestV1 {
+                host_offset: 0,
+                device_offset: 1,
+                copy_bytes: 8,
+            },
+        ] {
+            let steps = [
+                scripted_submit_step_v1(
+                    Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                    0,
+                    0,
+                    8,
+                    ScriptedFailureModeV1::Success,
+                ),
+                ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::CompletedWindow {
+                    direction: None,
+                    copy_bytes: None,
+                    requests: Some(vec![reported]),
+                }),
+            ];
+            let (mut backend, stream, host, device) = scripted_direct_backend_v1(8, steps);
+            let (source, destination) = scripted_copy_regions_v1(host, device, 8);
+            let submission = backend
+                .copy_async_v1(stream, source, destination, &[])
+                .unwrap();
+            assert!(matches!(
+                backend.poll_v1(submission),
+                Err(RuntimeBackendFailureV1::Terminal(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
+            ));
             assert!(backend.terminal_sdma_custody.is_some());
             let driver = backend.scripted_sdma.as_ref().unwrap();
             assert!(driver.is_exhausted());
@@ -13578,7 +13789,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 1,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1,
@@ -13857,7 +14069,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_kfd_sdma_packet_plan_covers_full_extent_with_exact_offsets() {
+    fn direct_kfd_sdma_window_plan_covers_256_mib_as_63_plus_2_packets() {
         let cap = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
         let mut active = ActiveSdmaCopyV1 {
             id: 1,
@@ -13869,34 +14081,90 @@ mod tests {
             destination_offset: 29,
             byte_len: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
             completed_bytes: 0,
-            packet_bytes: 0,
+            window_bytes: 0,
+            window_requests: Box::new([]),
             dependencies: Vec::new(),
             dependency_cursor: 0,
             dependency_depth: 1,
             phase: ActiveDirectionalSdmaPhaseV1::Ready,
         };
-        let mut packet_count = 0;
+        let mut window_packet_counts = Vec::new();
+        let mut packet_count = 0_usize;
         let mut last_bytes = 0;
         while active.completed_bytes < active.byte_len {
             let h2d =
-                direct_sdma_packet_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::HostToDevice)
+                direct_sdma_window_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::HostToDevice)
                     .unwrap();
             let d2h =
-                direct_sdma_packet_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::DeviceToHost)
+                direct_sdma_window_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::DeviceToHost)
                     .unwrap();
-            assert_eq!(h2d.host_offset, 11 + active.completed_bytes);
-            assert_eq!(h2d.device_offset, 29 + active.completed_bytes);
-            assert_eq!(d2h.host_offset, 29 + active.completed_bytes);
-            assert_eq!(d2h.device_offset, 11 + active.completed_bytes);
             assert_eq!(h2d.copy_bytes, d2h.copy_bytes);
-            packet_count += 1;
-            last_bytes = h2d.copy_bytes;
-            active.completed_bytes += u64::from(h2d.copy_bytes);
+            assert_eq!(h2d.requests.len(), d2h.requests.len());
+            window_packet_counts.push(h2d.requests.len());
+            for (index, (h2d, d2h)) in h2d.requests.iter().zip(d2h.requests.iter()).enumerate() {
+                let packet_progress = u64::try_from(index).unwrap() * cap;
+                assert_eq!(
+                    h2d.host_offset,
+                    11 + active.completed_bytes + packet_progress
+                );
+                assert_eq!(
+                    h2d.device_offset,
+                    29 + active.completed_bytes + packet_progress
+                );
+                assert_eq!(
+                    d2h.host_offset,
+                    29 + active.completed_bytes + packet_progress
+                );
+                assert_eq!(
+                    d2h.device_offset,
+                    11 + active.completed_bytes + packet_progress
+                );
+                assert_eq!(h2d.copy_bytes, d2h.copy_bytes);
+                packet_count += 1;
+                last_bytes = h2d.copy_bytes;
+            }
+            active.completed_bytes += h2d.copy_bytes;
         }
+        assert_eq!(window_packet_counts, [63, 2]);
         assert_eq!(packet_count, 65);
         assert_eq!(last_bytes, 2_048);
         assert_eq!(active.completed_bytes, 256 * 1024 * 1024);
         assert_eq!(cap, 0x003f_ffe0);
+    }
+
+    #[test]
+    fn direct_kfd_sdma_window_plan_honors_packet_boundaries() {
+        let cap = u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1);
+        for (byte_len, expected_packets, expected_bytes) in [
+            (1, 1, 1),
+            (cap, 1, cap),
+            (cap + 1, 2, cap + 1),
+            (63 * cap, 63, 63 * cap),
+            (63 * cap + 1, 63, 63 * cap),
+        ] {
+            let active = ActiveSdmaCopyV1 {
+                id: 1,
+                stream: 2,
+                prior_stream_submission: None,
+                source: 3,
+                destination: 4,
+                source_offset: 0,
+                destination_offset: 0,
+                byte_len,
+                completed_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
+                dependencies: Vec::new(),
+                dependency_cursor: 0,
+                dependency_depth: 1,
+                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+            };
+            let window =
+                direct_sdma_window_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::HostToDevice)
+                    .unwrap();
+            assert_eq!(window.requests.len(), expected_packets);
+            assert_eq!(window.copy_bytes, expected_bytes);
+        }
     }
 
     #[test]
@@ -13962,7 +14230,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 4,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: vec![dependency],
                 dependency_cursor: 1,
                 dependency_depth: 1,
@@ -14013,7 +14282,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: vec![submission],
                 dependency_cursor: 0,
                 dependency_depth: 2,
@@ -14065,7 +14335,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
@@ -16025,7 +16296,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: vec![40],
                 dependency_cursor: 0,
                 dependency_depth: 1,
@@ -16449,7 +16721,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: vec![40],
                 dependency_cursor: 0,
                 dependency_depth: MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1,
@@ -16501,7 +16774,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
@@ -16675,7 +16949,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 0,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
@@ -16719,7 +16994,8 @@ mod tests {
                 destination_offset: 0,
                 byte_len: 8,
                 completed_bytes: 4,
-                packet_bytes: 0,
+                window_bytes: 0,
+                window_requests: Box::new([]),
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
