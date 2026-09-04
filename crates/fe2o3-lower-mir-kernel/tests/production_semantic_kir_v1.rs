@@ -1767,6 +1767,8 @@ fn retained_scalar_argument_is_stored_once_in_the_entry_slot() {
         .expect("pointer narrowing requires canonical Kernel IR V11")
         .revalidate()
         .unwrap();
+    assert!(lowered.canonical_kernel_ir_v8().is_none());
+    assert!(lowered.canonical_kernel_ir_v8_identity().is_none());
     let function = &lowered.module().functions[0];
     let body = function.body.as_ref().unwrap();
     let [span] = lowered.correspondence().synthetic_operation_spans() else {
