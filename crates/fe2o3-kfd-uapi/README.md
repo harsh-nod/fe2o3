@@ -73,6 +73,7 @@ routing. It grants no process-global owner or ioctl authority.
 The committed slice contains only:
 
 - `kfd_ioctl_get_version_args` and `AMDKFD_IOC_GET_VERSION`
+- `kfd_ioctl_get_clock_counters_args` and `AMDKFD_IOC_GET_CLOCK_COUNTERS`
 - `kfd_process_device_apertures`,
   `kfd_ioctl_get_process_apertures_new_args`, and
   `AMDKFD_IOC_GET_PROCESS_APERTURES_NEW`

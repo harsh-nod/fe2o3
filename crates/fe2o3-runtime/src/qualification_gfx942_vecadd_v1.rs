@@ -164,7 +164,8 @@ impl AdmittedGfx942VecaddQualificationV1 {
         &self,
         request: KfdRuntimeAuthorityRequestV1<'_>,
     ) -> bool {
-        exact_artifact_v1(&request)
+        request.semantic_launch == crate::KfdRuntimeSemanticLaunchV1::Ordinary
+            && exact_artifact_v1(&request)
             && exact_kernarg_and_geometry_v1(&request)
             && exact_abi_and_allocations_v1(&request, &self.initial_buffer_sha256)
     }
@@ -614,7 +615,7 @@ mod tests {
         ];
         let dispatch_abi = authority_abi_v1();
         let kernarg = gfx942_vecadd_qualification_explicit_kernarg_v1();
-        let request = KfdRuntimeAuthorityRequestV1 {
+        let mut request = KfdRuntimeAuthorityRequestV1 {
             module_image: HSACO_BYTES_V1,
             module_sha256: GFX942_VECADD_QUALIFICATION_HSACO_SHA256_V1,
             kernel_name: GFX942_VECADD_QUALIFICATION_KERNEL_V1,
@@ -625,9 +626,24 @@ mod tests {
             dispatch_abi: &dispatch_abi,
             allocations: &allocations,
             geometry: GFX942_VECADD_QUALIFICATION_GEOMETRY_V1,
+            semantic_launch: crate::KfdRuntimeSemanticLaunchV1::Ordinary,
         };
         assert!(
             admit_gfx942_vecadd_qualification_v1()
+                .unwrap()
+                .authorizes_kfd_request_v1(request)
+        );
+        request.semantic_launch =
+            crate::KfdRuntimeSemanticLaunchV1::Atomic(crate::RuntimeAtomicLaunchContractV1 {
+                operation: crate::RuntimeAtomicOperationV1::Add,
+                scope: crate::RuntimeMemoryScopeV1::Workgroup,
+                order: crate::RuntimeMemoryOrderV1::Relaxed,
+                failure_order: None,
+                weak: false,
+                geometry: GFX942_VECADD_QUALIFICATION_GEOMETRY_V1,
+            });
+        assert!(
+            !admit_gfx942_vecadd_qualification_v1()
                 .unwrap()
                 .authorizes_kfd_request_v1(request)
         );
@@ -779,6 +795,7 @@ mod tests {
                     dispatch_abi: &self.dispatch_abi,
                     allocations: &allocations,
                     geometry: self.geometry,
+                    semantic_launch: crate::KfdRuntimeSemanticLaunchV1::Ordinary,
                 })
         }
     }

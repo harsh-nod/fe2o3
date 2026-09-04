@@ -28,6 +28,15 @@ mod memory;
 mod shared_memory;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod persistent_allocation;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod persistent_directional_sdma;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod persistent_sdma;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod wait;
 
 #[cfg(target_os = "linux")]
@@ -38,6 +47,9 @@ mod queue;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod semantic_observation;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod sdma;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod debug_trap;
@@ -67,16 +79,25 @@ pub use memory::*;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use shared_memory::*;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use persistent_allocation::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use persistent_directional_sdma::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use persistent_sdma::*;
+
 #[cfg(target_os = "linux")]
 pub use queue_resources::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use queue::{
-    ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
-    ComputeAqlQueueSessionV1, GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1,
-    GFX942_AQL_COMPLETION_MANIFEST_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-    GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
-    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+    ComputeAqlQueueDestroyedV1, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
+    ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
+    GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
+    GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
@@ -98,14 +119,41 @@ pub use queue::{
     Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
     Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
-    Gfx942RecycledDispatchResourcesV1, Gfx942RecycledDispatchWriteRequestV1,
-    Gfx942RepeatedByteContentV1, Gfx942TimeoutExecutionObservationV1,
+    Gfx942PromotedSdmaDestinationV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942RecycledDispatchWriteRequestV1, Gfx942RepeatedByteContentV1,
+    Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
+    Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
+    Gfx942SdmaCompletedPromotionFailureV1, Gfx942SdmaDispatchDataBridgeV1,
+    Gfx942SdmaDispatchDataDemotionFailureV1, Gfx942SdmaMultiQueueFailureCustodyV1,
+    Gfx942SdmaMultiQueueFailureDispositionV1, Gfx942SdmaMultiQueueSubmissionFailureV1,
+    Gfx942SdmaMultiQueueTerminalCustodyV1, Gfx942SdmaSubmissionFailureV1,
+    Gfx942SdmaTerminalShardObservationV1, Gfx942TimeoutExecutionObservationV1,
     Gfx942TimeoutSignalObservationV1, KfdTargetRuntimeDebugQueueTeardownV1,
     KfdTargetRuntimeDebugQueueV1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1, preflight_gfx942_fixed_dispatch_replacement,
+};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use sdma::{
+    GFX942_SDMA_COPY_MANIFEST_SHA256_V1, GFX942_SDMA_COPY_MANIFEST_V1,
+    GFX942_SDMA_COPY_PACKET_BYTES_V1, GFX942_SDMA_D2H_ENGINE_INDEX_V1,
+    GFX942_SDMA_FENCE_PACKET_BYTES_V1, GFX942_SDMA_H2D_ENGINE_INDEX_V1,
+    GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
+    GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1, GFX942_SDMA_MAX_MULTI_QUEUE_SHARDS_V1,
+    GFX942_SDMA_MAX_STRIPED_QUEUES_V1, GFX942_SDMA_RING_BYTES_V1, GFX942_SDMA_SUBMISSION_BYTES_V1,
+    Gfx942DirectionalSdmaQueueObservationV1, Gfx942NativeXgmiSdmaBatchV1,
+    Gfx942NativeXgmiSdmaQueueV1, Gfx942SdmaBufferKindV1, Gfx942SdmaBufferV1,
+    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
+    Gfx942SdmaCopySubmissionV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
+    Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaMultiQueuePlanErrorV1, Gfx942SdmaMultiQueuePlanV1,
+    Gfx942SdmaMultiQueueShardTicketsV1, Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaPacketErrorV1,
+    Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueProgressObservationV1,
+    Gfx942SdmaUnpublishedCopyRequestV1, Gfx942XgmiBatchSubmissionFailureV1,
+    Gfx942XgmiBatchWaitFailureV1, Gfx942XgmiCompletedCopyV1, Gfx942XgmiCopyFailureV1,
+    Gfx942XgmiCopyPollV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiWaitFailureV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -123,7 +171,7 @@ pub use target_debug_telemetry_v1::*;
 pub use target_debug_telemetry_v2::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use currentness::ObservableDeviceCurrentnessV1;
+pub use currentness::{KfdClockCorrelationObservationV1, ObservableDeviceCurrentnessV1};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use device::*;

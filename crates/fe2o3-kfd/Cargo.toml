@@ -35,6 +35,10 @@ required-features = ["live-validation"]
 [[example]]
 name = "kfd-compute-aql-queue-policy"
 
+[[example]]
+name = "kfd-sdma-xgmi-peer-benchmark"
+required-features = ["live-validation"]
+
 [dependencies]
 fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true

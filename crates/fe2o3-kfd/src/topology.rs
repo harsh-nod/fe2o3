@@ -20,6 +20,22 @@ pub const DEFAULT_AMDGPU_MODULE_ROOT: &str = "/sys/module/amdgpu";
 pub const DEFAULT_DEVICE_CHARACTER_ROOT: &str = "/sys/dev/char";
 pub const DEFAULT_SYSFS_DEVICES_ROOT: &str = "/sys/devices";
 
+/// Additive provenance for targeted gfx942 ordinary-SDMA queue admission.
+pub const GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-gfx942-sdma-topology-capability-v1\n",
+    "source=/sys/class/kfd/kfd/topology/nodes/<selected>/properties\n",
+    "producer=amdgpu-kfd-topology-sysfs,read-only-decimal-node-properties\n",
+    "producer_source=/usr/src/amdgpu-6.16.13-2341068.24.04/amd/amdkfd/kfd_topology.c:502-507,2181-2186\n",
+    "producer_source_sha256=6a1453f8f70a9fba549694b71db132eb80679d7fbb8d0eb7af9dd8e7b669f802\n",
+    "properties=num_sdma_engines:exactly-2,num_sdma_queues_per_engine:exactly-8\n",
+    "base-compatibility=properties-optional-and-excluded-from-frozen-base-topology-equality,mandatory-only-for-targeted-or-directional-sdma\n",
+    "currentness=fresh-generation-consistent-selected-node-sidecar-must-match-retained-exact-profile-before-and-after-targeted-create-or-destroy\n",
+    "authority=observation-only,no-queue-or-engine-authority\n",
+);
+
+pub const GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_SHA256_V1: &str =
+    "51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26";
+
 const MAX_TOPOLOGY_NODES: usize = 256;
 const MAX_ROOT_ENTRIES: usize = 8;
 const MAX_NODE_ENTRIES: usize = 16;
@@ -27,11 +43,18 @@ const MAX_SCALAR_BYTES: usize = 64;
 const MAX_NAME_BYTES: usize = 128;
 const MAX_PROPERTY_BYTES: usize = 4096;
 const MAX_PROPERTY_LINES: usize = 64;
+const MAX_LINK_ENTRIES: usize = 4096;
 const MAX_MODULE_FIELD_BYTES: usize = 128;
 const EXPECTED_AMD_VENDOR_ID: u64 = 0x1002;
 const GFX942_TARGET_VERSION: u64 = 90_402;
 const MIN_DRM_RENDER_MINOR: u64 = 128;
 const MAX_DRM_RENDER_MINOR: u64 = 255;
+const KFD_IOLINK_TYPE_XGMI_V1: u32 = 11;
+const KFD_IOLINK_FLAG_ENABLED_V1: u32 = 1;
+const GFX942_SDMA_ENGINE_COUNT_V1: u32 = 2;
+const GFX942_SDMA_XGMI_ENGINE_COUNT_V1: u32 = 14;
+const GFX942_SDMA_TOTAL_ENGINE_COUNT_V1: u32 =
+    GFX942_SDMA_ENGINE_COUNT_V1 + GFX942_SDMA_XGMI_ENGINE_COUNT_V1;
 
 /// The only GPU target admitted by the initial direct-KFD runtime profile.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -474,8 +497,175 @@ impl GpuCapacityObservation {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Gfx942SdmaTopologyCapabilityObservationV1 {
+    engine_count: Option<u32>,
+    xgmi_engine_count: Option<u32>,
+    queues_per_engine: Option<u32>,
+}
+
+/// Source directory of one retained KFD topology link record.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum KfdTopologyLinkSetV1 {
+    Io,
+    P2p,
+}
+
+/// Exact, directional KFD topology link observation.
+///
+/// These fields are untrusted sysfs data retained under one topology
+/// generation. They provide no mapping, queue, visibility, or execution
+/// authority by themselves.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KfdTopologyLinkV1 {
+    set: KfdTopologyLinkSetV1,
+    index: u32,
+    link_type: u32,
+    version_major: u32,
+    version_minor: u32,
+    node_from: u32,
+    node_to: u32,
+    weight: u32,
+    min_latency: u64,
+    max_latency: u64,
+    min_bandwidth: u64,
+    max_bandwidth: u64,
+    recommended_transfer_size: u64,
+    recommended_sdma_engine_id_mask: u64,
+    flags: u32,
+}
+
+impl KfdTopologyLinkV1 {
+    pub const fn set(self) -> KfdTopologyLinkSetV1 {
+        self.set
+    }
+
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+
+    pub const fn link_type(self) -> u32 {
+        self.link_type
+    }
+
+    pub const fn version(self) -> (u32, u32) {
+        (self.version_major, self.version_minor)
+    }
+
+    pub const fn node_from(self) -> u32 {
+        self.node_from
+    }
+
+    pub const fn node_to(self) -> u32 {
+        self.node_to
+    }
+
+    pub const fn weight(self) -> u32 {
+        self.weight
+    }
+
+    pub const fn latency(self) -> (u64, u64) {
+        (self.min_latency, self.max_latency)
+    }
+
+    pub const fn bandwidth(self) -> (u64, u64) {
+        (self.min_bandwidth, self.max_bandwidth)
+    }
+
+    pub const fn recommended_transfer_size(self) -> u64 {
+        self.recommended_transfer_size
+    }
+
+    pub const fn recommended_sdma_engine_id_mask(self) -> u64 {
+        self.recommended_sdma_engine_id_mask
+    }
+
+    pub const fn flags(self) -> u32 {
+        self.flags
+    }
+}
+
+/// Checked directional XGMI route observation for the exact gfx942 profile.
+///
+/// This is topology evidence only. Native execution must additionally bind
+/// current devices, a multi-GPU mapping owner, and the exact selected queue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942XgmiRouteV1 {
+    topology_generation: u64,
+    source_node_id: u32,
+    destination_node_id: u32,
+    source_gpu_id: u32,
+    destination_gpu_id: u32,
+    hive_id: u64,
+    link: KfdTopologyLinkV1,
+    recommended_engine_id: u32,
+}
+
+impl Gfx942XgmiRouteV1 {
+    pub const fn topology_generation(self) -> u64 {
+        self.topology_generation
+    }
+
+    pub const fn source_node_id(self) -> u32 {
+        self.source_node_id
+    }
+
+    pub const fn destination_node_id(self) -> u32 {
+        self.destination_node_id
+    }
+
+    pub const fn source_gpu_id(self) -> u32 {
+        self.source_gpu_id
+    }
+
+    pub const fn destination_gpu_id(self) -> u32 {
+        self.destination_gpu_id
+    }
+
+    pub const fn hive_id(self) -> u64 {
+        self.hive_id
+    }
+
+    pub const fn link(self) -> KfdTopologyLinkV1 {
+        self.link
+    }
+
+    pub const fn recommended_engine_id(self) -> u32 {
+        self.recommended_engine_id
+    }
+
+    pub const fn canonical_mapping_gpu_ids(self) -> [u32; 2] {
+        if self.source_gpu_id < self.destination_gpu_id {
+            [self.source_gpu_id, self.destination_gpu_id]
+        } else {
+            [self.destination_gpu_id, self.source_gpu_id]
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942XgmiRouteErrorV1 {
+    SameGpu,
+    UnknownGpu(u32),
+    GpuIdOutOfRange(u64),
+    DifferentOrMissingHive,
+    MissingDirectionalLink,
+    AmbiguousDirectionalLink,
+    UnsupportedDirectionalLink,
+    UnsupportedEngineInventory,
+    InvalidRecommendedEngineMask(u64),
+}
+
+impl fmt::Display for Gfx942XgmiRouteErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "gfx942 XGMI route admission failed: {self:?}")
+    }
+}
+
+impl std::error::Error for Gfx942XgmiRouteErrorV1 {}
+
 /// One GPU identity observation from a stable KFD topology generation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct GpuTopologyNode {
     node_id: u32,
     gpu_id: u64,
@@ -490,7 +680,34 @@ pub struct GpuTopologyNode {
     fw_version: u32,
     sdma_fw_version: u32,
     capacity: GpuCapacityObservation,
+    sdma_topology_capability: Gfx942SdmaTopologyCapabilityObservationV1,
+    io_links: Vec<KfdTopologyLinkV1>,
+    p2p_links: Vec<KfdTopologyLinkV1>,
 }
+
+// The frozen base topology equality intentionally excludes the additive SDMA
+// capability sidecar. Targeted-SDMA admission inspects that sidecar explicitly.
+impl PartialEq for GpuTopologyNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.node_id == other.node_id
+            && self.gpu_id == other.gpu_id
+            && self.name == other.name
+            && self.target == other.target
+            && self.pci_device_id == other.pci_device_id
+            && self.drm_render_minor == other.drm_render_minor
+            && self.unique_id == other.unique_id
+            && self.hive_id == other.hive_id
+            && self.location_id == other.location_id
+            && self.domain == other.domain
+            && self.fw_version == other.fw_version
+            && self.sdma_fw_version == other.sdma_fw_version
+            && self.capacity == other.capacity
+            && self.io_links == other.io_links
+            && self.p2p_links == other.p2p_links
+    }
+}
+
+impl Eq for GpuTopologyNode {}
 
 impl GpuTopologyNode {
     pub const fn node_id(&self) -> u32 {
@@ -546,6 +763,21 @@ impl GpuTopologyNode {
     pub const fn capacity(&self) -> GpuCapacityObservation {
         self.capacity
     }
+
+    pub(crate) const fn sdma_engine_inventory(&self) -> (Option<u32>, Option<u32>) {
+        (
+            self.sdma_topology_capability.engine_count,
+            self.sdma_topology_capability.queues_per_engine,
+        )
+    }
+
+    pub fn io_links(&self) -> &[KfdTopologyLinkV1] {
+        &self.io_links
+    }
+
+    pub fn p2p_links(&self) -> &[KfdTopologyLinkV1] {
+        &self.p2p_links
+    }
 }
 
 /// A generation-consistent topology observation with no operational authority.
@@ -567,6 +799,74 @@ impl TopologySnapshot {
 
     pub fn gpu_nodes(&self) -> &[GpuTopologyNode] {
         &self.gpu_nodes
+    }
+
+    /// Admits one exact directional gfx942 XGMI route from retained sysfs
+    /// observations. The returned value remains observation-only.
+    pub fn admit_gfx942_xgmi_route(
+        &self,
+        source_gpu_id: u32,
+        destination_gpu_id: u32,
+    ) -> Result<Gfx942XgmiRouteV1, Gfx942XgmiRouteErrorV1> {
+        if source_gpu_id == destination_gpu_id {
+            return Err(Gfx942XgmiRouteErrorV1::SameGpu);
+        }
+        let find_gpu = |gpu_id| {
+            self.gpu_nodes
+                .iter()
+                .find(|node| u32::try_from(node.gpu_id).is_ok_and(|candidate| candidate == gpu_id))
+        };
+        let source =
+            find_gpu(source_gpu_id).ok_or(Gfx942XgmiRouteErrorV1::UnknownGpu(source_gpu_id))?;
+        let destination = find_gpu(destination_gpu_id)
+            .ok_or(Gfx942XgmiRouteErrorV1::UnknownGpu(destination_gpu_id))?;
+        if source.hive_id == 0 || source.hive_id != destination.hive_id {
+            return Err(Gfx942XgmiRouteErrorV1::DifferentOrMissingHive);
+        }
+        if source.sdma_topology_capability.engine_count != Some(GFX942_SDMA_ENGINE_COUNT_V1)
+            || source.sdma_topology_capability.xgmi_engine_count
+                != Some(GFX942_SDMA_XGMI_ENGINE_COUNT_V1)
+            || source.sdma_topology_capability.queues_per_engine != Some(8)
+        {
+            return Err(Gfx942XgmiRouteErrorV1::UnsupportedEngineInventory);
+        }
+        let mut links = source
+            .io_links
+            .iter()
+            .copied()
+            .filter(|link| link.node_to == destination.node_id);
+        let link = links
+            .next()
+            .ok_or(Gfx942XgmiRouteErrorV1::MissingDirectionalLink)?;
+        if links.next().is_some() {
+            return Err(Gfx942XgmiRouteErrorV1::AmbiguousDirectionalLink);
+        }
+        if link.set != KfdTopologyLinkSetV1::Io
+            || link.node_from != source.node_id
+            || link.link_type != KFD_IOLINK_TYPE_XGMI_V1
+            || link.flags & KFD_IOLINK_FLAG_ENABLED_V1 == 0
+            || link.max_bandwidth == 0
+        {
+            return Err(Gfx942XgmiRouteErrorV1::UnsupportedDirectionalLink);
+        }
+        let mask = link.recommended_sdma_engine_id_mask;
+        if mask.count_ones() != 1 {
+            return Err(Gfx942XgmiRouteErrorV1::InvalidRecommendedEngineMask(mask));
+        }
+        let engine = mask.trailing_zeros();
+        if !(GFX942_SDMA_ENGINE_COUNT_V1..GFX942_SDMA_TOTAL_ENGINE_COUNT_V1).contains(&engine) {
+            return Err(Gfx942XgmiRouteErrorV1::InvalidRecommendedEngineMask(mask));
+        }
+        Ok(Gfx942XgmiRouteV1 {
+            topology_generation: self.provenance.generation,
+            source_node_id: source.node_id,
+            destination_node_id: destination.node_id,
+            source_gpu_id,
+            destination_gpu_id,
+            hive_id: source.hive_id,
+            link,
+            recommended_engine_id: engine,
+        })
     }
 }
 
@@ -651,6 +951,27 @@ pub enum TopologyError {
         value: String,
     },
     InvalidNodeId(String),
+    LinkCountMismatch {
+        path: PathBuf,
+        declared: u32,
+        observed: usize,
+    },
+    NonCanonicalLinkIndex {
+        path: PathBuf,
+        index: u32,
+    },
+    UnexpectedLinkEntry(PathBuf),
+    InvalidLinkEndpoint {
+        path: PathBuf,
+        expected_from: u32,
+        observed_from: u32,
+        observed_to: u32,
+    },
+    InvalidLinkRange(PathBuf),
+    UnknownLinkEndpoint {
+        path: PathBuf,
+        node_to: u32,
+    },
     MalformedPropertyLine {
         path: PathBuf,
         line: usize,
@@ -792,6 +1113,45 @@ impl fmt::Display for TopologyError {
                 )
             }
             Self::InvalidNodeId(value) => write!(formatter, "invalid KFD node id {value:?}"),
+            Self::LinkCountMismatch {
+                path,
+                declared,
+                observed,
+            } => write!(
+                formatter,
+                "{} declares {declared} links but contains {observed}",
+                path.display()
+            ),
+            Self::NonCanonicalLinkIndex { path, index } => write!(
+                formatter,
+                "noncanonical topology link index {index} at {}",
+                path.display()
+            ),
+            Self::UnexpectedLinkEntry(path) => write!(
+                formatter,
+                "topology link directory has unexpected contents: {}",
+                path.display()
+            ),
+            Self::InvalidLinkEndpoint {
+                path,
+                expected_from,
+                observed_from,
+                observed_to,
+            } => write!(
+                formatter,
+                "{} has invalid link endpoints {observed_from}->{observed_to}, expected source {expected_from}",
+                path.display()
+            ),
+            Self::InvalidLinkRange(path) => write!(
+                formatter,
+                "{} has an inverted nonzero link range",
+                path.display()
+            ),
+            Self::UnknownLinkEndpoint { path, node_to } => write!(
+                formatter,
+                "{} targets unknown topology node {node_to}",
+                path.display()
+            ),
             Self::MalformedPropertyLine { path, line } => write!(
                 formatter,
                 "{} has a malformed property at line {line}",
@@ -1380,6 +1740,28 @@ fn bounded_u32(
     Ok(value as u32)
 }
 
+fn optional_bounded_u32(
+    properties: &BTreeMap<String, u64>,
+    path: &Path,
+    key: &'static str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Option<u32>, TopologyError> {
+    let Some(value) = properties.get(key).copied() else {
+        return Ok(None);
+    };
+    if value < minimum || value > maximum {
+        return Err(TopologyError::PropertyOutOfRange {
+            path: path.to_path_buf(),
+            key: key.to_owned(),
+            value,
+            minimum,
+            maximum,
+        });
+    }
+    Ok(Some(value as u32))
+}
+
 fn parse_platform(path: &Path) -> Result<PlatformObservation, TopologyError> {
     let properties = parse_named_properties(
         path,
@@ -1583,6 +1965,103 @@ fn validate_node_entries(path: &Path) -> Result<(), TopologyError> {
     Ok(())
 }
 
+fn parse_topology_links(
+    node_path: &Path,
+    node_id: u32,
+    set: KfdTopologyLinkSetV1,
+    expected_count: u32,
+) -> Result<Vec<KfdTopologyLinkV1>, TopologyError> {
+    let directory = node_path.join(match set {
+        KfdTopologyLinkSetV1::Io => "io_links",
+        KfdTopologyLinkSetV1::P2p => "p2p_links",
+    });
+    let entries = read_directory(&directory, MAX_LINK_ENTRIES)?;
+    if entries.len() != expected_count as usize {
+        return Err(TopologyError::LinkCountMismatch {
+            path: directory,
+            declared: expected_count,
+            observed: entries.len(),
+        });
+    }
+    let mut links = Vec::with_capacity(entries.len());
+    for (position, (name, path)) in entries.into_iter().enumerate() {
+        let index = parse_node_id(&name)?;
+        if usize::try_from(index) != Ok(position) {
+            return Err(TopologyError::NonCanonicalLinkIndex { path, index });
+        }
+        ensure_directory(&path)?;
+        let contents = read_directory(&path, 2)?;
+        if contents.len() != 1 || contents[0].0 != "properties" {
+            return Err(TopologyError::UnexpectedLinkEntry(path));
+        }
+        let properties_metadata = inspect(&contents[0].1)?;
+        if properties_metadata.file_type().is_symlink() {
+            return Err(TopologyError::Symlink(contents[0].1.clone()));
+        }
+        if !properties_metadata.is_file() {
+            return Err(TopologyError::UnexpectedFileType {
+                path: contents[0].1.clone(),
+                expected: "regular file",
+            });
+        }
+        let properties = parse_named_properties(
+            &contents[0].1,
+            &[
+                ("type", 0, u32::MAX as u64),
+                ("version_major", 0, u32::MAX as u64),
+                ("version_minor", 0, u32::MAX as u64),
+                ("node_from", 0, u16::MAX as u64),
+                ("node_to", 0, u16::MAX as u64),
+                ("weight", 0, u32::MAX as u64),
+                ("min_latency", 0, u64::MAX),
+                ("max_latency", 0, u64::MAX),
+                ("min_bandwidth", 0, u64::MAX),
+                ("max_bandwidth", 0, u64::MAX),
+                ("recommended_transfer_size", 0, u64::MAX),
+                ("recommended_sdma_engine_id_mask", 0, u64::MAX),
+                ("flags", 0, u32::MAX as u64),
+            ],
+        )?;
+        let node_from = properties["node_from"] as u32;
+        let node_to = properties["node_to"] as u32;
+        let min_latency = properties["min_latency"];
+        let max_latency = properties["max_latency"];
+        let min_bandwidth = properties["min_bandwidth"];
+        let max_bandwidth = properties["max_bandwidth"];
+        if node_from != node_id || node_to == node_id {
+            return Err(TopologyError::InvalidLinkEndpoint {
+                path: contents[0].1.clone(),
+                expected_from: node_id,
+                observed_from: node_from,
+                observed_to: node_to,
+            });
+        }
+        if min_latency > max_latency && max_latency != 0
+            || min_bandwidth > max_bandwidth && max_bandwidth != 0
+        {
+            return Err(TopologyError::InvalidLinkRange(contents[0].1.clone()));
+        }
+        links.push(KfdTopologyLinkV1 {
+            set,
+            index,
+            link_type: properties["type"] as u32,
+            version_major: properties["version_major"] as u32,
+            version_minor: properties["version_minor"] as u32,
+            node_from,
+            node_to,
+            weight: properties["weight"] as u32,
+            min_latency,
+            max_latency,
+            min_bandwidth,
+            max_bandwidth,
+            recommended_transfer_size: properties["recommended_transfer_size"],
+            recommended_sdma_engine_id_mask: properties["recommended_sdma_engine_id_mask"],
+            flags: properties["flags"] as u32,
+        });
+    }
+    Ok(links)
+}
+
 fn parse_gpu_node(
     node_id: u32,
     gpu_id: u64,
@@ -1669,6 +2148,29 @@ fn parse_gpu_node(
         wavefront_size: bounded_u32(properties, properties_path, "wave_front_size", 64, 64)?,
         xcc_count: bounded_u32(properties, properties_path, "num_xcc", 1, 64)?,
     };
+    let sdma_topology_capability = Gfx942SdmaTopologyCapabilityObservationV1 {
+        engine_count: optional_bounded_u32(
+            properties,
+            properties_path,
+            "num_sdma_engines",
+            0,
+            4096,
+        )?,
+        xgmi_engine_count: optional_bounded_u32(
+            properties,
+            properties_path,
+            "num_sdma_xgmi_engines",
+            0,
+            4096,
+        )?,
+        queues_per_engine: optional_bounded_u32(
+            properties,
+            properties_path,
+            "num_sdma_queues_per_engine",
+            0,
+            4096,
+        )?,
+    };
     Ok(GpuTopologyNode {
         node_id,
         gpu_id,
@@ -1683,6 +2185,9 @@ fn parse_gpu_node(
         fw_version,
         sdma_fw_version,
         capacity,
+        sdma_topology_capability,
+        io_links: Vec::new(),
+        p2p_links: Vec::new(),
     })
 }
 
@@ -1920,7 +2425,34 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
         let properties_path = path.join("properties");
         let properties = parse_properties(&properties_path)?;
         if gpu_id != 0 {
-            let node = parse_gpu_node(*node_id, gpu_id, name, &properties_path, &properties)?;
+            let mut node = parse_gpu_node(*node_id, gpu_id, name, &properties_path, &properties)?;
+            node.io_links = parse_topology_links(
+                path,
+                *node_id,
+                KfdTopologyLinkSetV1::Io,
+                node.capacity.io_link_count,
+            )?;
+            node.p2p_links = parse_topology_links(
+                path,
+                *node_id,
+                KfdTopologyLinkSetV1::P2p,
+                node.capacity.p2p_link_count,
+            )?;
+            for link in node.io_links.iter().chain(&node.p2p_links) {
+                if !node_ids.contains(&link.node_to) {
+                    let set = match link.set {
+                        KfdTopologyLinkSetV1::Io => "io_links",
+                        KfdTopologyLinkSetV1::P2p => "p2p_links",
+                    };
+                    return Err(TopologyError::UnknownLinkEndpoint {
+                        path: path
+                            .join(set)
+                            .join(link.index.to_string())
+                            .join("properties"),
+                        node_to: link.node_to,
+                    });
+                }
+            }
             if !gpu_ids.insert(node.gpu_id) {
                 return Err(TopologyError::DuplicateIdentity {
                     field: "gpu_id",
@@ -1983,9 +2515,21 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn sdma_topology_capability_manifest_is_frozen() {
+        let digest = Sha256::digest(GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_V1);
+        let mut rendered = String::with_capacity(64);
+        for byte in digest {
+            use core::fmt::Write;
+            write!(&mut rendered, "{byte:02x}").unwrap();
+        }
+        assert_eq!(rendered, GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_SHA256_V1);
+    }
 
     struct Fixture {
         root: PathBuf,
@@ -2006,16 +2550,19 @@ mod tests {
             )
             .unwrap();
             fs::create_dir(root.join("nodes")).unwrap();
-            Self::write_node(&root, 0, 0, 0);
+            Self::write_node(&root, 0, 0, 0, gpu_count);
             for index in 1..=gpu_count {
-                Self::write_node(&root, index, 1000 + u64::from(index), index);
+                Self::write_node(&root, index, 1000 + u64::from(index), index, gpu_count);
             }
             Self { root }
         }
 
-        fn write_node(root: &Path, node_id: u32, gpu_id: u64, identity: u32) {
+        fn write_node(root: &Path, node_id: u32, gpu_id: u64, identity: u32, gpu_count: u32) {
             let path = root.join("nodes").join(node_id.to_string());
             fs::create_dir(&path).unwrap();
+            for directory in ["caches", "io_links", "mem_banks", "p2p_links", "perf"] {
+                fs::create_dir(path.join(directory)).unwrap();
+            }
             fs::write(path.join("gpu_id"), format!("{gpu_id}\n")).unwrap();
             fs::write(
                 path.join("name"),
@@ -2027,18 +2574,71 @@ mod tests {
             } else {
                 format!(
                     "simd_count 1216\nmem_banks_count 1\ncaches_count 626\n\
-                     io_links_count 8\np2p_links_count 1\nwave_front_size 64\n\
+                     io_links_count {gpu_count}\np2p_links_count {}\nwave_front_size 64\n\
                      gfx_target_version 90402\nvendor_id 4098\ndevice_id 29857\n\
                      location_id {}\ndomain 0\ndrm_render_minor {}\nhive_id 99\n\
                      unique_id {}\nfw_version 192\nsdma_fw_version 25\nnum_xcc 8\n\
                      simd_per_cu 4\narray_count 32\nsimd_arrays_per_engine 1\n\
-                     lds_size_in_kb 64\nmax_waves_per_simd 8\nnum_cp_queues 24\n",
+                     lds_size_in_kb 64\nmax_waves_per_simd 8\nnum_cp_queues 24\n\
+                     num_sdma_engines 2\nnum_sdma_xgmi_engines 14\n\
+                     num_sdma_queues_per_engine 8\n",
+                    gpu_count.saturating_sub(1),
                     4096 * identity,
                     127 + identity,
                     2000 + u64::from(identity),
                 )
             };
             fs::write(path.join("properties"), properties).unwrap();
+            if gpu_id != 0 {
+                Self::write_link(&path, "io_links", 0, node_id, 0, 2, 3, 0);
+                let mut io_index = 1;
+                let mut p2p_index = 0;
+                for destination in 1..=gpu_count {
+                    if destination == node_id {
+                        continue;
+                    }
+                    let engine = 2 + ((node_id + destination) % 14);
+                    Self::write_link(
+                        &path,
+                        "io_links",
+                        io_index,
+                        node_id,
+                        destination,
+                        11,
+                        1,
+                        1_u64 << engine,
+                    );
+                    Self::write_link(&path, "p2p_links", p2p_index, node_id, destination, 2, 1, 0);
+                    io_index += 1;
+                    p2p_index += 1;
+                }
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn write_link(
+            node_path: &Path,
+            set: &str,
+            index: u32,
+            node_from: u32,
+            node_to: u32,
+            link_type: u32,
+            flags: u32,
+            engine_mask: u64,
+        ) {
+            let path = node_path.join(set).join(index.to_string());
+            fs::create_dir(&path).unwrap();
+            fs::write(
+                path.join("properties"),
+                format!(
+                    "type {link_type}\nversion_major 0\nversion_minor 0\n\
+                     node_from {node_from}\nnode_to {node_to}\nweight 15\n\
+                     min_latency 0\nmax_latency 0\nmin_bandwidth 0\nmax_bandwidth 64000\n\
+                     recommended_transfer_size 0\n\
+                     recommended_sdma_engine_id_mask {engine_mask}\nflags {flags}\n"
+                ),
+            )
+            .unwrap();
         }
 
         fn node(&self, id: u32) -> PathBuf {
@@ -2141,6 +2741,13 @@ mod tests {
                         wavefront_size: 64,
                         xcc_count: 8,
                     },
+                    sdma_topology_capability: Gfx942SdmaTopologyCapabilityObservationV1 {
+                        engine_count: Some(2),
+                        xgmi_engine_count: Some(14),
+                        queues_per_engine: Some(8),
+                    },
+                    io_links: Vec::new(),
+                    p2p_links: Vec::new(),
                 },
             }
         }
@@ -2185,7 +2792,153 @@ mod tests {
         assert_eq!(snapshot.gpu_nodes()[0].fw_version(), 192);
         assert_eq!(snapshot.gpu_nodes()[0].sdma_fw_version(), 25);
         assert_eq!(snapshot.gpu_nodes()[0].capacity().xcc_count(), 8);
+        assert_eq!(
+            snapshot.gpu_nodes()[0].sdma_engine_inventory(),
+            (Some(2), Some(8))
+        );
         assert_eq!(snapshot.gpu_nodes()[1].node_id(), 2);
+    }
+
+    #[test]
+    fn directional_xgmi_routes_bind_exact_links_engines_and_generation() {
+        let fixture = Fixture::valid(2);
+        let snapshot = fixture.discover().unwrap();
+        let forward = snapshot.admit_gfx942_xgmi_route(1001, 1002).unwrap();
+        let reverse = snapshot.admit_gfx942_xgmi_route(1002, 1001).unwrap();
+        assert_eq!(forward.topology_generation(), 7);
+        assert_eq!(
+            (forward.source_node_id(), forward.destination_node_id()),
+            (1, 2)
+        );
+        assert_eq!(forward.canonical_mapping_gpu_ids(), [1001, 1002]);
+        assert_eq!(forward.link().set(), KfdTopologyLinkSetV1::Io);
+        assert_eq!(forward.link().link_type(), 11);
+        assert_eq!(forward.link().node_from(), 1);
+        assert_eq!(forward.link().node_to(), 2);
+        assert_eq!(
+            forward.link().recommended_sdma_engine_id_mask(),
+            1_u64 << forward.recommended_engine_id()
+        );
+        assert_eq!(
+            (reverse.source_node_id(), reverse.destination_node_id()),
+            (2, 1)
+        );
+        assert_eq!(reverse.canonical_mapping_gpu_ids(), [1001, 1002]);
+    }
+
+    #[test]
+    fn link_count_endpoint_and_index_are_strict() {
+        let fixture = Fixture::valid(2);
+        fs::remove_dir_all(fixture.node(1).join("io_links/1")).unwrap();
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::LinkCountMismatch { .. })
+        ));
+
+        let fixture = Fixture::valid(2);
+        fs::rename(
+            fixture.node(1).join("io_links/1"),
+            fixture.node(1).join("io_links/2"),
+        )
+        .unwrap();
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::NonCanonicalLinkIndex { .. })
+        ));
+
+        let fixture = Fixture::valid(2);
+        let path = fixture.node(1).join("io_links/1/properties");
+        let contents = fs::read_to_string(&path).unwrap();
+        fs::write(path, contents.replace("node_from 1", "node_from 2")).unwrap();
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::InvalidLinkEndpoint { .. })
+        ));
+    }
+
+    #[test]
+    fn route_admission_rejects_wrong_type_flags_mask_and_inventory() {
+        for (needle, replacement, expected) in [
+            ("type 11", "type 2", "unsupported"),
+            ("flags 1", "flags 0", "unsupported"),
+            (
+                "recommended_sdma_engine_id_mask 32",
+                "recommended_sdma_engine_id_mask 3",
+                "mask",
+            ),
+        ] {
+            let fixture = Fixture::valid(2);
+            let path = fixture.node(1).join("io_links/1/properties");
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains(needle));
+            fs::write(path, contents.replace(needle, replacement)).unwrap();
+            let snapshot = fixture.discover().unwrap();
+            let error = snapshot.admit_gfx942_xgmi_route(1001, 1002).unwrap_err();
+            if expected == "mask" {
+                assert!(matches!(
+                    error,
+                    Gfx942XgmiRouteErrorV1::InvalidRecommendedEngineMask(3)
+                ));
+            } else {
+                assert_eq!(error, Gfx942XgmiRouteErrorV1::UnsupportedDirectionalLink);
+            }
+        }
+
+        let fixture = Fixture::valid(2);
+        fixture.replace_property(1, "num_sdma_xgmi_engines 14", "num_sdma_xgmi_engines 13");
+        let snapshot = fixture.discover().unwrap();
+        assert_eq!(
+            snapshot.admit_gfx942_xgmi_route(1001, 1002),
+            Err(Gfx942XgmiRouteErrorV1::UnsupportedEngineInventory)
+        );
+
+        let fixture = Fixture::valid(2);
+        let path = fixture.node(1).join("io_links/1/properties");
+        let contents = fs::read_to_string(&path).unwrap();
+        fs::write(
+            path,
+            contents.replace("max_bandwidth 64000", "max_bandwidth 0"),
+        )
+        .unwrap();
+        let snapshot = fixture.discover().unwrap();
+        assert_eq!(
+            snapshot.admit_gfx942_xgmi_route(1001, 1002),
+            Err(Gfx942XgmiRouteErrorV1::UnsupportedDirectionalLink)
+        );
+    }
+
+    #[test]
+    fn sdma_capability_properties_are_additive_to_base_topology() {
+        let fixture = Fixture::valid(1);
+        fixture.replace_property(1, "num_sdma_engines 2\n", "");
+        fixture.replace_property(1, "num_sdma_queues_per_engine 8\n", "");
+        let without_capability = fixture.discover().unwrap();
+        assert_eq!(
+            without_capability.gpu_nodes()[0].sdma_engine_inventory(),
+            (None, None)
+        );
+
+        let fixture = Fixture::valid(1);
+        fixture.replace_property(1, "num_sdma_engines 2", "num_sdma_engines 0");
+        fixture.replace_property(
+            1,
+            "num_sdma_queues_per_engine 8",
+            "num_sdma_queues_per_engine 0",
+        );
+        let zero_capability = fixture.discover().unwrap();
+        assert_eq!(
+            zero_capability.gpu_nodes()[0].sdma_engine_inventory(),
+            (Some(0), Some(0))
+        );
+
+        let mut changed_sidecar = without_capability.clone();
+        changed_sidecar.gpu_nodes[0].sdma_topology_capability =
+            Gfx942SdmaTopologyCapabilityObservationV1 {
+                engine_count: Some(2),
+                xgmi_engine_count: Some(14),
+                queues_per_engine: Some(8),
+            };
+        assert_eq!(without_capability, changed_sidecar);
     }
 
     #[test]

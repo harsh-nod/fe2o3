@@ -9,11 +9,15 @@
 mod authenticated_machine_effect;
 mod control_flow;
 #[cfg(feature = "authenticated-machine-effect")]
+mod gfx942_atomic_collective_structure;
+#[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_exec_control;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_dataflow;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_register;
+#[cfg(feature = "authenticated-machine-effect")]
+mod gfx942_scalar_f32_recurrence;
 mod kernel_check_model;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_analysis;
@@ -87,11 +91,15 @@ pub use control_flow::{
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
 #[cfg(feature = "authenticated-machine-effect")]
+pub use gfx942_atomic_collective_structure::*;
+#[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_exec_control::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_dataflow::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_register::*;
+#[cfg(feature = "authenticated-machine-effect")]
+pub use gfx942_scalar_f32_recurrence::*;
 pub use kernel_check_model::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_analysis::*;

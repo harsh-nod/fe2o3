@@ -306,7 +306,7 @@ use these statuses without aliases:
 
 | Status | Meaning | Examples |
 |---|---|---|
-| `Proved` | Verus accepted the named theorem for the exact model and executable Rust unit, with only its recorded allowlist | allocator transition preserves unique ownership; two reservations cannot own one slot |
+| `Proved` | Verus accepted the named abstract theorem for the exact proof model, with only its recorded allowlist; this does not establish refinement to executable Rust | allocator transition preserves unique ownership; two reservations cannot own one slot |
 | `Checked` | a deterministic parser, validator, or dynamic admission check accepted exact bytes/observations | UAPI layout fixture, ELF structure, target match, descriptor bounds |
 | `ProvedUnderContract` | a Verus theorem is valid if every named external contract behaves as specified | observed terminal signal implies quiescence under the AQL completion contract |
 | `Contracted` | behavior is supplied by a versioned external component and is not proved by fe2o3 | KFD ioctl semantics, firmware packet consumption, MFMA hardware behavior |

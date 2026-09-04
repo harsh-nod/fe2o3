@@ -1279,6 +1279,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "rustc_apfloat",
  "rustix",
  "sha2 0.11.0",
 ]
@@ -1702,6 +1703,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-runtime-machine-adapter"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-analysis",
+ "fe2o3-kfd",
+ "fe2o3-runtime",
+]
+
+[[package]]
 name = "fe2o3-runtime-model"
 version = "0.1.0"
 dependencies = [
@@ -1778,6 +1788,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-profiler-protocol",
+ "fe2o3-runtime",
  "fe2o3-semantic-import",
  "fe2o3-semantic-trace",
  "fe2o3-source-isa-observation",

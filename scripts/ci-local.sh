@@ -136,7 +136,9 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-semantic-query
   fe2o3-semantic-trace
   fe2o3-runtime
+  fe2o3-runtime-machine-adapter
   fe2o3-runtime-model
+  fe2o3-target-spec
   fe2o3-virtual-runtime
   fe2o3-virtual-runtime-cli
   fe2o3-verifier
@@ -1171,6 +1173,8 @@ run_rustc_trampoline_tests() {
 run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
+  run_step runtime-parity-report-tests \
+    python3 scripts/tests/test_runtime_parity_report.py
   run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
   run_step parity-snapshot-tests bash scripts/tests/run-parity-snapshot.sh
   run_step parity-oci-executor-tests \

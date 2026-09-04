@@ -595,6 +595,13 @@ fi
     'raw CPU tests omitted the process-identity and immutable-memfd suite' >&2
   exit 1
 }
+for runtime_package in fe2o3-runtime-machine-adapter fe2o3-target-spec; do
+  [[ " ${cpu_command} " == *" -p ${runtime_package} "* ]] || {
+    printf 'raw CPU tests omitted the runtime architecture package %s\n' \
+      "${runtime_package}" >&2
+    exit 1
+  }
+done
 if [[ " ${cpu_command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]]; then
   printf 'generic CPU tests mixed %s into the shared Cargo process\n' \
     "${RUSTC_CODEGEN_TEST_PACKAGE}" >&2
@@ -743,6 +750,7 @@ for core_step in \
   rustc-codegen-shard-policy \
   parity-matrix-check \
   parity-matrix-tests \
+  runtime-parity-report-tests \
   parity-evidence-tests \
   parity-oci-executor-tests \
   parity-oci-operator-tests \
@@ -1300,6 +1308,10 @@ unset FE2O3_ALLOW_GPU_SMOKE FE2O3_TARGET
 STEP_NAMES=()
 STEP_COMMANDS=()
 main parity-evidence
+assert_equals \
+  "python3 scripts/tests/test_runtime_parity_report.py" \
+  "$(step_command runtime-parity-report-tests)" \
+  'parity evidence command did not dispatch the runtime report suite'
 assert_equals \
   "bash scripts/tests/parity-row-evidence.sh" \
   "$(step_command parity-row-evidence-tests)" \

@@ -28,6 +28,24 @@ runtime handle. Recording is a bounded prefix. Once capacity or encoding loses
 an event, later events are counted but not retained, and completeness is false.
 Profiling evidence never participates in launch authority.
 
+Typed semantic profiling is a separate opt-in extension. Call
+`enable_profiler_with_semantic_profile_v1` before resource creation, then use
+`finish_profiler_with_semantic_profile_v1` for the frozen V1 capture and its
+separately versioned KFD Runtime Semantic Profile V1 sidecar, or
+`finish_profiler_with_dispatch_timestamps_v2` for runtime-owned timestamp and
+semantic custody. The original enable, Runtime Profile V1 finish, and timestamp
+V1 finish paths retain their existing allocation and validation surface.
+
+The sidecar has exactly one ordered record for every retained publication.
+Each record binds the Runtime Profile V1 content identity, event identity and
+sequence, dispatch shape, launch geometry, and an explicit ordinary or typed
+atomic/collective classification. Atomic contracts include success and
+compare-exchange failure ordering plus weak mode; collective contracts include
+the exact workgroup participant count. Structural sidecar validation grants no
+authority. Only the distinct non-constructible V2 runtime custody type
+authenticates a sidecar for the additive semantic-query V2 report, which is
+still read-only and does not prove machine semantics.
+
 `KfdRuntimeProfilerConfigV1::new` selects range-only host content records so
 large staging buffers do not require an extra digest on every operation.
 `with_host_content_identities` explicitly selects content identities. Complete

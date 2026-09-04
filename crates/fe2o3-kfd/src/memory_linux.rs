@@ -62,8 +62,7 @@ pub(super) struct LinuxCpuMapping {
 
 const VA_GUARDED: u8 = 0;
 const VA_IDENTITY_MAPPED: u8 = 1;
-const VA_IDENTITY_UNMAPPED: u8 = 2;
-const VA_RELEASED: u8 = 3;
+const VA_RELEASED: u8 = 2;
 
 impl LinuxMemoryBackend {
     pub(super) fn new(device: CheckedGfx942XnackMinusDevice) -> Self {
@@ -91,6 +90,57 @@ impl LinuxMemoryBackend {
         self.device.observation().aperture().gpuvm()
     }
 
+    pub(super) fn observe_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, MemorySessionError> {
+        self.device
+            .observe_clock_correlation()
+            .map_err(MemorySessionError::Device)
+    }
+
+    pub(super) fn sdma_engine_inventory(&self) -> (Option<u32>, Option<u32>) {
+        let unique_id = self.device.observation().unique_id();
+        self.device
+            .topology_snapshot()
+            .topology()
+            .gpu_nodes()
+            .iter()
+            .find(|gpu| gpu.unique_id() == unique_id)
+            .map_or((None, None), |gpu| gpu.sdma_engine_inventory())
+    }
+
+    pub(super) fn gpu_id_value(&self) -> u32 {
+        self.gpu_id()
+    }
+
+    pub(super) fn retained_xgmi_route(
+        &self,
+        source_gpu_id: u32,
+        destination_gpu_id: u32,
+    ) -> Result<crate::topology::Gfx942XgmiRouteV1, MemorySessionError> {
+        self.device
+            .topology_snapshot()
+            .topology()
+            .admit_gfx942_xgmi_route(source_gpu_id, destination_gpu_id)
+            .map_err(|_| MemorySessionError::KernelResultMalformed("gfx942 XGMI topology route"))
+    }
+
+    pub(super) fn check_xgmi_route_currentness(
+        &mut self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.device.check_gfx942_xgmi_route_currentness(route)?;
+        Ok(())
+    }
+
+    pub(super) fn check_gfx942_sdma_topology_capability_currentness(
+        &mut self,
+    ) -> Result<(), MemorySessionError> {
+        self.device
+            .check_gfx942_sdma_topology_capability_currentness()?;
+        Ok(())
+    }
+
     pub(super) fn plan_aql_queue_resources(
         &self,
         ring_bytes: u32,
@@ -106,17 +156,37 @@ impl LinuxMemoryBackend {
         if !mapping.active {
             return;
         }
-        // SAFETY: no readable/writable access has been enabled and no slice has
-        // been formed. Returning an ambiguously inheritable VMA would violate
-        // the safe API contract, so failed synchronous cleanup is fail-stop.
-        if unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }.is_err() {
+        if Self::restore_va_guard(mapping).is_err() {
             std::process::abort();
         }
         mapping.active = false;
         mapping.accessible = false;
         mapping
             .reservation_phase
-            .store(VA_IDENTITY_UNMAPPED, Ordering::Release);
+            .store(VA_GUARDED, Ordering::Release);
+    }
+
+    fn restore_va_guard(mapping: &LinuxCpuMapping) -> Result<(), MemorySessionError> {
+        let expected = mapping.address.as_ptr();
+        // SAFETY: the exact exclusively owned BO VMA is atomically replaced by
+        // an inaccessible anonymous guard at the same address. This preserves
+        // the process-wide GPU-VA reservation across repeated CPU access and
+        // prevents another allocation or session from reusing a live GPU VA.
+        let guarded = unsafe {
+            rustix::mm::mmap_anonymous(
+                expected,
+                mapping.bytes,
+                ProtFlags::empty(),
+                MapFlags::PRIVATE | MapFlags::FIXED | MapFlags::NORESERVE,
+            )
+        }
+        .map_err(|source| Self::syscall("restore retained GPU VA guard", source))?;
+        if guarded != expected {
+            // Linux MAP_FIXED must return the requested address. Continuing
+            // without the guard would permit aliasing a still-live GPU VA.
+            std::process::abort();
+        }
+        Ok(())
     }
 
     #[cfg(feature = "live-validation")]
@@ -186,20 +256,37 @@ impl LinuxMemoryBackend {
     fn exact_progress(
         operation: &'static str,
         handle: u64,
-        gpu_id: u32,
+        device_ids: &[u32],
         old_success: u32,
         unmap: bool,
         kfd: &rustix::fd::OwnedFd,
     ) -> KernelOutcome<u32> {
-        let device_ids = [gpu_id];
+        let Some(n_devices) = u32::try_from(device_ids.len())
+            .ok()
+            .filter(|count| *count != 0)
+        else {
+            return KernelOutcome {
+                value: old_success,
+                result: Err(MemorySessionError::KernelResultMalformed(
+                    "empty or oversized GPU-ID mapping roster",
+                )),
+            };
+        };
+        if old_success > n_devices
+            || device_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            || device_ids.contains(&0)
+        {
+            return KernelOutcome {
+                value: old_success,
+                result: Err(MemorySessionError::KernelResultMalformed(
+                    "noncanonical GPU-ID mapping roster or prefix",
+                )),
+            };
+        }
         let pointer = device_ids.as_ptr() as usize as u64;
         if unmap {
-            let mut args = KfdIoctlUnmapMemoryFromGpuArgs::retry(
-                handle,
-                pointer,
-                device_ids.len() as u32,
-                old_success,
-            );
+            let mut args =
+                KfdIoctlUnmapMemoryFromGpuArgs::retry(handle, pointer, n_devices, old_success);
             // SAFETY: the opcode and LP64 layout are frozen by the KFD 1.18
             // oracle. `device_ids` and the initialized in/out record remain
             // live and immutably located for the complete call.
@@ -210,9 +297,9 @@ impl LinuxMemoryBackend {
                 .map_err(|source| Self::syscall(operation, source));
             if args.handle != handle
                 || args.device_ids_array_ptr != pointer
-                || args.n_devices != 1
+                || args.n_devices != n_devices
                 || args.n_success < old_success
-                || args.n_success > 1
+                || args.n_success > n_devices
             {
                 return KernelOutcome {
                     value: args.n_success,
@@ -226,12 +313,8 @@ impl LinuxMemoryBackend {
                 result,
             }
         } else {
-            let mut args = KfdIoctlMapMemoryToGpuArgs::retry(
-                handle,
-                pointer,
-                device_ids.len() as u32,
-                old_success,
-            );
+            let mut args =
+                KfdIoctlMapMemoryToGpuArgs::retry(handle, pointer, n_devices, old_success);
             // SAFETY: same reviewed nested-pointer contract as the unmap path.
             let request = unsafe { Updater::<MAP_MEMORY_OPCODE, _>::new(&mut args) };
             // SAFETY: request and backing array stay live; output is exclusive.
@@ -239,9 +322,9 @@ impl LinuxMemoryBackend {
                 .map_err(|source| Self::syscall(operation, source));
             if args.handle != handle
                 || args.device_ids_array_ptr != pointer
-                || args.n_devices != 1
+                || args.n_devices != n_devices
                 || args.n_success < old_success
-                || args.n_success > 1
+                || args.n_success > n_devices
             {
                 return KernelOutcome {
                     value: args.n_success,
@@ -285,6 +368,11 @@ impl MemoryBackend for LinuxMemoryBackend {
 
     fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
         self.device.check_operational_currentness()?;
+        Ok(())
+    }
+
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.device.check_gfx942_xgmi_publication_currentness()?;
         Ok(())
     }
 
@@ -521,10 +609,11 @@ impl MemoryBackend for LinuxMemoryBackend {
     }
 
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
+        let gpu_ids = [self.gpu_id()];
         Self::exact_progress(
             "AMDKFD_IOC_MAP_MEMORY_TO_GPU",
             handle,
-            self.gpu_id(),
+            &gpu_ids,
             old_success,
             false,
             &self.device.kfd.opened.fd,
@@ -532,10 +621,43 @@ impl MemoryBackend for LinuxMemoryBackend {
     }
 
     fn unmap_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32> {
+        let gpu_ids = [self.gpu_id()];
         Self::exact_progress(
             "AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU",
             handle,
-            self.gpu_id(),
+            &gpu_ids,
+            old_success,
+            true,
+            &self.device.kfd.opened.fd,
+        )
+    }
+
+    fn map_gpu_ids(
+        &mut self,
+        handle: u64,
+        gpu_ids: &[u32],
+        old_success: u32,
+    ) -> KernelOutcome<u32> {
+        Self::exact_progress(
+            "AMDKFD_IOC_MAP_MEMORY_TO_GPU(multi-GPU)",
+            handle,
+            gpu_ids,
+            old_success,
+            false,
+            &self.device.kfd.opened.fd,
+        )
+    }
+
+    fn unmap_gpu_ids(
+        &mut self,
+        handle: u64,
+        gpu_ids: &[u32],
+        old_success: u32,
+    ) -> KernelOutcome<u32> {
+        Self::exact_progress(
+            "AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU(multi-GPU)",
+            handle,
+            gpu_ids,
             old_success,
             true,
             &self.device.kfd.opened.fd,
@@ -597,6 +719,43 @@ impl MemoryBackend for LinuxMemoryBackend {
             AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
         )?
         .fetch_add(increment, Ordering::AcqRel))
+    }
+
+    fn publish_sdma_write_release(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        expected: u64,
+        new: u64,
+    ) -> Result<(), MemorySessionError> {
+        if new <= expected {
+            return Err(malformed_aql_mapping("SDMA write-pointer progression"));
+        }
+        checked_atomic_u64(
+            mapping,
+            requested_bytes,
+            AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        )?
+        .compare_exchange(expected, new, Ordering::Release, Ordering::Relaxed)
+        .map(|_| ())
+        .map_err(|_| malformed_aql_mapping("SDMA visible write pointer changed"))
+    }
+
+    fn write_sdma_slot(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(packet.len()))
+            .ok_or_else(|| malformed_aql_mapping("SDMA packet slot offset"))?;
+        let pointer = checked_mapping_pointer(mapping, requested_bytes, offset, packet.len(), 1)?;
+        // SAFETY: the checked slot contains the complete private SDMA packet
+        // image. It is not consumable within the published queue range until
+        // the later release update of the visible write pointer.
+        unsafe { core::ptr::copy_nonoverlapping(packet.as_ptr(), pointer, packet.len()) };
+        Ok(())
     }
 
     fn write_aql_slot(
@@ -762,16 +921,19 @@ impl MemoryBackend for LinuxMemoryBackend {
                 "CPU mapping state",
             ));
         }
-        // SAFETY: the mapping is exclusively borrowed and no safe slice can
-        // survive a closure call. The engine establishes the backing-specific
-        // ordering relative to FREE before invoking this primitive.
-        unsafe { rustix::mm::munmap(mapping.address.as_ptr(), mapping.bytes) }
-            .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
+        // No safe slice can survive the closure call. Restoring the original
+        // inaccessible guard also removes the AMDGPU BO CPU mapping.
+        if Self::restore_va_guard(mapping).is_err() {
+            // MAP_FIXED cleanup cannot report whether the prior VMA survived
+            // every failure mode. Do not continue with ambiguous address-space
+            // ownership that could alias a still-live GPU mapping.
+            std::process::abort();
+        }
         mapping.active = false;
         mapping.accessible = false;
         mapping
             .reservation_phase
-            .store(VA_IDENTITY_UNMAPPED, Ordering::Release);
+            .store(VA_GUARDED, Ordering::Release);
         Ok(())
     }
 
@@ -786,13 +948,6 @@ impl MemoryBackend for LinuxMemoryBackend {
                     .map_err(|source| {
                         Self::syscall("release retained GPU VA reservation", source)
                     })?;
-                reservation.phase.store(VA_RELEASED, Ordering::Release);
-                Ok(())
-            }
-            VA_IDENTITY_UNMAPPED => {
-                // The fixed BO mapping already consumed the guard and explicit
-                // CPU unmap removed that VMA before FREE. Retire only the
-                // linear reservation authority; there is no second VMA.
                 reservation.phase.store(VA_RELEASED, Ordering::Release);
                 Ok(())
             }
@@ -939,6 +1094,47 @@ mod tests {
     struct AmdAqlControl([u8; 4096]);
 
     #[test]
+    fn cpu_unmap_guard_keeps_the_exact_gpu_va_reserved() {
+        let bytes = crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1 as usize;
+        // SAFETY: the test owns the returned page and releases it below.
+        let address = unsafe {
+            rustix::mm::mmap_anonymous(
+                core::ptr::null_mut(),
+                bytes,
+                ProtFlags::READ | ProtFlags::WRITE,
+                MapFlags::PRIVATE,
+            )
+        }
+        .unwrap();
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::new(address).unwrap(),
+            bytes,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+
+        LinuxMemoryBackend::restore_va_guard(&mapping).unwrap();
+        mapping.active = false;
+        mapping.accessible = false;
+        mapping
+            .reservation_phase
+            .store(VA_GUARDED, Ordering::Release);
+
+        // A successful protection change proves the exact VMA still exists;
+        // the second call restores the production inaccessible protection.
+        // SAFETY: the test exclusively owns this page and forms no references.
+        unsafe {
+            rustix::mm::mprotect(address, bytes, MprotectFlags::READ).unwrap();
+            rustix::mm::mprotect(address, bytes, MprotectFlags::empty()).unwrap();
+            rustix::mm::munmap(address, bytes).unwrap();
+        }
+        mapping
+            .reservation_phase
+            .store(VA_RELEASED, Ordering::Release);
+    }
+
+    #[test]
     fn aql_counter_operations_use_the_reviewed_amd_control_offsets() {
         let mut control = AmdAqlControl([0xff; 4096]);
         crate::queue::submit::initialize_amd_aql_control(&mut control.0).unwrap();
@@ -972,6 +1168,82 @@ mod tests {
         );
         assert_eq!(&control.0[..8], &0xaaaa_aaaa_aaaa_aaaa_u64.to_le_bytes());
         assert_eq!(&control.0[8..16], &0xbbbb_bbbb_bbbb_bbbb_u64.to_le_bytes());
+    }
+
+    #[test]
+    fn sdma_packet_construction_precedes_exact_visible_write_publication() {
+        let mut ring = MinimumRing([0; 4096]);
+        let mut ring_mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut ring).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        let mut control = AmdAqlControl([0; 4096]);
+        crate::queue::submit::initialize_amd_aql_control(&mut control.0).unwrap();
+        let mut control_mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut control).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        checked_atomic_u64(
+            &mut control_mapping,
+            4096,
+            AMD_AQL_WRITE_DISPATCH_ID_OFFSET_V1,
+        )
+        .unwrap()
+        .store(17 * 64, Ordering::Relaxed);
+
+        let packet = [0x5a; 64];
+        LinuxMemoryBackend::write_sdma_slot(&mut ring_mapping, 4096, 63, &packet).unwrap();
+        assert_eq!(&ring.0[63 * 64..], &packet);
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut control_mapping, 4096)
+                .unwrap()
+                .0,
+            17 * 64
+        );
+
+        LinuxMemoryBackend::publish_sdma_write_release(
+            &mut control_mapping,
+            4096,
+            17 * 64,
+            18 * 64,
+        )
+        .unwrap();
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut control_mapping, 4096)
+                .unwrap()
+                .0,
+            18 * 64
+        );
+        assert!(
+            LinuxMemoryBackend::publish_sdma_write_release(
+                &mut control_mapping,
+                4096,
+                17 * 64,
+                19 * 64,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            LinuxMemoryBackend::observe_aql_counters(&mut control_mapping, 4096)
+                .unwrap()
+                .0,
+            18 * 64
+        );
+        assert!(
+            LinuxMemoryBackend::publish_sdma_write_release(
+                &mut control_mapping,
+                4096,
+                18 * 64,
+                18 * 64,
+            )
+            .is_err()
+        );
     }
 
     #[test]

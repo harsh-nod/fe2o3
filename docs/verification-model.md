@@ -74,10 +74,17 @@ identity echo, but it neither transfers the host's one-use
 currentness custody nor supplies signing keys, protected deployment trust,
 replay exclusion, verification authority, load authority, or launch authority.
 
-Until a crate-owned production verifier consumes those owners together with
-the missing machine and launch evidence, ordinary generated applications fail
-closed. Synthetic integration tests demonstrate composition and hostile
-rejection only and never upgrade this assurance boundary.
+The host also has a typed, sealed join that can present those owners plus exact
+final LLVM, selected ISA, HSACO, currentness, physical-entry, and publication
+coordinates to a separately reviewed unsafe proof backend. It alone can seal
+that backend's owned proof artifacts into the opaque Worker V3 receipt. This is
+an evidence transport and consumption boundary, not a semantic proof.
+
+Until a reviewed protected verifier and concrete issue #214 proof
+backend/artifact consume those owners together with the missing machine and
+launch evidence, ordinary generated applications fail closed. Synthetic
+integration tests demonstrate composition and hostile rejection only and never
+upgrade this assurance boundary.
 
 ## Abstract Execution Model
 

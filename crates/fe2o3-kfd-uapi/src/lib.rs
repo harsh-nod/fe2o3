@@ -43,6 +43,9 @@ pub const KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID: &str =
 pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_ID: &str =
     "linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2";
 
+/// Stable name of the additive classic SDMA queue-input profile.
+pub const KFD_SDMA_QUEUE_SCHEMA_ID: &str = "linux-kfd-sdma-queue-1.18-generic-ioc-v2";
+
 /// Stable name of the reviewed gfx942 CREATE_QUEUE output-observation schema.
 pub const KFD_GFX942_QUEUE_RESOURCE_SCHEMA_ID: &str = "linux-kfd-gfx942-queue-resources-1.18-v2";
 
@@ -400,6 +403,31 @@ pub const KFD_AQL_QUEUE_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES: [u8; 32] = [
     0xb0, 0x92, 0x02, 0xe8, 0x55, 0x3e, 0xc2, 0x1c, 0xbb, 0xcf, 0x59, 0x53, 0x78, 0x1f, 0x61, 0x19,
 ];
 
+/// Canonical manifest for the additive classic SDMA queue-input profile.
+///
+/// This composes the frozen queue lifecycle schema without changing its
+/// compute-AQL profile. It admits only construction of the exact ioctl input;
+/// packet execution and the kernel-returned queue resources remain separate
+/// adapter and hardware obligations.
+pub const KFD_SDMA_QUEUE_SCHEMA_MANIFEST: &str = concat!(
+    "schema_id=linux-kfd-sdma-queue-1.18-generic-ioc-v2\n",
+    "queue_schema_id=linux-kfd-aql-queue-lifecycle-1.18-generic-ioc-v2\n",
+    "queue_schema_manifest_sha256=9e16e0e6b76387d9602dcfdef2ad6614b09202e8553ec21cbbcf5953781f6119\n",
+    "target=linux-x86_64-generic-ioc\n",
+    "source_header=include/uapi/linux/kfd_ioctl.h\n",
+    "source_header_sha256=b3721c1a428a32bb9994af579432af48c44fa65abb860049f11a63a5c093235d\n",
+    "kfd_uapi=1.18\n",
+    "queue_type=sdma:00000001,sdma_xgmi_known_not_admitted:00000003,sdma_by_engine_id:00000004\n",
+    "create_profile=generic-sdma-engine-placeholder-zero-or-targeted-gfx942-engine-index-0..1,ring_write_read_nonzero,doorbell_sentinel_u64_max,queue_id_sentinel_u32_max,eop_zero,cwsr_zero,pad_zero\n",
+    "bounds=ring_power_of_two_and_at_least_1024,percentage:0..100,priority:0..15,gfx942-ordinary-sdma-engines:2,queues-per-engine:8\n",
+    "outputs=shared_gfx942_queue_resource_observation_only\n",
+    "authority=no-queue,no-doorbell,no-packet,no-firmware-or-hardware-execution\n",
+);
+
+/// SHA-256 of [`KFD_SDMA_QUEUE_SCHEMA_MANIFEST`].
+pub const KFD_SDMA_QUEUE_SCHEMA_MANIFEST_SHA256: &str =
+    "f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b";
+
 /// Canonical manifest for reviewed gfx942 CREATE_QUEUE output observations.
 ///
 /// This composes, but does not modify, the frozen queue-lifecycle schema. It
@@ -520,8 +548,88 @@ pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL: u32 =
 pub const KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC: u32 =
     KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL | KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC;
 
+/// Classic packetized DMA queue selected by the additive R7 builder.
+pub const KFD_IOC_QUEUE_TYPE_SDMA: u32 = 0x1;
+
 /// Exact UAPI queue type admitted by the R4 builder.
 pub const KFD_IOC_QUEUE_TYPE_COMPUTE_AQL: u32 = 0x2;
+
+/// XGMI-specialized packetized DMA queue. The initial R7 builder records this
+/// value for ABI parity but does not construct this queue type.
+pub const KFD_IOC_QUEUE_TYPE_SDMA_XGMI: u32 = 0x3;
+
+/// SDMA queue targeted to the exact engine in `sdma_engine_id`.
+pub const KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID: u32 = 0x4;
+
+/// Exact ordinary SDMA inventory in the admitted MI300X gfx942 profile.
+pub const KFD_GFX942_SDMA_ENGINE_COUNT_V1: u32 = 2;
+pub const KFD_GFX942_SDMA_XGMI_ENGINE_COUNT_V1: u32 = 14;
+pub const KFD_GFX942_SDMA_TOTAL_ENGINE_COUNT_V1: u32 =
+    KFD_GFX942_SDMA_ENGINE_COUNT_V1 + KFD_GFX942_SDMA_XGMI_ENGINE_COUNT_V1;
+pub const KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1: u32 = 8;
+
+/// One ordinary SDMA engine admitted by the exact gfx942 two-engine profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdGfx942SdmaEngineId(u32);
+
+impl KfdGfx942SdmaEngineId {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdGfx942SdmaEngineIdError {
+    pub engine_id: u32,
+    pub engine_count: u32,
+}
+
+pub const fn admit_kfd_gfx942_sdma_engine_id(
+    engine_id: u32,
+) -> Result<KfdGfx942SdmaEngineId, KfdGfx942SdmaEngineIdError> {
+    if engine_id >= KFD_GFX942_SDMA_ENGINE_COUNT_V1 {
+        return Err(KfdGfx942SdmaEngineIdError {
+            engine_id,
+            engine_count: KFD_GFX942_SDMA_ENGINE_COUNT_V1,
+        });
+    }
+    Ok(KfdGfx942SdmaEngineId(engine_id))
+}
+
+/// One topology-recommended gfx942 XGMI SDMA engine in the BY_ENG_ID space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct KfdGfx942SdmaXgmiEngineId(u32);
+
+impl KfdGfx942SdmaXgmiEngineId {
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdGfx942SdmaXgmiEngineMaskError {
+    pub engine_mask: u64,
+}
+
+/// Decodes an exact one-bit topology recommendation into an XGMI engine.
+/// Ordinary engines 0 and 1 and bits beyond the 16-engine gfx942 inventory
+/// are rejected.
+pub const fn admit_kfd_gfx942_sdma_xgmi_engine_mask(
+    engine_mask: u64,
+) -> Result<KfdGfx942SdmaXgmiEngineId, KfdGfx942SdmaXgmiEngineMaskError> {
+    if engine_mask.count_ones() != 1 {
+        return Err(KfdGfx942SdmaXgmiEngineMaskError { engine_mask });
+    }
+    let engine_id = engine_mask.trailing_zeros();
+    if engine_id < KFD_GFX942_SDMA_ENGINE_COUNT_V1
+        || engine_id >= KFD_GFX942_SDMA_TOTAL_ENGINE_COUNT_V1
+    {
+        return Err(KfdGfx942SdmaXgmiEngineMaskError { engine_mask });
+    }
+    Ok(KfdGfx942SdmaXgmiEngineId(engine_id))
+}
 
 /// Maximum low-byte queue percentage accepted by the active driver.
 pub const KFD_MAX_QUEUE_PERCENTAGE: u32 = 100;
@@ -1018,6 +1126,34 @@ impl KfdIoctlGetVersionArgs {
     }
 }
 
+/// C layout of `struct kfd_ioctl_get_clock_counters_args`.
+///
+/// These are one ioctl's correlated clock samples. They do not identify a
+/// dispatch boundary and therefore are not kernel start/end timestamps.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct KfdIoctlGetClockCountersArgs {
+    pub gpu_clock_counter: u64,
+    pub cpu_clock_counter: u64,
+    pub system_clock_counter: u64,
+    pub system_clock_freq: u64,
+    pub gpu_id: u32,
+    pub pad: u32,
+}
+
+impl KfdIoctlGetClockCountersArgs {
+    pub const fn new(gpu_id: u32) -> Self {
+        Self {
+            gpu_clock_counter: 0,
+            cpu_clock_counter: 0,
+            system_clock_counter: 0,
+            system_clock_freq: 0,
+            gpu_id,
+            pad: 0,
+        }
+    }
+}
+
 /// Opaque userspace addresses and device-derived auxiliary sizes for a
 /// compute-AQL queue creation request.
 ///
@@ -1037,11 +1173,24 @@ pub struct KfdAqlComputeQueueBuffers {
     pub ctl_stack_size: u32,
 }
 
+/// Opaque mapped addresses used by one classic SDMA queue.
+///
+/// The ring is GPU-visible storage. The read and write pointers are coherent
+/// userspace locations retained for the complete queue lifetime. This record
+/// alone proves no address provenance, mapping, alignment, or ownership fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdSdmaQueueBuffers {
+    pub ring_base_address: u64,
+    pub write_pointer_address: u64,
+    pub read_pointer_address: u64,
+}
+
 /// C layout of `struct kfd_ioctl_create_queue_args`.
 ///
-/// The safe constructor fixes the queue kind to compute AQL, zeros SDMA and
-/// padding inputs, and initializes both kernel outputs to fail-closed
-/// sentinels. It does not create a queue or grant authority over any address.
+/// Safe constructors fix either the reviewed compute-AQL or classic SDMA
+/// profile, zero profile-inapplicable fields and padding, and initialize both
+/// kernel outputs to fail-closed sentinels. They do not create a queue or grant
+/// authority over any address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct KfdIoctlCreateQueueArgs {
@@ -1092,6 +1241,70 @@ impl KfdIoctlCreateQueueArgs {
             sdma_engine_id: 0,
             pad: 0,
         }
+    }
+
+    /// Builds the reviewed generic SDMA input profile.
+    ///
+    /// Engine zero is an input placeholder for the generic queue type; the
+    /// active KFD scheduler selects a concrete engine. EOP and CWSR fields are
+    /// deliberately zero because they belong to compute queues.
+    pub const fn new_sdma(
+        buffers: KfdSdmaQueueBuffers,
+        ring_size: KfdAqlQueueRingSize,
+        gpu_id: u32,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+    ) -> Self {
+        Self {
+            ring_base_address: buffers.ring_base_address,
+            write_pointer_address: buffers.write_pointer_address,
+            read_pointer_address: buffers.read_pointer_address,
+            doorbell_offset: u64::MAX,
+            ring_size: ring_size.bytes(),
+            gpu_id,
+            queue_type: KFD_IOC_QUEUE_TYPE_SDMA,
+            queue_percentage: queue_percentage.value(),
+            queue_priority: queue_priority.value(),
+            queue_id: u32::MAX,
+            eop_buffer_address: 0,
+            eop_buffer_size: 0,
+            ctx_save_restore_address: 0,
+            ctx_save_restore_size: 0,
+            ctl_stack_size: 0,
+            sdma_engine_id: 0,
+            pad: 0,
+        }
+    }
+
+    /// Builds the exact gfx942 targeted-engine SDMA input profile.
+    pub const fn new_sdma_on_engine(
+        buffers: KfdSdmaQueueBuffers,
+        ring_size: KfdAqlQueueRingSize,
+        gpu_id: u32,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+        engine_id: KfdGfx942SdmaEngineId,
+    ) -> Self {
+        let mut args = Self::new_sdma(buffers, ring_size, gpu_id, queue_percentage, queue_priority);
+        args.queue_type = KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID;
+        args.sdma_engine_id = engine_id.value();
+        args
+    }
+
+    /// Builds a gfx942 XGMI queue targeted to the exact engine recommended by
+    /// one separately admitted directional topology link.
+    pub const fn new_sdma_xgmi_on_engine(
+        buffers: KfdSdmaQueueBuffers,
+        ring_size: KfdAqlQueueRingSize,
+        gpu_id: u32,
+        queue_percentage: KfdQueuePercentage,
+        queue_priority: KfdQueuePriority,
+        engine_id: KfdGfx942SdmaXgmiEngineId,
+    ) -> Self {
+        let mut args = Self::new_sdma(buffers, ring_size, gpu_id, queue_percentage, queue_priority);
+        args.queue_type = KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID;
+        args.sdma_engine_id = engine_id.value();
+        args
     }
 }
 
@@ -1454,6 +1667,14 @@ pub const AMDKFD_IOC_GET_VERSION: IoctlRequest = encode_admitted_ioctl(
     size_of::<KfdIoctlGetVersionArgs>(),
 );
 
+/// Request for `_IOWR('K', 0x05, struct kfd_ioctl_get_clock_counters_args)`.
+pub const AMDKFD_IOC_GET_CLOCK_COUNTERS: IoctlRequest = encode_admitted_ioctl(
+    IoctlDirection::ReadWrite,
+    AMDKFD_IOCTL_BASE,
+    0x05,
+    size_of::<KfdIoctlGetClockCountersArgs>(),
+);
+
 /// Request for `_IOWR('K', 0x02, struct kfd_ioctl_create_queue_args)`.
 ///
 /// This constant is intentionally not exposed through [`AdmittedKfdUapi`]: a
@@ -1699,6 +1920,8 @@ const _: () = {
     assert!(KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC == 0x2000_0000);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL == 0x8000_0001);
     assert!(KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC == 0xa000_0001);
+    assert!(KFD_IOC_QUEUE_TYPE_SDMA == 0x1);
+    assert!(KFD_IOC_QUEUE_TYPE_SDMA_XGMI == 0x3);
 
     assert!(size_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
     assert!(align_of::<KfdIoctlFreeMemoryOfGpuArgs>() == 8);
@@ -1749,7 +1972,17 @@ const _: () = {
     assert!(offset_of!(KfdIoctlSmiEventsArgs, gpu_id) == 0);
     assert!(offset_of!(KfdIoctlSmiEventsArgs, anon_fd) == 4);
 
+    assert!(size_of::<KfdIoctlGetClockCountersArgs>() == 40);
+    assert!(align_of::<KfdIoctlGetClockCountersArgs>() == 8);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, gpu_clock_counter) == 0);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, cpu_clock_counter) == 8);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, system_clock_counter) == 16);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, system_clock_freq) == 24);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, gpu_id) == 32);
+    assert!(offset_of!(KfdIoctlGetClockCountersArgs, pad) == 36);
+
     assert!(AMDKFD_IOC_GET_VERSION == 0x8008_4b01);
+    assert!(AMDKFD_IOC_GET_CLOCK_COUNTERS == 0xc028_4b05);
     assert!(AMDKFD_IOC_CREATE_QUEUE == 0xc060_4b02);
     assert!(AMDKFD_IOC_DESTROY_QUEUE == 0xc008_4b03);
     assert!(AMDKFD_IOC_UPDATE_QUEUE == 0x4018_4b07);

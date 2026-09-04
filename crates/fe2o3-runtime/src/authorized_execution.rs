@@ -2,9 +2,6 @@
 
 use core::{fmt, time::Duration};
 
-#[cfg(test)]
-use std::{net::Shutdown, os::unix::net::UnixStream};
-
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
     KfdCooperativeTargetTelemetryEndpointV1, KfdCooperativeTargetTelemetryEndpointV2,
@@ -907,6 +904,7 @@ mod tests {
         KfdDebuggerTelemetryEndpointV1, KfdTargetDebugSessionNonceV1,
         KfdTargetDebugTelemetryProcessV1, create_kfd_target_debug_telemetry_channel_v1,
     };
+    use rustix::fd::OwnedFd;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1129,33 +1127,21 @@ mod tests {
         KfdDebuggerTelemetryEndpointV1,
         AuthorizedRuntimeDebugTelemetrySessionV1,
     ) {
-        let nonce = KfdTargetDebugSessionNonceV1::from_bytes([11; 32]).unwrap();
-        let process = KfdTargetDebugTelemetryProcessV1::capture(std::process::id()).unwrap();
-        let (debugger_fd, target_fd) = create_kfd_target_debug_telemetry_channel_v1().unwrap();
-        let debugger = KfdDebuggerTelemetryEndpointV1::admit(debugger_fd, nonce, process).unwrap();
-        let target =
-            KfdCooperativeTargetTelemetryEndpointV1::admit(target_fd, nonce, process).unwrap();
-        let executable =
-            KfdTargetDebugArtifactIdentityV1::new(telemetry_digest_for_test(12), 8_192).unwrap();
-        (
-            debugger,
-            AuthorizedRuntimeDebugTelemetrySessionV1::new(
-                target,
-                telemetry_digest_for_test(13),
-                executable,
-            ),
-        )
+        let (debugger, debugger_shutdown, session) =
+            telemetry_session_with_debugger_shutdown_for_test();
+        drop(debugger_shutdown);
+        (debugger, session)
     }
 
-    fn telemetry_session_with_shutdown_for_test() -> (
+    fn telemetry_session_with_debugger_shutdown_for_test() -> (
         KfdDebuggerTelemetryEndpointV1,
+        OwnedFd,
         AuthorizedRuntimeDebugTelemetrySessionV1,
-        UnixStream,
     ) {
         let nonce = KfdTargetDebugSessionNonceV1::from_bytes([11; 32]).unwrap();
         let process = KfdTargetDebugTelemetryProcessV1::capture(std::process::id()).unwrap();
         let (debugger_fd, target_fd) = create_kfd_target_debug_telemetry_channel_v1().unwrap();
-        let shutdown = UnixStream::from(debugger_fd.try_clone().unwrap());
+        let debugger_shutdown = rustix::io::fcntl_dupfd_cloexec(&debugger_fd, 3).unwrap();
         let debugger = KfdDebuggerTelemetryEndpointV1::admit(debugger_fd, nonce, process).unwrap();
         let target =
             KfdCooperativeTargetTelemetryEndpointV1::admit(target_fd, nonce, process).unwrap();
@@ -1163,12 +1149,12 @@ mod tests {
             KfdTargetDebugArtifactIdentityV1::new(telemetry_digest_for_test(12), 8_192).unwrap();
         (
             debugger,
+            debugger_shutdown,
             AuthorizedRuntimeDebugTelemetrySessionV1::new(
                 target,
                 telemetry_digest_for_test(13),
                 executable,
             ),
-            shutdown,
         )
     }
 
@@ -1430,9 +1416,13 @@ mod tests {
 
     #[test]
     fn pre_native_telemetry_failure_is_returned_and_poisoned() {
-        let (debugger, mut session, shutdown) = telemetry_session_with_shutdown_for_test();
-        shutdown.shutdown(Shutdown::Both).unwrap();
+        let (debugger, debugger_shutdown, mut session) =
+            telemetry_session_with_debugger_shutdown_for_test();
+        // A concurrent subprocess can retain a fork-before-exec copy despite CLOEXEC. Shutting
+        // down the shared socket description makes target sends fail before every copy closes.
+        rustix::net::shutdown(&debugger_shutdown, rustix::net::Shutdown::Both).unwrap();
         drop(debugger);
+        drop(debugger_shutdown);
         assert!(
             session
                 .emit_before_dispatch(&telemetry_facts_for_test())

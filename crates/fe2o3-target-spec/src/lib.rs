@@ -238,6 +238,9 @@ impl TargetProfileSpecV1 {
     ///
     /// Callers should run [`Self::validate`] before using the profile as
     /// canonical compiler input or proof evidence.
+    // The positional fields mirror the complete, fixed V1 schema. Keeping them
+    // together makes construction auditable at each static profile definition.
+    #[allow(clippy::too_many_arguments)]
     pub const fn from_static_parts(
         vendor: TargetVendorV1,
         architecture_family: TargetArchitectureFamilyV1,
@@ -325,13 +328,13 @@ impl TargetProfileSpecV1 {
         let mut previous_name = None;
         for feature in self.features {
             feature.validate()?;
-            if let Some(previous_name) = previous_name {
-                if previous_name >= feature.name() {
-                    return Err(TargetProfileValidationErrorV1::UnsortedFeatureName {
-                        previous: previous_name,
-                        current: feature.name(),
-                    });
-                }
+            if let Some(previous_name) = previous_name
+                && previous_name >= feature.name()
+            {
+                return Err(TargetProfileValidationErrorV1::UnsortedFeatureName {
+                    previous: previous_name,
+                    current: feature.name(),
+                });
             }
             previous_name = Some(feature.name());
         }

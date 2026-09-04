@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -23,41 +23,34 @@ use fe2o3_artifact_transaction::{
     reacquire_current_hsaco_publication_lease_v3,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
-use fe2o3_artifacts::{
-    AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestAlgorithm,
-    DigestBytes, Mutability, Name, PayloadDigest, PointerWidth,
-};
+use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::__generated::load_admitted_worker_v3_application_v1;
 use fe2o3_host::{
-    __hardware_test::{
-        application_handoff_observed_context_fixture_v1,
-        generated_shared_f32_argument_pair_fixture_v1,
-    },
+    __hardware_test::application_handoff_observed_context_fixture_v1,
     AuthenticatedWorkerV3ExecutableV1, AuthenticatedWorkerV3RosterV1,
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterV1,
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-    GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1,
-    GeneratedWorkerV3PrepareErrorV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
-    HsaDispatchObservationV1, HsaEnvironmentMismatch, HsaEnvironmentObservationV1,
-    HsaExecutableObjectIdentityV1, HsaImplicitKernargInitializationObservationV1,
-    HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchGeometryV1,
-    HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
-    ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
-    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
-    WorkerV3AuditorV1, WorkerV3CompilerExecutionVerificationV1, WorkerV3GeneratedDispatchErrorV1,
-    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3ProtectedRosterEntryEvidenceV1,
-    WorkerV3ProtectedRosterVerificationEvidenceV1, WorkerV3ProtectedRosterVerifierAdapterV1,
-    WorkerV3ProtectedRosterVerifierBackendV1, WorkerV3ProtectedVerificationEvidenceV1,
+    CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
+    CompilerGeneratedKernelProfileV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
+    HsaDispatchObservationV1, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
+    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ProductionWorkerV3ApplicationLoadErrorV1,
+    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, WorkerV3AuditorV1,
+    WorkerV3CompilerExecutionVerificationV1, WorkerV3HsaLoadAuthorizationErrorV1,
+    WorkerV3ProtectedRosterEntryEvidenceV1, WorkerV3ProtectedRosterVerificationEvidenceV1,
+    WorkerV3ProtectedRosterVerifierAdapterV1, WorkerV3ProtectedRosterVerifierBackendV1,
+    WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, WorkerV3ProtectedVerificationEvidenceV1,
     WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
+    WorkerV3RefiningProtectedVerifierAdapterV1, WorkerV3RefiningProtectedVerifierErrorV1,
     WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
     WorkerV3RosterVerificationDecisionErrorV1, WorkerV3RosterVerificationRequestV1,
-    WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
-    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
-    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
-    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
-    audit_recovered_worker_v3_verification_v1,
+    WorkerV3SafetyPropertiesV1, WorkerV3SemanticMachineRefinementBackendV1,
+    WorkerV3SemanticMachineRefinementRequestV1, WorkerV3SyntheticVerifierAdapterV1,
+    WorkerV3SyntheticVerifierV1, WorkerV3VerificationAuthenticationErrorV1,
+    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
+    WorkerV3VerificationRequestV1, admit_recovered_worker_v3_descriptor_v1,
+    admit_recovered_worker_v3_roster_v1, audit_recovered_worker_v3_verification_v1,
 };
 use fe2o3_hsaco_finalize::RevalidatedProtectedWorkerV3FinalizerDerivationV1;
 use fe2o3_kernel_descriptor::KernelId;
@@ -127,10 +120,12 @@ fn static_v3_application_fixtures() -> &'static StaticV3ApplicationFixtures {
         if !static_rustflags.is_empty() {
             static_rustflags.push(" ");
         }
-        static_rustflags.push("-C target-feature=+crt-static");
+        static_rustflags.push("-C target-feature=+crt-static -C debuginfo=0");
         let built = Command::new(cargo)
             .current_dir(workspace)
             .env_remove("RUSTFLAGS")
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
             .env(
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
                 static_rustflags,
@@ -305,72 +300,6 @@ fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
         WorkerV3SyntheticSecondTransformMarker,
         WorkerV3SyntheticSubstitutedTransformMarker,
     ];
-}
-
-struct WorkerV3VecAddArguments<'allocation> {
-    owner: &'allocation (),
-    address: usize,
-    length: usize,
-}
-
-// SAFETY: this integration fixture mirrors the independently produced descriptor's one exact
-// shared-`f32` source argument and retains the inert allocation owner through completion.
-unsafe impl<'allocation> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, WorkerV3VecAddMarker>
-    for WorkerV3VecAddArguments<'allocation>
-{
-    fn generated_argument_layout_v1()
-    -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError> {
-        CompilerGeneratedArgumentLayoutV1::new(
-            16,
-            8,
-            PointerWidth::Bits64,
-            vec![
-                AbiField::new(
-                    Name::new("values").unwrap(),
-                    0,
-                    16,
-                    8,
-                    AbiKind::Slice {
-                        element_size: 4,
-                        element_alignment: 4,
-                    },
-                    Mutability::Immutable,
-                    Access::ReadOnly,
-                    AddressSpace::Global,
-                    <f32 as GeneratedDeviceScalarV1>::shared_slice_type_identity_v1(
-                        PointerWidth::Bits64,
-                    ),
-                    ArgumentOwnership::SharedBorrow,
-                    AliasClass::SharedReadOnly,
-                )
-                .unwrap(),
-            ],
-        )
-    }
-
-    fn bind_arguments_v1(
-        &self,
-        plan: &GeneratedArgumentPackingPlanV1,
-    ) -> Result<GeneratedWorkerV3ArgumentBindingV1<'allocation>, GeneratedArgumentPackError> {
-        // SAFETY: the inert numeric allocation is retained by `self.owner` for this integration
-        // test and is never dereferenced by either fake runtime stage.
-        let values = unsafe {
-            generated_shared_f32_argument_pair_fixture_v1(
-                &application_handoff_observed_context_fixture_v1("gfx942:xnack-"),
-                self.owner,
-                plan,
-                0,
-                self.address,
-                self.length,
-            )
-        };
-        Ok(
-            GeneratedWorkerV3ArgumentBindingV1::from_compiler_generated_parts_v1(
-                vec![],
-                vec![values],
-            ),
-        )
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -705,6 +634,222 @@ where
 }
 
 #[derive(Clone, Copy)]
+enum RefiningTestProtectedVerifierAction {
+    Admit,
+    Reject,
+    Panic,
+    SubstituteCompilerSubject,
+}
+
+struct RefiningTestPanicPayload;
+
+impl Drop for RefiningTestPanicPayload {
+    fn drop(&mut self) {
+        panic!("refining verifier panic payload destructor");
+    }
+}
+
+struct RefiningTestProtectedVerifier {
+    action: RefiningTestProtectedVerifierAction,
+    calls: usize,
+}
+
+// SAFETY: this backend is compiled only under the integration-test feature. The explicitly unsafe
+// synthetic-currentness constructor below exists solely to make the otherwise production-only
+// refinement join reachable for adversarial transition tests.
+unsafe impl<K> WorkerV3ProtectedVerifierBackendV1<K> for RefiningTestProtectedVerifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_protected(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        match self.action {
+            RefiningTestProtectedVerifierAction::Reject => {
+                return Err("protected verifier rejected request");
+            }
+            RefiningTestProtectedVerifierAction::Panic => {
+                std::panic::panic_any(RefiningTestPanicPayload);
+            }
+            RefiningTestProtectedVerifierAction::Admit
+            | RefiningTestProtectedVerifierAction::SubstituteCompilerSubject => {}
+        }
+
+        let mut subject = request.compiler_execution_subject_sha256();
+        if matches!(
+            self.action,
+            RefiningTestProtectedVerifierAction::SubstituteCompilerSubject
+        ) {
+            subject[0] ^= 0xff;
+        }
+        // SAFETY: this constructor is an explicit non-production test hook. The integration test
+        // needs a positive currentness prerequisite to exercise the exact refining-adapter join.
+        let compiler_execution = unsafe {
+            WorkerV3CompilerExecutionVerificationV1::synthetic_authenticated_refining_adapter_test_only(
+                subject,
+                request.compiler_execution_carriage_sha256(),
+                request.compiler_execution_policy_sha256(),
+                request.compiler_execution_issuer_journal_sha256(),
+                request.compiler_occurrence_sha256(),
+                request.compiler_execution_receipt_sha256(),
+                request.compiler_execution_publication_sha256(),
+                request.compiler_execution_acknowledgment_sha256(),
+                request.compiler_execution_worker_ledger_record_sha256(),
+                request.compiler_execution_sequence(),
+                request.compiler_execution_prior_rollback_anchor(),
+                request.compiler_execution_current_rollback_anchor(),
+                [0xe1; 32],
+                [0xe2; 32],
+                [0xe3; 32],
+                [0xe4; 32],
+                [0xe5; 32],
+            )
+        };
+        let proof_inputs = request
+            .validate_compiler_proof_inputs_v4()
+            .expect("the integration fixture carries canonical compiler proof inputs");
+        let target_lineage = request
+            .validate_compiler_target_lineage_v1(&proof_inputs)
+            .expect("the integration fixture carries canonical target lineage");
+        let finalizer_derivation = request
+            .independently_revalidate_finalizer_derivation()
+            .expect("the exact fixture finalizer derivation must replay");
+        // SAFETY: this test backend supplies the exact decoded request owners and nonzero synthetic
+        // protected identities. It never represents the result as production evidence.
+        Ok(unsafe {
+            WorkerV3ProtectedVerificationEvidenceV1::new(
+                finalizer_derivation,
+                compiler_execution,
+                proof_inputs,
+                target_lineage,
+                [0xf1; 32],
+                [0xf2; 32],
+                [0xf3; 32],
+                [0xf4; 32],
+                [0xf5; 32],
+                WorkerV3SafetyPropertiesV1::required(),
+            )
+        })
+    }
+}
+
+enum RefiningTestSemanticAction {
+    Admit,
+    Reject,
+    Panic,
+    InvalidatePublication { root: PathBuf, moved: PathBuf },
+}
+
+#[derive(Debug)]
+struct RefiningTestSemanticObservation {
+    final_llvm_sha256: [u8; 32],
+    final_llvm_bytes: usize,
+    selected_isa_sha256: [u8; 32],
+    selected_isa_bytes: usize,
+    finalized_hsaco_sha256: [u8; 32],
+    finalized_hsaco_bytes: usize,
+    selected_isa_offset: usize,
+}
+
+struct RefiningTestSemanticBackend {
+    action: RefiningTestSemanticAction,
+    calls: usize,
+    observation: Option<RefiningTestSemanticObservation>,
+}
+
+// SAFETY: this backend is a deterministic integration fixture. It first proves that the adapter
+// supplied the exact final LLVM, descriptor-selected ISA range, and complete retained HSACO, then
+// returns fixed non-authoritative proof bytes for receipt-custody tests.
+unsafe impl<K> WorkerV3SemanticMachineRefinementBackendV1<K> for RefiningTestSemanticBackend
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_semantic_machine_refinement(
+        &mut self,
+        request: &WorkerV3SemanticMachineRefinementRequestV1<'_, '_, K>,
+    ) -> Result<WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, Self::Error> {
+        self.calls += 1;
+        let verification_request = request.verification_request();
+        let binding = verification_request.descriptor_binding();
+        let start = usize::try_from(binding.entry_file_offset())
+            .expect("fixture ISA file offset fits usize");
+        let bytes = usize::try_from(binding.entry_size()).expect("fixture ISA size fits usize");
+        let end = start
+            .checked_add(bytes)
+            .expect("fixture ISA range does not overflow");
+        assert_eq!(
+            request.selected_isa_bytes(),
+            &verification_request.finalized_hsaco_bytes()[start..end]
+        );
+        assert_eq!(
+            request.final_llvm_bytes(),
+            verification_request.final_llvm_bytes()
+        );
+        assert_eq!(
+            request.finalized_hsaco_bytes(),
+            verification_request.finalized_hsaco_bytes()
+        );
+        self.observation = Some(RefiningTestSemanticObservation {
+            final_llvm_sha256: Sha256::digest(request.final_llvm_bytes()).into(),
+            final_llvm_bytes: request.final_llvm_bytes().len(),
+            selected_isa_sha256: Sha256::digest(request.selected_isa_bytes()).into(),
+            selected_isa_bytes: request.selected_isa_bytes().len(),
+            finalized_hsaco_sha256: Sha256::digest(request.finalized_hsaco_bytes()).into(),
+            finalized_hsaco_bytes: request.finalized_hsaco_bytes().len(),
+            selected_isa_offset: start,
+        });
+
+        match &self.action {
+            RefiningTestSemanticAction::Reject => {
+                return Err("semantic refinement rejected request");
+            }
+            RefiningTestSemanticAction::Panic => {
+                std::panic::panic_any(RefiningTestPanicPayload);
+            }
+            RefiningTestSemanticAction::InvalidatePublication { root, moved } => {
+                fs::rename(root, moved).expect("move current publication for stale-token test");
+                fs::create_dir(root).expect("replace current publication for stale-token test");
+            }
+            RefiningTestSemanticAction::Admit => {}
+        }
+
+        WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+            vec![0x91; 257].into_boxed_slice(),
+            vec![0x92; 513].into_boxed_slice(),
+            [0x93; 32],
+            [0x94; 32],
+        )
+        .map_err(|_| "semantic refinement fixture evidence is invalid")
+    }
+}
+
+fn refining_test_verifier(
+    protected_action: RefiningTestProtectedVerifierAction,
+    semantic_action: RefiningTestSemanticAction,
+) -> WorkerV3RefiningProtectedVerifierAdapterV1<
+    RefiningTestProtectedVerifier,
+    RefiningTestSemanticBackend,
+> {
+    WorkerV3RefiningProtectedVerifierAdapterV1::new(
+        RefiningTestProtectedVerifier {
+            action: protected_action,
+            calls: 0,
+        },
+        RefiningTestSemanticBackend {
+            action: semantic_action,
+            calls: 0,
+            observation: None,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
 enum ReviewedTestProtectedRosterVerifierFault {
     None,
     CompilerSubject,
@@ -1007,23 +1152,11 @@ struct ReviewedTestHsaKernel {
 
 #[derive(Default)]
 struct ReviewedTestHsaState {
+    environment_observations: AtomicUsize,
+    loads: AtomicUsize,
     unloads: AtomicUsize,
     implicit_initializations: AtomicUsize,
     dispatches: AtomicUsize,
-    dispatched_kernarg: Mutex<Option<Vec<u8>>>,
-    dispatched_geometry: Mutex<Option<HsaLaunchGeometryV1>>,
-    fault: Mutex<ReviewedTestHsaFault>,
-}
-
-#[derive(Clone, Copy, Default)]
-enum ReviewedTestHsaFault {
-    #[default]
-    None,
-    ImplicitError,
-    MutateExplicit,
-    ImplicitKernel,
-    DispatchError,
-    DispatchIncomplete,
 }
 
 struct ReviewedTestHsaAdapter {
@@ -1075,6 +1208,9 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
     type Error = &'static str;
 
     unsafe fn observe_environment(&mut self) -> Result<HsaEnvironmentObservationV1, Self::Error> {
+        self.state
+            .environment_observations
+            .fetch_add(1, Ordering::SeqCst);
         Ok(self.environment.clone())
     }
 
@@ -1083,6 +1219,7 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
         bytes: &[u8],
         finalized_digest: PayloadDigest,
     ) -> Result<(Self::Executable, HsaCodeObjectLoadObservationV1), Self::Error> {
+        self.state.loads.fetch_add(1, Ordering::SeqCst);
         let identity = Self::executable_identity();
         let observed_digest = if self.substitute_load_digest {
             PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([0xdf; 32]))
@@ -1130,18 +1267,13 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
         kernarg: &mut [u8],
     ) -> Result<HsaDispatchObservationV1, Self::Error> {
         self.state.dispatches.fetch_add(1, Ordering::SeqCst);
-        let fault = *self.state.fault.lock().unwrap();
-        if matches!(fault, ReviewedTestHsaFault::DispatchError) {
-            return Err("fixture dispatch failure");
-        }
-        *self.state.dispatched_kernarg.lock().unwrap() = Some(kernarg.to_vec());
-        *self.state.dispatched_geometry.lock().unwrap() = Some(geometry);
+        let _ = kernarg;
         HsaDispatchObservationV1::new(
             [0xd7; 16],
             executable.identity,
             kernel.identity,
             geometry,
-            !matches!(fault, ReviewedTestHsaFault::DispatchIncomplete),
+            true,
         )
         .map_err(|_| "invalid fixture dispatch observation")
     }
@@ -1176,22 +1308,10 @@ unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedTestHsaAdapter {
         self.state
             .implicit_initializations
             .fetch_add(1, Ordering::SeqCst);
-        let fault = *self.state.fault.lock().unwrap();
-        if matches!(fault, ReviewedTestHsaFault::ImplicitError) {
-            return Err("fixture implicit initialization failure");
-        }
         kernarg[implicit_byte_offset..implicit_byte_offset + implicit_byte_len].fill(0xa5);
-        if matches!(fault, ReviewedTestHsaFault::MutateExplicit) {
-            kernarg[0] ^= 0xff;
-        }
-        let kernel_identity = if matches!(fault, ReviewedTestHsaFault::ImplicitKernel) {
-            HsaKernelObjectIdentityV1::new([0xde; 32]).unwrap()
-        } else {
-            kernel.identity
-        };
         Ok(HsaImplicitKernargInitializationObservationV1::new(
             executable.identity,
-            kernel_identity,
+            kernel.identity,
             geometry,
             u64::try_from(explicit_byte_len).unwrap(),
             u64::try_from(implicit_byte_offset).unwrap(),
@@ -1199,6 +1319,14 @@ unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedTestHsaAdapter {
             true,
         ))
     }
+}
+
+fn assert_hsa_adapter_unreached(state: &ReviewedTestHsaState) {
+    assert_eq!(state.environment_observations.load(Ordering::SeqCst), 0);
+    assert_eq!(state.loads.load(Ordering::SeqCst), 0);
+    assert_eq!(state.implicit_initializations.load(Ordering::SeqCst), 0);
+    assert_eq!(state.dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(state.unloads.load(Ordering::SeqCst), 0);
 }
 
 fn recovered_host_fixture() -> (
@@ -1802,7 +1930,7 @@ fn strict_v3_handoff_rejects_stale_envelope_after_publication_turnover() {
 }
 
 #[test]
-fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
+fn completed_v3_publication_is_inert_and_synthetic_verification_cannot_reach_hsa() {
     let worker_v3_fixture::PublishedWorkerV3Fixture {
         directory,
         producer,
@@ -1889,144 +2017,21 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     admitted.revalidate_currentness().unwrap();
 
     let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
-    let mut loaded = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+    let denied = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
         admitted,
         &observed,
         &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
             fault: ReviewedTestWorkerV3VerifierFault::None,
         }),
         adapter,
-    )
-    .unwrap();
-    assert!(!loaded.grants_load_authority());
-    assert!(!loaded.grants_launch_authority());
-    assert_eq!(loaded.kernel_observation().export_symbol(), "vecadd");
-    loaded.revalidate_currentness().unwrap();
-
-    let owner = ();
-    for rejected_geometry in [
-        HsaLaunchGeometryV1::new([0, 1, 1], [64, 1, 1], 0),
-        HsaLaunchGeometryV1::new([5, 1, 1], [257, 1, 1], 0),
-        HsaLaunchGeometryV1::new([5, 1, 1], [64, 1, 1], 1),
-    ] {
-        match loaded.prepare_generated_worker_v3_v1(
-            &observed,
-            rejected_geometry,
-            WorkerV3VecAddArguments {
-                owner: &owner,
-                address: 0x10_000,
-                length: 257,
-            },
-        ) {
-            Err(GeneratedWorkerV3PrepareErrorV1::LaunchAuthorization(_)) => {}
-            Err(other) => panic!("unexpected rejected-geometry error: {other:?}"),
-            Ok(_) => panic!("rejected geometry unexpectedly prepared"),
-        }
-    }
-    assert_eq!(
-        adapter_state
-            .implicit_initializations
-            .load(Ordering::SeqCst),
-        0
     );
-    assert_eq!(adapter_state.dispatches.load(Ordering::SeqCst), 0);
-
-    let geometry = HsaLaunchGeometryV1::new([5, 1, 1], [64, 1, 1], 0);
-    for fault in [
-        ReviewedTestHsaFault::ImplicitError,
-        ReviewedTestHsaFault::MutateExplicit,
-        ReviewedTestHsaFault::ImplicitKernel,
-        ReviewedTestHsaFault::DispatchError,
-        ReviewedTestHsaFault::DispatchIncomplete,
-    ] {
-        *adapter_state.fault.lock().unwrap() = fault;
-        let result = loaded
-            .prepare_generated_worker_v3_v1(
-                &observed,
-                geometry,
-                WorkerV3VecAddArguments {
-                    owner: &owner,
-                    address: 0x10_000,
-                    length: 257,
-                },
-            )
-            .unwrap()
-            .dispatch();
-        let rejected_at_expected_stage = matches!(
-            (fault, result),
-            (
-                ReviewedTestHsaFault::ImplicitError,
-                Err(WorkerV3GeneratedDispatchErrorV1::ImplicitAdapter(_)),
-            ) | (
-                ReviewedTestHsaFault::MutateExplicit,
-                Err(WorkerV3GeneratedDispatchErrorV1::ExplicitKernargMutation),
-            ) | (
-                ReviewedTestHsaFault::ImplicitKernel,
-                Err(WorkerV3GeneratedDispatchErrorV1::ImplicitObservationMismatch(_)),
-            ) | (
-                ReviewedTestHsaFault::DispatchError,
-                Err(WorkerV3GeneratedDispatchErrorV1::DispatchAdapter(_)),
-            ) | (
-                ReviewedTestHsaFault::DispatchIncomplete,
-                Err(WorkerV3GeneratedDispatchErrorV1::DispatchObservationMismatch(_)),
-            )
-        );
-        assert!(rejected_at_expected_stage);
-    }
-    assert_eq!(
-        adapter_state
-            .implicit_initializations
-            .load(Ordering::SeqCst),
-        5
-    );
-    assert_eq!(adapter_state.dispatches.load(Ordering::SeqCst), 2);
-    *adapter_state.fault.lock().unwrap() = ReviewedTestHsaFault::None;
-
-    let prepared = loaded
-        .prepare_generated_worker_v3_v1(
-            &observed,
-            geometry,
-            WorkerV3VecAddArguments {
-                owner: &owner,
-                address: 0x10_000,
-                length: 257,
-            },
-        )
-        .unwrap();
-    assert_eq!(prepared.geometry(), geometry);
-    assert_eq!(prepared.explicit_byte_len(), 16);
-    assert_eq!(prepared.implicit_byte_len(), 256);
-    assert_eq!(prepared.physical_kernarg_byte_len(), 272);
-    assert_eq!(prepared.physical_kernarg_alignment(), 16);
-
-    let completed = prepared.dispatch().unwrap();
-    assert_eq!(completed.kernel_id().as_bytes(), &[0xa1; 32]);
-    assert_eq!(completed.completed_dispatch().geometry(), geometry);
-    assert!(completed.completed_dispatch().dispatch().completed());
-    loaded.revalidate_currentness().unwrap();
-    assert_eq!(
-        adapter_state
-            .implicit_initializations
-            .load(Ordering::SeqCst),
-        6
-    );
-    assert_eq!(adapter_state.dispatches.load(Ordering::SeqCst), 3);
-    assert_eq!(
-        *adapter_state.dispatched_geometry.lock().unwrap(),
-        Some(geometry)
-    );
-    let kernarg_guard = adapter_state.dispatched_kernarg.lock().unwrap();
-    let kernarg = kernarg_guard.as_ref().unwrap();
-    assert_eq!(&kernarg[..8], &0x10_000_u64.to_le_bytes());
-    assert_eq!(&kernarg[8..16], &257_u64.to_le_bytes());
-    assert!(kernarg[16..].iter().all(|byte| *byte == 0xa5));
-    drop(kernarg_guard);
-
-    let unloaded = loaded.unload().unwrap();
-    assert!(unloaded.unload_observation().released());
-    assert!(!unloaded.grants_load_authority());
-    assert!(!unloaded.grants_launch_authority());
-    assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        denied,
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable
+        ))
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
 }
 
 #[test]
@@ -2502,12 +2507,13 @@ fn authenticated_v3_roster_retains_verifier_entry_currentness_until_drop() {
 }
 
 #[test]
-fn v3_host_load_rejects_incompatible_observed_target_features() {
+fn synthetic_v3_hsa_authorization_fails_before_environment_validation() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack+");
     let admitted =
         admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
             .unwrap();
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
     assert!(matches!(
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
@@ -2515,12 +2521,13 @@ fn v3_host_load_rejects_incompatible_observed_target_features() {
             &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
                 fault: ReviewedTestWorkerV3VerifierFault::None,
             }),
-            ReviewedTestHsaAdapter::new().0,
+            adapter,
         ),
         Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
-            WorkerV3HsaLoadAuthorizationErrorV1::Environment(HsaEnvironmentMismatch::Target { .. })
+            WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable
         ))
     ));
+    assert_hsa_adapter_unreached(&adapter_state);
 }
 
 #[test]
@@ -2545,7 +2552,7 @@ fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
 }
 
 #[test]
-fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
+fn protected_verifier_without_current_compiler_evidence_cannot_reach_hsa() {
     let (_directory, recovered) = recovered_host_fixture();
     let admitted = admit_recovered_worker_v3_descriptor_v1(
         recovered,
@@ -2587,6 +2594,50 @@ fn protected_verifier_adapter_maps_independent_evidence_into_authentication() {
     );
     assert!(!authenticated.grants_load_authority());
     assert!(!authenticated.grants_launch_authority());
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    assert!(matches!(
+        authenticated.authorize_hsa_load(observed, adapter),
+        Err(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable)
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
+}
+
+#[test]
+fn stale_authenticated_v3_transition_cannot_reach_hsa_authorization() {
+    let (directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut WorkerV3SyntheticVerifierAdapterV1::new(ReviewedTestWorkerV3Verifier {
+            fault: ReviewedTestWorkerV3VerifierFault::None,
+        }),
+    )
+    .unwrap();
+    authenticated.revalidate_currentness().unwrap();
+
+    let original = directory.0.clone();
+    let moved = original.with_extension("stale-hsa-original");
+    fs::rename(&original, &moved).unwrap();
+    fs::create_dir(&original).unwrap();
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    let denied = authenticated.authorize_hsa_load(observed, adapter);
+
+    fs::remove_dir(&original).unwrap();
+    fs::rename(&moved, &original).unwrap();
+
+    assert!(matches!(
+        denied,
+        Err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication(_))
+    ));
+    assert_hsa_adapter_unreached(&adapter_state);
 }
 
 #[test]
@@ -2670,6 +2721,229 @@ fn protected_verifier_adapter_rejects_substituted_and_zero_evidence() {
             WorkerV3VerificationAuthenticationErrorV1::Decision(actual) if actual == expected
         ));
     }
+}
+
+#[test]
+fn refining_protected_verifier_adapter_joins_exact_isa_and_consumes_receipt() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let binding = admitted.descriptor_binding();
+    let mut verifier = refining_test_verifier(
+        RefiningTestProtectedVerifierAction::Admit,
+        RefiningTestSemanticAction::Admit,
+    );
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap();
+    assert!(
+        authenticated
+            .verification()
+            .retains_current_compiler_and_signed_verus_evidence()
+    );
+    let finalized_hsaco_sha256 = authenticated.verification().finalized_hsaco_sha256();
+    let finalized_hsaco_bytes =
+        usize::try_from(authenticated.verification().finalized_hsaco_length()).unwrap();
+    let (protected, semantic) = verifier.into_inner();
+    assert_eq!(protected.calls, 1);
+    assert_eq!(semantic.calls, 1);
+    let observation = semantic
+        .observation
+        .expect("semantic backend must observe the exact joined request");
+    assert_ne!(observation.final_llvm_sha256, [0; 32]);
+    assert_ne!(observation.final_llvm_bytes, 0);
+    assert_ne!(observation.selected_isa_sha256, [0; 32]);
+    assert_eq!(
+        observation.selected_isa_bytes,
+        usize::try_from(binding.entry_size()).unwrap()
+    );
+    assert_eq!(
+        observation.selected_isa_offset,
+        usize::try_from(binding.entry_file_offset()).unwrap()
+    );
+    assert_eq!(observation.finalized_hsaco_sha256, finalized_hsaco_sha256);
+    assert_eq!(observation.finalized_hsaco_bytes, finalized_hsaco_bytes);
+    assert!(observation.selected_isa_bytes < observation.finalized_hsaco_bytes);
+
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
+    let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
+    let authorized = authenticated.authorize_hsa_load(observed, adapter).unwrap();
+    assert!(authorized.retains_semantic_machine_refinement_receipt());
+    assert_ne!(
+        authorized.semantic_machine_refinement_receipt_identity(),
+        &[0; 32]
+    );
+    assert_eq!(
+        adapter_state
+            .environment_observations
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(adapter_state.loads.load(Ordering::SeqCst), 0);
+    drop(authorized);
+}
+
+#[test]
+fn refining_protected_verifier_adapter_rejects_protected_failure_and_substitution() {
+    for action in [
+        RefiningTestProtectedVerifierAction::Reject,
+        RefiningTestProtectedVerifierAction::SubstituteCompilerSubject,
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let mut verifier = refining_test_verifier(action, RefiningTestSemanticAction::Admit);
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+        match action {
+            RefiningTestProtectedVerifierAction::Reject => assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::ProtectedVerifier(
+                        "protected verifier rejected request"
+                    )
+                )
+            )),
+            RefiningTestProtectedVerifierAction::SubstituteCompilerSubject => assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::ProtectedDecision(
+                        WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                            "compiler-execution subject"
+                        )
+                    )
+                )
+            )),
+            RefiningTestProtectedVerifierAction::Admit
+            | RefiningTestProtectedVerifierAction::Panic => unreachable!(),
+        }
+        let (protected, semantic) = verifier.into_inner();
+        assert_eq!(protected.calls, 1);
+        assert_eq!(semantic.calls, 0);
+        assert!(semantic.observation.is_none());
+    }
+}
+
+#[test]
+fn refining_protected_verifier_adapter_propagates_semantic_rejection_without_receipt() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let mut verifier = refining_test_verifier(
+        RefiningTestProtectedVerifierAction::Admit,
+        RefiningTestSemanticAction::Reject,
+    );
+    let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::Verifier(
+            WorkerV3RefiningProtectedVerifierErrorV1::SemanticMachineRefinement(
+                "semantic refinement rejected request"
+            )
+        )
+    ));
+    let (protected, semantic) = verifier.into_inner();
+    assert_eq!(protected.calls, 1);
+    assert_eq!(semantic.calls, 1);
+    assert!(semantic.observation.is_some());
+}
+
+#[test]
+fn refining_protected_verifier_adapter_contains_backend_panics() {
+    for (protected_action, semantic_action, protected_panics) in [
+        (
+            RefiningTestProtectedVerifierAction::Panic,
+            RefiningTestSemanticAction::Admit,
+            true,
+        ),
+        (
+            RefiningTestProtectedVerifierAction::Admit,
+            RefiningTestSemanticAction::Panic,
+            false,
+        ),
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let mut verifier = refining_test_verifier(protected_action, semantic_action);
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+        if protected_panics {
+            assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::ProtectedVerifierPanicked
+                )
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                WorkerV3VerificationAuthenticationErrorV1::Verifier(
+                    WorkerV3RefiningProtectedVerifierErrorV1::SemanticMachineRefinementPanicked
+                )
+            ));
+        }
+    }
+}
+
+#[test]
+fn refining_protected_verifier_adapter_revalidates_currentness_after_semantic_backend() {
+    let (directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(
+        recovered,
+        KernelId::from_bytes(TEST_MARKER_BINDING),
+    )
+    .unwrap();
+    let root = directory.0.clone();
+    let moved = root.with_extension("stale-refining-adapter-original");
+    let mut verifier = refining_test_verifier(
+        RefiningTestProtectedVerifierAction::Admit,
+        RefiningTestSemanticAction::InvalidatePublication {
+            root: root.clone(),
+            moved: moved.clone(),
+        },
+    );
+    let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut verifier,
+    )
+    .unwrap_err();
+
+    fs::remove_dir(&root).unwrap();
+    fs::rename(&moved, &root).unwrap();
+
+    assert!(matches!(
+        error,
+        WorkerV3VerificationAuthenticationErrorV1::CurrentPublication(_)
+    ));
+    let (protected, semantic) = verifier.into_inner();
+    assert_eq!(protected.calls, 1);
+    assert_eq!(semantic.calls, 1);
+    assert!(semantic.observation.is_some());
 }
 
 #[test]
@@ -2855,7 +3129,7 @@ fn v3_verification_rejects_every_compiler_execution_substitution_and_missing_aut
 }
 
 #[test]
-fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
+fn synthetic_v3_evidence_cannot_probe_a_substituting_hsa_adapter() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     let admitted =
@@ -2871,11 +3145,9 @@ fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
             }),
             adapter,
         ),
-        Err(ProductionWorkerV3ApplicationLoadErrorV1::ExecutableLoad(
-            fe2o3_host::WorkerV3HsaExecutableLoadErrorV1::LoadObservationMismatch {
-                field: "finalized digest"
-            }
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable
         ))
     ));
-    assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
+    assert_hsa_adapter_unreached(&adapter_state);
 }

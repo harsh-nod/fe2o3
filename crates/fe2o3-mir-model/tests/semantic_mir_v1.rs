@@ -1634,7 +1634,7 @@ fn read_view_load_abi(identity: u8) -> SemanticFunctionAbiV1 {
 }
 
 fn strided_read_load_request(field_count: usize) -> InertSemanticMirRequestV1 {
-    let argument_types = vec![
+    let argument_types = [
         READ_VIEW_REF,
         READ_VIEW_USIZE,
         READ_VIEW_USIZE,

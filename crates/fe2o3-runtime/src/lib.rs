@@ -1,16 +1,19 @@
 #![deny(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod async_engine;
 #[allow(unsafe_code)]
 mod authorized_execution;
 mod context;
 #[allow(unsafe_code)]
 mod kfd_backend;
 mod kfd_profile;
+mod kfd_timestamp_profile;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_vecadd_v1;
 mod worker;
 
+pub use async_engine::*;
 pub use authorized_execution::{
     AuthorizedRuntimeDebugTelemetrySessionV1, AuthorizedRuntimeDebugTelemetrySessionV2,
     Gfx942AuthorizedRuntimeCompletedBufferV1, Gfx942AuthorizedRuntimeDebugExecutionErrorV2,
@@ -24,6 +27,7 @@ pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;
 pub use kfd_backend::*;
 pub use kfd_profile::*;
+pub use kfd_timestamp_profile::*;
 pub use worker::*;
 
 use core::fmt;

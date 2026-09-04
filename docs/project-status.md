@@ -1226,16 +1226,24 @@ is complete, and the recorded runs grant no current production authority.
   returning an inert descriptor. This is the sole protected production
   descriptor handoff, but it grants no prerequisite, load, or launch authority.
 
-  No production Worker V3 verifier yet promotes the retained compiler origin,
+  No shipped production Worker V3 verifier yet promotes the retained compiler origin,
   signed MIR-to-live-PLIRON execution, Rust ABI, and machine-effect evidence
   into safe dispatch. Default decisions require the exact move-only V4 proof
   inputs and compiler-currentness evidence, but default builds expose no
   downstream implementation or decision-construction route; they therefore
-  fail closed until the crate-owned protected verifier exists. The opt-in
+  fail closed until a reviewed protected verifier exists. An additive sealed
+  composing adapter now joins that verifier to a separate unsafe semantic-to-
+  final-machine proof backend. The typed request exposes exact source proof
+  owners, final LLVM, selected ISA, HSACO, compiler-currentness, physical entry,
+  and publication coordinates; the opaque receipt retains exact owned proof
+  artifacts plus producer measurement and transcript. No concrete issue #214
+  proof backend or authenticated scalar proof artifact is shipped, so this SPI
+  does not make production application dispatch available. The opt-in
   physical-differential crate now composes only an already-authenticated
   generated invocation with exact simulator state in one move-only
   execute-and-compare transition. Its V2 qualification command enumerates the
-  absent protected backend/key/ledger/rollback and refinement-receipt producers
+  absent protected backend/key/ledger/rollback and concrete refinement-proof
+  backend
   separately, accepts no caller pass counts, and cannot admit the synthetic
   verifier feature.
   Retired Worker V2 test
@@ -1247,8 +1255,10 @@ is complete, and the recorded runs grant no current production authority.
 - The generated contract identity authenticates compiler declarations and the
   exact payload bytes. The authenticated physical-machine worker extracts one
   indivisible effect-and-instruction bundle from exact `gfx942` HSACO bytes,
-  but Worker V3 does not yet consume a semantic refinement receipt relating
-  that trace to KIR. The fixed lowering, Kernel IR checks, host alias admission,
+  and Worker V3 now has an exact typed request/receipt path capable of consuming
+  a separately produced semantic refinement proof relating that trace to KIR.
+  No such proof is currently produced. The fixed lowering, Kernel IR checks,
+  host alias admission,
   and tests provide separate defenses. The generic ranked-PLIRON bounds and
   race analyses reject unsupported or conflicting compiler IR before lowering,
   but end-to-end source-to-machine safety still requires complete frontend
@@ -1259,9 +1269,10 @@ is complete, and the recorded runs grant no current production authority.
   native inputs, canonical in-process LLD policy, and final HSACO. Worker V3
   retains this chain across durable replay. Formal preservation from KIR/LLVM
   to machine behavior and the final join into runtime authority remain open.
-- Generated Worker V3 arguments retain the resources required for dispatch,
-  but generalized asynchronous application APIs, cancellation, and composition
-  remain incomplete.
+- Generated Worker V3 arguments retain the resources required for dispatch.
+  The runtime now has a bounded executor-neutral event-future observer, but
+  generated Worker V3 launch futures, generalized cancellation, operation
+  graphs, and application-level composition remain incomplete.
 - Worker V3 marker-to-artifact association remains part of the trusted
   compiler/linker contract and does not itself prove executable semantics.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The

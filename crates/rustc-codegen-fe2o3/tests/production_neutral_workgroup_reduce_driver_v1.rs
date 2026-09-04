@@ -619,6 +619,7 @@ fn execute_scan_through_sim_runtime(
                 workgroup: [case.extent as u32, 1, 1],
                 dynamic_shared_bytes: 0,
             },
+            semantic_launch: fe2o3_runtime::BackendSemanticLaunchV1::Ordinary,
         })
         .unwrap();
     assert_eq!(

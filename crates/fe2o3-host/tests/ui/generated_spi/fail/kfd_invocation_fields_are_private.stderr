@@ -14,13 +14,13 @@ error[E0451]: fields `authority`, `device`, `prepared`, `completion` and `differ
 9 |         differential,
   |         ^^^^^^^^^^^^ private field
 
-error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecutionAuthority<K>` is private
+error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdInvocationAuthorityV1<K>` is private
  --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:5:9
   |
 5 |         authority,
   |         ^^^^^^^^^ private type
 
-error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecutionAuthority<K>` is private
+error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdInvocationAuthorityV1<K>` is private
   --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:11:13
    |
 11 |     let _ = (authority, device, prepared, completion, differential);

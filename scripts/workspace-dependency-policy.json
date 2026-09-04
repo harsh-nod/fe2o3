@@ -135,6 +135,7 @@
         "fe2o3-sim-physical-differential",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
+        "fe2o3-runtime-machine-adapter",
         "fe2o3-virtual-runtime-cli",
         "rustc-codegen-fe2o3"
       ]

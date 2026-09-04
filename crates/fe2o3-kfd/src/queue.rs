@@ -66,9 +66,10 @@ pub use device_content::{
 
 pub(crate) use live::GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1;
 pub use live::{
-    ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
-    ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
-    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
+    ComputeAqlQueueDestroyedV1, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
+    ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942BarrierProbeExecutionObservationV1,
     Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
     Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942DetachedFixedDispatchV1,
@@ -76,10 +77,23 @@ pub use live::{
     Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1,
     Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1,
     Gfx942KfdQueueExceptionObservationV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
+    Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
+    Gfx942SdmaMultiQueueFailureCustodyV1, Gfx942SdmaMultiQueueFailureDispositionV1,
+    Gfx942SdmaMultiQueueSubmissionFailureV1, Gfx942SdmaMultiQueueTerminalCustodyV1,
+    Gfx942SdmaSubmissionFailureV1, Gfx942SdmaTerminalShardObservationV1,
     KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
     QuarantinedGfx942BarrierProbeV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
+};
+
+// These types are exported through the private queue module solely to make
+// the public move-only role transition nameable at the crate boundary.
+#[allow(unused_imports)]
+pub use live::{
+    Gfx942PromotedSdmaDestinationV1, Gfx942SdmaCompletedPromotionFailureV1,
+    Gfx942SdmaDispatchDataBridgeV1, Gfx942SdmaDispatchDataDemotionFailureV1,
 };
 
 /// Canonical claim boundary for the executable native-queue foundation.
@@ -251,6 +265,9 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         if self.authority_poisoned {
             return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
         }
+        self.resources
+            .try_reserve(1)
+            .map_err(|_| NativeQueueAdapterErrorV1::JournalCapacity)?;
         let view = self.backend.resource_view(&authority)?;
         if view.buffers.ring_base_address == 0
             || view.buffers.write_pointer_address == 0

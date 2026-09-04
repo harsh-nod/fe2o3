@@ -1,4 +1,5 @@
 use crate::generated_argument_plan::validate_worker_v3_argument_packing;
+use crate::worker_v3_verification_admission::AdmittedWorkerV3SemanticMachineRefinementV1;
 use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
     CompilerGeneratedKernelExpectationV1, DeviceIdentity, GeneratedArgumentPackingError,
@@ -688,29 +689,50 @@ impl HsaImplicitKernargInitializationObservationV1 {
     }
 }
 
-/// Environment-authenticated permission to load one exact verified Worker V3 executable.
+/// Protected-verifier- and environment-authenticated permission to load one exact verified
+/// Worker V3 executable.
 ///
 /// The value is linear. The verifier-entry durable publication lock remains retained through native
 /// executable unload; no stale generation can be loaded or turned over between verification and
 /// native state retirement.
 pub struct AuthorizedWorkerV3HsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    semantic_machine_refinement: WorkerV3HsaSemanticMachineRefinementCustodyV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
+}
+
+struct WorkerV3HsaSemanticMachineRefinementCustodyV1 {
+    refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
+}
+
+impl WorkerV3HsaSemanticMachineRefinementCustodyV1 {
+    const fn new(refinement: AdmittedWorkerV3SemanticMachineRefinementV1) -> Self {
+        Self { refinement }
+    }
+
+    const fn receipt_identity(&self) -> &[u8; 32] {
+        self.refinement.receipt().identity()
+    }
 }
 
 pub(crate) fn authorize_worker_v3_hsa_load_v1<
     K: CompilerGeneratedKernelExpectationV1,
     A: ReviewedHsaExecutableLifecycleAdapterV1,
 >(
-    authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    mut authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
     observed: ObservedContext,
     mut adapter: A,
 ) -> Result<AuthorizedWorkerV3HsaLoadV1<K, A>, WorkerV3HsaLoadAuthorizationErrorV1<A::Error>> {
     authenticated
         .revalidate_currentness()
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication)?;
+    let semantic_machine_refinement = WorkerV3HsaSemanticMachineRefinementCustodyV1::new(
+        authenticated
+            .take_application_semantic_machine_refinement()
+            .ok_or(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable)?,
+    );
     // SAFETY: only an unsafe reviewed adapter can enter this migration boundary. Its complete
     // observation is checked against the artifact target and separately supplied HIP context
     // before load authority is returned.
@@ -720,6 +742,7 @@ pub(crate) fn authorize_worker_v3_hsa_load_v1<
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::Environment)?;
     Ok(AuthorizedWorkerV3HsaLoadV1 {
         authenticated,
+        semantic_machine_refinement,
         observed,
         adapter,
         environment,
@@ -737,6 +760,16 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedWorkerV3HsaLoadV1<
 
     pub const fn environment(&self) -> &HsaEnvironmentObservationV1 {
         &self.environment
+    }
+
+    /// Returns the unique semantic-to-machine receipt identity consumed into HSA custody.
+    pub const fn semantic_machine_refinement_receipt_identity(&self) -> &[u8; 32] {
+        self.semantic_machine_refinement.receipt_identity()
+    }
+
+    /// Reports ownership of the unique receipt consumed by this HSA lifecycle.
+    pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
+        true
     }
 }
 
@@ -808,6 +841,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 
         Ok(LoadedWorkerV3HsaExecutableV1 {
             authenticated: self.authenticated,
+            semantic_machine_refinement: self.semantic_machine_refinement,
             observed: self.observed,
             adapter: self.adapter,
             environment: self.environment,
@@ -823,6 +857,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 #[non_exhaustive]
 pub enum WorkerV3HsaLoadAuthorizationErrorV1<E> {
     CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
+    ProtectedProductionEvidenceUnavailable,
     Adapter(E),
     Environment(HsaEnvironmentMismatch),
 }
@@ -847,6 +882,9 @@ impl<E: fmt::Display> fmt::Display for WorkerV3HsaLoadAuthorizationErrorV1<E> {
                     "Worker V3 publication revalidation failed: {error}"
                 )
             }
+            Self::ProtectedProductionEvidenceUnavailable => formatter.write_str(
+                "an admitted Worker V3 semantic-to-machine refinement receipt is unavailable",
+            ),
             Self::Adapter(error) => write!(formatter, "reviewed HSA adapter failed: {error}"),
             Self::Environment(error) => write!(formatter, "HSA environment mismatch: {error}"),
         }
@@ -862,6 +900,7 @@ where
             Self::CurrentPublication(error) => Some(error),
             Self::Adapter(error) => Some(error),
             Self::Environment(error) => Some(error),
+            Self::ProtectedProductionEvidenceUnavailable => None,
         }
     }
 }
@@ -932,6 +971,7 @@ pub enum WorkerV3GeneratedDispatchErrorV1<E> {
 /// only through a compiler-generated typed argument implementation and a linear prepared value.
 pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    semantic_machine_refinement: WorkerV3HsaSemanticMachineRefinementCustodyV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
@@ -961,6 +1001,16 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleAdapterV1>
     LoadedWorkerV3HsaExecutableV1<K, A>
 {
+    /// Returns the unique semantic-to-machine receipt identity retained through HSA unload.
+    pub const fn semantic_machine_refinement_receipt_identity(&self) -> &[u8; 32] {
+        self.semantic_machine_refinement.receipt_identity()
+    }
+
+    /// Reports ownership of the unique receipt retained by this loaded HSA lifecycle.
+    pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
+        true
+    }
+
     pub const fn grants_load_authority(&self) -> bool {
         false
     }
@@ -1116,7 +1166,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaImplicitKernargAdapt
             )
         })
         .map_err(WorkerV3GeneratedDispatchErrorV1::ImplicitAdapter)?;
-        if kernarg[..explicit_byte_len] != *explicit {
+        if !explicit_kernarg_prefix_is_preserved(&explicit, kernarg) {
             return Err(WorkerV3GeneratedDispatchErrorV1::ExplicitKernargMutation);
         }
         validate_implicit_kernarg_observation(
@@ -1166,6 +1216,10 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaImplicitKernargAdapt
             _marker: PhantomData,
         })
     }
+}
+
+fn explicit_kernarg_prefix_is_preserved(expected: &[u8], physical: &[u8]) -> bool {
+    physical.get(..expected.len()) == Some(expected)
 }
 
 fn physical_implicit_kernarg_metadata_matches(
@@ -1719,6 +1773,25 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker_v3_verification_admission::admitted_semantic_machine_refinement_for_test_v1;
+    use fe2o3_kernel_descriptor::{
+        BuildEvidenceV1, DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1,
+        LaunchConstraintsV1, ValidName,
+    };
+    use std::convert::Infallible;
+
+    const VECADD_HSACO: &[u8] =
+        include_bytes!("../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
+
+    #[test]
+    fn qualified_hsa_owner_retains_the_consumed_refinement_receipt() {
+        let refinement = admitted_semantic_machine_refinement_for_test_v1();
+        let expected = *refinement.receipt().identity();
+
+        let custody = WorkerV3HsaSemanticMachineRefinementCustodyV1::new(refinement);
+
+        assert_eq!(custody.receipt_identity(), &expected);
+    }
 
     fn environment(target: &str, ordinal: i32) -> HsaEnvironmentObservationV1 {
         let target = AmdTargetId::parse(target).unwrap();
@@ -1736,6 +1809,134 @@ mod tests {
 
     fn digest(seed: u8) -> PayloadDigest {
         PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([seed; 32]))
+    }
+
+    fn executable_id(seed: u8) -> HsaExecutableObjectIdentityV1 {
+        HsaExecutableObjectIdentityV1::new([seed; 32]).unwrap()
+    }
+
+    fn kernel_id(seed: u8) -> HsaKernelObjectIdentityV1 {
+        HsaKernelObjectIdentityV1::new([seed; 32]).unwrap()
+    }
+
+    fn load_observation(
+        environment: &HsaEnvironmentObservationV1,
+        executable: HsaExecutableObjectIdentityV1,
+    ) -> HsaCodeObjectLoadObservationV1 {
+        HsaCodeObjectLoadObservationV1::new(
+            digest(0x41),
+            4_096,
+            environment.runtime().instance(),
+            environment.agent().agent_handle(),
+            executable,
+        )
+    }
+
+    fn resolution_observation(
+        executable: HsaExecutableObjectIdentityV1,
+        kernel: HsaKernelObjectIdentityV1,
+    ) -> HsaKernelResolutionObservationV1 {
+        HsaKernelResolutionObservationV1::new(executable, kernel, "vecadd", 48, 16, 0, 0).unwrap()
+    }
+
+    fn geometry_descriptor(
+        max_grid_x: u32,
+        max_dynamic_shared_memory_bytes: u32,
+    ) -> KernelDescriptorV1 {
+        let evidence = |identity, digest| {
+            BuildEvidenceV1::new(
+                EvidenceIdentity::from_opaque_bytes([identity; 32]),
+                EvidenceDigest::from_sha256_bytes([digest; 32]),
+            )
+        };
+        KernelDescriptorV1::new(
+            KernelId::from_bytes([0x51; 32]),
+            ValidName::new("vecadd").unwrap(),
+            ValidName::new("vecadd").unwrap(),
+            ValidName::new("vecadd.kd").unwrap(),
+            evidence(0x52, 0x53),
+            evidence(0x54, 0x55),
+            vec![],
+            KernelAbiLayoutV1::new(0, 48, 8).unwrap(),
+            LaunchConstraintsV1::new(
+                1,
+                BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+                DimensionsV1::new(max_grid_x, 1, 1).unwrap(),
+                256,
+                0,
+                max_dynamic_shared_memory_bytes,
+            )
+            .unwrap(),
+            vec![],
+        )
+        .unwrap()
+    }
+
+    fn vecadd_physical_kernel() -> InspectedKernel {
+        let inspected = fe2o3_hsaco::inspect(VECADD_HSACO).unwrap();
+        assert_eq!(inspected.kernels().len(), 1);
+        inspected.kernels()[0].clone()
+    }
+
+    struct TerminalUnloadAdapter {
+        environment: HsaEnvironmentObservationV1,
+        load: HsaCodeObjectLoadObservationV1,
+        resolution: HsaKernelResolutionObservationV1,
+        unload: HsaUnloadObservationV1,
+        unload_calls: usize,
+        unloaded_executable: Option<HsaExecutableObjectIdentityV1>,
+    }
+
+    // SAFETY: this test adapter is synchronous, returns only retained descriptive values, and
+    // never owns native HSA authority.
+    unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for TerminalUnloadAdapter {
+        type Executable = HsaExecutableObjectIdentityV1;
+        type Kernel = HsaKernelObjectIdentityV1;
+        type Error = Infallible;
+
+        unsafe fn observe_environment(
+            &mut self,
+        ) -> Result<HsaEnvironmentObservationV1, Self::Error> {
+            Ok(self.environment.clone())
+        }
+
+        unsafe fn load_executable(
+            &mut self,
+            _bytes: &[u8],
+            _finalized_digest: PayloadDigest,
+        ) -> Result<(Self::Executable, HsaCodeObjectLoadObservationV1), Self::Error> {
+            Ok((self.load.executable_object(), self.load.clone()))
+        }
+
+        unsafe fn resolve_kernel(
+            &mut self,
+            _executable: &Self::Executable,
+            _export_symbol: &str,
+        ) -> Result<(Self::Kernel, HsaKernelResolutionObservationV1), Self::Error> {
+            Ok((self.resolution.kernel_object(), self.resolution.clone()))
+        }
+
+        unsafe fn launch_and_wait(
+            &mut self,
+            executable: &Self::Executable,
+            kernel: &Self::Kernel,
+            geometry: HsaLaunchGeometryV1,
+            _kernarg: &mut [u8],
+        ) -> Result<HsaDispatchObservationV1, Self::Error> {
+            Ok(
+                HsaDispatchObservationV1::new([0x56; 16], *executable, *kernel, geometry, true)
+                    .unwrap(),
+            )
+        }
+
+        unsafe fn unload_executable(
+            &mut self,
+            executable: Self::Executable,
+        ) -> Result<HsaUnloadObservationV1, Self::Error> {
+            self.unload_calls += 1;
+            self.unloaded_executable = Some(executable);
+            Ok(self.unload.clone())
+        }
     }
 
     #[test]
@@ -1855,5 +2056,317 @@ mod tests {
                 Err(HsaEnvironmentMismatch::Target { .. })
             ));
         }
+    }
+
+    #[test]
+    fn production_environment_rejects_ordinal_and_internal_identity_substitution() {
+        let expected = AmdTargetId::parse("gfx942:xnack-").unwrap();
+        let observed = device("gfx942:sramecc+:xnack-", 0);
+        let exact = environment("gfx942:sramecc+:xnack-", 0);
+        validate_environment_facts(expected, &observed, &exact).unwrap();
+
+        assert!(matches!(
+            validate_environment_facts(expected, &device("gfx942:sramecc+:xnack-", 1), &exact,),
+            Err(HsaEnvironmentMismatch::DeviceOrdinal {
+                expected: 1,
+                actual: 0,
+            })
+        ));
+
+        let mut crossed_runtime = exact.clone();
+        crossed_runtime.agent.runtime_instance = [0x61; 16];
+        assert!(matches!(
+            validate_environment_facts(expected, &observed, &crossed_runtime),
+            Err(HsaEnvironmentMismatch::RuntimeInstance)
+        ));
+
+        let mut crossed_device = exact;
+        crossed_device.agent.physical_device_uuid = [0x62; 16];
+        assert!(matches!(
+            validate_environment_facts(expected, &observed, &crossed_device),
+            Err(HsaEnvironmentMismatch::PhysicalDevice)
+        ));
+    }
+
+    #[test]
+    fn load_and_resolution_validation_rejects_digest_and_identity_substitution() {
+        let environment = environment("gfx942:sramecc+:xnack-", 0);
+        let executable = executable_id(0x63);
+        let exact = load_observation(&environment, executable);
+        validate_load_observation(&environment, digest(0x41), 4_096, &exact).unwrap();
+
+        let mut changed = exact.clone();
+        changed.finalized_digest = digest(0x64);
+        assert_eq!(
+            validate_load_observation(&environment, digest(0x41), 4_096, &changed),
+            Err("finalized digest")
+        );
+        let mut changed = exact.clone();
+        changed.byte_len += 1;
+        assert_eq!(
+            validate_load_observation(&environment, digest(0x41), 4_096, &changed),
+            Err("finalized byte length")
+        );
+        let mut changed = exact.clone();
+        changed.runtime_instance = [0x65; 16];
+        assert_eq!(
+            validate_load_observation(&environment, digest(0x41), 4_096, &changed),
+            Err("HSA runtime instance")
+        );
+        let mut changed = exact.clone();
+        changed.agent_handle += 1;
+        assert_eq!(
+            validate_load_observation(&environment, digest(0x41), 4_096, &changed),
+            Err("HSA agent handle")
+        );
+
+        let resolution = resolution_observation(executable, kernel_id(0x66));
+        validate_kernel_resolution_fields("vecadd", 48, 8, 0, 0, executable, &resolution).unwrap();
+        let mut crossed_executable = resolution;
+        crossed_executable.executable_object = executable_id(0x67);
+        assert_eq!(
+            validate_kernel_resolution_fields(
+                "vecadd",
+                48,
+                8,
+                0,
+                0,
+                executable,
+                &crossed_executable,
+            ),
+            Err("HSA executable object")
+        );
+    }
+
+    #[test]
+    fn worker_v3_launch_geometry_enforces_source_and_physical_bounds() {
+        let physical = vecadd_physical_kernel();
+        let descriptor = geometry_descriptor(5, 0);
+        validate_worker_v3_launch_geometry(
+            &descriptor,
+            &physical,
+            HsaLaunchGeometryV1::new([5, 1, 1], [256, 1, 1], 0),
+        )
+        .unwrap();
+
+        for (geometry, expected) in [
+            (
+                HsaLaunchGeometryV1::new([0, 1, 1], [256, 1, 1], 0),
+                HsaLaunchAuthorizationError::ZeroDimension,
+            ),
+            (
+                HsaLaunchGeometryV1::new([u32::MAX, 1, 1], [256, 1, 1], 0),
+                HsaLaunchAuthorizationError::DimensionOverflow,
+            ),
+            (
+                HsaLaunchGeometryV1::new([5, 2, 1], [256, 1, 1], 0),
+                HsaLaunchAuthorizationError::RankMismatch,
+            ),
+            (
+                HsaLaunchGeometryV1::new([6, 1, 1], [256, 1, 1], 0),
+                HsaLaunchAuthorizationError::GridExceedsContract,
+            ),
+            (
+                HsaLaunchGeometryV1::new([5, 1, 1], [64, 1, 1], 0),
+                HsaLaunchAuthorizationError::WorkgroupMismatch,
+            ),
+            (
+                HsaLaunchGeometryV1::new([5, 1, 1], [u32::from(u16::MAX) + 1, 1, 1], 0),
+                HsaLaunchAuthorizationError::WorkgroupExceedsPhysicalLimit,
+            ),
+            (
+                HsaLaunchGeometryV1::new([5, 1, 1], [256, 1, 1], 1),
+                HsaLaunchAuthorizationError::DynamicSharedMemoryExceedsContract,
+            ),
+        ] {
+            assert_eq!(
+                validate_worker_v3_launch_geometry(&descriptor, &physical, geometry),
+                Err(expected)
+            );
+        }
+
+        let descriptor = geometry_descriptor(5, 1);
+        assert_eq!(
+            validate_worker_v3_launch_geometry(
+                &descriptor,
+                &physical,
+                HsaLaunchGeometryV1::new([5, 1, 1], [256, 1, 1], 1),
+            ),
+            Err(HsaLaunchAuthorizationError::DynamicSharedMemoryNotRepresented)
+        );
+    }
+
+    #[test]
+    fn implicit_kernarg_validation_rejects_explicit_mutation_identity_and_completion_changes() {
+        let environment = environment("gfx942:sramecc+:xnack-", 0);
+        let executable = executable_id(0x68);
+        let kernel = kernel_id(0x69);
+        let load = load_observation(&environment, executable);
+        let resolution = resolution_observation(executable, kernel);
+        let geometry = HsaLaunchGeometryV1::new([5, 1, 1], [256, 1, 1], 0);
+        let exact = HsaImplicitKernargInitializationObservationV1::new(
+            executable, kernel, geometry, 48, 48, 256, true,
+        );
+        validate_implicit_kernarg_observation(&load, &resolution, geometry, 48, 48, 256, &exact)
+            .unwrap();
+
+        let mut changed = exact.clone();
+        changed.executable_object = executable_id(0x6a);
+        assert_eq!(
+            validate_implicit_kernarg_observation(
+                &load,
+                &resolution,
+                geometry,
+                48,
+                48,
+                256,
+                &changed,
+            ),
+            Err("implicit kernarg executable object")
+        );
+        let mut changed = exact.clone();
+        changed.kernel_object = kernel_id(0x6b);
+        assert_eq!(
+            validate_implicit_kernarg_observation(
+                &load,
+                &resolution,
+                geometry,
+                48,
+                48,
+                256,
+                &changed,
+            ),
+            Err("implicit kernarg kernel object")
+        );
+        let mut changed = exact;
+        changed.initialized = false;
+        assert_eq!(
+            validate_implicit_kernarg_observation(
+                &load,
+                &resolution,
+                geometry,
+                48,
+                48,
+                256,
+                &changed,
+            ),
+            Err("implicit kernarg initialization completion")
+        );
+
+        let explicit = [1_u8, 2, 3, 4];
+        assert!(explicit_kernarg_prefix_is_preserved(
+            &explicit,
+            &[1, 2, 3, 4, 0xa5],
+        ));
+        assert!(!explicit_kernarg_prefix_is_preserved(
+            &explicit,
+            &[1, 2, 0xff, 4, 0xa5],
+        ));
+        assert!(!explicit_kernarg_prefix_is_preserved(&explicit, &[1, 2, 3],));
+    }
+
+    #[test]
+    fn dispatch_validation_rejects_crossed_identity_geometry_and_incomplete_observations() {
+        let environment = environment("gfx942:sramecc+:xnack-", 0);
+        let executable = executable_id(0x6c);
+        let kernel = kernel_id(0x6d);
+        let load = load_observation(&environment, executable);
+        let resolution = resolution_observation(executable, kernel);
+        let geometry = HsaLaunchGeometryV1::new([5, 1, 1], [256, 1, 1], 0);
+        let exact =
+            HsaDispatchObservationV1::new([0x6e; 16], executable, kernel, geometry, true).unwrap();
+        validate_dispatch_observation(&load, &resolution, geometry, &exact).unwrap();
+
+        let mut changed = exact.clone();
+        changed.executable_object = executable_id(0x6f);
+        assert_eq!(
+            validate_dispatch_observation(&load, &resolution, geometry, &changed),
+            Err("dispatch executable object")
+        );
+        let mut changed = exact.clone();
+        changed.kernel_object = kernel_id(0x70);
+        assert_eq!(
+            validate_dispatch_observation(&load, &resolution, geometry, &changed),
+            Err("dispatch kernel object")
+        );
+        let mut changed = exact.clone();
+        changed.geometry = HsaLaunchGeometryV1::new([4, 1, 1], [256, 1, 1], 0);
+        assert_eq!(
+            validate_dispatch_observation(&load, &resolution, geometry, &changed),
+            Err("dispatch geometry")
+        );
+        let mut changed = exact;
+        changed.completed = false;
+        assert_eq!(
+            validate_dispatch_observation(&load, &resolution, geometry, &changed),
+            Err("dispatch completion")
+        );
+
+        let surfaced: Result<
+            HsaDispatchObservationV1,
+            WorkerV3GeneratedDispatchErrorV1<&'static str>,
+        > = reviewed_adapter_call(|| Err("fixture dispatch failure"))
+            .map_err(WorkerV3GeneratedDispatchErrorV1::DispatchAdapter);
+        assert!(matches!(
+            surfaced,
+            Err(WorkerV3GeneratedDispatchErrorV1::DispatchAdapter(
+                "fixture dispatch failure"
+            ))
+        ));
+    }
+
+    #[test]
+    fn unload_validation_and_terminal_cleanup_bind_exact_identity_once() {
+        let environment = environment("gfx942:sramecc+:xnack-", 0);
+        let executable = executable_id(0x71);
+        let kernel = kernel_id(0x72);
+        let load = load_observation(&environment, executable);
+        let exact = HsaUnloadObservationV1::new(
+            executable,
+            environment.runtime().instance(),
+            environment.agent().agent_handle(),
+            true,
+        );
+        validate_unload_observation(&environment, &load, &exact).unwrap();
+
+        let mut changed = exact.clone();
+        changed.executable_object = executable_id(0x73);
+        assert_eq!(
+            validate_unload_observation(&environment, &load, &changed),
+            Err("unloaded executable object")
+        );
+        let mut changed = exact.clone();
+        changed.runtime_instance = [0x74; 16];
+        assert_eq!(
+            validate_unload_observation(&environment, &load, &changed),
+            Err("unload runtime instance")
+        );
+        let mut changed = exact.clone();
+        changed.agent_handle += 1;
+        assert_eq!(
+            validate_unload_observation(&environment, &load, &changed),
+            Err("unload HSA agent")
+        );
+        let mut changed = exact.clone();
+        changed.released = false;
+        assert_eq!(
+            validate_unload_observation(&environment, &load, &changed),
+            Err("unload completion")
+        );
+
+        let mut adapter = TerminalUnloadAdapter {
+            environment: environment.clone(),
+            load: load.clone(),
+            resolution: resolution_observation(executable, kernel),
+            unload: exact.clone(),
+            unload_calls: 0,
+            unloaded_executable: None,
+        };
+        assert_eq!(
+            terminal_unload(&mut adapter, executable, &environment, &load),
+            exact
+        );
+        assert_eq!(adapter.unload_calls, 1);
+        assert_eq!(adapter.unloaded_executable, Some(executable));
     }
 }

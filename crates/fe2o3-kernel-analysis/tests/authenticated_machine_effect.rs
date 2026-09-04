@@ -3,10 +3,14 @@
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectErrorKindV1, AuthenticatedPhysicalMachineEffectLimitsV1,
     AuthenticatedPhysicalMachineEffectWorkerV1, DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
+    Gfx942MachineAtomicOperationV1, Gfx942MachineCollectivePrimitiveV1,
+    Gfx942MachinePrimitiveClassV1, Gfx942MachineStructureErrorV1,
     PhysicalMachineAnalysisEvidenceErrorV1, PhysicalMachineAnalyzerIdentityV1,
     PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
     PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectWorkerPolicyV1,
-    PhysicalMachineToolchainIdentityV1, inspect_physical_machine_effect_worker_candidate_v1,
+    PhysicalMachineMemoryAccessV1, PhysicalMachineToolchainIdentityV1,
+    check_authenticated_gfx942_atomic_collective_machine_structure_v1,
+    inspect_physical_machine_effect_worker_candidate_v1,
 };
 use rustix::fs::{OFlags, SealFlags};
 use std::{
@@ -68,6 +72,135 @@ fn worker() -> AuthenticatedPhysicalMachineEffectWorkerV1 {
         inspect_physical_machine_effect_worker_candidate_v1(fixture(), limits()).unwrap();
     AuthenticatedPhysicalMachineEffectWorkerV1::open(fixture(), candidate.policy(), limits())
         .unwrap()
+}
+
+fn semantic_entry() -> PhysicalMachineEffectEntryRequestV1 {
+    PhysicalMachineEffectEntryRequestV1::new(
+        "alpha",
+        PhysicalMachineEffectBudgetV1::new(1, 1, 1, 1, 0),
+    )
+    .unwrap()
+}
+
+fn semantic_payload(mode: u8) -> Vec<u8> {
+    let mut payload = (0_u8..16).collect::<Vec<_>>();
+    payload[0] = mode;
+    payload
+}
+
+#[test]
+fn authenticated_atomic_and_collective_machine_structure_retains_exact_custody() {
+    let execution = worker()
+        .analyze(semantic_payload(19), vec![semantic_entry()], limits())
+        .unwrap();
+    let atomic_trace = &execution.analysis().trace().instructions()[0];
+    assert!(atomic_trace.flags().may_load());
+    assert!(atomic_trace.flags().may_store());
+    assert_eq!(
+        atomic_trace.memory_access(),
+        PhysicalMachineMemoryAccessV1::ReadWrite { byte_width: 4 }
+    );
+    let execution_identity = execution.identity();
+    let checked =
+        check_authenticated_gfx942_atomic_collective_machine_structure_v1(execution, "alpha")
+            .unwrap();
+
+    assert_eq!(checked.kernel_symbol(), "alpha");
+    assert_eq!(checked.descriptor_symbol(), "alpha.kd");
+    assert_eq!(
+        checked.authenticated_execution_identity(),
+        execution_identity
+    );
+    assert_eq!(checked.artifact_identity().byte_len(), 16);
+    assert_eq!(checked.entry_file_offset(), 0);
+    assert_eq!(checked.entry_byte_len(), 16);
+    assert_eq!(checked.sites().len(), 3);
+    assert!(matches!(
+        checked.sites()[0].primitive(),
+        Gfx942MachinePrimitiveClassV1::Atomic(atomic)
+            if atomic.operation() == Gfx942MachineAtomicOperationV1::FetchAdd
+                && atomic.width_bits() == 32
+    ));
+    assert_eq!(
+        checked.sites()[1].primitive(),
+        Gfx942MachinePrimitiveClassV1::Collective(Gfx942MachineCollectivePrimitiveV1::LdsRead32)
+    );
+    assert_eq!(
+        checked.sites()[2].primitive(),
+        Gfx942MachinePrimitiveClassV1::Collective(
+            Gfx942MachineCollectivePrimitiveV1::WorkgroupBarrier
+        )
+    );
+    assert!(checked.authenticates_analyzer_execution());
+    assert!(checked.binds_exact_payload_descriptor_entry_and_instruction_bytes());
+    assert!(!checked.establishes_machine_instruction_semantics());
+    assert!(!checked.establishes_atomic_memory_ordering());
+    assert!(!checked.establishes_collective_convergence());
+    assert!(!checked.establishes_compiler_refinement());
+    assert!(!checked.grants_load_authority());
+    assert!(!checked.grants_launch_authority());
+}
+
+#[test]
+fn machine_structure_failure_returns_authenticated_custody_for_exact_retry() {
+    let execution = worker()
+        .analyze(semantic_payload(19), vec![semantic_entry()], limits())
+        .unwrap();
+    let failure =
+        check_authenticated_gfx942_atomic_collective_machine_structure_v1(execution, "omega")
+            .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        &Gfx942MachineStructureErrorV1::KernelNotRequested
+    );
+    let (execution, error) = failure.into_parts();
+    assert_eq!(error, Gfx942MachineStructureErrorV1::KernelNotRequested);
+    assert!(
+        check_authenticated_gfx942_atomic_collective_machine_structure_v1(execution, "alpha")
+            .is_ok()
+    );
+}
+
+#[test]
+fn unknown_atomic_ds_and_barrier_classifications_fail_closed() {
+    for (mode, expected) in [
+        (20, "GLOBAL_ATOMIC_INC_RTN_vi"),
+        (21, "DS_READ2_B32_vi"),
+        (22, "S_BARRIER_SIGNAL_vi"),
+        (23, "GLOBAL_ATOMIC_ADD_FUTURE_vi"),
+        (25, "DS_READ_B32_FUTURE_vi"),
+        (26, "V_ADD_U32_DPP_FUTURE"),
+    ] {
+        let execution = worker()
+            .analyze(semantic_payload(mode), vec![semantic_entry()], limits())
+            .unwrap();
+        let failure =
+            check_authenticated_gfx942_atomic_collective_machine_structure_v1(execution, "alpha")
+                .unwrap_err();
+        match failure.error() {
+            Gfx942MachineStructureErrorV1::UnsupportedAtomicOpcode { opcode }
+            | Gfx942MachineStructureErrorV1::UnsupportedCollectiveOpcode { opcode } => {
+                assert_eq!(opcode, expected)
+            }
+            error => panic!("unexpected classification error: {error:?}"),
+        }
+    }
+}
+
+#[test]
+fn exact_atomic_opcode_with_mismatched_memory_classification_fails_closed() {
+    let execution = worker()
+        .analyze(semantic_payload(24), vec![semantic_entry()], limits())
+        .unwrap();
+    let failure =
+        check_authenticated_gfx942_atomic_collective_machine_structure_v1(execution, "alpha")
+            .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        &Gfx942MachineStructureErrorV1::AtomicMemoryClassification {
+            opcode: "GLOBAL_ATOMIC_ADD_RTN_vi".to_owned(),
+        }
+    );
 }
 
 #[test]
@@ -478,8 +611,11 @@ fn run_failed_ack_delivery_repeats(repeats: usize) {
             error.kind(),
             &AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
         );
+        // This interval includes post-spawn process attestation as well as the
+        // five-second cleanup bound. Keep it below the fixture's intentional
+        // thirty-second sleep without making parallel CI scheduling the test.
         assert!(
-            started.elapsed() < Duration::from_secs(10),
+            started.elapsed() < Duration::from_secs(20),
             "ACK failure cleanup {iteration} took {:?}",
             started.elapsed()
         );

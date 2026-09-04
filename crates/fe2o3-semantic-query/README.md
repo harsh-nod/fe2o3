@@ -127,6 +127,38 @@ joins remain unavailable. Its local opaque collector ticks and loss status are
 preserved where represented. Details and remaining producer dependencies are in
 [`../../docs/runtime-causality-v1.md`](../../docs/runtime-causality-v1.md).
 
+The library-only `report_dispatch_timestamps_v1` surface separately validates
+Dispatch Timestamp Capture V1 bytes against their exact runtime profile,
+producer-declared evidence bytes, and collection configuration. It exposes bounded raw
+producer-claimed ticks and correlation brackets for inspection. Those values
+retain their explicit producer-declared origin and are never promoted to an
+authenticated observed fact. Structural
+admission is reported as a declared producer claim; authenticated per-dispatch
+device timestamps remain unavailable until a real collector adapter supplies
+complete, loss-free observations. CPU publication is never relabeled as a
+device timestamp, and opaque ticks are never normalized to nanoseconds or a
+global clock.
+
+`report_authenticated_native_runtime_dispatch_timestamps_v1` consumes only the
+direct-KFD runtime's opaque custody bundle. It reports exact host-monotonic
+publication and completion observation points and their loss/completeness
+coverage. Empty captures report no observed intervals, and a fresh recorder
+occurrence distinguishes each process-local clock epoch. It does not infer GPU begin/end from those points, reuse the low-level
+clock-correlation sample, or advertise a device/global clock domain. Persisted
+timestamp JSON can be revalidated structurally but cannot recreate this
+authenticated query input.
+
+The additive
+`report_authenticated_native_runtime_dispatch_timestamps_v2` accepts only the
+distinct runtime-owned V2 custody type and leaves the V1 report schema
+unchanged. It joins each retained timestamp record to the exact KFD Runtime
+Semantic Profile V1 publication, exposing the opaque dispatch-shape identity,
+launch geometry, and optional typed atomic or collective contract. The report
+also carries sidecar coverage and rejects missing, duplicate, stale, or
+substituted joins. These are authenticated runtime contract declarations, not
+semantic execution events, machine-correctness proofs, GPU timestamps, or
+collection/dispatch authority.
+
 ## Profiler capture queries
 
 The same crate provides the read-only `CaptureQuerySessionV1` protocol and

@@ -2,14 +2,14 @@ use core::mem::{align_of, offset_of, size_of};
 
 use fe2o3_kfd_uapi::{
     AMDKFD_IOC_ACQUIRE_VM, AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, AMDKFD_IOC_FREE_MEMORY_OF_GPU,
-    AMDKFD_IOC_GET_PROCESS_APERTURES_NEW, AMDKFD_IOC_GET_VERSION, AMDKFD_IOC_MAP_MEMORY_TO_GPU,
-    AMDKFD_IOC_SET_XNACK_MODE, AMDKFD_IOC_SMI_EVENTS, AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU,
-    AMDKFD_IOCTL_BASE, IoctlDirection, KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE,
-    KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC,
-    KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE, KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT,
-    KFD_ALLOC_MEMORY_FLAGS_KERNARG, KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE,
-    KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL, KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID,
-    KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST,
+    AMDKFD_IOC_GET_CLOCK_COUNTERS, AMDKFD_IOC_GET_PROCESS_APERTURES_NEW, AMDKFD_IOC_GET_VERSION,
+    AMDKFD_IOC_MAP_MEMORY_TO_GPU, AMDKFD_IOC_SET_XNACK_MODE, AMDKFD_IOC_SMI_EVENTS,
+    AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU, AMDKFD_IOCTL_BASE, IoctlDirection,
+    KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
+    KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC, KFD_ALLOC_MEMORY_FLAGS_EXECUTABLE,
+    KFD_ALLOC_MEMORY_FLAGS_HOST_VISIBLE_COHERENT, KFD_ALLOC_MEMORY_FLAGS_KERNARG,
+    KFD_ALLOC_MEMORY_FLAGS_USERPTR_EXECUTABLE, KFD_ALLOC_MEMORY_FLAGS_USERPTR_QUEUE_CONTROL,
+    KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_ID, KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST,
     KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256,
     KFD_DEVICE_MEMORY_LIFECYCLE_SCHEMA_MANIFEST_SHA256_BYTES,
     KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM, KFD_IOC_ALLOC_MEM_FLAGS_COHERENT,
@@ -33,12 +33,12 @@ use fe2o3_kfd_uapi::{
     KFD_USERPTR_QUEUE_CONTROL_SCHEMA_MANIFEST_SHA256_BYTES, KFD_XNACK_MODE_DISABLED,
     KFD_XNACK_MODE_ENABLED, KFD_XNACK_MODE_QUERY, KfdAllocMemoryFlags, KfdAllocMemoryFlagsError,
     KfdIoctlAcquireVmArgs, KfdIoctlAllocMemoryOfGpuArgs, KfdIoctlFreeMemoryOfGpuArgs,
-    KfdIoctlGetProcessAperturesNewArgs, KfdIoctlGetVersionArgs, KfdIoctlMapMemoryToGpuArgs,
-    KfdIoctlSetXnackModeArgs, KfdIoctlSmiEventsArgs, KfdIoctlUnmapMemoryFromGpuArgs,
-    KfdProcessDeviceApertures, KfdUapiVersion, KfdUapiVersionError, admit_kfd_alloc_memory_flags,
-    admit_kfd_device_memory_flags, admit_kfd_public_device_memory_flags,
-    admit_kfd_userptr_executable_memory_flags, admit_kfd_userptr_queue_control_memory_flags,
-    encode_ioctl, negotiate_kfd_uapi_version,
+    KfdIoctlGetClockCountersArgs, KfdIoctlGetProcessAperturesNewArgs, KfdIoctlGetVersionArgs,
+    KfdIoctlMapMemoryToGpuArgs, KfdIoctlSetXnackModeArgs, KfdIoctlSmiEventsArgs,
+    KfdIoctlUnmapMemoryFromGpuArgs, KfdProcessDeviceApertures, KfdUapiVersion, KfdUapiVersionError,
+    admit_kfd_alloc_memory_flags, admit_kfd_device_memory_flags,
+    admit_kfd_public_device_memory_flags, admit_kfd_userptr_executable_memory_flags,
+    admit_kfd_userptr_queue_control_memory_flags, encode_ioctl, negotiate_kfd_uapi_version,
 };
 use sha2::{Digest, Sha256};
 
@@ -204,6 +204,31 @@ fn get_version_layout_matches_kfd_uapi_1_18_golden() {
     assert_eq!(align_of::<KfdIoctlGetVersionArgs>(), 4);
     assert_eq!(offset_of!(KfdIoctlGetVersionArgs, major_version), 0);
     assert_eq!(offset_of!(KfdIoctlGetVersionArgs, minor_version), 4);
+}
+
+#[test]
+fn clock_counter_layout_matches_kfd_uapi_1_18_golden() {
+    assert_eq!(size_of::<KfdIoctlGetClockCountersArgs>(), 40);
+    assert_eq!(align_of::<KfdIoctlGetClockCountersArgs>(), 8);
+    assert_eq!(
+        offset_of!(KfdIoctlGetClockCountersArgs, gpu_clock_counter),
+        0
+    );
+    assert_eq!(
+        offset_of!(KfdIoctlGetClockCountersArgs, cpu_clock_counter),
+        8
+    );
+    assert_eq!(
+        offset_of!(KfdIoctlGetClockCountersArgs, system_clock_counter),
+        16
+    );
+    assert_eq!(
+        offset_of!(KfdIoctlGetClockCountersArgs, system_clock_freq),
+        24
+    );
+    assert_eq!(offset_of!(KfdIoctlGetClockCountersArgs, gpu_id), 32);
+    assert_eq!(offset_of!(KfdIoctlGetClockCountersArgs, pad), 36);
+    assert_eq!(KfdIoctlGetClockCountersArgs::new(17).gpu_id, 17);
 }
 
 #[test]
@@ -446,6 +471,7 @@ fn smi_events_layout_and_reset_mask_match_kfd_uapi_1_18_golden() {
 #[test]
 fn ioctl_numbers_match_linux_generic_ioc_golden() {
     assert_eq!(AMDKFD_IOC_GET_VERSION, 0x8008_4b01);
+    assert_eq!(AMDKFD_IOC_GET_CLOCK_COUNTERS, 0xc028_4b05);
     assert_eq!(AMDKFD_IOC_GET_PROCESS_APERTURES_NEW, 0xc010_4b14);
     assert_eq!(AMDKFD_IOC_ACQUIRE_VM, 0x4008_4b15);
     assert_eq!(AMDKFD_IOC_ALLOC_MEMORY_OF_GPU, 0xc028_4b16);
@@ -454,6 +480,16 @@ fn ioctl_numbers_match_linux_generic_ioc_golden() {
     assert_eq!(AMDKFD_IOC_UNMAP_MEMORY_FROM_GPU, 0xc018_4b19);
     assert_eq!(AMDKFD_IOC_SET_XNACK_MODE, 0xc004_4b21);
     assert_eq!(AMDKFD_IOC_SMI_EVENTS, 0xc008_4b1f);
+
+    assert_eq!(
+        encode_ioctl(
+            IoctlDirection::ReadWrite,
+            AMDKFD_IOCTL_BASE,
+            0x05,
+            size_of::<KfdIoctlGetClockCountersArgs>(),
+        ),
+        Some(AMDKFD_IOC_GET_CLOCK_COUNTERS),
+    );
 
     assert_eq!(
         encode_ioctl(

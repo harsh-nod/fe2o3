@@ -4,8 +4,8 @@ use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_core::GpuContext;
 use fe2o3_runtime::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
-    BackendPollV1, RuntimeAccessV1, RuntimeBackendFailureV1, RuntimeBackendV1,
-    RuntimeCapabilitiesV1, RuntimeMemoryKindV1,
+    BackendPollV1, BackendSemanticLaunchV1, RuntimeAccessV1, RuntimeBackendFailureV1,
+    RuntimeBackendV1, RuntimeCapabilitiesV1, RuntimeMemoryKindV1,
 };
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -1122,6 +1122,9 @@ impl<A: DispatchApi> BackendState<A> {
 
     fn submit_v1(&mut self, launch: BackendLaunchV1<'_>) -> BackendResult<u64> {
         self.require_live()?;
+        if launch.semantic_launch != BackendSemanticLaunchV1::Ordinary {
+            return Err(rejected_invalid_argument("semantic launch"));
+        }
         let stream = self
             .streams
             .get(&launch.stream)
@@ -2144,12 +2147,36 @@ mod tests {
                 workgroup: [64, 1, 1],
                 dynamic_shared_bytes: 16,
             },
+            semantic_launch: BackendSemanticLaunchV1::Ordinary,
         }
     }
 
     fn complete(state: &mut BackendState<MockApi>, submission: u64) {
         let signal = state.submissions[&submission].signal.unwrap();
         state.core.api.signals.insert(signal, 0);
+    }
+
+    #[test]
+    fn base_submission_rejects_a_semantic_contract_before_custody() {
+        let mut state = state(272);
+        let binding = binding(999);
+        let mut request = launch(999, 999, &binding, &[]);
+        request.semantic_launch =
+            BackendSemanticLaunchV1::Collective(fe2o3_runtime::RuntimeCollectiveLaunchContractV1 {
+                operation: fe2o3_runtime::RuntimeCollectiveOperationV1::ReduceSum,
+                scope: fe2o3_runtime::RuntimeMemoryScopeV1::Workgroup,
+                order: fe2o3_runtime::RuntimeMemoryOrderV1::AcquireRelease,
+                participants: 64,
+                geometry: request.geometry,
+            });
+
+        assert!(matches!(
+            state.submit_v1(request),
+            Err(RuntimeBackendFailureV1::Rejected(
+                ReviewedHsaRuntimeBackendErrorV1::InvalidArgument("semantic launch")
+            ))
+        ));
+        assert!(state.submissions.is_empty());
     }
 
     #[test]

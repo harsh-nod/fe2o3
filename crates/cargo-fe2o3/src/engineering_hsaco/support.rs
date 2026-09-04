@@ -89,6 +89,10 @@ struct Grants {
     launch: bool,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the canonical manifest binds every independently measured tool and payload explicitly"
+)]
 pub(super) fn canonical_manifest(
     options: &Options,
     observation: &EngineeringHsacoObservationV1,

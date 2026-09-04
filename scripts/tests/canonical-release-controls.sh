@@ -174,6 +174,7 @@ expect_failure wrong_repository '--repo must be harsh-nod/fe2o3' \
   bash "${WRAPPER}" verify --repo powderluv/fe2o3 "${common[@]}"
 
 mkdir -p "${TEST_ROOT}/fake-bin" "${TEST_ROOT}/fake-gh"
+ln -s -- "$(command -v jq)" "${TEST_ROOT}/fake-bin/jq"
 cat >"${TEST_ROOT}/fake-bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail

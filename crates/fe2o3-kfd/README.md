@@ -23,7 +23,7 @@ The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the
 exact correlated render descriptor plus a prospective KFD whole-GPU reset-event
-descriptor, owns a process-global fe2o3 admission lease, requires KFD 1.18 and
+descriptor, runs under a process-serialized admission transaction, requires KFD 1.18 and
 AMDGPU DRM 3.64.0, compares the DRM identity prefix with topology/sysfs,
 establishes a disabled-XNACK no-queue barrier, checks the complete bounded
 process-aperture inventory, and repeats process, descriptor, topology, XNACK,
@@ -68,8 +68,9 @@ refinement proof, nor a
 `ProductionDeviceAuthorityV1` implementation. No R1 API grants VM, allocation,
 mapping, queue, event, code, or dispatch authority. It does not enumerate
 cache, memory-bank, or link subtrees or prove their reported counts. The
-process-global lease excludes other fe2o3 R1 admissions, not arbitrary raw KFD
-users in the process. Ancestor traversal, mount-namespace integrity, sysfs
+admission transaction excludes concurrent fe2o3 R1 commits, not other live
+checked physical-device tokens or arbitrary raw KFD users in the process.
+Ancestor traversal, mount-namespace integrity, sysfs
 truth, cross-file snapshot semantics, KFD/DRM ioctl behavior, firmware meaning,
 and absence of an ABA reset remain named external contracts. KFD does not expose
 a sequence snapshot for the prospective subscription, does not report every
@@ -578,19 +579,175 @@ batch, signal slot and generation, and last packet. Production deliberately has
 no constructor for that token, so neither public data, an internal descriptor,
 nor a boolean can mint initialized memory.
 
-This is a prerequisite state machine, not a device-copy implementation. The
-pinned KFD UAPI exposes no admitted memcpy or SDMA submission operation. The
-queue can return a never-published mapped C3 set with generation zero, or a
-published set only after exact C4 recycle and confirmed destruction. That
-return path is deliberately not connected to the content state machine. The
-next integration must authenticate an exact
-copy-kernel artifact and semantics and consume its exact C2 publication and C4
-completed batch to construct the opaque tokens above. Until those are
-composed, C6 provides no Linux copy backend, actual copy, or
-copy-completion-derived initialized lease. The independent public-VRAM CPU
-initialization path above does not authenticate a device copy. Neither path
-currently supplies a public read-dispatch premise or hardware evidence.
+This remains a prerequisite content-authentication state machine, not the
+device-copy implementation described below. The queue can return a
+never-published mapped C3 set with generation zero, or a published set only
+after exact C4 recycle and confirmed destruction. That return path is
+deliberately not connected to the content state machine. The R7 SDMA engine
+moves bytes and observes its own completion generation; it does not authenticate
+source semantics or construct the opaque C6 initialized-content token. A later
+composition must join exact content identity with exact copy publication and
+completion. The independent public-VRAM CPU initialization path also does not
+authenticate a device copy. Neither path supplies a public read-dispatch premise
+or hardware evidence.
 
+### R7 gfx942 SDMA and pooled buffers
+
+An active compute session may add one generic classic KFD SDMA queue, an exact
+two-queue directional profile, or a balanced striped set with any even count
+from 2 through 16 targeted queues. Every queue has a 4096-byte ring and at most 63 in-flight
+64-byte submissions. Directional and striped admission requires a fresh,
+generation-consistent observation of exactly two ordinary SDMA engines and
+eight queues per engine before and after targeted queue creation and
+destruction. The striped profile alternates engine indices 0 and 1, rejects
+duplicate native queue IDs, selects one queue round-robin per successfully
+published batch, and does not advance its selection on rejection. KFD engine
+index 1 carries directional H2D and index 0 carries directional D2H; these are
+indices, not the public HSA engine bit masks. Each submission contains one
+reviewed gfx942 linear-copy packet and one system-memory completion fence.
+Move-only host-coherent and HBM buffers retain the exact queue owner and a
+concrete pool generation, and remain in queue custody until the exact slot
+generation is observed. Copy tickets bind that same non-reused queue occurrence
+in addition to the native queue ID, ring slot, and slot generation. Cross-queue
+recycle and submission are rejected before mutation. Nonblocking submit, poll,
+deadline wait, and batch forms are public. A batch writes complete packet
+images while the visible write pointer is unchanged, then performs one release
+write-pointer publication and one final release doorbell. The split API uses one
+operational-currentness envelope for submission and another for waiting; the
+checked combined API uses one envelope from preparation through observed
+completion.
+
+Polling and queue-progress observations are nonblocking. Progress binds the
+native queue occurrence, submitted/completed/pending counts, and ring byte
+counters to one host `Instant`; that is host-monotonic observation time, not a
+calibrated GPU timestamp. Deadline waits use bounded adaptive
+spin/yield/sleep backoff. The admitted SDMA fence protocol does not create a
+KFD completion event: the queue event is an exception signal, so completion
+remains coherent-memory polling. Published packets cannot be cancelled or
+retracted safely through this KFD interface. Cancellation validates custody
+and returns a typed unsupported result; callers must poll or explicitly drain
+the retained ticket batch.
+
+The session also owns a best-fit pool keyed by buffer kind, physical bytes, and
+alignment. Recycling is explicit, is possible only after buffer authority has
+returned from completion, and advances the concrete generation before reuse.
+Pool trim releases every free allocation before queue teardown. Outstanding or
+pooled buffers block destruction. SDMA queue
+destruction precedes compute queue destruction, followed by explicit unmap and
+release of the copy ring, control page, and completion arena. A partial
+directional create or destroy failure returns no retryable state: native and
+mapped custody is terminally retained for process teardown.
+
+An exact full coherent upload buffer can be moved into fixed-dispatch data only
+after its complete physical extent matches a content descriptor. An exact full
+H2D completion can similarly move its device destination without a second
+allocation or copy, but only after the complete coherent source matches the
+descriptor. The move-only bridge binds queue occurrence, storage identity,
+extent, and pool generation; demotion checks those coordinates and advances
+the pool generation before returning SDMA custody. Partial copies, pooled
+logical/physical extent differences, foreign owners, digest substitution, and
+detached-ledger substitution fail closed. This is a custody-preserving role
+transition, not a proof of DMA execution or coherence.
+
+The fixed AQL batch supports multiple independent dispatch packets on one
+compute queue. This work does not create multiple compute queues inside one
+checked-device owner: the device, VM, and shared-memory session are linear and
+splitting that authority requires a separate native-owner transition. Striped
+queues apply only to SDMA work.
+
+The copy benchmark's `stripedN` profiles are an explicit concurrency
+diagnostic over that queue set. Each direction is partitioned into
+`min(N, depth)` balanced batches, every batch is published before the first
+wait, and each successful batch advances to the next native queue. Submission
+and wait retain their existing per-batch currentness envelopes. This is not an
+all-or-nothing multi-queue publication transaction: a later shard failure after
+an earlier publication is a terminal benchmark failure, and no production
+atomic-batch claim follows from the measurement.
+
+The separate production
+`submit_gfx942_striped_sdma_copy_batch_v1` operation accepts at most 1,008
+requests over exactly 2 through 16 admitted striped queues. It deterministically
+balances no more than 63 requests per queue, prepares every shard before the
+first visible publication, and commits its round-robin cursor only after every
+shard publishes and closing currentness succeeds. A no-effect preflight failure
+returns the intact requests for retry. Any terminal failure instead returns
+move-only, observation-only custody that must be retained until process teardown:
+all request count/ordinals before publication; confirmed published shards, at
+most one indeterminate failing shard, and untouched request ordinals after
+partial publication; or all confirmed shards after a closing failure. It exposes
+no drain, ticket, buffer, or resubmission authority. Earlier publications cannot
+be rolled back, so this is a bounded prepare-all/typed-partial-outcome boundary,
+not an atomic device transaction. Safe fault-injection tests exercise the same
+production preparation/publication algorithms. Closing-currentness injection
+exercises the shared post-publication cursor/state transition, not the outer
+live-session currentness/poison path. These tests do not claim live native fault
+injection or firmware/coherence proof.
+
+`GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
+capability sidecar, reviewed ROCr revision, direction policy and packet sources,
+packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves
+only the separate abstract R7 lease-generation,
+retention, quarantine, dependency, and device-coordinate theorems. It does not
+refine this Rust code. Ioctl truth, doorbell MMIO, CPU/GPU coherence, firmware
+consumption, completion, liveness, and performance remain contracted or
+measured.
+
+The hardware benchmarks print stable key/value records containing queue depth,
+batch size, direction, concurrency, doorbells per batch, and p50/p95 latency.
+Representative commands are:
+
+```text
+cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> directional
+cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> striped8
+cargo run -p fe2o3-kfd --example kfd-sdma-multi-device-benchmark -- <gpu0> <gpu1> <bytes> <depth-per-device> <warmups> <samples>
+cargo run -p fe2o3-kfd --example kfd-sdma-xgmi-peer-benchmark -- <gpu0> <gpu1> <bytes> <depth> <warmups> <samples>
+```
+
+The ordinary and XGMI publication changes are packet-model and fake-MMIO
+tested. Throughput, completion latency, copy-engine overlap, and cross-GPU
+behavior remain hardware-unverified until these commands are run on the named
+gfx942 topology and compared with equivalent HIP/HSA workloads.
+
+### R9 native XGMI and machine-structure admission
+
+The [R9 boundary](docs/r9-native-xgmi-machine-structure-v1.md) defines a
+bounded low-level native XGMI path. Topology discovery retains exact
+directional link records. Route admission binds one enabled type-11 XGMI
+`io_links` edge, same-hive gfx942 endpoints, nonzero bandwidth, the exact
+2+14-engine inventory, and one topology-recommended XGMI engine. PUBLIC HBM
+owners map an exact canonical two-GPU array with cumulative-prefix recovery;
+an errored full map is cleanup-only and an errored full unmap quarantines
+without granting free authority. A BY_ENG_ID XGMI SDMA queue exposes
+nonblocking bounded submission and exact completion custody in both
+directions. A bounded batch performs all fallible packet construction and
+retained-mapping allocation before native mutation, writes every packet while
+the visible write pointer is unchanged, then performs one release write-pointer
+publication and one final doorbell store under one topology-currentness
+envelope. Nonblocking poll, progress observation, bounded adaptive wait, typed
+cancellation rejection, and explicit batch drain mirror the ordinary SDMA
+surface. Forward and reverse route queues use the topology-recommended XGMI
+engine for their exact direction. The current safe API holds both device
+sessions mutably for one route queue, so the bidirectional benchmark runs
+forward then reverse and reports `concurrency=1`; simultaneous opposite-route
+striping requires a future split peer-session authority.
+
+The authenticated LLVM/MC analyzer separately classifies a closed set of
+global/LDS integer RMW atomic instructions and collective building blocks. Its
+move-only receipt binds exact payload, descriptor, entry, reachable machine
+sites, encodings, widths, and memory classes, then matches those coordinates
+to a loader-prepared dispatch. The reviewed collective structure roster covers
+exact LDS read/write/permutation and workgroup-barrier spellings; all `_DPP`
+spellings are rejected. The safe structure-required wrapper lives in the
+integration-only `fe2o3-runtime-machine-adapter` crate. It consumes the applied
+receipt, independent Worker V3 authority, and a checked device, delegates to
+the sole authorized dispatch transition, and returns the retained structure
+with the normal result. This is Checked machine-structure evidence.
+It does not prove opcode semantics, ordering, scope, convergence, compiler
+refinement, coherence, or hardware behavior and itself grants no load or
+launch authority. KFD atomics and collectives remain code-object behavior
+rather than standalone ioctls. Worker V3 remains responsible for exact
+semantic and launch authority; concrete device, queue, publication, and
+completion custody remains with the native owner.
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
 capabilities, and TTMP-save. Success is required while the process has no user
@@ -754,3 +911,133 @@ inputs, output bounds, redactions, availability claims, and authority
 exclusions. Reports and capability queries are fixed-size and allocation-free.
 Hostile tests use only crate-private detached-fact constructors; they perform
 no KFD, DRM, HIP, HSA, or ROCm runtime discovery.
+
+## R17 persistent device-allocation custody core
+
+`Gfx942PersistentDeviceAllocationV1` is an additive, addressless lifecycle
+core around exactly one existing mapped device-local allocation. It accepts
+either the ordinary single-device mapped lease or an already complete,
+canonical two-device peer mapping. The non-cloneable owner and every use lease
+are thread-affine. They expose no GPU address, native allocation handle,
+descriptor, pointer, or mapping identity. Internal `Rc` identity is used only
+to bind move-only custody to one owner incarnation; there is no interior
+locking or externally cloneable allocation authority.
+
+The owner retains the existing private allocation generation, selected device,
+VM, and mapped-state identity for exact substitution checks. Each concrete
+owner also has a private, non-resettable incarnation identity carried by every
+use lease and dependency frontier, so demotion and re-promotion of the same
+native allocation cannot make old custody current again. A fixed 64-slot ledger
+admits Compute, LocalSdma, and peer-mapped source/destination
+classifications over checked nonempty allocation subranges. Operation selects
+the access class; callers cannot provide a contradictory access value.
+Overlapping reads can coexist and disjoint uses can coexist. Any active
+overlap involving a writer is rejected. A later overlapping use involving a
+writer must name the exact current host-confirmed successful frontier for the
+same native binding. Reservations then move through `Reserved`, `Prepared`,
+`Published`, `Completed`, and `Settled`; reserved and prepared uses can be
+cancelled, while a timeout returns the exact published custody unchanged.
+Settlement is ordered by reservation sequence so one frontier cannot skip an
+earlier live use. Retained settled history is bounded and can be retired only
+after every use is settled. Normal native-authority extraction requires no
+active use. Caller-reported indeterminate publication or currentness loss
+quarantines the owner and blocks normal extraction; `Drop` performs no KFD
+operation.
+
+Used directly, this core does not connect to the compute AQL or SDMA packet owners. Its
+`Prepared`, `Published`, `Completed`, dependency-frontier, timeout, and
+quarantine transitions are host-side custody states invoked by a future
+adapter; they are not observations of a queue, packet, signal, device, driver,
+firmware, or hardware. In particular, a complete two-device peer mapping is
+not a `Gfx942XgmiRouteV1`: the peer-mapped operation names grant no route
+direction, topology generation, home endpoint, selected SDMA engine, XGMI
+publication, or completion authority. The currentness-loss entry point records
+only a caller report and performs no currentness check. Queue-owned publication
+callbacks and exact compute binding remain separate integration work. There is
+no executable-Rust refinement proof for this ledger.
+
+## R18 targeted persistent local-SDMA adapter
+
+`promote_sdma_device_buffer_to_persistent_allocation_v1` moves one existing
+queue-owned device buffer into `Gfx942QueuePersistentAllocationV1` without
+changing `sdma_outstanding_buffers`. The wrapper remains bound to the exact
+parent `QueueKeyV1`, native child queue ID, target engine, pool generation,
+mapped allocation identity, and full physical extent. Admission is limited to
+one page-multiple local allocation no larger than 256 MiB and one single
+targeted queue. Engine 1 admits only H2D; engine 0 admits only D2H. Directional,
+striped, generic untargeted, peer-mapped, XGMI, compute, and concurrent range
+uses are outside this adapter.
+
+`submit_persistent_sdma_copy_v1` consumes that wrapper and exactly one ordinary
+host SDMA buffer. It reserves and prepares the derived R17 LocalSdma use, then
+moves the exact device lease into the existing SDMA queue record. Prepared and
+published custody bind the host storage identity, pool generation, logical and
+physical extents, plus the exact planned lower ticket slot and generation.
+Clean pre-publication rejection restores only those exact inputs and cancels the
+prepared use.
+Lower-layer `Retained` custody quarantines the use while it is still Prepared;
+it never fabricates a Published transition. Only confirmed lower publication
+advances the use to Published. Nonblocking
+`poll_persistent_sdma_copy_v1` and bounded
+`wait_persistent_sdma_copy_for_v1` retain the same move-only submission on
+pending or timeout. Exact completion authenticates the queue record's device
+identity, restores the original persistent owner, and advances through
+Completed and Settled. Demotion is available only after quiescent,
+non-quarantined restoration and advances the inherited pool generation once.
+The consuming `retire_settled_frontier_v1` allocation transition reclaims the
+bounded settled ledger after quiescence; it accepts only the exact latest
+frontier and returns both move-only inputs unchanged on stale or substituted
+frontiers. Retirement performs no native operation and does not change the
+inherited outstanding-buffer debit.
+
+Terminal currentness, publication, ticket, or completion uncertainty returns
+opaque process-teardown custody. No post-publication failure path allocates a
+replacement custody object or exposes the raw adapted device buffer to the
+ordinary recycle/release API. Host tests cover Prepared quarantine, exact
+detach/restore, pending and timeout retention, exact completion settlement,
+terminal completion custody, more than 64 sequential publish/complete/retire
+cycles, stale and substituted frontier rejection, demote/re-promote frontier
+ABA rejection, same-queue host and ticket substitution rejection, and the
+recoverable/retained/confirmed branch separation. These tests perform no KFD,
+DRM, SDMA, HIP, HSA, firmware, or GPU work. The adapter is not hardware
+execution evidence, a concurrency claim, a copy-performance result, or an
+executable-Rust/formal refinement proof.
+
+## R19 directional persistent local-SDMA adapter
+
+The additive R19 surface promotes one existing queue-owned device buffer into
+`Gfx942DirectionalQueuePersistentAllocationV1`, bound to the exact parent queue
+occurrence and the ordered pair of distinct native child queues: engine 1 for
+H2D and engine 0 for D2H. Unlike R18, pooled backing is admitted with
+`0 < logical <= physical <= 256 MiB`; the physical extent must remain page
+rounded and is the extent owned by R17, while every copy is bounded by the
+current logical extent. Promotion, use, completion, frontier retirement, and
+demotion preserve the one inherited `sdma_outstanding_buffers` debit.
+
+`submit_directional_persistent_sdma_copy_v1` selects direction explicitly on
+every use. After exact completion and frontier retirement, any next direction
+is admitted, including repeated same-direction chunks and arbitrary H2D/D2H
+sequences. Dependency chaining is not exposed: the exact completed frontier
+must be retired before the next use, which then reserves without a dependency.
+The lower single-copy prepare/publish path retains one request,
+packet, and full ticket inline; it does not allocate batch `Vec` rosters or an
+owned doorbell error string per packet. The lower maximum linear copy remains
+`0x003f_ffe0` bytes, so larger logical transfers require sequential chunks.
+Nonblocking `poll_directional_persistent_sdma_copy_v1` and bounded
+`wait_directional_persistent_sdma_copy_for_v1` retain exact pending custody.
+
+Clean rejection returns both owners and cancels Prepared. A retained lower
+publication quarantines Prepared, confirmed publication alone advances to
+Published, and exact child/ticket/range/storage restoration alone completes and
+settles the use. Promotion and demotion failures also distinguish explicit
+retryable custody from opaque process-teardown custody; no moved native owner is
+represented by `None`. Terminal currentness or publication ambiguity poisons
+the session, and outstanding persistent custody continues to block queue
+destruction. No topology or sysfs discovery occurs per packet.
+
+The frozen R19 manifest digest is
+`c04f67240eecff85cffb092a228554c88a72cb89f1d49865c123db559cfae319`.
+Evidence is native-neutral host custody and failure-injection testing only.
+R19 remains single-flight and local: it does not claim concurrent range borrows,
+striping, peer/XGMI copies, compute integration, hardware execution,
+copy-performance parity, or executable-Rust/formal refinement.

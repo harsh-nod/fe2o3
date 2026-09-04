@@ -29,6 +29,7 @@ use super::completion::{
 use super::device_content::Gfx942DeviceContentDescriptorV1;
 use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
 use crate::MemorySessionError;
+use crate::sdma::{Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1};
 use crate::shared_memory::{
     AqlDispatchCodeResourceRoleV1, AqlDispatchHostDataResourceRoleV1,
     AqlDispatchKernargResourceRoleV1, ExecutableGttV1, Gfx942DeviceMemoryDispatchAuthorityV1,
@@ -407,6 +408,42 @@ impl Gfx942FixedDispatchDataV1 {
                 Gfx942FixedDispatchStorageIdentityV1::HostVisibleInitialized(
                     memory.storage_identity(),
                 )
+            }
+        }
+    }
+
+    pub(crate) const fn sdma_storage_identity(&self) -> Gfx942SdmaBufferStorageIdentityV1 {
+        match &self.storage {
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                Gfx942SdmaBufferStorageIdentityV1::Device(lease.storage_identity())
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                Gfx942SdmaBufferStorageIdentityV1::Device(memory.storage_identity())
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942SdmaBufferStorageIdentityV1::Host(token.storage_identity())
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942SdmaBufferStorageIdentityV1::Host(memory.storage_identity())
+            }
+        }
+    }
+
+    pub(crate) fn into_sdma_storage(self) -> Gfx942SdmaBufferStorageV1 {
+        match self.storage {
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                Gfx942SdmaBufferStorageV1::Device(lease)
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                Gfx942SdmaBufferStorageV1::Device(memory.into_parts().0)
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                Gfx942SdmaBufferStorageV1::Host(token)
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                Gfx942SdmaBufferStorageV1::Host(memory.into_token())
             }
         }
     }
@@ -894,7 +931,9 @@ impl DispatchGenerationOwnerV1 {
         debug_assert_eq!(self.next_generation, generation);
         self.next_generation = generation + 1;
         self.phase = DispatchOwnerPhaseV1::InFlight { generation };
-        self.recycled_generation = None;
+        // Phase checks hide the prior exact recycle while this generation is
+        // active. Retain it so a no-effect cancellation can restore the last
+        // reportable publication instead of fabricating generation zero.
     }
 
     fn active(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -4375,7 +4414,32 @@ mod tests {
         owner.commit_begin(next);
         assert!(owner.returned_generation().is_err());
         owner.cancel(next).unwrap();
+        assert_eq!(owner.returned_generation().unwrap(), generation);
+    }
+
+    #[test]
+    fn retryable_cancel_preserves_last_recycle_for_returning_destroy() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let first_generation = owner.next().unwrap();
+        owner.commit_begin(first_generation);
+        owner.complete(first_generation).unwrap();
+        owner.recycle(first_generation).unwrap();
+
+        let retry_generation = owner.next().unwrap();
+        owner.commit_begin(retry_generation);
+        assert_eq!(first_generation, 1);
+        assert_eq!(retry_generation, 2);
         assert!(owner.returned_generation().is_err());
+        assert!(owner.returning_destroy_generation().is_err());
+
+        // `cancel` is reached only for a classified no-effect submission
+        // failure. The latest exact recycle remains the returned report.
+        owner.cancel(retry_generation).unwrap();
+        assert_eq!(owner.returned_generation().unwrap(), first_generation);
+        assert_eq!(
+            owner.returning_destroy_generation().unwrap(),
+            first_generation
+        );
     }
 
     #[test]

@@ -1,5 +1,9 @@
 use super::*;
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the extraction boundary keeps each independently pinned tool and custody path explicit"
+)]
 pub(super) fn run_extraction(
     options: &Options,
     cargo: &crate::pinned_executable::PinnedExecutable,

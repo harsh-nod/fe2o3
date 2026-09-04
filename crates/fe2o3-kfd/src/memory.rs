@@ -302,6 +302,9 @@ pub(super) trait MemoryBackend {
     fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
         self.check_currentness()
     }
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.check_operational_currentness()
+    }
     fn acquire_vm(&mut self) -> Result<(), MemorySessionError>;
     fn reserve_va(&mut self, bytes: usize) -> Result<Self::Reservation, MemorySessionError>;
     fn reservation_address(reservation: &Self::Reservation) -> u64;
@@ -357,6 +360,38 @@ pub(super) trait MemoryBackend {
     ) -> Result<(), MemorySessionError>;
     fn map_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32>;
     fn unmap_gpu(&mut self, handle: u64, old_success: u32) -> KernelOutcome<u32>;
+    fn map_gpu_ids(
+        &mut self,
+        handle: u64,
+        gpu_ids: &[u32],
+        old_success: u32,
+    ) -> KernelOutcome<u32> {
+        if gpu_ids == [self.gpu_id()] {
+            return self.map_gpu(handle, old_success);
+        }
+        KernelOutcome {
+            value: old_success,
+            result: Err(MemorySessionError::KernelResultMalformed(
+                "multi-GPU mapping backend",
+            )),
+        }
+    }
+    fn unmap_gpu_ids(
+        &mut self,
+        handle: u64,
+        gpu_ids: &[u32],
+        old_success: u32,
+    ) -> KernelOutcome<u32> {
+        if gpu_ids == [self.gpu_id()] {
+            return self.unmap_gpu(handle, old_success);
+        }
+        KernelOutcome {
+            value: old_success,
+            result: Err(MemorySessionError::KernelResultMalformed(
+                "multi-GPU unmapping backend",
+            )),
+        }
+    }
     fn with_bytes<R>(
         mapping: &Self::Mapping,
         requested_bytes: usize,
@@ -382,6 +417,26 @@ pub(super) trait MemoryBackend {
     ) -> Result<u64, MemorySessionError> {
         Err(MemorySessionError::KernelResultMalformed(
             "AQL mapped write backend",
+        ))
+    }
+    fn publish_sdma_write_release(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _expected: u64,
+        _new: u64,
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "SDMA visible write-pointer backend",
+        ))
+    }
+    fn write_sdma_slot(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _slot_index: u32,
+        _packet: &[u8; 64],
+    ) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "SDMA mapped slot backend",
         ))
     }
     fn write_aql_slot(

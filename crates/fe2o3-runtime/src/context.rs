@@ -6,6 +6,7 @@ use fe2o3_runtime_model::{IdentityDigestV1, PeerTransferMechanismV1, TypedAsyncK
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,8 @@ pub const MAX_RUNTIME_KERNELS_V1: usize = 1_048_576;
 pub const MAX_RUNTIME_EVENTS_V1: usize = 1_048_576;
 /// Maximum number of live submissions retained by one runtime context.
 pub const MAX_RUNTIME_SUBMISSIONS_V1: usize = 1_048_576;
+/// Maximum number of pending completion callbacks retained by one context.
+pub const MAX_RUNTIME_COMPLETION_CALLBACKS_V1: usize = 1_048_576;
 /// Maximum number of explicit dependencies accepted by one launch.
 pub const MAX_RUNTIME_DEPENDENCIES_V1: usize = 256;
 /// Width of one address patch in an explicit AMDGPU kernarg image.
@@ -81,6 +84,24 @@ pub struct RuntimeCapabilitiesV1 {
     pub host_visible_memory: bool,
     pub peer_copy: bool,
     pub multi_device: bool,
+    pub atomics: bool,
+    pub collectives: bool,
+}
+
+/// Optional execution-detail inventory outside the stable Worker V3 bitset.
+///
+/// Backends must opt in field by field. The default is deliberately all false,
+/// so an older backend cannot accidentally advertise a native mechanism merely
+/// because it implements the corresponding logical operation cooperatively.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeExecutionCapabilitiesV1 {
+    pub native_async_copy: bool,
+    pub native_peer_copy: bool,
+    pub concurrent_compute: bool,
+    pub compute_copy_overlap: bool,
+    pub memory_pool: bool,
+    pub profiling: bool,
+    pub cancellation: bool,
     pub atomics: bool,
     pub collectives: bool,
 }
@@ -221,9 +242,125 @@ impl RuntimeLaunchGeometryV1 {
             .ok_or(RuntimeValidationErrorV1::GeometryOverflow)?;
         Ok(self)
     }
+
+    fn has_complete_workgroups(self) -> bool {
+        self.grid
+            .into_iter()
+            .zip(self.workgroup)
+            .all(|(grid, workgroup)| grid >= workgroup && grid.is_multiple_of(workgroup))
+    }
+}
+
+/// Memory visibility scope declared by an atomic or collective kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeMemoryScopeV1 {
+    Workgroup,
+    Device,
+    System,
+}
+
+/// Ordering declared for the memory effects of an atomic or collective kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeMemoryOrderV1 {
+    Relaxed,
+    Acquire,
+    Release,
+    AcquireRelease,
+    SequentiallyConsistent,
+}
+
+/// Read-modify-write operation implemented by an admitted typed kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeAtomicOperationV1 {
+    Add,
+    Minimum,
+    Maximum,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    Exchange,
+    CompareExchange,
+}
+
+/// Explicit semantic and launch-shape contract for an atomic kernel.
+///
+/// The runtime validates this value against [`RuntimeAtomicArgumentsV1`] and
+/// preserves it through [`RuntimeAtomicBackendV1`]. This contract does not
+/// imply a backend-native intrinsic or prove that the kernel implementation
+/// satisfies the declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeAtomicLaunchContractV1 {
+    pub operation: RuntimeAtomicOperationV1,
+    pub scope: RuntimeMemoryScopeV1,
+    /// Success ordering, or the sole ordering for non-compare-exchange operations.
+    pub order: RuntimeMemoryOrderV1,
+    /// Compare-exchange failure ordering; `None` for every other operation.
+    pub failure_order: Option<RuntimeMemoryOrderV1>,
+    /// Selects weak compare-exchange. Must be false for every other operation.
+    pub weak: bool,
+    pub geometry: RuntimeLaunchGeometryV1,
+}
+
+/// Typed arguments that declare the atomic semantics of their admitted kernel.
+pub trait RuntimeAtomicArgumentsV1: RuntimeArgumentsV1 {
+    const OPERATION_V1: RuntimeAtomicOperationV1;
+    const SCOPE_V1: RuntimeMemoryScopeV1;
+    const ORDER_V1: RuntimeMemoryOrderV1;
+    const FAILURE_ORDER_V1: Option<RuntimeMemoryOrderV1> = None;
+    const WEAK_V1: bool = false;
+}
+
+/// Collective operation implemented by an admitted typed kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeCollectiveOperationV1 {
+    Barrier,
+    Broadcast,
+    ReduceSum,
+    ReduceMinimum,
+    ReduceMaximum,
+    AllReduceSum,
+    InclusiveScanSum,
+}
+
+/// Explicit semantic, participation, and launch-shape contract for a collective.
+///
+/// `participants` must equal the workgroup size for workgroup scope and the
+/// complete grid size for device scope. System scope is rejected because a
+/// single-stream launch cannot identify a cross-device participant set.
+/// Execution requires [`RuntimeCollectiveBackendV1`]; the runtime does not
+/// synthesize a collective.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCollectiveLaunchContractV1 {
+    pub operation: RuntimeCollectiveOperationV1,
+    pub scope: RuntimeMemoryScopeV1,
+    pub order: RuntimeMemoryOrderV1,
+    pub participants: u64,
+    pub geometry: RuntimeLaunchGeometryV1,
+}
+
+/// Typed arguments that declare the collective semantics of their admitted kernel.
+pub trait RuntimeCollectiveArgumentsV1: RuntimeArgumentsV1 {
+    const OPERATION_V1: RuntimeCollectiveOperationV1;
+    const SCOPE_V1: RuntimeMemoryScopeV1;
+    const ORDER_V1: RuntimeMemoryOrderV1;
+}
+
+/// Marker identifying an atomic submission while preserving its argument type.
+pub struct RuntimeAtomicLaunchV1<A>(PhantomData<fn(A) -> A>);
+
+/// Marker identifying a collective submission while preserving its argument type.
+pub struct RuntimeCollectiveLaunchV1<A>(PhantomData<fn(A) -> A>);
+
+/// Semantic class retained across the backend launch boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendSemanticLaunchV1 {
+    Ordinary,
+    Atomic(RuntimeAtomicLaunchContractV1),
+    Collective(RuntimeCollectiveLaunchContractV1),
 }
 
 /// Backend launch description after all context-local validation.
+#[derive(Clone, Copy, Debug)]
 pub struct BackendLaunchV1<'a> {
     pub stream: u64,
     pub kernel: u64,
@@ -231,6 +368,7 @@ pub struct BackendLaunchV1<'a> {
     pub bindings: &'a [BackendBindingV1],
     pub dependencies: &'a [u64],
     pub geometry: RuntimeLaunchGeometryV1,
+    pub semantic_launch: BackendSemanticLaunchV1,
 }
 
 /// Backend allocation-relative region translated from a stable runtime handle.
@@ -288,6 +426,12 @@ pub enum RuntimeBackendFailureV1<E> {
 /// successful stream destroy established it) and must not invalidate events
 /// that still retain the completion state.
 ///
+/// Implementations must never silently ignore [`BackendLaunchV1::semantic_launch`].
+/// A backend without the corresponding additive atomic or collective SPI must
+/// reject a non-[`BackendSemanticLaunchV1::Ordinary`] launch before accepting
+/// custody. A supporting backend must preserve the exact semantic contract;
+/// its additive SPI must reject the wrong semantic variant.
+///
 /// Failure classes are part of the safety contract:
 ///
 /// - `Rejected` means no device-visible mutation occurred and all prior
@@ -300,6 +444,18 @@ pub enum RuntimeBackendFailureV1<E> {
 ///   resources rather than freeing them.
 pub trait RuntimeBackendV1 {
     type Error: Error + Send + Sync + 'static;
+
+    /// Reports execution details that are not representable in
+    /// `RuntimeCapabilitiesV1` or the frozen Runtime Worker V1 capability
+    /// bitset. A backend may report capabilities only for a
+    /// currently admitted device handle; unknown or superseded handles must
+    /// return the all-false record. Worker-backed implementations bind admitted
+    /// handles to their most recent successful enumeration, while an in-process
+    /// backend may know its fixed admitted roster at construction.
+    /// Implementations inherit the fail-closed default.
+    fn execution_capabilities_v1(&self, _device: u64) -> RuntimeExecutionCapabilitiesV1 {
+        RuntimeExecutionCapabilitiesV1::default()
+    }
 
     fn enumerate_devices_v1(
         &mut self,
@@ -402,6 +558,102 @@ pub trait RuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
 }
 
+/// Optional nonblocking same-device copy SPI.
+///
+/// This extension makes the operation explicit at the backend type boundary
+/// without silently changing the Runtime Worker V1 wire contract. Runtime
+/// Worker V1 has no per-device same-device-copy capability bit, so
+/// implementations may reject the operation as unsupported. Negotiated Runtime
+/// Worker V4 encodes this SPI explicitly. Implementations may use a native copy
+/// engine or bounded cooperative host progress, but must document which.
+/// Successful submission retains source and destination against mutation until
+/// conclusive completion; the submission handle remains retained until
+/// [`RuntimeBackendV1::release_submission_v1`].
+pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
+    fn copy_async_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Optional atomic-kernel submission SPI.
+///
+/// The launch must carry [`BackendSemanticLaunchV1::Atomic`] with the validated
+/// operation, scope, ordering, compare-exchange mode, and geometry.
+/// Implementations must reject the wrong variant or a contract that is not
+/// covered by their native execution authority before accepting custody.
+pub trait RuntimeAtomicBackendV1: RuntimeBackendV1 {
+    fn submit_atomic_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Optional collective-kernel submission SPI.
+///
+/// The launch must carry [`BackendSemanticLaunchV1::Collective`] with the
+/// validated operation, scope, ordering, participation, and geometry.
+/// Implementations must reject the wrong variant or an unsupported contract
+/// before accepting custody.
+pub trait RuntimeCollectiveBackendV1: RuntimeBackendV1 {
+    fn submit_collective_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Additive explicit-progress SPI encoded only by negotiated Runtime Worker V4.
+///
+/// For native work, a successful call establishes that every dependency-ready
+/// operation in the backend scheduling domain selected by `stream` at method
+/// entry was published. A cooperative backend with no native publication point
+/// may instead drive its retained, explicitly bounded host operation to a
+/// conclusive state; it must document the work bound and blocking behavior.
+/// Recoverable prepublication or cooperative-progress failure must be returned
+/// as an error, not hidden behind success. This operation does not wait for
+/// completion of native work or provide background progress. A backend whose
+/// bounded publication window cannot hold the complete ready native set must
+/// reject before mutation.
+pub trait RuntimeFlushBackendV1: RuntimeBackendV1 {
+    fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Backend result of a cancellation attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendCancellationV1 {
+    /// The operation was withdrawn before publication and is quiescent.
+    Cancelled,
+    /// Publication already occurred; custody and completion remain live.
+    TooLate,
+}
+
+/// Additive cancellation and drain SPI encoded only by negotiated Runtime Worker V4.
+pub trait RuntimeCancellationBackendV1: RuntimeBackendV1 {
+    fn cancel_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>>;
+
+    fn drain_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Public cancellation observation. `TooLate` retains the submission token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeCancellationV1 {
+    Cancelled,
+    TooLate,
+}
+
+const RUNTIME_CANCELLED_CODE_V1: i64 = -2;
+const RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1: i64 = -3;
+
 /// Validation failure before entering a backend.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeValidationErrorV1 {
@@ -436,6 +688,8 @@ pub enum RuntimeValidationErrorV1 {
     DuplicateDependency,
     ZeroGeometry,
     GeometryOverflow,
+    InvalidAtomicContract,
+    InvalidCollectiveContract,
 }
 
 impl fmt::Display for RuntimeValidationErrorV1 {
@@ -635,6 +889,24 @@ struct SubmissionRecordV1 {
     stream: RuntimeStreamIdV1,
     device: RuntimeDeviceIdV1,
     quiescent: bool,
+    status: RuntimeCompletionStatusV1,
+}
+
+type RuntimeCompletionCallbackV1 =
+    Box<dyn FnOnce(RuntimeCompletionStatusV1) + Send + UnwindSafe + 'static>;
+
+fn completion_callback_panicked_v1(
+    callback: impl FnOnce(RuntimeCompletionStatusV1),
+    status: RuntimeCompletionStatusV1,
+) -> bool {
+    match catch_unwind(AssertUnwindSafe(|| callback(status))) {
+        Ok(()) => false,
+        Err(payload) => {
+            // A callback can panic with a payload whose destructor also panics.
+            core::mem::forget(payload);
+            true
+        }
+    }
 }
 
 /// One independently owned runtime backend and all of its context-local handles.
@@ -662,8 +934,20 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     backend_events: HashSet<u64>,
     submissions: HashMap<RuntimeSubmissionIdV1, SubmissionRecordV1>,
     backend_submissions: HashSet<u64>,
+    completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
+    completion_callback_count: usize,
+    completion_callback_panic_count: u64,
     next_identity: u64,
     terminal: bool,
+}
+
+struct ContextLaunchRequestV1<'a, A: RuntimeArgumentsV1> {
+    stream: RuntimeStreamIdV1,
+    kernel: &'a TypedRuntimeKernelV1<A>,
+    arguments: &'a A,
+    geometry: RuntimeLaunchGeometryV1,
+    dependencies: &'a [RuntimeEventIdV1],
+    semantic_launch: BackendSemanticLaunchV1,
 }
 
 /// A failed consuming shutdown retaining the context and every unreleased handle.
@@ -776,6 +1060,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_events: HashSet::new(),
             submissions: HashMap::new(),
             backend_submissions: HashSet::new(),
+            completion_callbacks: HashMap::new(),
+            completion_callback_count: 0,
+            completion_callback_panic_count: 0,
             next_identity: 1,
             terminal: false,
         })
@@ -783,6 +1070,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     pub fn devices(&self) -> &[RuntimeDeviceV1] {
         &self.devices
+    }
+
+    /// Returns mechanism-level capabilities for one context device.
+    pub fn execution_capabilities(
+        &self,
+        device: RuntimeDeviceIdV1,
+    ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeValidationErrorV1> {
+        let record = self.device(device)?;
+        Ok(self
+            .backend
+            .execution_capabilities_v1(record.backend_device))
     }
 
     pub const fn is_terminal(&self) -> bool {
@@ -891,6 +1189,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Ok(()) => {
                     self.submissions.remove(&id);
                     self.backend_submissions.remove(&record.backend_submission);
+                    debug_assert!(!self.completion_callbacks.contains_key(&id));
                 }
                 Err(failure) => {
                     submissions_released = false;
@@ -1006,11 +1305,118 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     }
 
     fn mark_stream_quiescent(&mut self, stream: RuntimeStreamIdV1) {
-        for submission in self.submissions.values_mut() {
-            if submission.stream == stream {
-                submission.quiescent = true;
+        let submissions: Vec<_> = self
+            .submissions
+            .iter()
+            .filter_map(|(id, record)| (record.stream == stream).then_some(*id))
+            .collect();
+        for submission in submissions {
+            self.transition_submission_status(
+                submission,
+                RuntimeCompletionStatusV1::QuiescentWithoutResult,
+            );
+        }
+    }
+
+    fn transition_submission_status(
+        &mut self,
+        submission: RuntimeSubmissionIdV1,
+        status: RuntimeCompletionStatusV1,
+    ) -> RuntimeCompletionStatusV1 {
+        let Some(record) = self.submissions.get_mut(&submission) else {
+            return status;
+        };
+        if record.status.is_terminal() || !status.is_terminal() {
+            return record.status;
+        }
+        record.status = status;
+        record.quiescent = true;
+        let callbacks = self
+            .completion_callbacks
+            .remove(&submission)
+            .unwrap_or_default();
+        self.completion_callback_count = self
+            .completion_callback_count
+            .checked_sub(callbacks.len())
+            .expect("callback count tracks retained callbacks");
+        for callback in callbacks {
+            if completion_callback_panicked_v1(callback, status) {
+                self.completion_callback_panic_count =
+                    self.completion_callback_panic_count.saturating_add(1);
             }
         }
+        status
+    }
+
+    fn observe_submission_backend(
+        &mut self,
+        submission: RuntimeSubmissionIdV1,
+        observation: BackendPollV1,
+    ) -> RuntimeCompletionStatusV1 {
+        let status = match observation {
+            BackendPollV1::Pending => RuntimeCompletionStatusV1::Pending,
+            BackendPollV1::Succeeded => RuntimeCompletionStatusV1::Succeeded,
+            BackendPollV1::Failed { code } => {
+                RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::BackendCode(code))
+            }
+        };
+        self.transition_submission_status(submission, status)
+    }
+
+    fn completion_backend_result(
+        &mut self,
+        submission: RuntimeSubmissionIdV1,
+        result: Result<BackendPollV1, RuntimeBackendFailureV1<B::Error>>,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>> {
+        match result {
+            Ok(observation) => Ok(self.observe_submission_backend(submission, observation)),
+            Err(RuntimeBackendFailureV1::Rejected(error)) => {
+                Err(RuntimeErrorV1::BackendRejected(error))
+            }
+            Err(RuntimeBackendFailureV1::Quiescent(error)) => {
+                self.transition_submission_status(
+                    submission,
+                    RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                );
+                Err(RuntimeErrorV1::BackendQuiescent(error))
+            }
+            Err(RuntimeBackendFailureV1::Terminal(error)) => {
+                self.terminal = true;
+                Err(RuntimeErrorV1::BackendTerminal(error))
+            }
+        }
+    }
+
+    fn stream_observation(
+        &self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<RuntimeStreamObservationV1, RuntimeValidationErrorV1> {
+        if !self.streams.contains_key(&stream) {
+            return Err(RuntimeValidationErrorV1::UnknownStream);
+        }
+        let mut observation = RuntimeStreamObservationV1::default();
+        let mut first_failure = None;
+        for (id, record) in &self.submissions {
+            if record.stream != stream {
+                continue;
+            }
+            observation.total_submissions += 1;
+            match record.status {
+                RuntimeCompletionStatusV1::Pending => observation.pending += 1,
+                RuntimeCompletionStatusV1::Succeeded => observation.succeeded += 1,
+                RuntimeCompletionStatusV1::Failed(failure) => {
+                    observation.failed += 1;
+                    if first_failure.is_none_or(|(first_id, _)| *id < first_id) {
+                        first_failure = Some((*id, failure));
+                    }
+                }
+                RuntimeCompletionStatusV1::QuiescentWithoutResult => {
+                    observation.quiescent_without_result += 1;
+                }
+            }
+        }
+        observation.first_failure = first_failure.map(|(_, failure)| failure);
+        Ok(observation)
     }
 
     fn require_live(&self) -> Result<(), RuntimeValidationErrorV1> {
@@ -1388,6 +1794,39 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         geometry: RuntimeLaunchGeometryV1,
         dependencies: &[RuntimeEventIdV1],
     ) -> Result<RuntimeSubmissionV1<A>, RuntimeErrorV1<B::Error>> {
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments,
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Ordinary,
+            },
+            |backend, launch| backend.submit_v1(launch),
+        )
+    }
+
+    fn launch_with_backend_submit<A, M, F>(
+        &mut self,
+        request: ContextLaunchRequestV1<'_, A>,
+        submit: F,
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
+    where
+        A: RuntimeArgumentsV1,
+        F: for<'launch> FnOnce(
+            &mut B,
+            BackendLaunchV1<'launch>,
+        ) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
+    {
+        let ContextLaunchRequestV1 {
+            stream,
+            kernel,
+            arguments,
+            geometry,
+            dependencies,
+            semantic_launch,
+        } = request;
         self.require_live()?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
@@ -1497,14 +1936,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_dependencies.push(event.backend_event);
         }
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let result = self.backend.submit_v1(BackendLaunchV1 {
-            stream: stream_record.backend_stream,
-            kernel: kernel.backend_kernel,
-            explicit_kernarg: &explicit_kernarg,
-            bindings: &backend_bindings,
-            dependencies: &backend_dependencies,
-            geometry,
-        });
+        let result = submit(
+            &mut self.backend,
+            BackendLaunchV1 {
+                stream: stream_record.backend_stream,
+                kernel: kernel.backend_kernel,
+                explicit_kernarg: &explicit_kernarg,
+                bindings: &backend_bindings,
+                dependencies: &backend_dependencies,
+                geometry,
+                semantic_launch,
+            },
+        );
         let backend_submission = self.backend_result(result)?;
         let protocol_error = self.backend_handle_protocol_error(
             RuntimeBackendResourceKindV1::Submission,
@@ -1517,6 +1960,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 stream,
                 device: stream_record.device,
                 quiescent: false,
+                status: RuntimeCompletionStatusV1::Pending,
             },
         );
         if protocol_error.is_none() {
@@ -1534,22 +1978,153 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.seal_backend_protocol(protocol_error, submission)
     }
 
+    /// Submits an admitted typed kernel under an explicit atomic contract.
+    ///
+    /// Both stable and execution-detail atomic capabilities must be advertised,
+    /// and the backend must implement the contract-preserving atomic SPI.
+    pub fn launch_atomic<A: RuntimeAtomicArgumentsV1>(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        kernel: &TypedRuntimeKernelV1<A>,
+        arguments: &A,
+        contract: RuntimeAtomicLaunchContractV1,
+        dependencies: &[RuntimeEventIdV1],
+    ) -> Result<RuntimeSubmissionV1<RuntimeAtomicLaunchV1<A>>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAtomicBackendV1,
+    {
+        self.require_live()?;
+        let geometry = contract
+            .geometry
+            .validate()
+            .map_err(|_| RuntimeValidationErrorV1::InvalidAtomicContract)?;
+        if contract.operation != A::OPERATION_V1
+            || contract.scope != A::SCOPE_V1
+            || contract.order != A::ORDER_V1
+            || contract.failure_order != A::FAILURE_ORDER_V1
+            || contract.weak != A::WEAK_V1
+            || !atomic_contract_is_legal(contract)
+        {
+            return Err(RuntimeValidationErrorV1::InvalidAtomicContract.into());
+        }
+        let stream_record = *self
+            .streams
+            .get(&stream)
+            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let device = self.device(stream_record.device)?;
+        if !device.capabilities.atomics
+            || !self
+                .backend
+                .execution_capabilities_v1(device.backend_device)
+                .atomics
+        {
+            return Err(RuntimeValidationErrorV1::Unsupported.into());
+        }
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments,
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Atomic(contract),
+            },
+            |backend, launch| backend.submit_atomic_v1(launch),
+        )
+    }
+
+    /// Submits an admitted typed kernel under an explicit collective contract.
+    ///
+    /// The participant count is checked against geometry before the
+    /// contract-preserving collective SPI is entered. System-wide collectives
+    /// are rejected because one stream launch cannot establish a cross-device
+    /// participant set.
+    pub fn launch_collective<A: RuntimeCollectiveArgumentsV1>(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        kernel: &TypedRuntimeKernelV1<A>,
+        arguments: &A,
+        contract: RuntimeCollectiveLaunchContractV1,
+        dependencies: &[RuntimeEventIdV1],
+    ) -> Result<RuntimeSubmissionV1<RuntimeCollectiveLaunchV1<A>>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeCollectiveBackendV1,
+    {
+        self.require_live()?;
+        let geometry = contract
+            .geometry
+            .validate()
+            .map_err(|_| RuntimeValidationErrorV1::InvalidCollectiveContract)?;
+        if !geometry.has_complete_workgroups() {
+            return Err(RuntimeValidationErrorV1::InvalidCollectiveContract.into());
+        }
+        let workgroup_participants = geometry
+            .workgroup
+            .into_iter()
+            .try_fold(1_u64, |product, value| {
+                product.checked_mul(u64::from(value))
+            })
+            .ok_or(RuntimeValidationErrorV1::InvalidCollectiveContract)?;
+        let grid_participants = geometry
+            .grid
+            .into_iter()
+            .try_fold(1_u64, |product, value| {
+                product.checked_mul(u64::from(value))
+            })
+            .ok_or(RuntimeValidationErrorV1::InvalidCollectiveContract)?;
+        let expected_participants = match contract.scope {
+            RuntimeMemoryScopeV1::Workgroup => workgroup_participants,
+            RuntimeMemoryScopeV1::Device => grid_participants,
+            RuntimeMemoryScopeV1::System => {
+                return Err(RuntimeValidationErrorV1::InvalidCollectiveContract.into());
+            }
+        };
+        if contract.operation != A::OPERATION_V1
+            || contract.scope != A::SCOPE_V1
+            || contract.order != A::ORDER_V1
+            || contract.participants == 0
+            || contract.participants != expected_participants
+        {
+            return Err(RuntimeValidationErrorV1::InvalidCollectiveContract.into());
+        }
+        let stream_record = *self
+            .streams
+            .get(&stream)
+            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let device = self.device(stream_record.device)?;
+        if !device.capabilities.collectives
+            || !self
+                .backend
+                .execution_capabilities_v1(device.backend_device)
+                .collectives
+        {
+            return Err(RuntimeValidationErrorV1::Unsupported.into());
+        }
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments,
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Collective(contract),
+            },
+            |backend, launch| backend.submit_collective_v1(launch),
+        )
+    }
+
     pub fn poll<A>(
         &mut self,
         submission: &mut RuntimeSubmissionV1<A>,
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
         self.require_live()?;
         let record = self.live_submission_record(submission)?;
-        if let Some(completion) = submission.completion {
-            return Ok(completion);
+        if record.status.is_terminal() {
+            return Ok(submission.observe_status(record.status));
         }
         let result = self.backend.poll_v1(record.backend_submission);
-        let observation = self.backend_result(result)?;
-        let observation = submission.observe(observation);
-        if observation != RuntimePollV1::Pending {
-            self.submissions.get_mut(&submission.id).unwrap().quiescent = true;
-        }
-        Ok(observation)
+        let status = self.completion_backend_result(submission.id, result)?;
+        Ok(submission.observe_status(status))
     }
 
     pub fn wait<A>(
@@ -1559,19 +2134,163 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
         self.require_live()?;
         let record = self.live_submission_record(submission)?;
-        if let Some(completion) = submission.completion {
-            return Ok(completion);
+        if record.status.is_terminal() {
+            return Ok(submission.observe_status(record.status));
         }
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
         let result = self.backend.wait_v1(record.backend_submission, deadline);
-        let observation = self.backend_result(result)?;
-        let observation = submission.observe(observation);
-        if observation != RuntimePollV1::Pending {
-            self.submissions.get_mut(&submission.id).unwrap().quiescent = true;
+        let status = self.completion_backend_result(submission.id, result)?;
+        Ok(submission.observe_status(status))
+    }
+
+    /// Returns the last conclusive submission state without entering the backend.
+    pub fn query_submission<A>(
+        &self,
+        submission: &RuntimeSubmissionV1<A>,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        Ok(self.submission_record(submission)?.status)
+    }
+
+    /// Returns an aggregate view of every retained submission on `stream`.
+    ///
+    /// This is a context-local query and never enters the backend. The first
+    /// failure is selected by submission identity, making mixed stream results
+    /// deterministic without discarding the aggregate counts.
+    pub fn query_stream(
+        &self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<RuntimeStreamObservationV1, RuntimeValidationErrorV1> {
+        self.stream_observation(stream)
+    }
+
+    /// Explicitly publishes dependency-ready native work, or drives a bounded
+    /// cooperative host operation, in this stream's backend scheduling domain.
+    ///
+    /// Runtime Worker V1 does not encode this operation; negotiated Runtime
+    /// Worker V4 does. It lets batching backends begin device work before a later poll or wait. A
+    /// cooperative backend may complete bounded host work in the call; native
+    /// completion remains observation-only. The call does not create a progress
+    /// thread or otherwise promise background host progress.
+    pub fn flush_stream(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeFlushBackendV1,
+    {
+        self.require_live()?;
+        let backend_stream = self
+            .streams
+            .get(&stream)
+            .ok_or(RuntimeValidationErrorV1::UnknownStream)?
+            .backend_stream;
+        let result = self.backend.flush_stream_v1(backend_stream);
+        self.backend_result(result)
+    }
+
+    /// Waits once for every pending submission using one shared deadline.
+    ///
+    /// A backend may return `Pending` at the deadline, in which case the
+    /// returned observation remains non-quiescent. Conclusive observations are
+    /// committed through the same centralized transition used by submission
+    /// and event waits, including exact-once callback delivery. The first
+    /// nonterminal backend error is returned after the remaining pending
+    /// submissions are observed; terminal backend ambiguity stops immediately.
+    pub fn synchronize_stream(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        timeout: Duration,
+    ) -> Result<RuntimeStreamObservationV1, RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        self.stream_observation(stream)?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
+        let pending_count = self
+            .submissions
+            .values()
+            .filter(|record| record.stream == stream && !record.status.is_terminal())
+            .count();
+        let mut pending = Vec::new();
+        pending
+            .try_reserve_exact(pending_count)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        pending.extend(self.submissions.iter().filter_map(|(id, record)| {
+            (record.stream == stream && !record.status.is_terminal())
+                .then_some((*id, record.backend_submission))
+        }));
+        pending.sort_unstable_by_key(|(id, _)| *id);
+        let mut first_error = None;
+        for (submission, backend_submission) in pending {
+            let result = self.backend.wait_v1(backend_submission, deadline);
+            match self.completion_backend_result(submission, result) {
+                Ok(_) => {}
+                Err(error @ RuntimeErrorV1::BackendTerminal(_)) => return Err(error),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        Ok(observation)
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(self.stream_observation(stream)?)
+    }
+
+    /// Registers one callback for a submission's first conclusive state.
+    ///
+    /// Pending callbacks are removed before invocation, so each registered
+    /// callback runs exactly once when a conclusive status is first established
+    /// across submission and event poll/wait, cancellation, drain, stream
+    /// quiescence, cleanup, or release. A callback registered after completion
+    /// runs synchronously. Panics are contained to protect resource custody and
+    /// counted by [`Self::completion_callback_panic_count`]. Terminal backend
+    /// ambiguity is not a completion and therefore does not invoke callbacks.
+    pub fn on_completion<A, F>(
+        &mut self,
+        submission: &RuntimeSubmissionV1<A>,
+        callback: F,
+    ) -> Result<(), RuntimeErrorV1<B::Error>>
+    where
+        F: FnOnce(RuntimeCompletionStatusV1) + Send + UnwindSafe + 'static,
+    {
+        self.require_live()?;
+        let record = self.submission_record(submission)?;
+        if record.status.is_terminal() {
+            if completion_callback_panicked_v1(callback, record.status) {
+                self.completion_callback_panic_count =
+                    self.completion_callback_panic_count.saturating_add(1);
+            }
+            return Ok(());
+        }
+        if self.completion_callback_count >= MAX_RUNTIME_COMPLETION_CALLBACKS_V1 {
+            return Err(RuntimeValidationErrorV1::Capacity.into());
+        }
+        if let Some(callbacks) = self.completion_callbacks.get_mut(&submission.id) {
+            callbacks
+                .try_reserve(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            callbacks.push(Box::new(callback));
+        } else {
+            let mut callbacks: Vec<RuntimeCompletionCallbackV1> = Vec::new();
+            callbacks
+                .try_reserve_exact(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            callbacks.push(Box::new(callback));
+            self.completion_callbacks
+                .try_reserve(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            self.completion_callbacks.insert(submission.id, callbacks);
+        }
+        self.completion_callback_count += 1;
+        Ok(())
+    }
+
+    /// Returns the number of callback panics contained by this context.
+    pub const fn completion_callback_panic_count(&self) -> u64 {
+        self.completion_callback_panic_count
     }
 
     /// Consumes and releases a submission after terminal completion or stream quiescence.
@@ -1601,12 +2320,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(RuntimeValidationErrorV1::SubmissionRetainedByEvent.into());
         }
+        if !record.status.is_terminal() {
+            self.transition_submission_status(
+                submission.id,
+                RuntimeCompletionStatusV1::QuiescentWithoutResult,
+            );
+        }
         let result = self
             .backend
             .release_submission_v1(record.backend_submission);
         self.backend_result(result)?;
         self.submissions.remove(&submission.id);
         self.backend_submissions.remove(&record.backend_submission);
+        debug_assert!(!self.completion_callbacks.contains_key(&submission.id));
         Ok(())
     }
 
@@ -1642,6 +2368,73 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.backend_events.insert(backend_event);
         }
         self.seal_backend_protocol(protocol_error, id)
+    }
+
+    /// Queries a recorded event without polling the backend.
+    ///
+    /// Events alias their source submission's centralized completion state, so
+    /// event and submission queries cannot disagree after either observes a
+    /// conclusive result.
+    pub fn query_event(
+        &self,
+        event: RuntimeEventIdV1,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        let event = self
+            .events
+            .get(&event)
+            .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+        self.submissions
+            .get(&event.submission)
+            .map(|submission| submission.status)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)
+    }
+
+    /// Performs one nonblocking completion observation for a recorded event.
+    pub fn poll_event(
+        &mut self,
+        event: RuntimeEventIdV1,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        let event = *self
+            .events
+            .get(&event)
+            .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+        let submission = *self
+            .submissions
+            .get(&event.submission)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
+        if submission.status.is_terminal() {
+            return Ok(submission.status);
+        }
+        let result = self.backend.poll_v1(submission.backend_submission);
+        self.completion_backend_result(event.submission, result)
+    }
+
+    /// Waits until an event's source submission completes or `timeout` expires.
+    pub fn wait_event(
+        &mut self,
+        event: RuntimeEventIdV1,
+        timeout: Duration,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        let event = *self
+            .events
+            .get(&event)
+            .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+        let submission = *self
+            .submissions
+            .get(&event.submission)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
+        if submission.status.is_terminal() {
+            return Ok(submission.status);
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
+        let result = self
+            .backend
+            .wait_v1(submission.backend_submission, deadline);
+        self.completion_backend_result(event.submission, result)
     }
 
     pub fn release_event(
@@ -1765,6 +2558,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 stream,
                 device: destination_device,
                 quiescent: false,
+                status: RuntimeCompletionStatusV1::Pending,
             },
         );
         if protocol_error.is_none() {
@@ -1783,6 +2577,198 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         self.seal_backend_protocol(protocol_error, submission)
     }
+
+    /// Submits a same-device copy without waiting for completion.
+    ///
+    /// The concrete backend determines whether progress is native or
+    /// cooperative. A live direct KFD backend uses persistent native SDMA
+    /// storage; its synthetic constructor rejects the extension. The KFD
+    /// multi-device router uses native SDMA within one live child and bounded
+    /// cooperative host progress otherwise.
+    pub fn copy_async(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: &[RuntimeEventIdV1],
+    ) -> Result<RuntimeSubmissionV1<RuntimeCopyV1>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        self.require_live()?;
+        if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
+            return Err(RuntimeValidationErrorV1::Capacity.into());
+        }
+        if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(RuntimeValidationErrorV1::TooManyDependencies.into());
+        }
+        for (index, dependency) in dependencies.iter().enumerate() {
+            if dependencies[..index].contains(dependency) {
+                return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
+            }
+        }
+        let stream_record = *self
+            .streams
+            .get(&stream)
+            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let translate = |region: RuntimeMemoryRegionV1| -> Result<
+            (BackendMemoryRegionV1, RuntimeDeviceIdV1),
+            RuntimeValidationErrorV1,
+        > {
+            let allocation = *self
+                .allocations
+                .get(&region.allocation)
+                .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+            let end = region
+                .byte_offset
+                .checked_add(region.byte_len)
+                .ok_or(RuntimeValidationErrorV1::InvalidRange)?;
+            if region.byte_len == 0 || end > allocation.byte_len {
+                return Err(RuntimeValidationErrorV1::InvalidRange);
+            }
+            Ok((
+                BackendMemoryRegionV1 {
+                    allocation: allocation.backend_allocation,
+                    access: region.access,
+                    byte_offset: region.byte_offset,
+                    byte_len: region.byte_len,
+                },
+                allocation.device,
+            ))
+        };
+        let (source, source_device) = translate(source)?;
+        let (destination, destination_device) = translate(destination)?;
+        if !matches!(
+            source.access,
+            RuntimeAccessV1::Read | RuntimeAccessV1::ReadWrite
+        ) || !matches!(
+            destination.access,
+            RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+        ) {
+            return Err(RuntimeValidationErrorV1::InvalidAccess.into());
+        }
+        if source_device != destination_device || stream_record.device != destination_device {
+            return Err(RuntimeValidationErrorV1::WrongDevice.into());
+        }
+        if source.byte_len != destination.byte_len {
+            return Err(RuntimeValidationErrorV1::InvalidRange.into());
+        }
+        let mut backend_dependencies = Vec::with_capacity(dependencies.len());
+        for dependency in dependencies {
+            let event = self
+                .events
+                .get(dependency)
+                .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+            if event.device != destination_device {
+                return Err(RuntimeValidationErrorV1::WrongDevice.into());
+            }
+            backend_dependencies.push(event.backend_event);
+        }
+        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+        let result = self.backend.copy_async_v1(
+            stream_record.backend_stream,
+            source,
+            destination,
+            &backend_dependencies,
+        );
+        let backend_submission = self.backend_result(result)?;
+        let protocol_error = self.backend_handle_protocol_error(
+            RuntimeBackendResourceKindV1::Submission,
+            backend_submission,
+        );
+        self.submissions.insert(
+            id,
+            SubmissionRecordV1 {
+                backend_submission,
+                stream,
+                device: destination_device,
+                quiescent: false,
+                status: RuntimeCompletionStatusV1::Pending,
+            },
+        );
+        if protocol_error.is_none() {
+            self.backend_submissions.insert(backend_submission);
+        }
+        let submission = RuntimeSubmissionV1 {
+            id,
+            backend_submission,
+            stream,
+            device: destination_device,
+            completion: None,
+            peer_transfer: None,
+            marker: PhantomData,
+        };
+        self.seal_backend_protocol(protocol_error, submission)
+    }
+
+    /// Attempts to withdraw a submission before native publication.
+    ///
+    /// A `TooLate` result does not release or otherwise weaken submission
+    /// custody. The caller must continue polling or drain it to completion.
+    pub fn cancel<A>(
+        &mut self,
+        submission: &mut RuntimeSubmissionV1<A>,
+    ) -> Result<RuntimeCancellationV1, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeCancellationBackendV1,
+    {
+        self.require_live()?;
+        let record = self.submission_record(submission)?;
+        if record.quiescent {
+            return Ok(RuntimeCancellationV1::TooLate);
+        }
+        let result = self.backend.cancel_v1(record.backend_submission);
+        let cancellation = match result {
+            Ok(cancellation) => cancellation,
+            Err(RuntimeBackendFailureV1::Rejected(error)) => {
+                return Err(RuntimeErrorV1::BackendRejected(error));
+            }
+            Err(RuntimeBackendFailureV1::Quiescent(error)) => {
+                self.transition_submission_status(
+                    submission.id,
+                    RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                );
+                return Err(RuntimeErrorV1::BackendQuiescent(error));
+            }
+            Err(RuntimeBackendFailureV1::Terminal(error)) => {
+                self.terminal = true;
+                return Err(RuntimeErrorV1::BackendTerminal(error));
+            }
+        };
+        match cancellation {
+            BackendCancellationV1::Cancelled => {
+                let status = self.transition_submission_status(
+                    submission.id,
+                    RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::Cancelled),
+                );
+                submission.observe_status(status);
+                Ok(RuntimeCancellationV1::Cancelled)
+            }
+            BackendCancellationV1::TooLate => Ok(RuntimeCancellationV1::TooLate),
+        }
+    }
+
+    /// Waits for a submission through a backend's explicit drain path.
+    pub fn drain<A>(
+        &mut self,
+        submission: &mut RuntimeSubmissionV1<A>,
+        deadline: Instant,
+    ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeCancellationBackendV1,
+    {
+        self.require_live()?;
+        if deadline <= Instant::now() {
+            return Err(RuntimeValidationErrorV1::InvalidDeadline.into());
+        }
+        let record = self.submission_record(submission)?;
+        if record.status.is_terminal() {
+            return Ok(submission.observe_status(record.status));
+        }
+        let result = self.backend.drain_v1(record.backend_submission, deadline);
+        let status = self.completion_backend_result(submission.id, result)?;
+        Ok(submission.observe_status(status))
+    }
 }
 
 fn validate_byte_range(
@@ -1799,6 +2785,41 @@ fn validate_byte_range(
         return Err(RuntimeValidationErrorV1::InvalidRange);
     }
     Ok(())
+}
+
+const fn atomic_contract_is_legal(contract: RuntimeAtomicLaunchContractV1) -> bool {
+    match (contract.operation, contract.failure_order) {
+        (RuntimeAtomicOperationV1::CompareExchange, Some(failure)) => {
+            valid_compare_exchange_order_pair(contract.order, failure)
+        }
+        (RuntimeAtomicOperationV1::CompareExchange, None) => false,
+        (_, None) => !contract.weak,
+        (_, Some(_)) => false,
+    }
+}
+
+const fn valid_compare_exchange_order_pair(
+    success: RuntimeMemoryOrderV1,
+    failure: RuntimeMemoryOrderV1,
+) -> bool {
+    match success {
+        RuntimeMemoryOrderV1::Relaxed => matches!(failure, RuntimeMemoryOrderV1::Relaxed),
+        RuntimeMemoryOrderV1::Acquire => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed | RuntimeMemoryOrderV1::Acquire
+        ),
+        RuntimeMemoryOrderV1::Release => matches!(failure, RuntimeMemoryOrderV1::Relaxed),
+        RuntimeMemoryOrderV1::AcquireRelease => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed | RuntimeMemoryOrderV1::Acquire
+        ),
+        RuntimeMemoryOrderV1::SequentiallyConsistent => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed
+                | RuntimeMemoryOrderV1::Acquire
+                | RuntimeMemoryOrderV1::SequentiallyConsistent
+        ),
+    }
 }
 
 fn runtime_kernel_identity(
@@ -1844,6 +2865,67 @@ fn peer_copy_contract_identity(
 /// Marker identifying a typed peer-copy submission.
 pub enum RuntimePeerCopyV1 {}
 
+/// Marker identifying a same-device asynchronous copy submission.
+pub enum RuntimeCopyV1 {}
+
+/// Typed reason for a conclusively failed submission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeCompletionFailureV1 {
+    /// Backend-defined device or execution failure code.
+    BackendCode(i64),
+    /// Submission was withdrawn before device-visible publication.
+    Cancelled,
+}
+
+/// Backend-neutral query state shared by submissions and recorded events.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeCompletionStatusV1 {
+    Pending,
+    Succeeded,
+    Failed(RuntimeCompletionFailureV1),
+    /// Native references are gone, but no execution result was observed.
+    QuiescentWithoutResult,
+}
+
+/// Aggregate completion state for all submissions retained by one stream.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RuntimeStreamObservationV1 {
+    pub total_submissions: usize,
+    pub pending: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub quiescent_without_result: usize,
+    pub first_failure: Option<RuntimeCompletionFailureV1>,
+}
+
+impl RuntimeStreamObservationV1 {
+    pub const fn is_quiescent(self) -> bool {
+        self.pending == 0
+    }
+}
+
+impl RuntimeCompletionStatusV1 {
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::Pending)
+    }
+
+    fn legacy_poll(self) -> RuntimePollV1 {
+        match self {
+            Self::Pending => RuntimePollV1::Pending,
+            Self::Succeeded => RuntimePollV1::Succeeded,
+            Self::Failed(RuntimeCompletionFailureV1::BackendCode(code)) => {
+                RuntimePollV1::Failed { code }
+            }
+            Self::Failed(RuntimeCompletionFailureV1::Cancelled) => RuntimePollV1::Failed {
+                code: RUNTIME_CANCELLED_CODE_V1,
+            },
+            Self::QuiescentWithoutResult => RuntimePollV1::Failed {
+                code: RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1,
+            },
+        }
+    }
+}
+
 /// Moveable asynchronous submission bound to its argument type.
 pub struct RuntimeSubmissionV1<A> {
     id: RuntimeSubmissionIdV1,
@@ -1869,19 +2951,12 @@ impl<A> RuntimeSubmissionV1<A> {
         self.peer_transfer
     }
 
-    fn observe(&mut self, observation: BackendPollV1) -> RuntimePollV1 {
-        match observation {
-            BackendPollV1::Pending => RuntimePollV1::Pending,
-            BackendPollV1::Succeeded => {
-                self.completion = Some(RuntimePollV1::Succeeded);
-                RuntimePollV1::Succeeded
-            }
-            BackendPollV1::Failed { code } => {
-                let completion = RuntimePollV1::Failed { code };
-                self.completion = Some(completion);
-                completion
-            }
+    fn observe_status(&mut self, status: RuntimeCompletionStatusV1) -> RuntimePollV1 {
+        let observation = status.legacy_poll();
+        if status.is_terminal() {
+            self.completion = Some(observation);
         }
+        observation
     }
 }
 
@@ -1937,6 +3012,23 @@ mod tests {
         TerminalEvent,
     }
 
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    enum MockFlushFailure {
+        #[default]
+        None,
+        RejectOnce,
+        Terminal,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    enum MockWaitFailure {
+        #[default]
+        None,
+        RejectFirst,
+        QuiescentFirst,
+        TerminalFirst,
+    }
+
     #[derive(Debug, Default)]
     struct MockBackend {
         next: u64,
@@ -1949,6 +3041,20 @@ mod tests {
         device_name_len: usize,
         device_target_len: usize,
         handle_override: Option<(MockHandleKind, u64)>,
+        cancel_before_publication: bool,
+        execution_capabilities: RuntimeExecutionCapabilitiesV1,
+        submit_count: usize,
+        poll_call_count: usize,
+        wait_call_count: usize,
+        flush_call_count: usize,
+        last_flushed_stream: Option<u64>,
+        flush_failure: MockFlushFailure,
+        last_launch_geometry: Option<RuntimeLaunchGeometryV1>,
+        last_atomic_contract: Option<RuntimeAtomicLaunchContractV1>,
+        last_collective_contract: Option<RuntimeCollectiveLaunchContractV1>,
+        wait_observation: Option<BackendPollV1>,
+        first_wait_failure: MockWaitFailure,
+        wait_deadlines: Vec<Instant>,
     }
 
     impl MockBackend {
@@ -1970,6 +3076,10 @@ mod tests {
 
     impl RuntimeBackendV1 for MockBackend {
         type Error = MockError;
+
+        fn execution_capabilities_v1(&self, _device: u64) -> RuntimeExecutionCapabilitiesV1 {
+            self.execution_capabilities
+        }
 
         fn enumerate_devices_v1(
             &mut self,
@@ -2116,7 +3226,9 @@ mod tests {
             if self.terminal_on_submit {
                 return Err(RuntimeBackendFailureV1::Terminal(MockError("lost")));
             }
+            self.submit_count += 1;
             self.last_dependency_count = launch.dependencies.len();
+            self.last_launch_geometry = Some(launch.geometry);
             let identity = self.handle(MockHandleKind::Submission);
             self.polls.insert(identity, 0);
             Ok(identity)
@@ -2126,6 +3238,7 @@ mod tests {
             &mut self,
             submission: u64,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.poll_call_count += 1;
             let polls = self.polls.get_mut(&submission).unwrap();
             *polls += 1;
             Ok(if *polls == 1 {
@@ -2138,9 +3251,31 @@ mod tests {
         fn wait_v1(
             &mut self,
             _submission: u64,
-            _deadline: Instant,
+            deadline: Instant,
         ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
-            Ok(BackendPollV1::Succeeded)
+            self.wait_call_count += 1;
+            self.wait_deadlines.push(deadline);
+            if self.wait_call_count == 1 {
+                match self.first_wait_failure {
+                    MockWaitFailure::None => {}
+                    MockWaitFailure::RejectFirst => {
+                        return Err(RuntimeBackendFailureV1::Rejected(MockError(
+                            "wait rejected",
+                        )));
+                    }
+                    MockWaitFailure::QuiescentFirst => {
+                        return Err(RuntimeBackendFailureV1::Quiescent(MockError(
+                            "wait quiescent",
+                        )));
+                    }
+                    MockWaitFailure::TerminalFirst => {
+                        return Err(RuntimeBackendFailureV1::Terminal(MockError(
+                            "wait terminal",
+                        )));
+                    }
+                }
+            }
+            Ok(self.wait_observation.unwrap_or(BackendPollV1::Succeeded))
         }
 
         fn release_submission_v1(
@@ -2194,6 +3329,104 @@ mod tests {
             let identity = self.handle(MockHandleKind::Submission);
             self.polls.insert(identity, 0);
             Ok(identity)
+        }
+    }
+
+    impl RuntimeAsyncCopyBackendV1 for MockBackend {
+        fn copy_async_v1(
+            &mut self,
+            _stream: u64,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+            dependencies: &[u64],
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.last_dependency_count = dependencies.len();
+            let source_start = source.byte_offset as usize;
+            let source_end = source_start + source.byte_len as usize;
+            let bytes = self.memory[&source.allocation][source_start..source_end].to_vec();
+            let destination_start = destination.byte_offset as usize;
+            self.memory.get_mut(&destination.allocation).unwrap()
+                [destination_start..destination_start + bytes.len()]
+                .copy_from_slice(&bytes);
+            let identity = self.handle(MockHandleKind::Submission);
+            self.polls.insert(identity, 0);
+            Ok(identity)
+        }
+    }
+
+    impl RuntimeAtomicBackendV1 for MockBackend {
+        fn submit_atomic_v1(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let BackendSemanticLaunchV1::Atomic(contract) = launch.semantic_launch else {
+                return Err(RuntimeBackendFailureV1::Rejected(MockError("not atomic")));
+            };
+            self.last_atomic_contract = Some(contract);
+            self.submit_v1(launch)
+        }
+    }
+
+    impl RuntimeCollectiveBackendV1 for MockBackend {
+        fn submit_collective_v1(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let BackendSemanticLaunchV1::Collective(contract) = launch.semantic_launch else {
+                return Err(RuntimeBackendFailureV1::Rejected(MockError(
+                    "not collective",
+                )));
+            };
+            self.last_collective_contract = Some(contract);
+            self.submit_v1(launch)
+        }
+    }
+
+    impl RuntimeCancellationBackendV1 for MockBackend {
+        fn cancel_v1(
+            &mut self,
+            submission: u64,
+        ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+            if !self.polls.contains_key(&submission) {
+                return Err(RuntimeBackendFailureV1::Rejected(MockError(
+                    "unknown submission",
+                )));
+            }
+            Ok(if self.cancel_before_publication {
+                BackendCancellationV1::Cancelled
+            } else {
+                BackendCancellationV1::TooLate
+            })
+        }
+
+        fn drain_v1(
+            &mut self,
+            submission: u64,
+            deadline: Instant,
+        ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.wait_v1(submission, deadline)
+        }
+    }
+
+    impl RuntimeFlushBackendV1 for MockBackend {
+        fn flush_stream_v1(
+            &mut self,
+            stream: u64,
+        ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.flush_call_count += 1;
+            self.last_flushed_stream = Some(stream);
+            match self.flush_failure {
+                MockFlushFailure::None => Ok(()),
+                MockFlushFailure::RejectOnce => {
+                    self.flush_failure = MockFlushFailure::None;
+                    Err(RuntimeBackendFailureV1::Rejected(MockError(
+                        "flush rejected",
+                    )))
+                }
+                MockFlushFailure::Terminal => Err(RuntimeBackendFailureV1::Terminal(MockError(
+                    "flush terminal",
+                ))),
+            }
         }
     }
 
@@ -2284,6 +3517,18 @@ mod tests {
         }
     }
 
+    impl RuntimeAtomicArgumentsV1 for AddArguments {
+        const OPERATION_V1: RuntimeAtomicOperationV1 = RuntimeAtomicOperationV1::Add;
+        const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Workgroup;
+        const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::Relaxed;
+    }
+
+    impl RuntimeCollectiveArgumentsV1 for AddArguments {
+        const OPERATION_V1: RuntimeCollectiveOperationV1 = RuntimeCollectiveOperationV1::ReduceSum;
+        const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Workgroup;
+        const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::AcquireRelease;
+    }
+
     fn geometry() -> RuntimeLaunchGeometryV1 {
         RuntimeLaunchGeometryV1 {
             grid: [64, 1, 1],
@@ -2325,7 +3570,18 @@ mod tests {
         RuntimeAllocationIdV1,
         TypedRuntimeKernelV1<AddArguments>,
     ) {
-        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        context_with_launch_prerequisites_using(MockBackend::default())
+    }
+
+    fn context_with_launch_prerequisites_using(
+        backend: MockBackend,
+    ) -> (
+        RuntimeContextV1<MockBackend>,
+        RuntimeStreamIdV1,
+        RuntimeAllocationIdV1,
+        TypedRuntimeKernelV1<AddArguments>,
+    ) {
+        let mut context = RuntimeContextV1::open(backend).unwrap();
         let device = context.devices()[0].id();
         let stream = context.create_stream(device).unwrap();
         let allocation = context
@@ -2507,6 +3763,36 @@ mod tests {
             assert!(context.is_terminal());
             assert_eq!(context.submissions.len(), 1);
         }
+        {
+            let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+            let device = context.devices()[0].id();
+            let stream = context.create_stream(device).unwrap();
+            let source = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let destination = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let source = RuntimeMemoryRegionV1 {
+                allocation: source,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            let destination = RuntimeMemoryRegionV1 {
+                allocation: destination,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            context.backend.handle_override = Some((MockHandleKind::Submission, 0));
+            assert_protocol_failure(
+                context.copy_async(stream, source, destination, &[]),
+                RuntimeBackendProtocolErrorV1::ZeroHandle(RuntimeBackendResourceKindV1::Submission),
+            );
+            assert!(context.is_terminal());
+            assert_eq!(context.submissions.len(), 1);
+        }
     }
 
     #[test]
@@ -2639,6 +3925,42 @@ mod tests {
                 Some((MockHandleKind::Submission, first.backend_submission));
             assert_protocol_failure(
                 context.peer_copy(stream, source, destination, &[]),
+                RuntimeBackendProtocolErrorV1::DuplicateHandle(
+                    RuntimeBackendResourceKindV1::Submission,
+                ),
+            );
+            assert!(context.is_terminal());
+            assert_eq!(context.submissions.len(), 2);
+        }
+        {
+            let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+            let device = context.devices()[0].id();
+            let stream = context.create_stream(device).unwrap();
+            let source_allocation = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let destination_allocation = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let source = RuntimeMemoryRegionV1 {
+                allocation: source_allocation,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            let destination = RuntimeMemoryRegionV1 {
+                allocation: destination_allocation,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 8,
+            };
+            let first = context
+                .copy_async(stream, source, destination, &[])
+                .unwrap();
+            context.backend.handle_override =
+                Some((MockHandleKind::Submission, first.backend_submission));
+            assert_protocol_failure(
+                context.copy_async(stream, source, destination, &[]),
                 RuntimeBackendProtocolErrorV1::DuplicateHandle(
                     RuntimeBackendResourceKindV1::Submission,
                 ),
@@ -3023,6 +4345,117 @@ mod tests {
                 ))
             ));
         }
+    }
+
+    #[test]
+    fn async_copy_is_typed_validated_and_same_device() {
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        let other_device = context.devices()[1].id();
+        let stream = context.create_stream(device).unwrap();
+        let source = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        let destination = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        let foreign = context
+            .allocate(other_device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        context.write_allocation(source, 2, &[4, 3, 2, 1]).unwrap();
+        let region = |allocation, access, byte_offset| RuntimeMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset,
+            byte_len: 4,
+        };
+        let mut submission = context
+            .copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(destination, RuntimeAccessV1::Write, 8),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(submission.peer_transfer_mechanism(), None);
+        assert_eq!(
+            context.poll(&mut submission).unwrap(),
+            RuntimePollV1::Pending
+        );
+        assert_eq!(
+            context
+                .wait(&mut submission, Duration::from_secs(1))
+                .unwrap(),
+            RuntimePollV1::Succeeded
+        );
+        let mut observed = [0_u8; 4];
+        context
+            .read_allocation(destination, 8, &mut observed)
+            .unwrap();
+        assert_eq!(observed, [4, 3, 2, 1]);
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(foreign, RuntimeAccessV1::Write, 0),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::WrongDevice
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Write, 2),
+                region(destination, RuntimeAccessV1::Write, 8),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidAccess
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                RuntimeMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 8,
+                    byte_len: 5,
+                },
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidRange
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(destination, RuntimeAccessV1::Write, 14),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidRange
+            ))
+        ));
+        let event = context.record_event(&submission).unwrap();
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 2),
+                region(destination, RuntimeAccessV1::Write, 8),
+                &[event, event],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::DuplicateDependency
+            ))
+        ));
+        context.release_event(event).unwrap();
+        context.release_submission(submission).unwrap();
     }
 
     #[test]
@@ -3438,6 +4871,94 @@ mod tests {
     }
 
     #[test]
+    fn execution_capability_detail_defaults_closed_and_reports_opt_in_bits() {
+        let context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        assert_eq!(
+            context.execution_capabilities(device).unwrap(),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        let backend = context.shutdown().unwrap();
+        let expected = RuntimeExecutionCapabilitiesV1 {
+            native_async_copy: true,
+            native_peer_copy: true,
+            concurrent_compute: true,
+            compute_copy_overlap: true,
+            memory_pool: true,
+            profiling: true,
+            cancellation: true,
+            atomics: true,
+            collectives: true,
+        };
+        let context = RuntimeContextV1::open(MockBackend {
+            execution_capabilities: expected,
+            ..backend
+        })
+        .unwrap();
+        assert_eq!(
+            context.execution_capabilities(context.devices()[0].id()),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn cancellation_distinguishes_prepublication_quiescence_from_too_late() {
+        for (cancel_before_publication, expected) in [
+            (true, RuntimeCancellationV1::Cancelled),
+            (false, RuntimeCancellationV1::TooLate),
+        ] {
+            let mut context = RuntimeContextV1::open(MockBackend {
+                cancel_before_publication,
+                ..MockBackend::default()
+            })
+            .unwrap();
+            let device = context.devices()[0].id();
+            let stream = context.create_stream(device).unwrap();
+            let source = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let destination = context
+                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            let mut submission = context
+                .copy_async(
+                    stream,
+                    RuntimeMemoryRegionV1 {
+                        allocation: source,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: 16,
+                    },
+                    RuntimeMemoryRegionV1 {
+                        allocation: destination,
+                        access: RuntimeAccessV1::Write,
+                        byte_offset: 0,
+                        byte_len: 16,
+                    },
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(context.cancel(&mut submission).unwrap(), expected);
+            if expected == RuntimeCancellationV1::Cancelled {
+                assert_eq!(
+                    context.poll(&mut submission).unwrap(),
+                    RuntimePollV1::Failed {
+                        code: RUNTIME_CANCELLED_CODE_V1
+                    }
+                );
+            } else {
+                assert_eq!(
+                    context
+                        .drain(&mut submission, Instant::now() + Duration::from_secs(1))
+                        .unwrap(),
+                    RuntimePollV1::Succeeded
+                );
+            }
+            context.release_submission(submission).unwrap();
+        }
+    }
+
+    #[test]
     fn launch_rejects_invalid_or_nonzero_pointer_patches() {
         let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
         let device = context.devices()[0].id();
@@ -3483,5 +5004,738 @@ mod tests {
                 ))
             ));
         }
+    }
+
+    #[test]
+    fn event_and_submission_observation_share_one_exact_once_completion() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut context, stream, allocation, kernel) = context_with_launch_prerequisites();
+        let mut submission = context
+            .launch(
+                stream,
+                &kernel,
+                &AddArguments {
+                    allocation,
+                    scalar: 1,
+                },
+                geometry(),
+                &[],
+            )
+            .unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&observed);
+        context
+            .on_completion(&submission, move |status| {
+                callback_observed.lock().unwrap().push(status);
+            })
+            .unwrap();
+        let event = context.record_event(&submission).unwrap();
+
+        assert_eq!(
+            context.query_event(event),
+            Ok(RuntimeCompletionStatusV1::Pending)
+        );
+        assert_eq!(
+            context.poll_event(event).unwrap(),
+            RuntimeCompletionStatusV1::Pending
+        );
+        assert_eq!(context.backend().poll_call_count, 1);
+        assert_eq!(
+            context.wait_event(event, Duration::from_secs(1)).unwrap(),
+            RuntimeCompletionStatusV1::Succeeded
+        );
+        assert_eq!(context.backend().wait_call_count, 1);
+        assert_eq!(
+            context.query_submission(&submission),
+            Ok(RuntimeCompletionStatusV1::Succeeded)
+        );
+        assert_eq!(
+            context.poll(&mut submission).unwrap(),
+            RuntimePollV1::Succeeded
+        );
+        assert_eq!(context.backend().poll_call_count, 1);
+        assert_eq!(
+            observed.lock().unwrap().as_slice(),
+            [RuntimeCompletionStatusV1::Succeeded]
+        );
+
+        let after_completion = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&after_completion);
+        context
+            .on_completion(&submission, move |status| {
+                callback_observed.lock().unwrap().push(status);
+            })
+            .unwrap();
+        assert_eq!(
+            after_completion.lock().unwrap().as_slice(),
+            [RuntimeCompletionStatusV1::Succeeded]
+        );
+        context.release_event(event).unwrap();
+        context.release_submission(submission).unwrap();
+        assert_eq!(observed.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cancellation_is_typed_and_callbacks_are_not_repeated_by_drain_or_release() {
+        use std::sync::{Arc, Mutex};
+
+        let mut context = RuntimeContextV1::open(MockBackend {
+            cancel_before_publication: true,
+            ..MockBackend::default()
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+            .unwrap();
+        let module = context.load_module(device, b"object").unwrap();
+        let kernel = context
+            .resolve_kernel::<AddArguments>(module, "add")
+            .unwrap();
+        let mut submission = context
+            .launch(
+                stream,
+                &kernel,
+                &AddArguments {
+                    allocation,
+                    scalar: 1,
+                },
+                geometry(),
+                &[],
+            )
+            .unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&observed);
+        context
+            .on_completion(&submission, move |status| {
+                callback_observed.lock().unwrap().push(status);
+            })
+            .unwrap();
+        let event = context.record_event(&submission).unwrap();
+
+        assert_eq!(
+            context.cancel(&mut submission).unwrap(),
+            RuntimeCancellationV1::Cancelled
+        );
+        let cancelled = RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::Cancelled);
+        assert_eq!(context.query_event(event), Ok(cancelled));
+        assert_eq!(context.poll_event(event).unwrap(), cancelled);
+        assert_eq!(
+            context
+                .drain(&mut submission, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            RuntimePollV1::Failed {
+                code: RUNTIME_CANCELLED_CODE_V1
+            }
+        );
+        context.release_event(event).unwrap();
+        context.release_submission(submission).unwrap();
+        assert_eq!(observed.lock().unwrap().as_slice(), [cancelled]);
+        assert_eq!(context.backend().poll_call_count, 0);
+        assert_eq!(context.backend().wait_call_count, 0);
+    }
+
+    #[test]
+    fn callback_panics_are_contained_and_stream_quiescence_has_typed_status() {
+        use std::sync::{Arc, Mutex};
+
+        struct PanickingDropPayload;
+
+        impl Drop for PanickingDropPayload {
+            fn drop(&mut self) {
+                panic!("completion callback panic payload destructor");
+            }
+        }
+
+        let (mut context, stream, allocation, kernel) = context_with_launch_prerequisites();
+        let submission = context
+            .launch(
+                stream,
+                &kernel,
+                &AddArguments {
+                    allocation,
+                    scalar: 1,
+                },
+                geometry(),
+                &[],
+            )
+            .unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&observed);
+        context
+            .on_completion(&submission, move |status| {
+                callback_observed.lock().unwrap().push(status);
+            })
+            .unwrap();
+        context
+            .on_completion(&submission, |_| std::panic::panic_any(PanickingDropPayload))
+            .unwrap();
+
+        context.destroy_stream(stream).unwrap();
+        assert_eq!(
+            context.query_submission(&submission),
+            Ok(RuntimeCompletionStatusV1::QuiescentWithoutResult)
+        );
+        assert_eq!(
+            observed.lock().unwrap().as_slice(),
+            [RuntimeCompletionStatusV1::QuiescentWithoutResult]
+        );
+        assert_eq!(context.completion_callback_panic_count(), 1);
+        context
+            .on_completion(&submission, |_| std::panic::panic_any(PanickingDropPayload))
+            .unwrap();
+        assert_eq!(context.completion_callback_panic_count(), 2);
+        context.release_submission(submission).unwrap();
+    }
+
+    #[test]
+    fn typed_completion_distinguishes_backend_codes_from_cancellation() {
+        let mut context = RuntimeContextV1::open(MockBackend {
+            wait_observation: Some(BackendPollV1::Failed {
+                code: RUNTIME_CANCELLED_CODE_V1,
+            }),
+            ..MockBackend::default()
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+            .unwrap();
+        let module = context.load_module(device, b"object").unwrap();
+        let kernel = context
+            .resolve_kernel::<AddArguments>(module, "add")
+            .unwrap();
+        let mut submission = context
+            .launch(
+                stream,
+                &kernel,
+                &AddArguments {
+                    allocation,
+                    scalar: 1,
+                },
+                geometry(),
+                &[],
+            )
+            .unwrap();
+
+        context
+            .wait(&mut submission, Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            context.query_submission(&submission),
+            Ok(RuntimeCompletionStatusV1::Failed(
+                RuntimeCompletionFailureV1::BackendCode(RUNTIME_CANCELLED_CODE_V1)
+            ))
+        );
+    }
+
+    #[test]
+    fn stream_query_and_synchronize_preserve_aggregate_completion() {
+        let (mut context, stream, allocation, kernel) = context_with_launch_prerequisites();
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+        let first = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let second = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+
+        assert_eq!(
+            context.query_stream(stream),
+            Ok(RuntimeStreamObservationV1 {
+                total_submissions: 2,
+                pending: 2,
+                ..RuntimeStreamObservationV1::default()
+            })
+        );
+        assert_eq!(
+            context
+                .synchronize_stream(stream, Duration::from_secs(1))
+                .unwrap(),
+            RuntimeStreamObservationV1 {
+                total_submissions: 2,
+                succeeded: 2,
+                ..RuntimeStreamObservationV1::default()
+            }
+        );
+        assert_eq!(context.backend().wait_call_count, 2);
+        assert_eq!(
+            context.backend().wait_deadlines[0],
+            context.backend().wait_deadlines[1]
+        );
+        context.release_submission(first).unwrap();
+        context.release_submission(second).unwrap();
+        assert_eq!(
+            context.query_stream(stream),
+            Ok(RuntimeStreamObservationV1::default())
+        );
+    }
+
+    #[test]
+    fn stream_observation_retains_failure_while_other_work_completes() {
+        let mut context = RuntimeContextV1::open(MockBackend {
+            cancel_before_publication: true,
+            ..MockBackend::default()
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+            .unwrap();
+        let module = context.load_module(device, b"object").unwrap();
+        let kernel = context
+            .resolve_kernel::<AddArguments>(module, "add")
+            .unwrap();
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+        let mut cancelled = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let completed = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+
+        assert_eq!(
+            context.cancel(&mut cancelled).unwrap(),
+            RuntimeCancellationV1::Cancelled
+        );
+        assert_eq!(
+            context
+                .synchronize_stream(stream, Duration::from_secs(1))
+                .unwrap(),
+            RuntimeStreamObservationV1 {
+                total_submissions: 2,
+                succeeded: 1,
+                failed: 1,
+                first_failure: Some(RuntimeCompletionFailureV1::Cancelled),
+                ..RuntimeStreamObservationV1::default()
+            }
+        );
+        assert_eq!(context.backend().wait_call_count, 1);
+        context.release_submission(cancelled).unwrap();
+        context.release_submission(completed).unwrap();
+    }
+
+    #[test]
+    fn stream_synchronize_continues_after_rejected_wait_and_discharges_later_callbacks() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut context, stream, allocation, kernel) =
+            context_with_launch_prerequisites_using(MockBackend {
+                first_wait_failure: MockWaitFailure::RejectFirst,
+                ..MockBackend::default()
+            });
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+        let first = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let second = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&observed);
+        context
+            .on_completion(&second, move |status| {
+                callback_observed.lock().unwrap().push(status);
+            })
+            .unwrap();
+
+        assert!(matches!(
+            context.synchronize_stream(stream, Duration::from_secs(1)),
+            Err(RuntimeErrorV1::BackendRejected(_))
+        ));
+        assert_eq!(context.backend().wait_call_count, 2);
+        assert_eq!(
+            context.query_submission(&first),
+            Ok(RuntimeCompletionStatusV1::Pending)
+        );
+        assert_eq!(
+            context.query_submission(&second),
+            Ok(RuntimeCompletionStatusV1::Succeeded)
+        );
+        assert_eq!(
+            observed.lock().unwrap().as_slice(),
+            [RuntimeCompletionStatusV1::Succeeded]
+        );
+
+        context.destroy_stream(stream).unwrap();
+        assert_eq!(
+            context.query_submission(&first),
+            Ok(RuntimeCompletionStatusV1::QuiescentWithoutResult)
+        );
+        context.release_submission(first).unwrap();
+        context.release_submission(second).unwrap();
+    }
+
+    #[test]
+    fn stream_synchronize_continues_after_quiescent_wait_but_stops_on_terminal_wait() {
+        use std::sync::{Arc, Mutex};
+
+        let (mut context, stream, allocation, kernel) =
+            context_with_launch_prerequisites_using(MockBackend {
+                first_wait_failure: MockWaitFailure::QuiescentFirst,
+                ..MockBackend::default()
+            });
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+        let first = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let second = context
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        for submission in [&first, &second] {
+            let callback_observed = Arc::clone(&observed);
+            context
+                .on_completion(submission, move |status| {
+                    callback_observed.lock().unwrap().push(status);
+                })
+                .unwrap();
+        }
+
+        assert!(matches!(
+            context.synchronize_stream(stream, Duration::from_secs(1)),
+            Err(RuntimeErrorV1::BackendQuiescent(_))
+        ));
+        assert_eq!(context.backend().wait_call_count, 2);
+        assert_eq!(
+            context.query_stream(stream),
+            Ok(RuntimeStreamObservationV1 {
+                total_submissions: 2,
+                succeeded: 1,
+                quiescent_without_result: 1,
+                ..RuntimeStreamObservationV1::default()
+            })
+        );
+        assert_eq!(
+            observed.lock().unwrap().as_slice(),
+            [
+                RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                RuntimeCompletionStatusV1::Succeeded,
+            ]
+        );
+        context.release_submission(first).unwrap();
+        context.release_submission(second).unwrap();
+
+        let (mut terminal, stream, allocation, kernel) =
+            context_with_launch_prerequisites_using(MockBackend {
+                first_wait_failure: MockWaitFailure::TerminalFirst,
+                ..MockBackend::default()
+            });
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+        let first = terminal
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let _second = terminal
+            .launch(stream, &kernel, &arguments, geometry(), &[])
+            .unwrap();
+        let terminal_callbacks = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&terminal_callbacks);
+        terminal
+            .on_completion(&first, move |status| {
+                callback_observed.lock().unwrap().push(status);
+            })
+            .unwrap();
+        assert!(matches!(
+            terminal.synchronize_stream(stream, Duration::from_secs(1)),
+            Err(RuntimeErrorV1::BackendTerminal(_))
+        ));
+        assert!(terminal.is_terminal());
+        assert_eq!(terminal.backend().wait_call_count, 1);
+        assert!(terminal_callbacks.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn flush_stream_validates_before_backend_and_preserves_failure_class() {
+        let mut context = RuntimeContextV1::open(MockBackend {
+            flush_failure: MockFlushFailure::RejectOnce,
+            ..MockBackend::default()
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let backend_stream = context.streams[&stream].backend_stream;
+        let unknown = RuntimeStreamIdV1::new(context.context_generation, stream.get() + 1);
+
+        assert!(matches!(
+            context.flush_stream(unknown),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::UnknownStream
+            ))
+        ));
+        assert_eq!(context.backend().flush_call_count, 0);
+        assert!(matches!(
+            context.flush_stream(stream),
+            Err(RuntimeErrorV1::BackendRejected(_))
+        ));
+        assert!(!context.is_terminal());
+        assert_eq!(context.backend().flush_call_count, 1);
+        assert_eq!(context.backend().last_flushed_stream, Some(backend_stream));
+        context.flush_stream(stream).unwrap();
+        assert_eq!(context.backend().flush_call_count, 2);
+    }
+
+    #[test]
+    fn terminal_flush_seals_context_without_a_second_backend_call() {
+        let mut context = RuntimeContextV1::open(MockBackend {
+            flush_failure: MockFlushFailure::Terminal,
+            ..MockBackend::default()
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+
+        assert!(matches!(
+            context.flush_stream(stream),
+            Err(RuntimeErrorV1::BackendTerminal(_))
+        ));
+        assert!(context.is_terminal());
+        assert_eq!(context.backend().flush_call_count, 1);
+        assert!(matches!(
+            context.flush_stream(stream),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::ContextTerminal
+            ))
+        ));
+        assert_eq!(context.backend().flush_call_count, 1);
+    }
+
+    #[test]
+    fn atomic_and_collective_contracts_gate_ordinary_typed_submissions() {
+        let (mut closed, stream, allocation, kernel) = context_with_launch_prerequisites();
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+        let atomic_contract = RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::Add,
+            scope: RuntimeMemoryScopeV1::Workgroup,
+            order: RuntimeMemoryOrderV1::Relaxed,
+            failure_order: None,
+            weak: false,
+            geometry: geometry(),
+        };
+        assert!(matches!(
+            closed.launch_atomic(stream, &kernel, &arguments, atomic_contract, &[]),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::Unsupported
+            ))
+        ));
+        assert_eq!(closed.backend().submit_count, 0);
+
+        let mut context = RuntimeContextV1::open(MockBackend {
+            execution_capabilities: RuntimeExecutionCapabilitiesV1 {
+                atomics: true,
+                collectives: true,
+                ..RuntimeExecutionCapabilitiesV1::default()
+            },
+            ..MockBackend::default()
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
+            .unwrap();
+        let module = context.load_module(device, b"object").unwrap();
+        let kernel = context
+            .resolve_kernel::<AddArguments>(module, "atomic_collective")
+            .unwrap();
+        let arguments = AddArguments {
+            allocation,
+            scalar: 1,
+        };
+
+        let mut atomic = context
+            .launch_atomic(stream, &kernel, &arguments, atomic_contract, &[])
+            .unwrap();
+        assert_eq!(context.backend().submit_count, 1);
+        assert_eq!(context.backend().last_launch_geometry, Some(geometry()));
+        assert_eq!(
+            context.backend().last_atomic_contract,
+            Some(atomic_contract)
+        );
+        context.wait(&mut atomic, Duration::from_secs(1)).unwrap();
+        context.release_submission(atomic).unwrap();
+
+        let partial_atomic_geometry = RuntimeLaunchGeometryV1 {
+            grid: [65, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        };
+        let mut partial_atomic = context
+            .launch_atomic(
+                stream,
+                &kernel,
+                &arguments,
+                RuntimeAtomicLaunchContractV1 {
+                    geometry: partial_atomic_geometry,
+                    ..atomic_contract
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(context.backend().submit_count, 2);
+        assert_eq!(
+            context.backend().last_launch_geometry,
+            Some(partial_atomic_geometry)
+        );
+        context
+            .wait(&mut partial_atomic, Duration::from_secs(1))
+            .unwrap();
+        context.release_submission(partial_atomic).unwrap();
+
+        let collective_contract = RuntimeCollectiveLaunchContractV1 {
+            operation: RuntimeCollectiveOperationV1::ReduceSum,
+            scope: RuntimeMemoryScopeV1::Workgroup,
+            order: RuntimeMemoryOrderV1::AcquireRelease,
+            participants: 64,
+            geometry: geometry(),
+        };
+        let mut collective = context
+            .launch_collective(stream, &kernel, &arguments, collective_contract, &[])
+            .unwrap();
+        assert_eq!(context.backend().submit_count, 3);
+        assert_eq!(
+            context.backend().last_collective_contract,
+            Some(collective_contract)
+        );
+        context
+            .wait(&mut collective, Duration::from_secs(1))
+            .unwrap();
+        context.release_submission(collective).unwrap();
+
+        assert!(matches!(
+            context.launch_atomic(
+                stream,
+                &kernel,
+                &arguments,
+                RuntimeAtomicLaunchContractV1 {
+                    operation: RuntimeAtomicOperationV1::Exchange,
+                    ..atomic_contract
+                },
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidAtomicContract
+            ))
+        ));
+        assert!(matches!(
+            context.launch_collective(
+                stream,
+                &kernel,
+                &arguments,
+                RuntimeCollectiveLaunchContractV1 {
+                    participants: 63,
+                    ..collective_contract
+                },
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidCollectiveContract
+            ))
+        ));
+        assert!(matches!(
+            context.launch_collective(
+                stream,
+                &kernel,
+                &arguments,
+                RuntimeCollectiveLaunchContractV1 {
+                    participants: 64,
+                    geometry: RuntimeLaunchGeometryV1 {
+                        grid: [65, 1, 1],
+                        workgroup: [64, 1, 1],
+                        dynamic_shared_bytes: 0,
+                    },
+                    ..collective_contract
+                },
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidCollectiveContract
+            ))
+        ));
+        assert_eq!(context.backend().submit_count, 3);
+    }
+
+    #[test]
+    fn compare_exchange_contract_requires_a_legal_failure_order_and_explicit_weakness() {
+        use RuntimeMemoryOrderV1::{
+            Acquire, AcquireRelease, Relaxed, Release, SequentiallyConsistent,
+        };
+
+        let orders = [
+            Relaxed,
+            Acquire,
+            Release,
+            AcquireRelease,
+            SequentiallyConsistent,
+        ];
+        let legal_pairs = [
+            (Relaxed, Relaxed),
+            (Acquire, Relaxed),
+            (Acquire, Acquire),
+            (Release, Relaxed),
+            (AcquireRelease, Relaxed),
+            (AcquireRelease, Acquire),
+            (SequentiallyConsistent, Relaxed),
+            (SequentiallyConsistent, Acquire),
+            (SequentiallyConsistent, SequentiallyConsistent),
+        ];
+        for success in orders {
+            for failure in orders {
+                assert_eq!(
+                    valid_compare_exchange_order_pair(success, failure),
+                    legal_pairs.contains(&(success, failure)),
+                    "unexpected compare-exchange order pair: {success:?}/{failure:?}",
+                );
+            }
+        }
+
+        let contract = RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::CompareExchange,
+            scope: RuntimeMemoryScopeV1::Device,
+            order: AcquireRelease,
+            failure_order: Some(Acquire),
+            weak: true,
+            geometry: geometry(),
+        };
+        assert!(atomic_contract_is_legal(contract));
+        assert!(!atomic_contract_is_legal(RuntimeAtomicLaunchContractV1 {
+            failure_order: Some(Release),
+            ..contract
+        }));
+        assert!(!atomic_contract_is_legal(RuntimeAtomicLaunchContractV1 {
+            failure_order: None,
+            ..contract
+        }));
+        assert!(!atomic_contract_is_legal(RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::Add,
+            failure_order: Some(Relaxed),
+            ..contract
+        }));
+        assert!(!atomic_contract_is_legal(RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::Add,
+            failure_order: None,
+            ..contract
+        }));
     }
 }

@@ -61,7 +61,7 @@ fn serve_requests(
         if request.last() == Some(&b'\r') {
             request.pop();
         }
-        let response = match answer_agent_kfd_profiler_request_v1(&capture, &request) {
+        let response = match answer_agent_kfd_profiler_request_v1(capture, &request) {
             Ok(response) => response,
             Err(error) => {
                 encode_agent_kfd_profiler_error_response_v1(request_id_hint(&request), &error)

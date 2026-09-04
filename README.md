@@ -186,8 +186,10 @@ arguments.
 
 There is currently no supported copy-and-paste source-to-GPU quick start.
 `cargo fe2o3 build` enters the production compiler transaction, but ordinary
-example applications still lack the production Worker V3 verifier and release
-deployment needed to authorize load and dispatch. For example,
+example applications still lack the production Worker V3 verifier deployment
+and concrete semantic-to-final-machine proof backend/artifact needed to
+authorize load and dispatch. The host provides only the typed, sealed join for
+such a backend; it does not synthesize proof authority. For example,
 `fe2o3-vecadd` and `fe2o3-fill` intentionally fail closed before dispatch.
 
 Hardware development and CI exercise bounded direct-KFD mechanics and exact
