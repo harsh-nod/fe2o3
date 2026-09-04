@@ -228,6 +228,33 @@ nor D2D, and remains single-flight with a `0x003f_ffe0`-byte packet cap. It has
 no hardware-execution or matched HIP/HSA performance evidence and therefore
 does not satisfy this parity profile.
 
+## Current R20 Status
+
+R20 integrates the R19 owner into direct-KFD runtime allocation and same-device
+copy state. It admits native H2D and D2H only, preserves exact host/device and
+terminal custody, chunks logical ranges at `0x003f_ffe0`, and requires exact
+completion, settlement, and frontier retirement before continuation. H2H and
+D2D reject before facade mutation. Poll and wait observe only; explicit flush
+publishes continuations. Cancellation is limited to an unpublished transfer
+with zero completed bytes.
+
+The concrete facade distinguishes conclusive failure before the first packet
+from quiescent-without-result after partial device mutation. The latter releases
+all native and scheduler retains before installing a pre-reserved exact
+submission marker. That marker remains observable through poll, wait, drain,
+events, dependencies, stream destruction, release, shutdown, and Worker V4/V5
+transport. Packet-bounded staging replaces allocation-sized temporary buffers
+for synchronous copy, zero, scrub, and dirty-shadow reconciliation.
+
+The independent R20 executable model has 14 focused tests, and its abstract
+Verus summary adds 31 obligations and 15 rejected mutations for pinned totals
+of 336 and 194. No theorem connects the model to the Rust facade or native KFD
+execution. Runtime-layer scripted failure injection for every move-only R19
+custody result remains open. R20 also lacks H2H, D2D, batched local publication,
+shared persistent compute/XGMI storage, direct-backend background progress,
+hardware correctness, and matched performance evidence. It therefore does not
+satisfy this parity profile.
+
 ## Required Gates
 
 ### G1: API and ownership

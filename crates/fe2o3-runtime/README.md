@@ -301,6 +301,34 @@ so large transfers still require repeated completion and retirement cycles.
 There is no D2D or H2H path and no hardware or comparative HIP/HSA performance
 evidence in this tranche.
 
+R20 wires the R19 directional owner into `KfdRuntimeBackendV1` without changing
+the runtime or Worker wire protocols. Native allocation records distinguish
+host, persistent device, demoted cleanup-only, in-flight, and opaque terminal
+custody. Direct `copy_async` admits only H2D and D2H; H2H and D2D reject before
+handle or retain mutation. Every packet is bounded by the R19 cap, and exact
+completion, settlement, and frontier retirement restore both owners before the
+next packet. Poll and wait remain observation-only. `flush_stream` owns every
+continuation publication, and cancellation succeeds only before publication
+and before any completed byte.
+
+Zero-progress retryable publication settles as a conclusive failed submission.
+A retryable continuation failure after partial device mutation instead releases
+all native and scheduler retains and records an exact per-submission
+`QuiescentWithoutResult` marker. Poll, wait, drain, event retention, stream
+destruction, release, shutdown, and Worker V4/V5 transport preserve that
+distinction. Synchronous upload, download, zeroing, shadow reconciliation, and
+release scrub use packet-bounded transient staging rather than a second
+allocation-sized buffer.
+
+The independent R20 model has 14 focused executable tests. Its pinned Verus
+summary adds 31 obligations and 15 expected-negative mutations, bringing the
+authenticated totals to 336 and 194. The proof covers the abstract facade state
+machine only. The direct backend remains thread-affine and cannot use
+`RuntimeAsyncEngineV1` background progress directly; Send-capable Worker V4/V5
+adapters can. R20 has no facade-level scripted move-only failure driver, H2H or
+D2D path, batched large-copy publication, native hardware result, Rust-to-Verus
+refinement theorem, or comparative HIP/HSA performance evidence.
+
 The direct-KFD backend also exposes an opt-in bounded profiler. It records
 address-free logical resource lifecycle, host staging read/write ranges, native
 queue creation/teardown, successful AQL publication, completion, and

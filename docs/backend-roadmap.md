@@ -484,3 +484,41 @@ to the runtime facade, async engine, or workers. The native linear packet cap is
 D2D, multi-packet batched publication, persistent compute/XGMI sharing, and
 matched hardware measurements remain open. This tranche therefore carries no
 copy-performance or comparative HIP/HSA claim.
+
+## Runtime R20 Status
+
+R20 connects the R19 directional persistent allocation to the direct
+`KfdRuntimeBackendV1` facade. Device-local allocations are promoted into exact
+engine-1 H2D/engine-0 D2H custody, while host-visible allocations retain their
+ordinary queue-owned buffers. Facade copy admission accepts only H2D and D2H;
+H2H and D2D reject before handle, stream-tail, dependency, allocation, or
+completion-reservation mutation. Packet publication is capped at
+`0x003f_ffe0` bytes, and each completion must settle and retire its exact R19
+frontier before the allocation can publish the next packet.
+
+Poll and wait do not publish continuations. Explicit `flush_stream` may publish
+one dependency-ready packet, and cancellation is available only while the copy
+is unpublished with zero completed bytes. A zero-progress retryable publication
+failure becomes an ordinary conclusive failed record. A retryable failure after
+one or more completed packets releases every native and logical retain, then
+stores an exact releasable quiescent-without-result marker that poll, wait,
+drain, events, dependencies, stream destruction, shutdown, and Worker V4/V5
+preserve. Upload, download, zeroing, dirty-shadow reconciliation, and release
+scrub use packet-bounded transient staging; a retryable demotion or recycle
+failure retains explicit device or cleanup-only demoted custody.
+
+The independent R20 executable model has 14 focused tests. Its pinned Verus
+summary adds 31 obligations and 15 expected-negative mutations, bringing the
+authenticated totals to 336 and 194. Worker V4 and V5 child-process tests each
+exercise three quiescent copy cycles through flush, poll, drain, event-gated
+release, and orderly shutdown. These are abstract and host-protocol results, not
+a refinement theorem or native execution evidence.
+
+R20 still does not establish HIP/HSA parity or a speedup. Direct KFD remains
+thread-affine; only a Send-capable worker adapter can use the background async
+engine. The single-flight allocation still requires 65 publication/completion/
+retirement cycles for 256 MiB, and H2H, D2D, batched local SDMA, persistent
+compute/XGMI sharing, and a unified native multi-device owner remain open. A
+scripted runtime-layer move-only failure driver is also required before claiming
+that the concrete glue has exhaustive failure-atomic coverage. No MI300X or
+matched HIP/HSA performance measurement is attached to this tranche.

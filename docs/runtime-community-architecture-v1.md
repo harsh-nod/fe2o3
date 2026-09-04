@@ -516,14 +516,29 @@ Runtime Worker V4/V5 background progress is additionally exercised through
 real child processes, including deadline, terminal-response, and EOF failure
 sealing, but those tests do not execute native KFD work.
 
+R20 connects the R19 directional owner to the direct `KfdRuntimeBackendV1`
+facade. Device-local allocation records retain exact persistent or cleanup-only
+custody, and direct async copies admit H2D and D2H while rejecting H2H and D2D
+before facade mutation. Each packet is capped at `0x003f_ffe0` bytes and must
+complete, settle, and retire its exact frontier before `flush_stream` publishes
+the continuation. Poll and wait remain observation-only. A retryable failure
+before any progress becomes a conclusive failed record; retryable failure after
+partial device mutation releases all native and scheduler retains and installs
+a pre-reserved exact quiescent-without-result marker. Worker V4/V5 child tests
+exercise three complete marker/release cycles. The independent executable model
+and Verus summary add 31 obligations and 15 rejected mutations, bringing the
+pinned abstract totals to 336 and 194. A scripted runtime-layer transition
+driver and a Rust/native refinement theorem remain open.
+
 The remaining community-launch blockers are material. Direct KFD owns exactly
-two compute lanes per child, but has no background native-publication scheduler, queue-side
-dependency packets, or more than two in-flight compute dispatches. Native XGMI is owned by a separate
-exact two-device, copy-only backend; there is no unified native multi-device
-compute owner. R19 joins one persistent owner to the exact directional
-local-SDMA pair, but the runtime facade and progress engine do not yet own that
-adapter. Its single-flight `0x003f_ffe0`-byte packet path is not a batched
-large-copy path; H2H, D2D, persistent compute, native XGMI sharing, and
+two compute lanes per child, but has no background native-publication scheduler,
+queue-side dependency packets, or more than two in-flight compute dispatches.
+Native XGMI is owned by a separate exact two-device, copy-only backend; there is
+no unified native multi-device compute owner. R20 joins one persistent owner to
+the runtime facade's exact directional local-SDMA pair, but the direct backend
+remains thread-affine and cannot use cross-thread background progress. Its
+single-flight `0x003f_ffe0`-byte packet path is not a batched large-copy path;
+H2H, D2D, persistent compute, native XGMI sharing, and
 concurrent range leases remain absent. The host exposes a typed unsafe
 boundary and sealed adapter for
 a separately reviewed producer of the required Worker V3 semantic-to-machine

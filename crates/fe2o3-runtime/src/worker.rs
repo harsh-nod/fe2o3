@@ -4590,6 +4590,56 @@ mod tests {
         codec.decode_semantic_submit_response_v5(&response)
     }
 
+    fn exercise_quiescent_copy_marker_cycles_v1<B>(backend: &mut B)
+    where
+        B: RuntimeBackendV1
+            + RuntimeFlushBackendV1
+            + RuntimeAsyncCopyBackendV1
+            + RuntimeCancellationBackendV1,
+        B::Error: fmt::Debug,
+    {
+        let source = BackendMemoryRegionV1 {
+            allocation: 11,
+            access: RuntimeAccessV1::Read,
+            byte_offset: 3,
+            byte_len: 16,
+        };
+        let destination = BackendMemoryRegionV1 {
+            allocation: 12,
+            access: RuntimeAccessV1::Write,
+            byte_offset: 5,
+            byte_len: 16,
+        };
+
+        for cycle in 0..3 {
+            let expected_submission = 701 + cycle * 10;
+            let submission = backend.copy_async_v1(41, source, destination, &[]).unwrap();
+            assert_eq!(submission, expected_submission);
+            let event = backend.record_event_v1(41, submission).unwrap();
+            assert_eq!(event, submission + 1);
+
+            assert!(matches!(
+                backend.flush_stream_v1(41),
+                Err(RuntimeBackendFailureV1::Quiescent(_))
+            ));
+            assert!(matches!(
+                backend.poll_v1(submission),
+                Err(RuntimeBackendFailureV1::Quiescent(_))
+            ));
+            assert!(matches!(
+                backend.drain_v1(submission, Instant::now() + Duration::from_secs(2)),
+                Err(RuntimeBackendFailureV1::Quiescent(_))
+            ));
+
+            assert!(matches!(
+                backend.release_submission_v1(submission),
+                Err(RuntimeBackendFailureV1::Rejected(_))
+            ));
+            backend.release_event_v1(event).unwrap();
+            backend.release_submission_v1(submission).unwrap();
+        }
+    }
+
     const TEST_WORKER_SERVER: &str = r#"
 import struct
 import sys
@@ -4759,6 +4809,111 @@ for request in cleanup:
     expect(request, 42)
     write_frame(bytes((0,)))
 sys.exit(0 if not read_frame() else 43)
+"#;
+
+    const QUIESCENT_MARKER_WORKER_SERVER: &str = r#"
+import struct
+import sys
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+version = sys.argv[1]
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        part = stdin.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def read_frame():
+    size = struct.unpack('<I', read_exact(4))[0]
+    return read_exact(size)
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+def blob(value):
+    return struct.pack('<I', len(value)) + value
+
+def handle(value):
+    write_frame(bytes((0,)) + struct.pack('<Q', value))
+
+def region(allocation, access, offset, length):
+    return struct.pack('<QBQQ', allocation, access, offset, length)
+
+def launch_payload(stream):
+    payload = struct.pack('<QQI', stream, 43, 8) + bytes(8)
+    payload += struct.pack('<I', 1)
+    payload += struct.pack('<QBQQI', 47, 3, 0, 8, 0)
+    payload += struct.pack('<IQQ', 2, 53, 59)
+    payload += struct.pack('<IIIIIII', 64, 1, 1, 64, 1, 1, 0)
+    return payload
+
+if version == 'v4':
+    handshake = b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1'
+elif version == 'v5':
+    handshake = b'fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1'
+else:
+    sys.exit(60)
+
+write_frame(handshake)
+for cycle in range(3):
+    submission = 701 + cycle * 10
+    event = submission + 1
+    expected_copy = bytes((20,)) + struct.pack('<Q', 41)
+    expected_copy += region(11, 1, 3, 16) + region(12, 2, 5, 16)
+    expected_copy += struct.pack('<I', 0)
+    if read_frame() != expected_copy:
+        sys.exit(61)
+    handle(submission)
+
+    expected_record = bytes((14,)) + struct.pack('<QQ', 41, submission)
+    if read_frame() != expected_record:
+        sys.exit(62)
+    handle(event)
+
+    if read_frame() != bytes((18,)) + struct.pack('<Q', 41):
+        sys.exit(63)
+    write_frame(bytes((2,)) + blob(b'copy marker quiescent'))
+
+    if read_frame() != bytes((12,)) + struct.pack('<Q', submission):
+        sys.exit(64)
+    write_frame(bytes((2,)) + blob(b'copy marker quiescent'))
+
+    drain = read_frame()
+    if len(drain) != 21 or drain[:9] != bytes((22,)) + struct.pack('<Q', submission):
+        sys.exit(65)
+    seconds, nanoseconds = struct.unpack('<QI', drain[9:])
+    if seconds > 2 or nanoseconds >= 1000000000:
+        sys.exit(66)
+    write_frame(bytes((2,)) + blob(b'copy marker quiescent'))
+
+    if read_frame() != bytes((17,)) + struct.pack('<Q', submission):
+        sys.exit(67)
+    write_frame(bytes((1,)) + blob(b'event retained'))
+
+    if read_frame() != bytes((15,)) + struct.pack('<Q', event):
+        sys.exit(68)
+    write_frame(bytes((0,)))
+
+    if read_frame() != bytes((17,)) + struct.pack('<Q', submission):
+        sys.exit(69)
+    write_frame(bytes((0,)))
+
+if version == 'v5':
+    atomic = bytes((23, 1, 7, 1, 3, 2, 1)) + launch_payload(41)
+    if read_frame() != atomic:
+        sys.exit(70)
+    handle(799)
+    if read_frame() != bytes((17,)) + struct.pack('<Q', 799):
+        sys.exit(71)
+    write_frame(bytes((0,)))
+
+sys.exit(0 if not read_frame() else 72)
 "#;
 
     const V4_FLUSH_WORKER_SERVER: &str = r#"
@@ -6552,6 +6707,33 @@ time.sleep(60)
     }
 
     #[test]
+    fn v4_quiescent_copy_marker_preserves_proxy_and_exact_release_over_three_child_cycles() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(QUIESCENT_MARKER_WORKER_SERVER)
+            .argument("v4");
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+
+        exercise_quiescent_copy_marker_cycles_v1(&mut backend);
+        assert!(!backend.is_terminal());
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
     fn v4_backend_exposes_portable_flush_through_runtime_context() {
         if std::process::Command::new("python3")
             .arg("--version")
@@ -6738,6 +6920,41 @@ time.sleep(60)
                 RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Remote(_))
             ))
         ));
+        assert!(!backend.is_terminal());
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v5_quiescent_copy_marker_preserves_semantic_proxy_and_release_over_three_child_cycles() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(QUIESCENT_MARKER_WORKER_SERVER)
+            .argument("v5");
+        let mut backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            RuntimeBinaryCodecV5,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+
+        exercise_quiescent_copy_marker_cycles_v1(&mut backend);
+        let semantic_submission = backend
+            .submit_atomic_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+            ))
+            .unwrap();
+        assert_eq!(semantic_submission, 799);
+        backend.release_submission_v1(semantic_submission).unwrap();
         assert!(!backend.is_terminal());
         backend.shutdown(Duration::from_secs(2)).unwrap();
     }

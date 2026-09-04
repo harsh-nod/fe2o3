@@ -4,9 +4,9 @@ This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
 logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
-persistent-native-allocation, R18 persistent-local-SDMA-adapter, and R19
-directional-persistent-local-SDMA-adapter models. The authenticated runner
-proves 305 obligations and rejects 179
+persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
+directional-persistent-local-SDMA-adapter, and R20 runtime-facade directional
+chunking models. The authenticated runner proves 336 obligations and rejects 194
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -844,6 +844,57 @@ DMA/completion truth, liveness, HIP/HSA parity, or performance.
 | Independent executable custody lifecycle | **Checked** | Twenty-three Rust tests plus compile-fail `Clone`/`Send`; it directly composes a private R17 registry but has no refinement theorem. |
 | Boundary countermodels | **Rejected** | Twenty pinned expected-negative files fail only at their named postconditions. |
 | Executable-Rust, R17/R18, or native KFD refinement; hardware behavior or performance | **Not established** | Explicitly outside the R19 proof boundary. |
+
+## R20 runtime-facade directional chunking
+
+`r20_runtime_facade_directional_chunking_v1.rs` proves 31 obligations for a
+single-allocation, single-flight facade over abstract R19 packet custody. H2D
+and D2H bind exact host/device storage roles; H2H and D2D are unsupported and
+their preflight is mutation-free. Exact dependency identity and status gate
+publication. Pending dependencies retain `Ready`; failed dependencies settle a
+retained conclusive failure, while dependency quiescence settles an exact
+quiescent-without-result record.
+
+Every successful chunk binds its byte offset to prior completed progress, caps
+length at `0x003f_ffe0`, and carries an exact direction-selected ticket into an
+R19-shaped frontier. Completion cannot expose the continuation until exact
+frontier retirement. Poll is observational and never publishes a continuation;
+only flush changes `Ready` to `Published`. Recursive actual-prior-state
+transitions derive that 256 MiB requires 65 separately retired packets, with
+exact destination-dirty progress, one final completion, and no remaining
+ticket or frontier. Exact terminal release permits repeated same-direction or
+mixed-direction admission.
+
+A zero-progress retryable prepublication failure restores packet custody and
+settles the accepted target as retained conclusive failure code `-1`. A retry after
+partial progress restores packet custody and settles an exact, nonresumable
+quiescent-without-result marker. Exact later poll observes either terminal by
+submission identity; a foreign identity cannot observe or release it. Release
+removes the target retainer. Opaque publication/currentness failure preserves
+one authority in process-teardown custody. Cancellation is confined to an
+unpublished `Ready` target with zero completed bytes.
+
+The independent executable model directly composes the R19 executable adapter
+and has 14 focused Rust tests. Fifteen pinned expected-negative mutations cover
+direction/storage, offsets, ticket/frontier identity, poll publication, early
+continuation, cancellation, dependency bypass, partial progress, terminal
+quiescence and exact poll, opaque custody, frontier retirement, pool ABA,
+currentness, and the 65-packet bound.
+
+R20 is a standalone mathematical summary, not a correspondence theorem. It
+does not prove that the executable Rust model implements the Verus transition,
+or that runtime/KFD code implements either model. It proves no native syscall,
+queue, DMA, completion, device-memory visibility, hardware liveness,
+HIP/HSA parity, or performance claim.
+
+## R20 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Direction/storage, dependency, packet offset, ticket/frontier, retirement, dirty/completion, retry, quiescence, target-retain, cancellation, currentness, and bounded recursive chunking relations | **Proved** | Thirty-one obligations in `r20_runtime_facade_directional_chunking_v1.rs`. |
+| Independent executable facade over R19 lifecycle | **Checked** | Fourteen focused Rust tests; direct executable composition without a Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Fifteen pinned expected-negative files fail only at their named postconditions. |
+| Executable-Rust, runtime/KFD, native hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R20 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
