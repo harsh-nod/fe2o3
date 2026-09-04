@@ -3407,22 +3407,45 @@ fn independent_lowerings_are_deterministic() {
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
     assert_eq!(
-        first.canonical_kernel_ir_v8().canonical_bytes(),
-        second.canonical_kernel_ir_v8().canonical_bytes(),
+        first
+            .canonical_kernel_ir_v8()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_bytes(),
+        second
+            .canonical_kernel_ir_v8()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_bytes(),
     );
     assert_eq!(
         first.canonical_kernel_ir_v8_identity(),
         second.canonical_kernel_ir_v8_identity(),
     );
     assert_eq!(
-        first.canonical_kernel_ir_v8_identity().canonical_length(),
-        first.canonical_kernel_ir_v8().canonical_bytes().len() as u64,
+        first
+            .canonical_kernel_ir_v8_identity()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_length(),
+        first
+            .canonical_kernel_ir_v8()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_bytes()
+            .len() as u64,
     );
     assert_eq!(
-        decode_module_v8(first.canonical_kernel_ir_v8().canonical_bytes()).unwrap(),
+        decode_module_v8(
+            first
+                .canonical_kernel_ir_v8()
+                .expect("the fixture lowers to Kernel IR V8")
+                .canonical_bytes(),
+        )
+        .unwrap(),
         *first.module(),
     );
-    first.canonical_kernel_ir_v8().revalidate().unwrap();
+    first
+        .canonical_kernel_ir_v8()
+        .expect("the fixture lowers to Kernel IR V8")
+        .revalidate()
+        .unwrap();
 }
 
 #[test]
@@ -3440,6 +3463,7 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
             admitted
                 .semantic_kir()
                 .canonical_kernel_ir_v8()
+                .expect("the fixture lowers to Kernel IR V8")
                 .canonical_bytes(),
         )
         .unwrap(),
