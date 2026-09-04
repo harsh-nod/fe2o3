@@ -192,9 +192,9 @@ HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
     FE2O3_GFX950_FP4_GEMM_SHA256=$HSACO_SHA256 \
     CARGO_TARGET_DIR=$ROOT_TARGET_DIR \
         "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" test --locked \
-        -p fe2o3-hsa-runtime --features hardware-test-hooks \
+        -p fe2o3-hsa-runtime --features hardware-qualification \
         --test gfx950_fp4_gemm_hardware \
-        gfx950_fp4_gemm_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output \
+        gfx950_fp4_gemm_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output \
         -- --ignored --exact --nocapture
 )
 

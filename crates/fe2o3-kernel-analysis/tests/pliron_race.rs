@@ -931,7 +931,7 @@ fn checked_tiled_marker_shape_cannot_replace_validity_and_success_proofs() {
         assert!(
             report.findings()[0]
                 .to_string()
-                .contains("checked structured index markers are currently incomplete")
+                .contains("no supported checked structured contract")
         );
     }
 }
@@ -1230,6 +1230,109 @@ fn predicated_checked_access_proves_only_race_freedom() {
             assert!(!admitted.grants_artifact_or_launch_authority());
         }
     }
+}
+
+#[test]
+fn predicated_checked_row_striped_access_proves_four_workgroups_disjoint() {
+    let context = &mut setup();
+    let (function, arguments) =
+        function_with_index_arguments(context, "predicated_row_striped_grid_four", 1);
+    let entry = function.get_entry_block(context);
+    let access_block = block(context, &function, "access");
+    let second_guard_block = block(context, &function, "second_guard");
+    let second_access_block = block(context, &function, "second_access");
+    let exit = block(context, &function, "exit");
+    let view_type =
+        RankedViewType::new(context, 32, true, vec![dialect_kernel::DYNAMIC_EXTENT]).unwrap();
+    let output = RankedViewOp::new(context, view_type, vec![arguments[0]]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 1024);
+    let first_component = IndexConstantOp::new(context, 0);
+    let first_rows = IndexConstantOp::new(context, 16);
+    let first_columns = IndexConstantOp::new(context, 128);
+    let first_stride = IndexConstantOp::new(context, 128);
+    let first_checked = CheckedRowStripedIndex2DOp::new_predicated(
+        context,
+        invocation.result(context),
+        first_component.result(context),
+        first_rows.result(context),
+        first_columns.result(context),
+        first_stride.result(context),
+        arguments[0],
+        [64, 2],
+    );
+    let second_component = IndexConstantOp::new(context, 1);
+    let second_rows = IndexConstantOp::new(context, 16);
+    let second_columns = IndexConstantOp::new(context, 128);
+    let second_stride = IndexConstantOp::new(context, 128);
+    let second_checked = CheckedRowStripedIndex2DOp::new_predicated(
+        context,
+        invocation.result(context),
+        second_component.result(context),
+        second_rows.result(context),
+        second_columns.result(context),
+        second_stride.result(context),
+        arguments[0],
+        [64, 2],
+    );
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        first_checked.result(context),
+        arguments[0],
+        access_block,
+        exit,
+    );
+    let second_guard = IndexLessThanBranchOp::new(
+        context,
+        second_checked.result(context),
+        arguments[0],
+        second_access_block,
+        exit,
+    );
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        first_component.get_operation(),
+        first_rows.get_operation(),
+        first_columns.get_operation(),
+        first_stride.get_operation(),
+        first_checked.get_operation(),
+        second_component.get_operation(),
+        second_rows.get_operation(),
+        second_columns.get_operation(),
+        second_stride.get_operation(),
+        second_checked.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let first_write = RankedAccessOp::new_predicated(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        first_checked.result(context),
+        first_checked.success(context).unwrap(),
+    )
+    .unwrap();
+    let second_write = RankedAccessOp::new_predicated(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        second_checked.result(context),
+        second_checked.success(context).unwrap(),
+    )
+    .unwrap();
+    let to_second_guard = BranchOp::new(context, second_guard_block);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, access_block, &first_write);
+    append(context, access_block, &to_second_guard);
+    append(context, second_guard_block, &second_guard);
+    append(context, second_access_block, &second_write);
+    append(context, second_access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert!(report.is_clean(), "{report:?}");
 }
 
 #[test]

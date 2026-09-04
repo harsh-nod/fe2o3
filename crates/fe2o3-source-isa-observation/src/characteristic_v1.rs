@@ -14,7 +14,7 @@ pub const SOURCE_ISA_CHARACTERISTIC_CURSOR_BYTES_V1: usize = 152;
 // structural target header, and sparse ISA anchor. The observer's fixed-width optional-axis
 // slots make that projection larger than the producer's compact 64 MiB catalog.
 pub const MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1: usize = 128 * 1024 * 1024;
-pub const MAX_SOURCE_ISA_CHARACTERISTIC_CATALOG_RECORDS_V1: usize = 528_384;
+pub const MAX_SOURCE_ISA_CHARACTERISTIC_CATALOG_RECORDS_V1: usize = 540_672;
 pub const MAX_SOURCE_ISA_CHARACTERISTIC_TARGETS_V1: usize = 65_536;
 pub const MAX_SOURCE_ISA_CHARACTERISTIC_TARGET_CORRELATIONS_V1: usize = 262_144;
 pub const MAX_SOURCE_ISA_CHARACTERISTIC_CORRELATIONS_PER_TARGET_V1: usize = 4_096;

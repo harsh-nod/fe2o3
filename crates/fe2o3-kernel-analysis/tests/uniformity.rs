@@ -622,6 +622,99 @@ fn exact_global_index_workgroup_quotient_is_uniform_but_lane_remainder_is_not() 
 }
 
 #[test]
+fn exact_wg256_wave64_quotient_is_subgroup_uniform_but_lane_remainder_is_not() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::U32(64)),
+        cast(2, CastKind::ZeroExtend, 1, Type::INDEX),
+        binary(3, BinaryOp::Divide, 0, 2),
+        binary(4, BinaryOp::Remainder, 0, 2),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(256, 1, 1));
+    let mut module = Module::new("uniformity_wave64_quotient");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(3)), Variation::SubgroupUniform);
+    assert_eq!(report.value(ValueId(4)), Variation::Varying);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn wave64_quotient_rule_rejects_other_divisors_axes_workgroups_and_absent_contracts() {
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        intrinsic(
+            1,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::Y,
+            },
+        ),
+        constant(2, Constant::Index(64)),
+        constant(3, Constant::Index(32)),
+        constant(4, Constant::Index(128)),
+        binary(5, BinaryOp::Divide, 0, 2),
+        binary(6, BinaryOp::Divide, 1, 2),
+        binary(7, BinaryOp::Divide, 0, 3),
+        binary(8, BinaryOp::Divide, 0, 4),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D2 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(256, 1, 1));
+    let mut module = Module::new("uniformity_wave64_quotient_adversarial");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(5)), Variation::SubgroupUniform);
+    for value in 6..=8 {
+        assert_eq!(report.value(ValueId(value)), Variation::Varying);
+    }
+
+    module.kernels[0].workgroup_size = Some(WorkgroupSize::new(192, 1, 1));
+    assert_eq!(
+        analyze_kernel_entry(&module, &function).value(ValueId(5)),
+        Variation::Varying
+    );
+    module.kernels.clear();
+    assert_eq!(
+        analyze_kernel_entry(&module, &function).value(ValueId(5)),
+        Variation::Varying
+    );
+}
+
+#[test]
 fn workgroup_quotient_uniformity_is_axis_exact_and_requires_launch_contract() {
     let mut entry = returning(0);
     entry.operations = vec![

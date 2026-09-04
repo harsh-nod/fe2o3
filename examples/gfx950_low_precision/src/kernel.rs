@@ -9,7 +9,9 @@ use fe2o3_device::{
     KernelError, KernelResult, Math, StridedReadView2D, Wave64, WaveLane, kernel, thread,
 };
 
-pub const GFX950_WORKGROUP: [u32; 3] = [64, 1, 1];
+pub const GFX950_WORKGROUP: [u32; 3] = [256, 1, 1];
+pub const GFX950_GRID: [u32; 3] = [4, 1, 1];
+pub const GFX950_BATCHES: usize = 16;
 pub const GEMM_M: usize = 16;
 pub const GEMM_N: usize = 16;
 pub const GEMM_K: usize = 128;
@@ -18,43 +20,62 @@ pub const VALUE_COLUMNS: usize = 16;
 const ATTENTION_SCALE: f32 = 0.088_388_35;
 
 fn decode_fp4_e2m1(bits: u8) -> f32 {
-    let payload = bits & 0x7;
-    let exponent = payload >> 1_u8;
-    let mantissa = f32::from(payload & 1);
-    let magnitude = if exponent == 0 {
-        mantissa * 0.5
-    } else {
-        let scale = f32::from(1_u8 << (exponent - 1_u8));
-        (1.0 + mantissa * 0.5) * scale
-    };
-    if bits & 0x8 == 0 {
-        magnitude
-    } else {
-        -magnitude
+    match bits & 0xf {
+        0 => 0.0,
+        1 => 0.5,
+        2 => 1.0,
+        3 => 1.5,
+        4 => 2.0,
+        5 => 3.0,
+        6 => 4.0,
+        7 => 6.0,
+        8 => -0.0,
+        9 => -0.5,
+        10 => -1.0,
+        11 => -1.5,
+        12 => -2.0,
+        13 => -3.0,
+        14 => -4.0,
+        _ => -6.0,
     }
 }
 
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp4-gemm"))]
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_fp4_gemm_rust(
     lhs: &[u8],
     rhs: &[u8],
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) -> KernelResult {
-    if lhs.len() < GEMM_M * GEMM_K || rhs.len() < GEMM_K * GEMM_N || output.len() < GEMM_M * GEMM_N
+    if lhs.len() < GFX950_BATCHES * GEMM_M * GEMM_K
+        || rhs.len() < GFX950_BATCHES * GEMM_K * GEMM_N
+        || output.len() < GFX950_BATCHES * GEMM_M * GEMM_N
     {
         return Err(KernelError::InvalidArgument);
     }
     let index = thread::index_1d();
+    let batch = index.get() / 64;
     let lane = WaveLane::<Wave64>::current();
-    let Ok(lhs_matrix) = Gfx950Fp4MfmaAMatrix::row_major(lhs, 0, GEMM_M, GEMM_K, GEMM_K) else {
+    let Ok(lhs_matrix) = Gfx950Fp4MfmaAMatrix::row_major(
+        lhs,
+        batch.wrapping_mul(GEMM_M * GEMM_K),
+        GEMM_M,
+        GEMM_K,
+        GEMM_K,
+    ) else {
         return Err(KernelError::InvalidArgument);
     };
     let lhs = lhs_matrix.load_m16k128(&lane, 0, 0);
-    let Ok(rhs_matrix) = Gfx950Fp4MfmaBMatrix::row_major(rhs, 0, GEMM_K, GEMM_N, GEMM_N) else {
+    let Ok(rhs_matrix) = Gfx950Fp4MfmaBMatrix::row_major(
+        rhs,
+        batch.wrapping_mul(GEMM_K * GEMM_N),
+        GEMM_K,
+        GEMM_N,
+        GEMM_N,
+    ) else {
         return Err(KernelError::InvalidArgument);
     };
     let rhs = rhs_matrix.load_k128n16(&lane, 0, 0);
@@ -83,24 +104,39 @@ pub fn gfx950_fp4_gemm_rust(
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp8-gemm"))]
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_fp8_gemm_rust(
     lhs: &[u8],
     rhs: &[u8],
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) -> KernelResult {
-    if lhs.len() < GEMM_M * GEMM_K || rhs.len() < GEMM_K * GEMM_N || output.len() < GEMM_M * GEMM_N
+    if lhs.len() < GFX950_BATCHES * GEMM_M * GEMM_K
+        || rhs.len() < GFX950_BATCHES * GEMM_K * GEMM_N
+        || output.len() < GFX950_BATCHES * GEMM_M * GEMM_N
     {
         return Err(KernelError::InvalidArgument);
     }
     let index = thread::index_1d();
+    let batch = index.get() / 64;
     let lane = WaveLane::<Wave64>::current();
-    let Ok(lhs_matrix) = Gfx950Fp8MfmaAMatrix::row_major(lhs, 0, GEMM_M, GEMM_K, GEMM_K) else {
+    let Ok(lhs_matrix) = Gfx950Fp8MfmaAMatrix::row_major(
+        lhs,
+        batch.wrapping_mul(GEMM_M * GEMM_K),
+        GEMM_M,
+        GEMM_K,
+        GEMM_K,
+    ) else {
         return Err(KernelError::InvalidArgument);
     };
     let lhs = lhs_matrix.load_m16k128(&lane, 0, 0);
-    let Ok(rhs_matrix) = Gfx950Fp8MfmaBMatrix::row_major(rhs, 0, GEMM_K, GEMM_N, GEMM_N) else {
+    let Ok(rhs_matrix) = Gfx950Fp8MfmaBMatrix::row_major(
+        rhs,
+        batch.wrapping_mul(GEMM_K * GEMM_N),
+        GEMM_K,
+        GEMM_N,
+        GEMM_N,
+    ) else {
         return Err(KernelError::InvalidArgument);
     };
     let rhs = rhs_matrix.load_k128n16(&lane, 0, 0);
@@ -129,7 +165,7 @@ pub fn gfx950_fp8_gemm_rust(
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp4-attention"))]
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_fp4_attention_rust(
     query: &[u8],
@@ -138,28 +174,35 @@ pub fn gfx950_fp4_attention_rust(
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) {
     // Invalid launch buffers abort the full wave before collective work begins.
-    if query.len() < ATTENTION_TOKENS * GEMM_K
-        || key.len() < ATTENTION_TOKENS * GEMM_K
-        || value.len() < ATTENTION_TOKENS * VALUE_COLUMNS
-        || output.len() < ATTENTION_TOKENS * VALUE_COLUMNS
+    if query.len() < GFX950_BATCHES * ATTENTION_TOKENS * GEMM_K
+        || key.len() < GFX950_BATCHES * ATTENTION_TOKENS * GEMM_K
+        || value.len() < GFX950_BATCHES * ATTENTION_TOKENS * VALUE_COLUMNS
+        || output.len() < GFX950_BATCHES * ATTENTION_TOKENS * VALUE_COLUMNS
     {
         fe2o3_device::trap();
     }
     let index = thread::index_1d();
+    let batch = index.get() / 64;
     let lane_column = index.get() % 16;
     let lane = WaveLane::<Wave64>::current();
-    let Ok(query_matrix) =
-        Gfx950Fp4MfmaAMatrix::row_major(query, 0, ATTENTION_TOKENS, GEMM_K, GEMM_K)
-    else {
+    let Ok(query_matrix) = Gfx950Fp4MfmaAMatrix::row_major(
+        query,
+        0,
+        GFX950_BATCHES * ATTENTION_TOKENS,
+        GEMM_K,
+        GEMM_K,
+    ) else {
         fe2o3_device::trap();
     };
-    let query = query_matrix.load_m16k128(&lane, 0, 0);
-    let Ok(key) = Gfx950Fp4MfmaAMatrix::row_major(key, 0, ATTENTION_TOKENS, GEMM_K, GEMM_K)
+    let row_base = batch.wrapping_mul(ATTENTION_TOKENS);
+    let query = query_matrix.load_m16k128(&lane, row_base, 0);
+    let Ok(key) =
+        Gfx950Fp4MfmaAMatrix::row_major(key, 0, GFX950_BATCHES * ATTENTION_TOKENS, GEMM_K, GEMM_K)
     else {
         fe2o3_device::trap();
     };
     let key = Gfx950LdsTransposeTile::<Gfx950Fp4E2M1, Gfx950TransposeUninitialized>::current(&lane)
-        .stage_k_transposed(&key, 0, 0)
+        .stage_k_transposed(&key, row_base, 0)
         .publish()
         .read_mfma_fragment();
     let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane);
@@ -168,7 +211,7 @@ pub fn gfx950_fp4_attention_rust(
         .into_values();
     let Ok(value) = StridedReadView2D::from_shared_slice(
         value,
-        0,
+        batch.wrapping_mul(ATTENTION_TOKENS * VALUE_COLUMNS),
         ATTENTION_TOKENS,
         VALUE_COLUMNS,
         VALUE_COLUMNS,
@@ -293,7 +336,7 @@ pub fn gfx950_fp4_attention_rust(
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp8-attention"))]
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_fp8_attention_rust(
     query: &[u8],
@@ -302,28 +345,35 @@ pub fn gfx950_fp8_attention_rust(
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) {
     // Invalid launch buffers abort the full wave before collective work begins.
-    if query.len() < ATTENTION_TOKENS * GEMM_K
-        || key.len() < ATTENTION_TOKENS * GEMM_K
-        || value.len() < ATTENTION_TOKENS * VALUE_COLUMNS
-        || output.len() < ATTENTION_TOKENS * VALUE_COLUMNS
+    if query.len() < GFX950_BATCHES * ATTENTION_TOKENS * GEMM_K
+        || key.len() < GFX950_BATCHES * ATTENTION_TOKENS * GEMM_K
+        || value.len() < GFX950_BATCHES * ATTENTION_TOKENS * VALUE_COLUMNS
+        || output.len() < GFX950_BATCHES * ATTENTION_TOKENS * VALUE_COLUMNS
     {
         fe2o3_device::trap();
     }
     let index = thread::index_1d();
+    let batch = index.get() / 64;
     let lane_column = index.get() % 16;
     let lane = WaveLane::<Wave64>::current();
-    let Ok(query_matrix) =
-        Gfx950Fp8MfmaAMatrix::row_major(query, 0, ATTENTION_TOKENS, GEMM_K, GEMM_K)
-    else {
+    let Ok(query_matrix) = Gfx950Fp8MfmaAMatrix::row_major(
+        query,
+        0,
+        GFX950_BATCHES * ATTENTION_TOKENS,
+        GEMM_K,
+        GEMM_K,
+    ) else {
         fe2o3_device::trap();
     };
-    let query = query_matrix.load_m16k128(&lane, 0, 0);
-    let Ok(key) = Gfx950Fp8MfmaAMatrix::row_major(key, 0, ATTENTION_TOKENS, GEMM_K, GEMM_K)
+    let row_base = batch.wrapping_mul(ATTENTION_TOKENS);
+    let query = query_matrix.load_m16k128(&lane, row_base, 0);
+    let Ok(key) =
+        Gfx950Fp8MfmaAMatrix::row_major(key, 0, GFX950_BATCHES * ATTENTION_TOKENS, GEMM_K, GEMM_K)
     else {
         fe2o3_device::trap();
     };
     let key = Gfx950LdsTransposeTile::<Gfx950Fp8E4M3, Gfx950TransposeUninitialized>::current(&lane)
-        .stage_k_transposed(&key, 0, 0)
+        .stage_k_transposed(&key, row_base, 0)
         .publish()
         .read_mfma_fragment();
     let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp8E4M3>::zero(&lane);
@@ -332,7 +382,7 @@ pub fn gfx950_fp8_attention_rust(
         .into_values();
     let Ok(value) = StridedReadView2D::from_shared_slice(
         value,
-        0,
+        batch.wrapping_mul(ATTENTION_TOKENS * VALUE_COLUMNS),
         ATTENTION_TOKENS,
         VALUE_COLUMNS,
         VALUE_COLUMNS,
@@ -361,15 +411,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent0 = (bits0 >> 3_u8) & 0xf;
     let mantissa0 = bits0 & 0x7;
     let magnitude0 = if exponent0 == 0xf && mantissa0 == 0x7 {
-        let nan_source = f32::from(mantissa0 - 7_u8);
+        let nan_source = f32::from(mantissa0.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent0 == 0 {
         f32::from(mantissa0) / 512.0
     } else {
         let scale = if exponent0 < 8 {
-            f32::from(1_u8 << exponent0) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent0 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent0 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent0.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa0) / 8.0) * scale
     };
@@ -386,15 +436,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent1 = (bits1 >> 3_u8) & 0xf;
     let mantissa1 = bits1 & 0x7;
     let magnitude1 = if exponent1 == 0xf && mantissa1 == 0x7 {
-        let nan_source = f32::from(mantissa1 - 7_u8);
+        let nan_source = f32::from(mantissa1.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent1 == 0 {
         f32::from(mantissa1) / 512.0
     } else {
         let scale = if exponent1 < 8 {
-            f32::from(1_u8 << exponent1) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent1 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent1 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent1.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa1) / 8.0) * scale
     };
@@ -411,15 +461,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent2 = (bits2 >> 3_u8) & 0xf;
     let mantissa2 = bits2 & 0x7;
     let magnitude2 = if exponent2 == 0xf && mantissa2 == 0x7 {
-        let nan_source = f32::from(mantissa2 - 7_u8);
+        let nan_source = f32::from(mantissa2.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent2 == 0 {
         f32::from(mantissa2) / 512.0
     } else {
         let scale = if exponent2 < 8 {
-            f32::from(1_u8 << exponent2) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent2 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent2 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent2.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa2) / 8.0) * scale
     };
@@ -436,15 +486,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent3 = (bits3 >> 3_u8) & 0xf;
     let mantissa3 = bits3 & 0x7;
     let magnitude3 = if exponent3 == 0xf && mantissa3 == 0x7 {
-        let nan_source = f32::from(mantissa3 - 7_u8);
+        let nan_source = f32::from(mantissa3.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent3 == 0 {
         f32::from(mantissa3) / 512.0
     } else {
         let scale = if exponent3 < 8 {
-            f32::from(1_u8 << exponent3) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent3 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent3 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent3.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa3) / 8.0) * scale
     };
@@ -461,15 +511,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent4 = (bits4 >> 3_u8) & 0xf;
     let mantissa4 = bits4 & 0x7;
     let magnitude4 = if exponent4 == 0xf && mantissa4 == 0x7 {
-        let nan_source = f32::from(mantissa4 - 7_u8);
+        let nan_source = f32::from(mantissa4.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent4 == 0 {
         f32::from(mantissa4) / 512.0
     } else {
         let scale = if exponent4 < 8 {
-            f32::from(1_u8 << exponent4) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent4 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent4 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent4.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa4) / 8.0) * scale
     };
@@ -486,15 +536,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent5 = (bits5 >> 3_u8) & 0xf;
     let mantissa5 = bits5 & 0x7;
     let magnitude5 = if exponent5 == 0xf && mantissa5 == 0x7 {
-        let nan_source = f32::from(mantissa5 - 7_u8);
+        let nan_source = f32::from(mantissa5.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent5 == 0 {
         f32::from(mantissa5) / 512.0
     } else {
         let scale = if exponent5 < 8 {
-            f32::from(1_u8 << exponent5) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent5 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent5 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent5.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa5) / 8.0) * scale
     };
@@ -511,15 +561,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent6 = (bits6 >> 3_u8) & 0xf;
     let mantissa6 = bits6 & 0x7;
     let magnitude6 = if exponent6 == 0xf && mantissa6 == 0x7 {
-        let nan_source = f32::from(mantissa6 - 7_u8);
+        let nan_source = f32::from(mantissa6.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent6 == 0 {
         f32::from(mantissa6) / 512.0
     } else {
         let scale = if exponent6 < 8 {
-            f32::from(1_u8 << exponent6) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent6 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent6 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent6.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa6) / 8.0) * scale
     };
@@ -536,15 +586,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent7 = (bits7 >> 3_u8) & 0xf;
     let mantissa7 = bits7 & 0x7;
     let magnitude7 = if exponent7 == 0xf && mantissa7 == 0x7 {
-        let nan_source = f32::from(mantissa7 - 7_u8);
+        let nan_source = f32::from(mantissa7.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent7 == 0 {
         f32::from(mantissa7) / 512.0
     } else {
         let scale = if exponent7 < 8 {
-            f32::from(1_u8 << exponent7) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent7 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent7 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent7.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa7) / 8.0) * scale
     };
@@ -561,15 +611,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent8 = (bits8 >> 3_u8) & 0xf;
     let mantissa8 = bits8 & 0x7;
     let magnitude8 = if exponent8 == 0xf && mantissa8 == 0x7 {
-        let nan_source = f32::from(mantissa8 - 7_u8);
+        let nan_source = f32::from(mantissa8.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent8 == 0 {
         f32::from(mantissa8) / 512.0
     } else {
         let scale = if exponent8 < 8 {
-            f32::from(1_u8 << exponent8) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent8 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent8 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent8.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa8) / 8.0) * scale
     };
@@ -586,15 +636,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent9 = (bits9 >> 3_u8) & 0xf;
     let mantissa9 = bits9 & 0x7;
     let magnitude9 = if exponent9 == 0xf && mantissa9 == 0x7 {
-        let nan_source = f32::from(mantissa9 - 7_u8);
+        let nan_source = f32::from(mantissa9.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent9 == 0 {
         f32::from(mantissa9) / 512.0
     } else {
         let scale = if exponent9 < 8 {
-            f32::from(1_u8 << exponent9) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent9 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent9 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent9.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa9) / 8.0) * scale
     };
@@ -611,15 +661,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent10 = (bits10 >> 3_u8) & 0xf;
     let mantissa10 = bits10 & 0x7;
     let magnitude10 = if exponent10 == 0xf && mantissa10 == 0x7 {
-        let nan_source = f32::from(mantissa10 - 7_u8);
+        let nan_source = f32::from(mantissa10.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent10 == 0 {
         f32::from(mantissa10) / 512.0
     } else {
         let scale = if exponent10 < 8 {
-            f32::from(1_u8 << exponent10) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent10 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent10 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent10.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa10) / 8.0) * scale
     };
@@ -636,15 +686,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent11 = (bits11 >> 3_u8) & 0xf;
     let mantissa11 = bits11 & 0x7;
     let magnitude11 = if exponent11 == 0xf && mantissa11 == 0x7 {
-        let nan_source = f32::from(mantissa11 - 7_u8);
+        let nan_source = f32::from(mantissa11.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent11 == 0 {
         f32::from(mantissa11) / 512.0
     } else {
         let scale = if exponent11 < 8 {
-            f32::from(1_u8 << exponent11) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent11 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent11 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent11.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa11) / 8.0) * scale
     };
@@ -661,15 +711,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent12 = (bits12 >> 3_u8) & 0xf;
     let mantissa12 = bits12 & 0x7;
     let magnitude12 = if exponent12 == 0xf && mantissa12 == 0x7 {
-        let nan_source = f32::from(mantissa12 - 7_u8);
+        let nan_source = f32::from(mantissa12.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent12 == 0 {
         f32::from(mantissa12) / 512.0
     } else {
         let scale = if exponent12 < 8 {
-            f32::from(1_u8 << exponent12) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent12 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent12 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent12.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa12) / 8.0) * scale
     };
@@ -686,15 +736,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent13 = (bits13 >> 3_u8) & 0xf;
     let mantissa13 = bits13 & 0x7;
     let magnitude13 = if exponent13 == 0xf && mantissa13 == 0x7 {
-        let nan_source = f32::from(mantissa13 - 7_u8);
+        let nan_source = f32::from(mantissa13.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent13 == 0 {
         f32::from(mantissa13) / 512.0
     } else {
         let scale = if exponent13 < 8 {
-            f32::from(1_u8 << exponent13) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent13 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent13 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent13.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa13) / 8.0) * scale
     };
@@ -711,15 +761,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent14 = (bits14 >> 3_u8) & 0xf;
     let mantissa14 = bits14 & 0x7;
     let magnitude14 = if exponent14 == 0xf && mantissa14 == 0x7 {
-        let nan_source = f32::from(mantissa14 - 7_u8);
+        let nan_source = f32::from(mantissa14.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent14 == 0 {
         f32::from(mantissa14) / 512.0
     } else {
         let scale = if exponent14 < 8 {
-            f32::from(1_u8 << exponent14) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent14 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent14 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent14.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa14) / 8.0) * scale
     };
@@ -736,15 +786,15 @@ pub fn gfx950_fp8_attention_rust(
     let exponent15 = (bits15 >> 3_u8) & 0xf;
     let mantissa15 = bits15 & 0x7;
     let magnitude15 = if exponent15 == 0xf && mantissa15 == 0x7 {
-        let nan_source = f32::from(mantissa15 - 7_u8);
+        let nan_source = f32::from(mantissa15.wrapping_sub(7_u8));
         nan_source / nan_source
     } else if exponent15 == 0 {
         f32::from(mantissa15) / 512.0
     } else {
         let scale = if exponent15 < 8 {
-            f32::from(1_u8 << exponent15) / 128.0
+            f32::from(1_u8.wrapping_shl(exponent15 as u32)) / 128.0
         } else {
-            f32::from(1_u8 << (exponent15 - 7_u8))
+            f32::from(1_u8.wrapping_shl(exponent15.wrapping_sub(7_u8) as u32))
         };
         (1.0 + f32::from(mantissa15) / 8.0) * scale
     };

@@ -7,6 +7,16 @@ fn gfx950_kernels_are_safe_attributed_rust_with_typed_operations() {
         .expect("read Rust kernel source");
     assert_eq!(source.matches("#[kernel(").count(), 4);
     assert_eq!(source.matches("typed,").count(), 4);
+    assert_eq!(
+        source
+            .matches("launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])")
+            .count(),
+        4
+    );
+    assert!(source.contains("pub const GFX950_WORKGROUP: [u32; 3] = [256, 1, 1];"));
+    assert!(source.contains("pub const GFX950_GRID: [u32; 3] = [4, 1, 1];"));
+    assert!(source.contains("pub const GFX950_BATCHES: usize = 16;"));
+    assert_eq!(source.matches("let batch = index.get() / 64;").count(), 4);
     assert_eq!(source.matches("Blocked<Index1D, 16, 4>").count(), 4);
     assert_eq!(source.matches("checked_block::<16, 4>").count(), 4);
     assert_eq!(source.matches("get_block_mut").count(), 16);

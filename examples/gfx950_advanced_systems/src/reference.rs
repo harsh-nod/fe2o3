@@ -3,7 +3,7 @@
 use crate::{
     ALL_EXPERTS, CANDIDATES, DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HIDDEN,
     MUON_DIM, MUON_ELEMENTS, MUON_ITERATIONS, MUON_LEARNING_RATE, NGRAM, OUTPUT, QUERIES,
-    STATE_WIDTH, TABLE_SIZE, TOKENS, TOP_K,
+    STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
 };
 
 /// Complete CPU routing observation.
@@ -37,6 +37,15 @@ pub struct MuonReference {
     pub update: Vec<f32>,
     /// Frobenius norm of the fixed-order shard sum.
     pub norm: f32,
+}
+
+/// Concatenated updates and norms for all wave-owned Muon instances.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchedMuonReference {
+    /// Batch-major polar/Newton-Schulz update matrices.
+    pub update: Vec<f32>,
+    /// One pre-normalization Frobenius norm per batch.
+    pub norms: Vec<f32>,
 }
 
 /// Decodes an OCP E2M1 nibble.
@@ -107,6 +116,34 @@ pub fn moe_routing_reference(activations: &[u8], router_weights: &[f32]) -> MoeR
     result
 }
 
+/// Computes all independent wave-owned routing instances.
+pub fn batched_moe_routing_reference(
+    activations: &[u8],
+    router_weights: &[f32],
+) -> MoeRoutingReference {
+    assert_eq!(activations.len(), SYSTEM_BATCHES * TOKENS * HIDDEN);
+    assert_eq!(router_weights.len(), SYSTEM_BATCHES * EXPERTS * HIDDEN);
+    let mut result = MoeRoutingReference {
+        top_experts: Vec::with_capacity(SYSTEM_BATCHES * TOKENS * TOP_K),
+        top_weights: Vec::with_capacity(SYSTEM_BATCHES * TOKENS * TOP_K),
+        expert_counts: Vec::with_capacity(SYSTEM_BATCHES * EXPERTS),
+        dispatch: Vec::with_capacity(SYSTEM_BATCHES * EXPERTS * DISPATCH_CAPACITY),
+    };
+    for batch in 0..SYSTEM_BATCHES {
+        let activation_base = batch * TOKENS * HIDDEN;
+        let router_base = batch * EXPERTS * HIDDEN;
+        let batch_result = moe_routing_reference(
+            &activations[activation_base..activation_base + TOKENS * HIDDEN],
+            &router_weights[router_base..router_base + EXPERTS * HIDDEN],
+        );
+        result.top_experts.extend(batch_result.top_experts);
+        result.top_weights.extend(batch_result.top_weights);
+        result.expert_counts.extend(batch_result.expert_counts);
+        result.dispatch.extend(batch_result.dispatch);
+    }
+    result
+}
+
 /// Computes one two-expert logical rank, with an optional shared expert.
 pub fn moe_rank_reference(
     activations: &[u8],
@@ -152,6 +189,43 @@ pub fn moe_rank_reference(
     output
 }
 
+/// Computes one logical expert rank for every independent wave-owned batch.
+pub fn batched_moe_rank_reference(
+    activations: &[u8],
+    expert_weights: &[u8],
+    routing: &MoeRoutingReference,
+    first_expert: usize,
+    include_shared: bool,
+) -> Vec<f32> {
+    assert_eq!(activations.len(), SYSTEM_BATCHES * TOKENS * HIDDEN);
+    assert_eq!(
+        expert_weights.len(),
+        SYSTEM_BATCHES * ALL_EXPERTS * HIDDEN * OUTPUT
+    );
+    assert_eq!(routing.top_experts.len(), SYSTEM_BATCHES * TOKENS * TOP_K);
+    assert_eq!(routing.top_weights.len(), SYSTEM_BATCHES * TOKENS * TOP_K);
+    let mut output = Vec::with_capacity(SYSTEM_BATCHES * TOKENS * OUTPUT);
+    for batch in 0..SYSTEM_BATCHES {
+        let activation_base = batch * TOKENS * HIDDEN;
+        let weight_base = batch * ALL_EXPERTS * HIDDEN * OUTPUT;
+        let route_base = batch * TOKENS * TOP_K;
+        let batch_routing = MoeRoutingReference {
+            top_experts: routing.top_experts[route_base..route_base + TOKENS * TOP_K].to_vec(),
+            top_weights: routing.top_weights[route_base..route_base + TOKENS * TOP_K].to_vec(),
+            expert_counts: Vec::new(),
+            dispatch: Vec::new(),
+        };
+        output.extend(moe_rank_reference(
+            &activations[activation_base..activation_base + TOKENS * HIDDEN],
+            &expert_weights[weight_base..weight_base + ALL_EXPERTS * HIDDEN * OUTPUT],
+            &batch_routing,
+            first_expert,
+            include_shared,
+        ));
+    }
+    output
+}
+
 /// Applies transactional speculative acceptance.
 pub fn speculative_reference(
     draft: &[i32],
@@ -185,6 +259,49 @@ pub fn speculative_reference(
             };
             result.state[candidate * STATE_WIDTH + element] = base[element] + delta;
         }
+    }
+    result
+}
+
+/// Applies independent transactional acceptance to every wave-owned batch.
+pub fn batched_speculative_reference(
+    draft: &[i32],
+    target: &[i32],
+    scores: &[f32],
+    thresholds: &[f32],
+    base: &[f32],
+    deltas: &[f32],
+) -> SpeculativeReference {
+    assert_eq!(draft.len(), SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS);
+    assert_eq!(target.len(), SYSTEM_BATCHES * DRAFT_STEPS);
+    assert_eq!(scores.len(), SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS);
+    assert_eq!(thresholds.len(), SYSTEM_BATCHES * DRAFT_STEPS);
+    assert_eq!(base.len(), SYSTEM_BATCHES * STATE_WIDTH);
+    assert_eq!(
+        deltas.len(),
+        SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS * STATE_WIDTH
+    );
+    let mut result = SpeculativeReference {
+        accepted: Vec::with_capacity(SYSTEM_BATCHES * CANDIDATES),
+        committed: Vec::with_capacity(SYSTEM_BATCHES * CANDIDATES),
+        state: Vec::with_capacity(SYSTEM_BATCHES * CANDIDATES * STATE_WIDTH),
+    };
+    for batch in 0..SYSTEM_BATCHES {
+        let transaction_base = batch * CANDIDATES * DRAFT_STEPS;
+        let target_base = batch * DRAFT_STEPS;
+        let state_base = batch * STATE_WIDTH;
+        let delta_base = batch * CANDIDATES * DRAFT_STEPS * STATE_WIDTH;
+        let batch_result = speculative_reference(
+            &draft[transaction_base..transaction_base + CANDIDATES * DRAFT_STEPS],
+            &target[target_base..target_base + DRAFT_STEPS],
+            &scores[transaction_base..transaction_base + CANDIDATES * DRAFT_STEPS],
+            &thresholds[target_base..target_base + DRAFT_STEPS],
+            &base[state_base..state_base + STATE_WIDTH],
+            &deltas[delta_base..delta_base + CANDIDATES * DRAFT_STEPS * STATE_WIDTH],
+        );
+        result.accepted.extend(batch_result.accepted);
+        result.committed.extend(batch_result.committed);
+        result.state.extend(batch_result.state);
     }
     result
 }
@@ -226,6 +343,35 @@ pub fn ngram_reference(
         .collect()
 }
 
+/// Performs independent N-gram table lookups for every wave-owned batch.
+pub fn batched_ngram_reference(
+    queries: &[i32],
+    hashes: &[u64],
+    grams: &[i32],
+    values: &[i32],
+    priorities: &[i32],
+) -> Vec<i32> {
+    assert_eq!(queries.len(), SYSTEM_BATCHES * QUERIES * NGRAM);
+    assert_eq!(hashes.len(), SYSTEM_BATCHES * TABLE_SIZE);
+    assert_eq!(grams.len(), SYSTEM_BATCHES * TABLE_SIZE * NGRAM);
+    assert_eq!(values.len(), SYSTEM_BATCHES * TABLE_SIZE);
+    assert_eq!(priorities.len(), SYSTEM_BATCHES * TABLE_SIZE);
+    let mut output = Vec::with_capacity(SYSTEM_BATCHES * QUERIES);
+    for batch in 0..SYSTEM_BATCHES {
+        let query_base = batch * QUERIES * NGRAM;
+        let table_base = batch * TABLE_SIZE;
+        let gram_base = batch * TABLE_SIZE * NGRAM;
+        output.extend(ngram_reference(
+            &queries[query_base..query_base + QUERIES * NGRAM],
+            &hashes[table_base..table_base + TABLE_SIZE],
+            &grams[gram_base..gram_base + TABLE_SIZE * NGRAM],
+            &values[table_base..table_base + TABLE_SIZE],
+            &priorities[table_base..table_base + TABLE_SIZE],
+        ));
+    }
+    output
+}
+
 /// Computes the fixed-order two-shard Muon update.
 pub fn muon_reference(shards: &[f32]) -> MuonReference {
     assert_eq!(shards.len(), GRADIENT_SHARDS * MUON_ELEMENTS);
@@ -265,4 +411,23 @@ pub fn muon_reference(shards: &[f32]) -> MuonReference {
             .collect(),
         norm,
     }
+}
+
+/// Computes independent Muon updates for all wave-owned matrix batches.
+pub fn batched_muon_reference(shards: &[f32]) -> BatchedMuonReference {
+    assert_eq!(
+        shards.len(),
+        SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS
+    );
+    let mut result = BatchedMuonReference {
+        update: Vec::with_capacity(SYSTEM_BATCHES * MUON_ELEMENTS),
+        norms: Vec::with_capacity(SYSTEM_BATCHES),
+    };
+    for batch in 0..SYSTEM_BATCHES {
+        let base = batch * GRADIENT_SHARDS * MUON_ELEMENTS;
+        let batch_result = muon_reference(&shards[base..base + GRADIENT_SHARDS * MUON_ELEMENTS]);
+        result.update.extend(batch_result.update);
+        result.norms.push(batch_result.norm);
+    }
+    result
 }

@@ -670,6 +670,10 @@ impl sealed::TransposeState for Gfx950TransposePublished {}
 ///     let _ = (consumed, reused);
 /// }
 /// ```
+///
+/// A kernel may run one to four Wave64s in a one-dimensional workgroup. The production gfx950
+/// lowerer assigns every wave a disjoint format-sized LDS tile; `publish` remains a workgroup-wide
+/// barrier and therefore must be reached uniformly by every wave in the workgroup.
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_tile_v1"]
 pub struct Gfx950LdsTransposeTile<'wave, Format, State>
 where

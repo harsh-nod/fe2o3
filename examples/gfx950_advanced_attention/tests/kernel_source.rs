@@ -66,11 +66,9 @@ fn source_contains_the_eight_expected_typed_kernels() {
             .join(" ");
         assert!(attributes.contains("typed"));
         assert!(!attributes.contains("namespace"));
-        let kda = function.sig.ident.to_string().starts_with("gfx950_kda_");
-        let workgroup = if kda { 256 } else { 64 };
-        assert!(attributes.contains(&format!("required = [{workgroup} , 1 , 1]")));
-        assert!(attributes.contains(&format!("max = [{workgroup} , 1 , 1]")));
-        assert!(attributes.contains("max_grid = [1 , 1 , 1]"));
+        assert!(attributes.contains("required = [256 , 1 , 1]"));
+        assert!(attributes.contains("max = [256 , 1 , 1]"));
+        assert!(attributes.contains("max_grid = [4 , 1 , 1]"));
     }
 }
 
@@ -105,6 +103,8 @@ fn source_contains_the_three_standalone_ablation_kernels() {
         ])
     );
     assert!(!ABLATION_SOURCE.contains("unsafe"));
+    assert_eq!(ABLATION_SOURCE.matches("required = [256, 1, 1]").count(), 3);
+    assert_eq!(ABLATION_SOURCE.matches("max_grid = [4, 1, 1]").count(), 3);
     assert!(
         !ABLATION_SOURCE
             .to_ascii_lowercase()
@@ -159,9 +159,9 @@ fn source_is_safe_fixed_shape_rust_without_hip_escape_hatches() {
 
 #[test]
 fn package_states_the_production_source_and_evidence_boundary() {
-    assert_eq!(GFX950_ADVANCED_ATTENTION_WORKGROUP_V1, [64, 1, 1]);
+    assert_eq!(GFX950_ADVANCED_ATTENTION_WORKGROUP_V1, [256, 1, 1]);
     assert_eq!(GFX950_KDA_WORKGROUP_V2, [256, 1, 1]);
-    assert_eq!(GFX950_ADVANCED_ATTENTION_GRID_V1, [1, 1, 1]);
+    assert_eq!(GFX950_ADVANCED_ATTENTION_GRID_V1, [4, 1, 1]);
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1);
     assert!(
         LIB_SOURCE.contains("GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true")

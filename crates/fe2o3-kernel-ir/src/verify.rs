@@ -1274,16 +1274,21 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     std::slice::from_ref(&storage_ty),
                     location.clone(),
                 );
-                let exact_entry = self.function.role == FunctionRole::KernelEntry
+                let wave_private_entry = self.function.role == FunctionRole::KernelEntry
                     && self.module.kernels.iter().any(|kernel| {
                         kernel.entry == self.function.id
-                            && kernel.workgroup_size == Some(crate::WorkgroupSize::new(64, 1, 1))
+                            && kernel.workgroup_size.is_some_and(|workgroup| {
+                                workgroup.y == 1
+                                    && workgroup.z == 1
+                                    && (64..=256).contains(&workgroup.x)
+                                    && workgroup.x.is_multiple_of(64)
+                            })
                     });
-                if !exact_entry {
+                if !wave_private_entry {
                     self.emit(
                         location.clone(),
                         DiagnosticCode::InvalidGfx950LdsTranspose,
-                        "gfx950 LDS transpose storage requires a kernel entry with exact workgroup size [64, 1, 1]",
+                        "gfx950 LDS transpose storage requires a kernel entry with one-dimensional workgroup size [64, 1, 1] through [256, 1, 1] in exact Wave64 multiples",
                     );
                 }
                 if !self.gfx950_lds_transpose_currents.insert(format) {

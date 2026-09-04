@@ -13,9 +13,10 @@ use std::{
 
 use dialect_gpu::{AddressSpaceAttr, FenceOp};
 use dialect_kernel::{
-    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, IndexConstantOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
+    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr,
+    CheckedRowStripedIndex2DOp, DYNAMIC_EXTENT, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
     is_supported_allocation_effect_contract_v1,
 };
 use pliron::{
@@ -172,7 +173,7 @@ impl fmt::Display for RankedRaceFindingV1 {
                 value,
             } => write!(
                 formatter,
-                "error[FE2O3-RACE-002]: cannot prove race freedom at block {block} op {operation}; access dimension {dimension} has unresolved index {value}; checked structured index markers are currently incomplete because they carry no independently validated success/value contract; help: express the address with explicit affine index operations plus finite no-wrap and extent guards",
+                "error[FE2O3-RACE-002]: cannot prove race freedom at block {block} op {operation}; access dimension {dimension} has unresolved index {value}; the index has no supported checked structured contract with independently validated success, value, extent, and uniform-layout semantics; help: express the address with explicit affine index operations plus finite no-wrap and extent guards",
             ),
             Self::EffectInstanceLimitExceeded { actual, limit } => write!(
                 formatter,
@@ -1084,7 +1085,9 @@ fn checked_row_striped_pair_is_disjoint(
     else {
         return false;
     };
-    if first.checked_success.is_none() || second.checked_success.is_none() {
+    if !effect_has_authenticated_row_striped_contract(context, first, *first_index)
+        || !effect_has_authenticated_row_striped_contract(context, second, *second_index)
+    {
         return false;
     }
     let first_fact = sparse.fact(*first_index);
@@ -1098,12 +1101,74 @@ fn checked_row_striped_pair_is_disjoint(
     let first_component = sparse.fact(first.component()).constant_value();
     let second_component = sparse.fact(second.component()).constant_value();
     first.geometry() == second.geometry()
-        && first.runtime_layout() == second.runtime_layout()
-        && checked_runtime_layout_is_uniform(context, function, &first.runtime_layout(), sparse)
+        && checked_runtime_layouts_are_equivalent_and_uniform(
+            context,
+            function,
+            &first.runtime_layout(),
+            &second.runtime_layout(),
+            sparse,
+        )
         && first.invocation() == second.invocation()
         && first_component.is_some_and(|component| component < first.geometry()[1])
         && second_component.is_some_and(|component| component < second.geometry()[1])
         && checked_invocation_is_injective(first.invocation(), launch_extents)
+}
+
+fn effect_has_authenticated_row_striped_contract(
+    context: &Context,
+    effect: &EffectV1,
+    index: Value,
+) -> bool {
+    let (Some(success), EffectIdentityV1::View(view)) = (effect.checked_success, effect.identity)
+    else {
+        return false;
+    };
+    let Some(producer) = index.defining_op() else {
+        return false;
+    };
+    if success.defining_op() != Some(producer) {
+        return false;
+    }
+    let producer = Operation::get_op_dyn(producer, context);
+    let Some(checked) = producer.downcast_ref::<CheckedRowStripedIndex2DOp>() else {
+        return false;
+    };
+    let Some(view_definition) = view.defining_op() else {
+        return false;
+    };
+    let view_definition = Operation::get_op_dyn(view_definition, context);
+    let Some(view) = view_definition.downcast_ref::<RankedViewOp>() else {
+        return false;
+    };
+    if view
+        .view_type(context)
+        .is_none_or(|view_type| view_type.deref(context).shape() != [DYNAMIC_EXTENT])
+    {
+        return false;
+    }
+    checked.result(context) == index
+        && checked.success(context) == Some(success)
+        && checked
+            .physical_extent(context)
+            .is_some_and(|extent| view.dynamic_extent(context, 0) == Some(extent))
+}
+
+fn checked_runtime_layouts_are_equivalent_and_uniform(
+    context: &Context,
+    function: &FuncOp,
+    first: &[Value; 3],
+    second: &[Value; 3],
+    sparse: &SparseIndexAnalysisV1,
+) -> bool {
+    checked_runtime_layout_is_uniform(context, function, first, sparse)
+        && checked_runtime_layout_is_uniform(context, function, second, sparse)
+        && first.iter().zip(second).all(|(first, second)| {
+            first == second
+                || match (sparse.fact(*first).affine(), sparse.fact(*second).affine()) {
+                    (Some(first), Some(second)) => first == second,
+                    _ => false,
+                }
+        })
 }
 
 fn checked_runtime_layout_is_uniform(

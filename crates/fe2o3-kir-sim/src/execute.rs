@@ -5930,14 +5930,40 @@ fn prepare_collective_wait(
         OperationKind::Gfx950LdsTranspose(transpose) => {
             let input = match transpose.kind {
                 Gfx950LdsTransposeOperationKindV1::Current { format } => {
+                    let invocation = engine.invocation.ok_or_else(|| {
+                        engine.at(
+                            site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "gfx950 transpose workgroup invocation",
+                            ),
+                        )
+                    })?;
+                    let participants = invocation
+                        .workgroup_size
+                        .into_iter()
+                        .try_fold(1_u32, u32::checked_mul)
+                        .ok_or_else(|| {
+                            engine.at(
+                                site,
+                                SimulationExecutionErrorKindV1::InternalInvariant(
+                                    "preflighted gfx950 transpose workgroup size",
+                                ),
+                            )
+                        })?;
+                    let tile_bytes = format.lds_bytes();
                     let memory = WorkgroupMemory {
                         element: Type::Scalar(ScalarType::U8),
-                        extent: WorkgroupMemoryExtent::Static(format.lds_bytes()),
+                        extent: WorkgroupMemoryExtent::Static(tile_bytes * (participants / 64)),
                         alignment: 64,
                     };
-                    CollectiveInput::TransposeCurrent {
-                        storage: engine.workgroup_pointer(site, &memory)?,
-                    }
+                    let mut storage = engine.workgroup_pointer(site, &memory)?;
+                    let wave = invocation.local[0] / 64;
+                    let wave_base = usize::try_from(wave * tile_bytes).unwrap();
+                    let wave_end = usize::try_from((wave + 1) * tile_bytes).unwrap();
+                    storage.byte_offset = wave_base;
+                    storage.lower_bound = wave_base;
+                    storage.upper_bound = wave_end;
+                    CollectiveInput::TransposeCurrent { storage }
                 }
                 Gfx950LdsTransposeOperationKindV1::Stage {
                     storage,

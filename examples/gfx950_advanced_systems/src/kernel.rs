@@ -6,50 +6,54 @@
 use fe2o3_device::{
     Blocked, DeviceMath, DisjointSlice, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1,
     Gfx950Fp4MfmaAMatrix, Gfx950Fp8MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup, Index1D,
-    StridedReadView2D, Wave64, WaveLane, kernel, thread,
+    RowStriped2D, StridedReadView2D, Wave64, WaveLane, kernel, thread,
 };
 
 use crate::{
-    ALL_EXPERTS, CANDIDATES, DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HIDDEN,
-    MUON_ELEMENTS, MUON_LEARNING_RATE, NGRAM, OUTPUT, QUERIES, STATE_WIDTH, TABLE_SIZE, TOKENS,
-    TOP_K,
+    ALL_EXPERTS, CANDIDATES, COMBINE_BATCHES, DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS,
+    GRADIENT_SHARDS, HIDDEN, MUON_ELEMENTS, MUON_LEARNING_RATE, NGRAM, OUTPUT, QUERIES,
+    STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
 };
 
 /// Stable top-2 routing, weights, expert counts, and compact dispatch metadata.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
 #[kernel(
     typed,
-    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1]),
-    control_flow(loop_bounds(128, 32))
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1]),
+    control_flow(loop_bounds(128, 32, 32, 32))
 )]
 #[allow(clippy::too_many_arguments, unused_assignments)]
 pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     activations: &[u8],
     router_weights: &[f32],
-    mut top_experts: DisjointSlice<u32>,
-    mut top_weights: DisjointSlice<f32>,
-    mut expert_counts: DisjointSlice<u32>,
-    mut dispatch: DisjointSlice<i32>,
+    mut top_experts: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
+    mut top_weights: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
+    mut expert_counts: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
+    mut dispatch: DisjointSlice<i32, RowStriped2D<Index1D, 64, 2>>,
 ) {
-    let lane = thread::index_1d().get();
-    if activations.len() != TOKENS * HIDDEN
-        || router_weights.len() != EXPERTS * HIDDEN
-        || top_experts.len() != TOKENS * TOP_K
-        || top_weights.len() != TOKENS * TOP_K
-        || expert_counts.len() != EXPERTS
-        || dispatch.len() != EXPERTS * DISPATCH_CAPACITY
+    let global_index = thread::index_1d().get();
+    let batch = global_index / 64;
+    let wave_lane = global_index & 63;
+    if batch >= SYSTEM_BATCHES
+        || activations.len() != SYSTEM_BATCHES * TOKENS * HIDDEN
+        || router_weights.len() != SYSTEM_BATCHES * EXPERTS * HIDDEN
+        || top_experts.len() != SYSTEM_BATCHES * TOKENS * TOP_K
+        || top_weights.len() != SYSTEM_BATCHES * TOKENS * TOP_K
+        || expert_counts.len() != SYSTEM_BATCHES * EXPERTS
+        || dispatch.len() != SYSTEM_BATCHES * EXPERTS * DISPATCH_CAPACITY
     {
         return;
     }
+    let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
+    let router_base = batch.wrapping_mul(EXPERTS).wrapping_mul(HIDDEN);
     let Ok(router_weights) =
-        StridedReadView2D::from_shared_slice(router_weights, 0, EXPERTS, HIDDEN, HIDDEN)
+        StridedReadView2D::from_shared_slice(router_weights, router_base, EXPERTS, HIDDEN, HIDDEN)
     else {
         return;
     };
-    let wave_lane = lane & 63;
     let token = wave_lane & (TOKENS - 1);
     let Ok(activations) =
-        StridedReadView2D::from_shared_slice(activations, 0, TOKENS, HIDDEN, HIDDEN)
+        StridedReadView2D::from_shared_slice(activations, activation_base, TOKENS, HIDDEN, HIDDEN)
     else {
         return;
     };
@@ -143,48 +147,111 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         | (subgroup.broadcast_f32::<64>(local_pair as f32, 13) as u64) << 52
         | (subgroup.broadcast_f32::<64>(local_pair as f32, 14) as u64) << 56
         | (subgroup.broadcast_f32::<64>(local_pair as f32, 15) as u64) << 60;
-    if lane < TOKENS * TOP_K {
-        let choice = lane & (TOP_K - 1);
+    if wave_lane < TOKENS * TOP_K {
+        let choice = wave_lane & (TOP_K - 1);
         let selected = if choice == 0 { top_first } else { top_second };
         let weight = if choice == 0 {
             top_first_weight
         } else {
             top_second_weight
         };
-        if let Some(slot) = top_experts.get_mut(thread::index_1d()) {
+        let Some(top_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+            return;
+        };
+        if let Some(slot) = top_experts.get_row_striped_2d_mut(
+            &top_row,
+            0,
+            SYSTEM_BATCHES,
+            TOKENS * TOP_K,
+            TOKENS * TOP_K,
+        ) {
             *slot = selected;
         }
-        if let Some(slot) = top_weights.get_mut(thread::index_1d()) {
+        if let Some(slot) = top_weights.get_row_striped_2d_mut(
+            &top_row,
+            0,
+            SYSTEM_BATCHES,
+            TOKENS * TOP_K,
+            TOKENS * TOP_K,
+        ) {
             *slot = weight;
         }
     }
-    let dispatch_expert = (lane / DISPATCH_CAPACITY) as u32;
-    let count_expert = lane as u32;
-    let wanted = lane.wrapping_sub((dispatch_expert as usize).wrapping_mul(DISPATCH_CAPACITY));
-    let mut seen = 0_usize;
-    let mut dispatched = -1_i32;
+    let count_expert = wave_lane as u32;
     let mut count = 0_u32;
     let mut record = 0_usize;
     while record < TOKENS * TOP_K {
         let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(record) as u32) & 3) as u32;
-        let dispatch_matches = (selected == dispatch_expert) as usize;
-        let choose = ((dispatch_matches != 0) & (seen == wanted)) as i32;
-        dispatched = dispatched.wrapping_add(
-            (record as i32)
-                .wrapping_sub(dispatched)
-                .wrapping_mul(choose),
-        );
         count = count.wrapping_add((selected == count_expert) as u32);
-        seen = seen.wrapping_add(dispatch_matches);
         record += 1;
     }
-    if lane < EXPERTS {
-        if let Some(slot) = expert_counts.get_mut(thread::index_1d()) {
+    if wave_lane < EXPERTS {
+        let Some(count_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+            return;
+        };
+        if let Some(slot) =
+            expert_counts.get_row_striped_2d_mut(&count_row, 0, SYSTEM_BATCHES, EXPERTS, EXPERTS)
+        {
             *slot = count;
         }
     }
-    if let Some(slot) = dispatch.get_mut(thread::index_1d()) {
-        *slot = dispatched;
+    let Some(dispatch_row) = thread::index_1d().checked_row_striped_2d::<64, 2>() else {
+        return;
+    };
+    let dispatch_expert0 = (wave_lane / DISPATCH_CAPACITY) as u32;
+    let wanted0 =
+        wave_lane.wrapping_sub((dispatch_expert0 as usize).wrapping_mul(DISPATCH_CAPACITY));
+    let mut seen0 = 0_usize;
+    let mut dispatched0 = -1_i32;
+    let mut route0 = 0_usize;
+    while route0 < TOKENS * TOP_K {
+        let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(route0) as u32) & 3) as u32;
+        let dispatch_matches = (selected == dispatch_expert0) as usize;
+        let choose = ((dispatch_matches != 0) & (seen0 == wanted0)) as i32;
+        dispatched0 = dispatched0.wrapping_add(
+            (route0 as i32)
+                .wrapping_sub(dispatched0)
+                .wrapping_mul(choose),
+        );
+        seen0 = seen0.wrapping_add(dispatch_matches);
+        route0 += 1;
+    }
+    if let Some(slot) = dispatch.get_row_striped_2d_mut(
+        &dispatch_row,
+        0,
+        SYSTEM_BATCHES,
+        EXPERTS * DISPATCH_CAPACITY,
+        EXPERTS * DISPATCH_CAPACITY,
+    ) {
+        *slot = dispatched0;
+    }
+    let dispatch_element1 = wave_lane.wrapping_add(64);
+    let dispatch_expert1 = (dispatch_element1 / DISPATCH_CAPACITY) as u32;
+    let wanted1 =
+        dispatch_element1.wrapping_sub((dispatch_expert1 as usize).wrapping_mul(DISPATCH_CAPACITY));
+    let mut seen1 = 0_usize;
+    let mut dispatched1 = -1_i32;
+    let mut route1 = 0_usize;
+    while route1 < TOKENS * TOP_K {
+        let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(route1) as u32) & 3) as u32;
+        let dispatch_matches = (selected == dispatch_expert1) as usize;
+        let choose = ((dispatch_matches != 0) & (seen1 == wanted1)) as i32;
+        dispatched1 = dispatched1.wrapping_add(
+            (route1 as i32)
+                .wrapping_sub(dispatched1)
+                .wrapping_mul(choose),
+        );
+        seen1 = seen1.wrapping_add(dispatch_matches);
+        route1 += 1;
+    }
+    if let Some(slot) = dispatch.get_row_striped_2d_mut(
+        &dispatch_row,
+        1,
+        SYSTEM_BATCHES,
+        EXPERTS * DISPATCH_CAPACITY,
+        EXPERTS * DISPATCH_CAPACITY,
+    ) {
+        *slot = dispatched1;
     }
 }
 
@@ -194,14 +261,14 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     not(feature = "ablation-expert-serial"),
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[cfg_attr(
     feature = "ablation-expert-serial",
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[allow(clippy::too_many_arguments)]
@@ -215,25 +282,36 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     mut output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
 ) {
     let thread_index = thread::index_1d();
-    let lane_index = thread_index.get();
-    if activations.len() < TOKENS * HIDDEN
-        || expert_weights.len() < ALL_EXPERTS * HIDDEN * OUTPUT
-        || top_experts.len() < TOKENS * TOP_K
-        || top_weights.len() < TOKENS * TOP_K
-        || output.len() < TOKENS * OUTPUT
+    let global_index = thread_index.get();
+    let batch = global_index / 64;
+    let lane_index = global_index & 63;
+    if batch >= SYSTEM_BATCHES
+        || activations.len() != SYSTEM_BATCHES * TOKENS * HIDDEN
+        || expert_weights.len() != SYSTEM_BATCHES * ALL_EXPERTS * HIDDEN * OUTPUT
+        || top_experts.len() != SYSTEM_BATCHES * TOKENS * TOP_K
+        || top_weights.len() != SYSTEM_BATCHES * TOKENS * TOP_K
+        || output.len() != SYSTEM_BATCHES * TOKENS * OUTPUT
         || first_expert as usize >= EXPERTS - 1
     {
         return;
     }
     let second_expert = first_expert.wrapping_add(1);
     let lane = WaveLane::<Wave64>::current();
-    let first_offset = (first_expert as usize)
+    let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
+    let expert_batch_base = batch
+        .wrapping_mul(ALL_EXPERTS)
         .wrapping_mul(HIDDEN)
         .wrapping_mul(OUTPUT);
+    let route_batch_base = batch.wrapping_mul(TOKENS).wrapping_mul(TOP_K);
+    let first_offset = expert_batch_base.wrapping_add(
+        (first_expert as usize)
+            .wrapping_mul(HIDDEN)
+            .wrapping_mul(OUTPUT),
+    );
     #[cfg(not(feature = "ablation-expert-serial"))]
     let (first_values, second_values, shared_values) = {
         let Ok(activations_view) =
-            Gfx950Fp4MfmaAMatrix::row_major(activations, 0, TOKENS, HIDDEN, HIDDEN)
+            Gfx950Fp4MfmaAMatrix::row_major(activations, activation_base, TOKENS, HIDDEN, HIDDEN)
         else {
             return;
         };
@@ -258,7 +336,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         let second_weights = second_weights_view.load_k128n16(&lane, 0, 0);
         let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
             expert_weights,
-            (ALL_EXPERTS - 1) * HIDDEN * OUTPUT,
+            expert_batch_base.wrapping_add((ALL_EXPERTS - 1) * HIDDEN * OUTPUT),
             HIDDEN,
             OUTPUT,
             OUTPUT,
@@ -294,7 +372,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     #[cfg(feature = "ablation-expert-serial")]
     let (first_values, second_values, shared_values) = {
         let Ok(activations_view) =
-            Gfx950Fp4MfmaAMatrix::row_major(activations, 0, TOKENS, HIDDEN, HIDDEN)
+            Gfx950Fp4MfmaAMatrix::row_major(activations, activation_base, TOKENS, HIDDEN, HIDDEN)
         else {
             return;
         };
@@ -334,7 +412,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         let activations_shared = activations_view.load_m16k128(&lane, 0, 0);
         let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
             expert_weights,
-            (ALL_EXPERTS - 1) * HIDDEN * OUTPUT,
+            expert_batch_base.wrapping_add((ALL_EXPERTS - 1) * HIDDEN * OUTPUT),
             HIDDEN,
             OUTPUT,
             OUTPUT,
@@ -450,7 +528,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             } else {
                 $shared3
             };
-            let route_base = token.wrapping_mul(TOP_K);
+            let route_base = route_batch_base.wrapping_add(token.wrapping_mul(TOP_K));
             let route_second = route_base.wrapping_add(1);
             let selected0 = top_experts[route_base];
             let selected1 = top_experts[route_second];
@@ -512,30 +590,30 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     not(feature = "ablation-combine-transposed"),
     kernel(
         typed,
-        launch(required = [256, 1, 1], max = [256, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[cfg_attr(
     feature = "ablation-combine-transposed",
     kernel(
         typed,
-        launch(required = [256, 1, 1], max = [256, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 pub fn gfx950_combine_expert_ranks_v1(
     rank0: &[f32],
     rank1: &[f32],
-    mut output: DisjointSlice<f32>,
+    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 256, 1>>,
 ) {
     let index = thread::index_1d();
     let element = index.get();
-    if rank0.len() != TOKENS * OUTPUT
-        || rank1.len() != TOKENS * OUTPUT
-        || output.len() != TOKENS * OUTPUT
+    if rank0.len() != COMBINE_BATCHES * TOKENS * OUTPUT
+        || rank1.len() != COMBINE_BATCHES * TOKENS * OUTPUT
+        || output.len() != COMBINE_BATCHES * TOKENS * OUTPUT
     {
         return;
     }
-    if element >= TOKENS * OUTPUT {
+    if element >= COMBINE_BATCHES * TOKENS * OUTPUT {
         return;
     }
     #[cfg(not(feature = "ablation-combine-transposed"))]
@@ -548,7 +626,16 @@ pub fn gfx950_combine_expert_ranks_v1(
         let source_result = rank0[source_element] + rank1[source_element];
         Gfx950Subgroup::current().broadcast_f32::<64>(source_result, source_lane as u32)
     };
-    if let Some(slot) = output.get_mut(index) {
+    let Some(output_row) = index.checked_row_striped_2d::<256, 1>() else {
+        return;
+    };
+    if let Some(slot) = output.get_row_striped_2d_mut(
+        &output_row,
+        0,
+        COMBINE_BATCHES,
+        TOKENS * OUTPUT,
+        TOKENS * OUTPUT,
+    ) {
         *slot = result;
     }
 }
@@ -562,14 +649,14 @@ pub fn gfx950_combine_expert_ranks_v1(
     not(feature = "ablation-speculative-recompute-prefix"),
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[cfg_attr(
     feature = "ablation-speculative-recompute-prefix",
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[allow(clippy::too_many_arguments)]
@@ -580,41 +667,63 @@ pub fn gfx950_speculative_transaction_v1(
     thresholds: &[f32],
     base_state: &[f32],
     proposed_deltas: &[f32],
-    mut accepted_steps: DisjointSlice<u32>,
-    mut committed: DisjointSlice<u32>,
+    mut accepted_steps: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
+    mut committed: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
     mut output_state: DisjointSlice<f32>,
 ) {
-    let lane = thread::index_1d().get();
-    if draft_tokens.len() != CANDIDATES * DRAFT_STEPS
-        || target_tokens.len() != DRAFT_STEPS
-        || draft_scores.len() != CANDIDATES * DRAFT_STEPS
-        || thresholds.len() != DRAFT_STEPS
-        || base_state.len() != STATE_WIDTH
-        || proposed_deltas.len() != CANDIDATES * DRAFT_STEPS * STATE_WIDTH
-        || accepted_steps.len() != CANDIDATES
-        || committed.len() != CANDIDATES
-        || output_state.len() != CANDIDATES * STATE_WIDTH
+    let global_index = thread::index_1d().get();
+    let batch = global_index / 64;
+    let lane = global_index & 63;
+    if batch >= SYSTEM_BATCHES
+        || draft_tokens.len() != SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS
+        || target_tokens.len() != SYSTEM_BATCHES * DRAFT_STEPS
+        || draft_scores.len() != SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS
+        || thresholds.len() != SYSTEM_BATCHES * DRAFT_STEPS
+        || base_state.len() != SYSTEM_BATCHES * STATE_WIDTH
+        || proposed_deltas.len() != SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS * STATE_WIDTH
+        || accepted_steps.len() != SYSTEM_BATCHES * CANDIDATES
+        || committed.len() != SYSTEM_BATCHES * CANDIDATES
+        || output_state.len() != SYSTEM_BATCHES * CANDIDATES * STATE_WIDTH
     {
         return;
     }
-    let Ok(target_tokens) =
-        StridedReadView2D::from_shared_slice(target_tokens, 0, 1, DRAFT_STEPS, DRAFT_STEPS)
-    else {
+    let transaction_base = batch.wrapping_mul(CANDIDATES).wrapping_mul(DRAFT_STEPS);
+    let target_base = batch.wrapping_mul(DRAFT_STEPS);
+    let state_base = batch.wrapping_mul(STATE_WIDTH);
+    let delta_base = batch
+        .wrapping_mul(CANDIDATES)
+        .wrapping_mul(DRAFT_STEPS)
+        .wrapping_mul(STATE_WIDTH);
+    let Ok(target_tokens) = StridedReadView2D::from_shared_slice(
+        target_tokens,
+        target_base,
+        1,
+        DRAFT_STEPS,
+        DRAFT_STEPS,
+    ) else {
         return;
     };
     let Ok(thresholds) =
-        StridedReadView2D::from_shared_slice(thresholds, 0, 1, DRAFT_STEPS, DRAFT_STEPS)
+        StridedReadView2D::from_shared_slice(thresholds, target_base, 1, DRAFT_STEPS, DRAFT_STEPS)
     else {
         return;
     };
-    let Ok(draft_tokens) =
-        StridedReadView2D::from_shared_slice(draft_tokens, 0, CANDIDATES, DRAFT_STEPS, DRAFT_STEPS)
-    else {
+    let Ok(draft_tokens) = StridedReadView2D::from_shared_slice(
+        draft_tokens,
+        transaction_base,
+        CANDIDATES,
+        DRAFT_STEPS,
+        DRAFT_STEPS,
+    ) else {
         return;
     };
-    let Ok(draft_scores) =
-        StridedReadView2D::from_shared_slice(draft_scores, 0, CANDIDATES, DRAFT_STEPS, DRAFT_STEPS)
-    else {
+    let Ok(draft_scores) = StridedReadView2D::from_shared_slice(
+        draft_scores,
+        transaction_base,
+        CANDIDATES,
+        DRAFT_STEPS,
+        DRAFT_STEPS,
+    ) else {
         return;
     };
     #[cfg(feature = "ablation-speculative-recompute-prefix")]
@@ -664,34 +773,53 @@ pub fn gfx950_speculative_transaction_v1(
     #[cfg(feature = "ablation-speculative-recompute-prefix")]
     let accepted = accepted_prefix!(candidate);
     if lane < CANDIDATES {
-        if let Some(slot) = accepted_steps.get_mut(thread::index_1d()) {
+        let Some(status_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+            return;
+        };
+        if let Some(slot) = accepted_steps.get_row_striped_2d_mut(
+            &status_row,
+            0,
+            SYSTEM_BATCHES,
+            CANDIDATES,
+            CANDIDATES,
+        ) {
             *slot = accepted_local as u32;
         }
-        if let Some(slot) = committed.get_mut(thread::index_1d()) {
+        if let Some(slot) =
+            committed.get_row_striped_2d_mut(&status_row, 0, SYSTEM_BATCHES, CANDIDATES, CANDIDATES)
+        {
             *slot = if accepted_local == DRAFT_STEPS { 1 } else { 0 };
         }
     }
-    let mut value = base_state[state_element];
+    let mut value = base_state[state_base.wrapping_add(state_element)];
     if accepted == DRAFT_STEPS {
-        value += proposed_deltas[candidate
-            .wrapping_mul(DRAFT_STEPS)
-            .wrapping_mul(STATE_WIDTH)
-            .wrapping_add(state_element)];
-        value += proposed_deltas[candidate
-            .wrapping_mul(DRAFT_STEPS)
-            .wrapping_add(1)
-            .wrapping_mul(STATE_WIDTH)
-            .wrapping_add(state_element)];
-        value += proposed_deltas[candidate
-            .wrapping_mul(DRAFT_STEPS)
-            .wrapping_add(2)
-            .wrapping_mul(STATE_WIDTH)
-            .wrapping_add(state_element)];
-        value += proposed_deltas[candidate
-            .wrapping_mul(DRAFT_STEPS)
-            .wrapping_add(3)
-            .wrapping_mul(STATE_WIDTH)
-            .wrapping_add(state_element)];
+        value += proposed_deltas[delta_base.wrapping_add(
+            candidate
+                .wrapping_mul(DRAFT_STEPS)
+                .wrapping_mul(STATE_WIDTH)
+                .wrapping_add(state_element),
+        )];
+        value += proposed_deltas[delta_base.wrapping_add(
+            candidate
+                .wrapping_mul(DRAFT_STEPS)
+                .wrapping_add(1)
+                .wrapping_mul(STATE_WIDTH)
+                .wrapping_add(state_element),
+        )];
+        value += proposed_deltas[delta_base.wrapping_add(
+            candidate
+                .wrapping_mul(DRAFT_STEPS)
+                .wrapping_add(2)
+                .wrapping_mul(STATE_WIDTH)
+                .wrapping_add(state_element),
+        )];
+        value += proposed_deltas[delta_base.wrapping_add(
+            candidate
+                .wrapping_mul(DRAFT_STEPS)
+                .wrapping_add(3)
+                .wrapping_mul(STATE_WIDTH)
+                .wrapping_add(state_element),
+        )];
     }
     if let Some(slot) = output_state.get_mut(thread::index_1d()) {
         *slot = value;
@@ -704,14 +832,14 @@ pub fn gfx950_speculative_transaction_v1(
     not(feature = "ablation-ngram-reverse-probe"),
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[cfg_attr(
     feature = "ablation-ngram-reverse-probe",
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 pub fn gfx950_qwen_ngram_gather_v1(
@@ -720,23 +848,28 @@ pub fn gfx950_qwen_ngram_gather_v1(
     table_grams: &[i32],
     table_values: &[i32],
     priorities: &[i32],
-    mut output: DisjointSlice<i32>,
+    mut output: DisjointSlice<i32, RowStriped2D<Index1D, 64, 1>>,
 ) {
-    let index = thread::index_1d();
-    let query = index.get();
-    if queries.len() != QUERIES * NGRAM
-        || table_hashes.len() != TABLE_SIZE
-        || table_grams.len() != TABLE_SIZE * NGRAM
-        || table_values.len() != TABLE_SIZE
-        || priorities.len() != TABLE_SIZE
-        || output.len() != QUERIES
+    let global_index = thread::index_1d().get();
+    let batch = global_index / 64;
+    let query = global_index & 63;
+    if batch >= SYSTEM_BATCHES
+        || queries.len() != SYSTEM_BATCHES * QUERIES * NGRAM
+        || table_hashes.len() != SYSTEM_BATCHES * TABLE_SIZE
+        || table_grams.len() != SYSTEM_BATCHES * TABLE_SIZE * NGRAM
+        || table_values.len() != SYSTEM_BATCHES * TABLE_SIZE
+        || priorities.len() != SYSTEM_BATCHES * TABLE_SIZE
+        || output.len() != SYSTEM_BATCHES * QUERIES
     {
         return;
     }
     if query >= QUERIES {
         return;
     }
-    let base = query.wrapping_mul(NGRAM);
+    let query_batch_base = batch.wrapping_mul(QUERIES).wrapping_mul(NGRAM);
+    let table_batch_base = batch.wrapping_mul(TABLE_SIZE);
+    let gram_batch_base = batch.wrapping_mul(TABLE_SIZE).wrapping_mul(NGRAM);
+    let base = query_batch_base.wrapping_add(query.wrapping_mul(NGRAM));
     let mut hash = 1_469_598_103_934_665_603_u64;
     hash ^= queries[base] as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
@@ -750,18 +883,18 @@ pub fn gfx950_qwen_ngram_gather_v1(
     macro_rules! probe {
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
-            let equal = (table_hashes[slot] == hash)
-                & (table_grams[slot.wrapping_mul(NGRAM)] == queries[base])
-                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(1)]
-                    == queries[base.wrapping_add(1)])
-                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(2)]
-                    == queries[base.wrapping_add(2)]);
+            let table_slot = table_batch_base.wrapping_add(slot);
+            let gram_slot = gram_batch_base.wrapping_add(slot.wrapping_mul(NGRAM));
+            let equal = (table_hashes[table_slot] == hash)
+                & (table_grams[gram_slot] == queries[base])
+                & (table_grams[gram_slot.wrapping_add(1)] == queries[base.wrapping_add(1)])
+                & (table_grams[gram_slot.wrapping_add(2)] == queries[base.wrapping_add(2)]);
             if equal {
-                let priority = priorities[slot];
+                let priority = priorities[table_slot];
                 if priority > best_priority || (priority == best_priority && slot < best_slot) {
                     best_slot = slot;
                     best_priority = priority;
-                    best_value = table_values[slot];
+                    best_value = table_values[table_slot];
                 }
             }
         }};
@@ -770,16 +903,16 @@ pub fn gfx950_qwen_ngram_gather_v1(
     macro_rules! final_probe {
         ($probe:literal) => {{
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
-            let equal = (table_hashes[slot] == hash)
-                & (table_grams[slot.wrapping_mul(NGRAM)] == queries[base])
-                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(1)]
-                    == queries[base.wrapping_add(1)])
-                & (table_grams[slot.wrapping_mul(NGRAM).wrapping_add(2)]
-                    == queries[base.wrapping_add(2)]);
+            let table_slot = table_batch_base.wrapping_add(slot);
+            let gram_slot = gram_batch_base.wrapping_add(slot.wrapping_mul(NGRAM));
+            let equal = (table_hashes[table_slot] == hash)
+                & (table_grams[gram_slot] == queries[base])
+                & (table_grams[gram_slot.wrapping_add(1)] == queries[base.wrapping_add(1)])
+                & (table_grams[gram_slot.wrapping_add(2)] == queries[base.wrapping_add(2)]);
             if equal {
-                let priority = priorities[slot];
+                let priority = priorities[table_slot];
                 if priority > best_priority || (priority == best_priority && slot < best_slot) {
-                    best_value = table_values[slot];
+                    best_value = table_values[table_slot];
                 }
             }
         }};
@@ -822,7 +955,12 @@ pub fn gfx950_qwen_ngram_gather_v1(
         probe!(1);
         probe!(0);
     }
-    if let Some(slot) = output.get_mut(index) {
+    let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+        return;
+    };
+    if let Some(slot) =
+        output.get_row_striped_2d_mut(&output_row, 0, SYSTEM_BATCHES, QUERIES, QUERIES)
+    {
         *slot = best_value;
     }
 }
@@ -833,27 +971,35 @@ pub fn gfx950_qwen_ngram_gather_v1(
     not(feature = "ablation-stage-tile4"),
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[cfg_attr(
     feature = "ablation-stage-tile4",
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
-pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f32>) {
-    let index = thread::index_1d();
-    let element = index.get();
-    if input.len() != MUON_ELEMENTS || output.len() != MUON_ELEMENTS {
+pub fn gfx950_stage_gradient_shard_v1(
+    input: &[f32],
+    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
+) {
+    let global_index = thread::index_1d().get();
+    let batch = global_index / 64;
+    let element = global_index & 63;
+    if batch >= SYSTEM_BATCHES
+        || input.len() != SYSTEM_BATCHES * MUON_ELEMENTS
+        || output.len() != SYSTEM_BATCHES * MUON_ELEMENTS
+    {
         return;
     }
     if element >= MUON_ELEMENTS {
         return;
     }
+    let input_base = batch.wrapping_mul(MUON_ELEMENTS);
     #[cfg(not(feature = "ablation-stage-tile4"))]
-    let value = input[element];
+    let value = input[input_base.wrapping_add(element)];
     #[cfg(feature = "ablation-stage-tile4")]
     let value = {
         let mut tile0 = 0.0_f32;
@@ -862,10 +1008,10 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
         let mut tile3 = 0.0_f32;
         if element < 4 {
             let tile_base = element * 4;
-            tile0 = input[tile_base];
-            tile1 = input[tile_base.wrapping_add(1)];
-            tile2 = input[tile_base.wrapping_add(2)];
-            tile3 = input[tile_base + 3];
+            tile0 = input[input_base.wrapping_add(tile_base)];
+            tile1 = input[input_base.wrapping_add(tile_base).wrapping_add(1)];
+            tile2 = input[input_base.wrapping_add(tile_base).wrapping_add(2)];
+            tile3 = input[input_base.wrapping_add(tile_base).wrapping_add(3)];
         }
         let source = (element / 4) as u32;
         let subgroup = Gfx950Subgroup::current();
@@ -883,7 +1029,12 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
             value3
         }
     };
-    if let Some(slot) = output.get_mut(index) {
+    let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+        return;
+    };
+    if let Some(slot) =
+        output.get_row_striped_2d_mut(&output_row, 0, SYSTEM_BATCHES, MUON_ELEMENTS, MUON_ELEMENTS)
+    {
         *slot = value;
     }
 }
@@ -894,31 +1045,36 @@ pub fn gfx950_stage_gradient_shard_v1(input: &[f32], mut output: DisjointSlice<f
     not(feature = "ablation-muon-broadcast16"),
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 #[cfg_attr(
     feature = "ablation-muon-broadcast16",
     kernel(
         typed,
-        launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
+        launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
 pub fn gfx950_muon_update_4x4_v1(
     shards: &[f32],
-    mut output: DisjointSlice<f32>,
-    mut output_norm: DisjointSlice<f32>,
+    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
+    mut output_norm: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
 ) {
-    let lane = thread::index_1d().get();
-    if shards.len() != GRADIENT_SHARDS * MUON_ELEMENTS
-        || output.len() != MUON_ELEMENTS
-        || output_norm.len() != 1
+    let global_index = thread::index_1d().get();
+    let batch = global_index / 64;
+    let lane = global_index & 63;
+    if batch >= SYSTEM_BATCHES
+        || shards.len() != SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS
+        || output.len() != SYSTEM_BATCHES * MUON_ELEMENTS
+        || output_norm.len() != SYSTEM_BATCHES
     {
         return;
     }
     let Ok(shards) = StridedReadView2D::from_shared_slice(
         shards,
-        0,
+        batch
+            .wrapping_mul(GRADIENT_SHARDS)
+            .wrapping_mul(MUON_ELEMENTS),
         GRADIENT_SHARDS,
         MUON_ELEMENTS,
         MUON_ELEMENTS,
@@ -995,12 +1151,24 @@ pub fn gfx950_muon_update_4x4_v1(
     muon_iteration!();
     muon_iteration!();
     if lane < MUON_ELEMENTS {
-        if let Some(slot) = output.get_mut(thread::index_1d()) {
+        let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+            return;
+        };
+        if let Some(slot) = output.get_row_striped_2d_mut(
+            &output_row,
+            0,
+            SYSTEM_BATCHES,
+            MUON_ELEMENTS,
+            MUON_ELEMENTS,
+        ) {
             *slot = -MUON_LEARNING_RATE * matrix_value;
         }
     }
     if lane == 0 {
-        if let Some(slot) = output_norm.get_mut(thread::index_1d()) {
+        let Some(norm_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+            return;
+        };
+        if let Some(slot) = output_norm.get_row_striped_2d_mut(&norm_row, 0, SYSTEM_BATCHES, 1, 1) {
             *slot = norm;
         }
     }

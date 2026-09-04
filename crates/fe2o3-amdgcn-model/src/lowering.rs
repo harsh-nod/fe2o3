@@ -4100,7 +4100,10 @@ impl<'a> FunctionLowerer<'a> {
                         if let Gfx950LdsTransposeOperationKindV1::Current { format } =
                             transpose.kind =>
                     {
-                        (64, Some(u64::from(format.lds_bytes())))
+                        let waves = self
+                            .gfx950_transpose_waves_per_workgroup()
+                            .expect("transpose validation establishes wave-private LDS");
+                        (64, Some(u64::from(format.lds_bytes()) * u64::from(waves)))
                     }
                     _ => continue,
                 };
@@ -5204,7 +5207,7 @@ impl<'a> FunctionLowerer<'a> {
         }
         if self.kernel.is_none()
             || self.wave_width != Some(WaveWidth::Wave64)
-            || self.workgroup_size != Some(WorkgroupSize::new(64, 1, 1))
+            || self.gfx950_transpose_waves_per_workgroup().is_none()
             || transpose.width != WaveWidth::Wave64
             || transpose.active_lanes != 64
             || transpose.convergence.scope() != SynchronizationScope::Workgroup
@@ -5212,7 +5215,7 @@ impl<'a> FunctionLowerer<'a> {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedOperation,
-                "gfx950 LDS transpose requires one fully active Wave64 kernel entry with exact workgroup size [64, 1, 1] and workgroup-uniform convergence",
+                "gfx950 LDS transpose requires a fully active Wave64 kernel entry with one-dimensional workgroup size [64, 1, 1] through [256, 1, 1] in exact Wave64 multiples and workgroup-uniform convergence",
             ));
         }
         if let Gfx950LdsTransposeOperationKindV1::Stage { source_slice, .. } = transpose.kind {
@@ -5843,6 +5846,18 @@ impl<'a> FunctionLowerer<'a> {
             })
     }
 
+    fn gfx950_transpose_waves_per_workgroup(&self) -> Option<u32> {
+        let workgroup = self.workgroup_size?;
+        if workgroup.y != 1
+            || workgroup.z != 1
+            || !(64..=256).contains(&workgroup.x)
+            || !workgroup.x.is_multiple_of(64)
+        {
+            return None;
+        }
+        Some(workgroup.x / 64)
+    }
+
     fn has_gfx950_transpose_kind(
         &self,
         predicate: impl Fn(&Gfx950LdsTransposeOperationKindV1) -> bool,
@@ -5919,7 +5934,11 @@ impl<'a> FunctionLowerer<'a> {
                         if let Gfx950LdsTransposeOperationKindV1::Current { format } =
                             transpose.kind =>
                     {
-                        let bytes = format.lds_bytes();
+                        let tile_bytes = format.lds_bytes();
+                        let waves = self
+                            .gfx950_transpose_waves_per_workgroup()
+                            .expect("transpose validation establishes wave-private LDS");
+                        let bytes = tile_bytes * waves;
                         writeln!(
                             output,
                             "{symbol} = internal addrspace(3) global [{bytes} x i8] undef, align 64"
@@ -7081,11 +7100,31 @@ impl<'a> FunctionLowerer<'a> {
                     .results
                     .first()
                     .expect("verified transpose result");
-                let bytes = format.lds_bytes();
+                let tile_bytes = format.lds_bytes();
+                let waves = self
+                    .gfx950_transpose_waves_per_workgroup()
+                    .expect("transpose validation establishes wave-private LDS");
+                let bytes = tile_bytes * waves;
+                let result_name = value_name(result.id);
                 writeln!(
                     output,
-                    "  {} = getelementptr [{bytes} x i8], ptr addrspace(3) {}, i32 0, i32 0",
-                    value_name(result.id),
+                    "  {result_name}.transpose.local.i32 = call i32 @{}()",
+                    AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result_name}.transpose.wave.i32 = lshr i32 {result_name}.transpose.local.i32, 6"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result_name}.transpose.byte.offset.i32 = mul i32 {result_name}.transpose.wave.i32, {tile_bytes}"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result_name} = getelementptr [{bytes} x i8], ptr addrspace(3) {}, i32 0, i32 {result_name}.transpose.byte.offset.i32",
                     lds_symbol(
                         self.kernel
                             .expect("gfx950 transpose storage requires a kernel"),

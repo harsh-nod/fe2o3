@@ -58,6 +58,12 @@ const DEEPSEEK_SPARSE_TOP_K_V1: usize = 4;
 const MIXING_STREAMS_V1: usize = 4;
 #[cfg(feature = "hardware-test-hooks")]
 const SINKHORN_ITERATIONS_V1: usize = 3;
+#[cfg(feature = "hardware-test-hooks")]
+const MULTIGRID_WORKGROUPS_V1: usize = 4;
+#[cfg(feature = "hardware-test-hooks")]
+const MULTIGRID_SUBGROUP_BATCHES_V1: usize = 64;
+#[cfg(feature = "hardware-test-hooks")]
+const MULTIGRID_WAVE_BATCHES_V1: usize = 16;
 
 #[cfg(feature = "hardware-test-hooks")]
 const TOKENS: usize = 16;
@@ -95,6 +101,10 @@ const GRADIENT_SHARDS: usize = 2;
 const MUON_ITERATIONS: usize = 5;
 #[cfg(feature = "hardware-test-hooks")]
 const MUON_LEARNING_RATE: f32 = 0.05;
+#[cfg(feature = "hardware-test-hooks")]
+const SYSTEM_BATCHES: usize = 16;
+#[cfg(feature = "hardware-test-hooks")]
+const COMBINE_BATCHES: usize = 4;
 
 #[cfg(feature = "hardware-test-hooks")]
 #[path = "../../../examples/gfx950_advanced_attention/src/reference.rs"]
@@ -361,6 +371,17 @@ struct AdvancedCase {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+impl AdvancedCase {
+    fn grid_x(self) -> u32 {
+        if matches!(self.args.first(), Some(AbiArg::Pointer)) {
+            1
+        } else {
+            4
+        }
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 const KDA_DECODE: AdvancedCase = AdvancedCase {
     label: "gfx950 Kimi Delta Attention decode",
     export: "gfx950_kda_decode",
@@ -383,8 +404,8 @@ const SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
     label: "gfx950 content sparse attention",
     export: "gfx950_content_sparse_attention",
     descriptor: "gfx950_content_sparse_attention.kd",
-    workgroup_x: 64,
-    static_lds_bytes: 2048,
+    workgroup_x: 256,
+    static_lds_bytes: 8192,
     args: SIX_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
@@ -392,7 +413,7 @@ const DEEPSEEK_SPARSE_ATTENTION: AdvancedCase = AdvancedCase {
     label: "gfx950 DeepSeek sparse attention",
     export: "gfx950_deepseek_sparse_attention",
     descriptor: "gfx950_deepseek_sparse_attention.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: DEEPSEEK_SPARSE_ARGS,
 };
@@ -401,8 +422,8 @@ const HYBRID_ATTENTION: AdvancedCase = AdvancedCase {
     label: "gfx950 compressed hybrid attention",
     export: "gfx950_compressed_hybrid_attention",
     descriptor: "gfx950_compressed_hybrid_attention.kd",
-    workgroup_x: 64,
-    static_lds_bytes: 2048,
+    workgroup_x: 256,
+    static_lds_bytes: 8192,
     args: FIVE_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
@@ -410,7 +431,7 @@ const ATTNRES: AdvancedCase = AdvancedCase {
     label: "gfx950 AttnRes aggregation",
     export: "gfx950_attnres_aggregate",
     descriptor: "gfx950_attnres_aggregate.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: THREE_SLICES,
 };
@@ -419,7 +440,7 @@ const FOUR_BRANCH: AdvancedCase = AdvancedCase {
     label: "gfx950 four-branch residual",
     export: "gfx950_four_branch_residual",
     descriptor: "gfx950_four_branch_residual.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: FOUR_SLICES,
 };
@@ -428,26 +449,26 @@ const MHC: AdvancedCase = AdvancedCase {
     label: "gfx950 mHC Sinkhorn mix",
     export: "gfx950_mhc_sinkhorn_mix",
     descriptor: "gfx950_mhc_sinkhorn_mix.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: THREE_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const GPT_OSS: AdvancedCase = AdvancedCase {
-    label: "gfx950 GPT-OSS-120B batch-1 layer-tile megakernel",
+    label: "gfx950 GPT-OSS-120B 16-item layer-tile megakernel",
     export: "gfx950_gpt_oss_120b_decode_megakernel_v1",
     descriptor: "gfx950_gpt_oss_120b_decode_megakernel_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: THIRTEEN_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
 const GPT_OSS_PIPELINED: AdvancedCase = AdvancedCase {
-    label: "gfx950 GPT-OSS-120B batch-1 pipelined-attention megakernel",
+    label: "gfx950 GPT-OSS-120B 16-item pipelined-attention megakernel",
     export: "gfx950_gpt_oss_120b_decode_megakernel_v1",
     descriptor: "gfx950_gpt_oss_120b_decode_megakernel_v1.kd",
-    workgroup_x: 64,
-    static_lds_bytes: 2048,
+    workgroup_x: 256,
+    static_lds_bytes: 8192,
     args: THIRTEEN_SLICES,
 };
 #[cfg(feature = "hardware-test-hooks")]
@@ -455,7 +476,7 @@ const GPT_OSS_ROUTER_COMPONENT: AdvancedCase = AdvancedCase {
     label: "gfx950 GPT-OSS-120B materialized Rust router",
     export: "gfx950_gpt_oss_120b_router_v1",
     descriptor: "gfx950_gpt_oss_120b_router_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: THREE_SLICES,
 };
@@ -464,7 +485,7 @@ const GPT_OSS_ATTENTION_COMPONENT: AdvancedCase = AdvancedCase {
     label: "gfx950 GPT-OSS-120B materialized Rust attention",
     export: "gfx950_gpt_oss_120b_attention_v1",
     descriptor: "gfx950_gpt_oss_120b_attention_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: FIVE_SLICES,
 };
@@ -473,7 +494,7 @@ const GPT_OSS_EXPERT_COMPONENT: AdvancedCase = AdvancedCase {
     label: "gfx950 GPT-OSS-120B materialized Rust expert",
     export: "gfx950_gpt_oss_120b_expert_v1",
     descriptor: "gfx950_gpt_oss_120b_expert_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: SIX_SLICES,
 };
@@ -518,7 +539,7 @@ const MOE_EXPERT: AdvancedCase = AdvancedCase {
     label: "gfx950 MoE expert rank",
     export: "gfx950_moe_expert_rank_fp4_fp8_v1",
     descriptor: "gfx950_moe_expert_rank_fp4_fp8_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: EXPERT_RANK_ARGS,
 };
@@ -536,7 +557,7 @@ const SPECULATIVE: AdvancedCase = AdvancedCase {
     label: "gfx950 speculative transaction",
     export: "gfx950_speculative_transaction_v1",
     descriptor: "gfx950_speculative_transaction_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: NINE_SLICES,
 };
@@ -545,7 +566,7 @@ const NGRAM_GATHER: AdvancedCase = AdvancedCase {
     label: "gfx950 Qwen N-gram gather",
     export: "gfx950_qwen_ngram_gather_v1",
     descriptor: "gfx950_qwen_ngram_gather_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: SIX_SLICES,
 };
@@ -554,7 +575,7 @@ const STAGE_SHARD: AdvancedCase = AdvancedCase {
     label: "gfx950 gradient shard stage",
     export: "gfx950_stage_gradient_shard_v1",
     descriptor: "gfx950_stage_gradient_shard_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: TWO_SLICES,
 };
@@ -563,7 +584,7 @@ const MUON: AdvancedCase = AdvancedCase {
     label: "gfx950 Muon update",
     export: "gfx950_muon_update_4x4_v1",
     descriptor: "gfx950_muon_update_4x4_v1.kd",
-    workgroup_x: 64,
+    workgroup_x: 256,
     static_lds_bytes: 0,
     args: THREE_SLICES,
 };
@@ -712,7 +733,7 @@ fn inspect_profile(case: AdvancedCase, bytes: &[u8]) -> Result<(), BoxError> {
             && kernel.wavefront_size() == 64
             && kernel.group_segment_fixed_size() == case.static_lds_bytes
             && !kernel.uses_dynamic_stack(),
-        format!("{} has a substituted WG64/LDS profile", case.label),
+        format!("{} has a substituted workgroup/LDS profile", case.label),
     )?;
     let arguments = kernel
         .explicit_arguments()
@@ -917,8 +938,19 @@ fn deterministic_fp8(count: usize, salt: usize) -> Vec<u8> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn repeated_attention_query() -> (Vec<u8>, Vec<u8>) {
-    let logical = deterministic_fp8(HEAD_DIMENSION_V1, 1);
+fn nonuniform_fp8(count: usize, salt: usize, batch: usize) -> Vec<u8> {
+    const CODES: [u8; 5] = [0xb8, 0xb0, 0x00, 0x30, 0x38];
+    let mut values = deterministic_fp8(count, salt + batch);
+    if count > 1 {
+        values[0] = CODES[batch % CODES.len()];
+        values[1] = CODES[(batch / CODES.len()) % CODES.len()];
+    }
+    values
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn repeated_attention_query(batch: usize) -> (Vec<u8>, Vec<u8>) {
+    let logical = nonuniform_fp8(HEAD_DIMENSION_V1, 1, batch);
     let mut physical = Vec::with_capacity(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1);
     for _ in 0..ATTENTION_TOKENS_V1 {
         physical.extend_from_slice(&logical);
@@ -930,25 +962,54 @@ fn repeated_attention_query() -> (Vec<u8>, Vec<u8>) {
 fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     let plan = match case.export {
         "gfx950_kda_decode" => {
-            let query = normalized_kda_rows(1, 1);
-            let key = normalized_kda_rows(1, 2);
-            let value = deterministic_floats(KDA_VALUE_DIMENSION_V1, 3, 0.5);
-            let alpha = deterministic_floats(KDA_KEY_DIMENSION_V1, 4, 0.2)
+            let mut query = Vec::new();
+            let mut key = Vec::new();
+            let mut value = Vec::new();
+            let mut alpha = Vec::new();
+            let mut beta = Vec::new();
+            let mut physical_initial_state = Vec::new();
+            let mut expected_state = Vec::new();
+            let mut expected_output = Vec::new();
+            for batch in 0..MULTIGRID_WORKGROUPS_V1 {
+                let batch_query = normalized_kda_rows(1, 1 + batch * 3);
+                let batch_key = normalized_kda_rows(1, 2 + batch * 3);
+                let batch_value = deterministic_floats(
+                    KDA_VALUE_DIMENSION_V1,
+                    3 + batch,
+                    0.45 + batch as f32 * 0.03,
+                );
+                let batch_alpha = deterministic_floats(
+                    KDA_KEY_DIMENSION_V1,
+                    4 + batch,
+                    0.16 + batch as f32 * 0.01,
+                )
                 .into_iter()
                 .map(|entry| 0.75 + entry)
                 .collect::<Vec<_>>();
-            let beta = vec![0.6];
-            let initial_state = deterministic_floats(KDA_STATE_ELEMENTS_V1, 5, 0.25);
-            let physical_initial_state = kda_state_value_major(&initial_state);
-            let expected = attention_reference::kda_decode_reference_v2(
-                &query,
-                &key,
-                &value,
-                &alpha,
-                &beta,
-                &initial_state,
-            )
-            .map_err(|error| format!("KDA decode reference failed: {error:?}"))?;
+                let batch_beta = vec![0.45 + batch as f32 * 0.08];
+                let batch_state = deterministic_floats(
+                    KDA_STATE_ELEMENTS_V1,
+                    5 + batch,
+                    0.20 + batch as f32 * 0.02,
+                );
+                let expected = attention_reference::kda_decode_reference_v2(
+                    &batch_query,
+                    &batch_key,
+                    &batch_value,
+                    &batch_alpha,
+                    &batch_beta,
+                    &batch_state,
+                )
+                .map_err(|error| format!("KDA decode reference failed: {error:?}"))?;
+                query.extend(batch_query);
+                key.extend(batch_key);
+                value.extend(batch_value);
+                alpha.extend(batch_alpha);
+                beta.extend(batch_beta);
+                physical_initial_state.extend(kda_state_value_major(&batch_state));
+                expected_state.extend(kda_state_value_major(&expected.state));
+                expected_output.extend(kda_replicated_decode_output(&expected.output));
+            }
             let lengths = [
                 query.len(),
                 key.len(),
@@ -956,8 +1017,8 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 alpha.len(),
                 beta.len(),
                 physical_initial_state.len(),
-                KDA_STATE_ELEMENTS_V1,
-                KDA_STATE_ELEMENTS_V1,
+                expected_state.len(),
+                expected_output.len(),
             ];
             LaunchPlan {
                 label: case.label.into(),
@@ -968,16 +1029,8 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                     input("alpha", &alpha),
                     input("beta", &beta),
                     input("initial_state_value_major", &physical_initial_state),
-                    f32_output(
-                        "final_state_value_major",
-                        kda_state_value_major(&expected.state),
-                        2.0e-5,
-                    ),
-                    f32_output(
-                        "output_replicated",
-                        kda_replicated_decode_output(&expected.output),
-                        2.0e-5,
-                    ),
+                    f32_output("final_state_value_major", expected_state, 2.0e-5),
+                    f32_output("output_replicated", expected_output, 2.0e-5),
                 ],
                 args: (0..8)
                     .map(|buffer| PlannedArg::Slice {
@@ -988,27 +1041,58 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }
         }
         "gfx950_kda_chunkwise_prefill" => {
-            let query = normalized_kda_rows(PREFILL_TOKENS_V1, 6);
-            let key = normalized_kda_rows(PREFILL_TOKENS_V1, 7);
-            let value = deterministic_floats(PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1, 8, 0.5);
-            let alpha = deterministic_floats(PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1, 9, 0.2)
+            let mut query = Vec::new();
+            let mut key = Vec::new();
+            let mut value = Vec::new();
+            let mut alpha = Vec::new();
+            let mut beta = Vec::new();
+            let mut physical_initial_state = Vec::new();
+            let mut expected_state = Vec::new();
+            let mut expected_chunk0 = Vec::new();
+            let mut expected_chunk1 = Vec::new();
+            for batch in 0..MULTIGRID_WORKGROUPS_V1 {
+                let batch_query = normalized_kda_rows(PREFILL_TOKENS_V1, 6 + batch * 3);
+                let batch_key = normalized_kda_rows(PREFILL_TOKENS_V1, 7 + batch * 3);
+                let batch_value = deterministic_floats(
+                    PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1,
+                    8 + batch,
+                    0.42 + batch as f32 * 0.025,
+                );
+                let batch_alpha = deterministic_floats(
+                    PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1,
+                    9 + batch,
+                    0.15 + batch as f32 * 0.01,
+                )
                 .into_iter()
                 .map(|entry| 0.75 + entry)
                 .collect::<Vec<_>>();
-            let beta = (0..PREFILL_TOKENS_V1)
-                .map(|token| 0.35 + 0.05 * token as f32)
-                .collect::<Vec<_>>();
-            let initial_state = deterministic_floats(KDA_STATE_ELEMENTS_V1, 10, 0.25);
-            let physical_initial_state = kda_state_value_major(&initial_state);
-            let expected = attention_reference::kda_prefill_reference_v2(
-                &query,
-                &key,
-                &value,
-                &alpha,
-                &beta,
-                &initial_state,
-            )
-            .map_err(|error| format!("KDA prefill reference failed: {error:?}"))?;
+                let batch_beta = (0..PREFILL_TOKENS_V1)
+                    .map(|token| 0.25 + batch as f32 * 0.03 + 0.04 * token as f32)
+                    .collect::<Vec<_>>();
+                let batch_state = deterministic_floats(
+                    KDA_STATE_ELEMENTS_V1,
+                    10 + batch,
+                    0.18 + batch as f32 * 0.02,
+                );
+                let expected = attention_reference::kda_prefill_reference_v2(
+                    &batch_query,
+                    &batch_key,
+                    &batch_value,
+                    &batch_alpha,
+                    &batch_beta,
+                    &batch_state,
+                )
+                .map_err(|error| format!("KDA prefill reference failed: {error:?}"))?;
+                query.extend(batch_query);
+                key.extend(batch_key);
+                value.extend(batch_value);
+                alpha.extend(batch_alpha);
+                beta.extend(batch_beta);
+                physical_initial_state.extend(kda_state_value_major(&batch_state));
+                expected_state.extend(kda_state_value_major(&expected.final_state));
+                expected_chunk0.extend(kda_replicated_chunk_output(&expected.output, 0));
+                expected_chunk1.extend(kda_replicated_chunk_output(&expected.output, 1));
+            }
             let lengths = [
                 query.len(),
                 key.len(),
@@ -1016,9 +1100,9 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 alpha.len(),
                 beta.len(),
                 physical_initial_state.len(),
-                KDA_STATE_ELEMENTS_V1,
-                KDA_STATE_ELEMENTS_V1,
-                KDA_STATE_ELEMENTS_V1,
+                expected_state.len(),
+                expected_chunk0.len(),
+                expected_chunk1.len(),
             ];
             LaunchPlan {
                 label: case.label.into(),
@@ -1029,21 +1113,9 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                     input("alpha", &alpha),
                     input("beta", &beta),
                     input("initial_state_value_major", &physical_initial_state),
-                    f32_output(
-                        "final_state_value_major",
-                        kda_state_value_major(&expected.final_state),
-                        2.0e-4,
-                    ),
-                    f32_output(
-                        "output_chunk0_replicated",
-                        kda_replicated_chunk_output(&expected.output, 0),
-                        2.0e-4,
-                    ),
-                    f32_output(
-                        "output_chunk1_replicated",
-                        kda_replicated_chunk_output(&expected.output, 1),
-                        2.0e-4,
-                    ),
+                    f32_output("final_state_value_major", expected_state, 2.0e-4),
+                    f32_output("output_chunk0_replicated", expected_chunk0, 2.0e-4),
+                    f32_output("output_chunk1_replicated", expected_chunk1, 2.0e-4),
                 ],
                 args: (0..9)
                     .map(|buffer| PlannedArg::Slice {
@@ -1054,35 +1126,56 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }
         }
         "gfx950_deepseek_sparse_attention" => {
-            let query = deterministic_floats(HEAD_DIMENSION_V1, 1, 0.5);
-            let key = deterministic_floats(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2, 0.5);
-            let value = deterministic_floats(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3, 0.5);
             let indices = vec![13_u32, u32::MAX, 2, 9];
             require(
                 indices.len() == DEEPSEEK_SPARSE_TOP_K_V1,
                 "DeepSeek sparse fixture must provide exactly top-k indices",
             )?;
-            let expected = attention_reference::deepseek_sparse_attention_reference_v1(
-                &query, &key, &value, &indices,
-            )
-            .map_err(|error| format!("DeepSeek sparse reference failed: {error:?}"))?;
+            let mut query = Vec::new();
+            let mut key = Vec::new();
+            let mut value = Vec::new();
+            let mut expected_output = Vec::new();
+            let mut expected_maximum = Vec::new();
+            let mut expected_normalizer = Vec::new();
+            for batch in 0..MULTIGRID_SUBGROUP_BATCHES_V1 {
+                let batch_query =
+                    deterministic_floats(HEAD_DIMENSION_V1, 1 + batch, 0.30 + batch as f32 * 0.002);
+                let batch_key = deterministic_floats(
+                    ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1,
+                    2 + batch,
+                    0.34 + batch as f32 * 0.002,
+                );
+                let batch_value = deterministic_floats(
+                    ATTENTION_TOKENS_V1 * CHANNELS_V1,
+                    3 + batch,
+                    0.38 + batch as f32 * 0.002,
+                );
+                let expected = attention_reference::deepseek_sparse_attention_reference_v1(
+                    &batch_query,
+                    &batch_key,
+                    &batch_value,
+                    &indices,
+                )
+                .map_err(|error| format!("DeepSeek sparse reference failed: {error:?}"))?;
+                query.extend(batch_query);
+                key.extend(batch_key);
+                value.extend(batch_value);
+                expected_output.extend(expected.output);
+                expected_maximum.extend(std::iter::repeat_n(expected.softmax_maximum, CHANNELS_V1));
+                expected_normalizer.extend(std::iter::repeat_n(
+                    expected.softmax_normalizer,
+                    CHANNELS_V1,
+                ));
+            }
             LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
                     input("q", &query),
                     input("k", &key),
                     input("v", &value),
-                    f32_output("output", expected.output, 5.0e-3),
-                    f32_output(
-                        "softmax_maximum_output",
-                        vec![expected.softmax_maximum],
-                        5.0e-3,
-                    ),
-                    f32_output(
-                        "softmax_normalizer_output",
-                        vec![expected.softmax_normalizer],
-                        5.0e-3,
-                    ),
+                    f32_output("output", expected_output, 5.0e-3),
+                    f32_output("softmax_maximum_output", expected_maximum, 5.0e-3),
+                    f32_output("softmax_normalizer_output", expected_normalizer, 5.0e-3),
                 ],
                 args: vec![
                     PlannedArg::Slice {
@@ -1103,32 +1196,54 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                     PlannedArg::U32(indices[3]),
                     PlannedArg::Slice {
                         buffer: 3,
-                        elements: CHANNELS_V1,
+                        elements: MULTIGRID_SUBGROUP_BATCHES_V1 * CHANNELS_V1,
                     },
                     PlannedArg::Slice {
                         buffer: 4,
-                        elements: 1,
+                        elements: MULTIGRID_SUBGROUP_BATCHES_V1 * CHANNELS_V1,
                     },
                     PlannedArg::Slice {
                         buffer: 5,
-                        elements: 1,
+                        elements: MULTIGRID_SUBGROUP_BATCHES_V1 * CHANNELS_V1,
                     },
                 ],
             }
         }
         "gfx950_content_sparse_attention" | "gfx950_compressed_hybrid_attention" => {
-            let (logical_q, physical_q) = repeated_attention_query();
-            let key = deterministic_fp8(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2);
-            let value = deterministic_fp8(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3);
             if case == SPARSE_ATTENTION {
-                let scores = vec![
-                    0.10, 0.82, -0.20, 0.35, 0.61, 0.55, 0.14, 0.92, 0.73, -0.10, 0.48, 0.31, 0.41,
-                    0.67, 0.22, 0.05,
-                ];
-                let expected = attention_reference::content_sparse_attention_reference_v1(
-                    &logical_q, &key, &value, &scores,
-                )
-                .map_err(|error| format!("sparse reference failed: {error:?}"))?;
+                let mut physical_q = Vec::new();
+                let mut key = Vec::new();
+                let mut value = Vec::new();
+                let mut scores = Vec::new();
+                let mut expected_output = Vec::new();
+                let mut expected_selected = Vec::new();
+                for batch in 0..MULTIGRID_WAVE_BATCHES_V1 {
+                    let (logical_batch_q, physical_batch_q) = repeated_attention_query(batch);
+                    let batch_key =
+                        nonuniform_fp8(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2, batch);
+                    let batch_value = nonuniform_fp8(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3, batch);
+                    let mut batch_scores = deterministic_floats(
+                        ATTENTION_TOKENS_V1,
+                        4 + batch,
+                        0.45 + batch as f32 * 0.01,
+                    );
+                    for (token, score) in batch_scores.iter_mut().enumerate() {
+                        *score += ((token * 7 + batch * 3) % 17) as f32 * 0.01;
+                    }
+                    let expected = attention_reference::content_sparse_attention_reference_v1(
+                        &logical_batch_q,
+                        &batch_key,
+                        &batch_value,
+                        &batch_scores,
+                    )
+                    .map_err(|error| format!("sparse reference failed: {error:?}"))?;
+                    physical_q.extend(physical_batch_q);
+                    key.extend(batch_key);
+                    value.extend(batch_value);
+                    scores.extend(batch_scores);
+                    expected_output.extend(expected.output);
+                    expected_selected.extend(expected.selected);
+                }
                 LaunchPlan {
                     label: case.label.into(),
                     buffers: vec![
@@ -1136,11 +1251,8 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                         input("k", &key),
                         input("v", &value),
                         input("content_scores", &scores),
-                        f32_output("output", expected.output, 5.0e-3),
-                        output(
-                            "selected_output",
-                            ExpectedOutput::U32(expected.selected.to_vec()),
-                        ),
+                        f32_output("output", expected_output, 5.0e-3),
+                        output("selected_output", ExpectedOutput::U32(expected_selected)),
                     ],
                     args: (0..6)
                         .map(|buffer| PlannedArg::Slice {
@@ -1150,24 +1262,47 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                                 key.len(),
                                 value.len(),
                                 scores.len(),
-                                CHANNELS_V1,
-                                SELECTED_TOKENS_V1,
+                                MULTIGRID_WAVE_BATCHES_V1 * CHANNELS_V1,
+                                MULTIGRID_WAVE_BATCHES_V1 * SELECTED_TOKENS_V1,
                             ][buffer],
                         })
                         .collect(),
                 }
             } else {
-                let bias = deterministic_floats(ATTENTION_TOKENS_V1, 7, 0.4);
-                let expected = attention_reference::compressed_hybrid_attention_reference_v1(
-                    &logical_q, &key, &value, &bias,
-                )
-                .map_err(|error| format!("hybrid reference failed: {error:?}"))?;
+                let mut physical_q = Vec::new();
+                let mut key = Vec::new();
+                let mut value = Vec::new();
+                let mut bias = Vec::new();
+                let mut expected_output = Vec::new();
+                for batch in 0..MULTIGRID_WAVE_BATCHES_V1 {
+                    let (logical_batch_q, physical_batch_q) = repeated_attention_query(batch);
+                    let batch_key =
+                        nonuniform_fp8(ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1, 2, batch);
+                    let batch_value = nonuniform_fp8(ATTENTION_TOKENS_V1 * CHANNELS_V1, 3, batch);
+                    let batch_bias = deterministic_floats(
+                        ATTENTION_TOKENS_V1,
+                        7 + batch,
+                        0.25 + batch as f32 * 0.01,
+                    );
+                    let expected = attention_reference::compressed_hybrid_attention_reference_v1(
+                        &logical_batch_q,
+                        &batch_key,
+                        &batch_value,
+                        &batch_bias,
+                    )
+                    .map_err(|error| format!("hybrid reference failed: {error:?}"))?;
+                    physical_q.extend(physical_batch_q);
+                    key.extend(batch_key);
+                    value.extend(batch_value);
+                    bias.extend(batch_bias);
+                    expected_output.extend(expected);
+                }
                 let lengths = [
                     physical_q.len(),
                     key.len(),
                     value.len(),
                     bias.len(),
-                    CHANNELS_V1,
+                    MULTIGRID_WAVE_BATCHES_V1 * CHANNELS_V1,
                 ];
                 LaunchPlan {
                     label: case.label.into(),
@@ -1176,7 +1311,7 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                         input("k", &key),
                         input("v", &value),
                         input("token_bias", &bias),
-                        f32_output("output", expected, 5.0e-3),
+                        f32_output("output", expected_output, 5.0e-3),
                     ],
                     args: (0..5)
                         .map(|buffer| PlannedArg::Slice {
@@ -1188,10 +1323,30 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }
         }
         "gfx950_attnres_aggregate" => {
-            let values = deterministic_floats(MIXING_STREAMS_V1 * CHANNELS_V1, 8, 0.7);
-            let logits = deterministic_floats(MIXING_STREAMS_V1 * CHANNELS_V1, 9, 0.9);
-            let expected = attention_reference::attnres_aggregate_reference_v1(&values, &logits)
-                .map_err(|error| format!("AttnRes reference failed: {error:?}"))?;
+            let mut values = Vec::new();
+            let mut logits = Vec::new();
+            let mut expected = Vec::new();
+            for batch in 0..MULTIGRID_SUBGROUP_BATCHES_V1 {
+                let batch_values = deterministic_floats(
+                    MIXING_STREAMS_V1 * CHANNELS_V1,
+                    8 + batch,
+                    0.45 + batch as f32 * 0.003,
+                );
+                let batch_logits = deterministic_floats(
+                    MIXING_STREAMS_V1 * CHANNELS_V1,
+                    9 + batch,
+                    0.55 + batch as f32 * 0.004,
+                );
+                expected.extend(
+                    attention_reference::attnres_aggregate_reference_v1(
+                        &batch_values,
+                        &batch_logits,
+                    )
+                    .map_err(|error| format!("AttnRes reference failed: {error:?}"))?,
+                );
+                values.extend(batch_values);
+                logits.extend(batch_logits);
+            }
             LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
@@ -1202,20 +1357,51 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 args: (0..3)
                     .map(|buffer| PlannedArg::Slice {
                         buffer,
-                        elements: [values.len(), logits.len(), CHANNELS_V1][buffer],
+                        elements: [
+                            values.len(),
+                            logits.len(),
+                            MULTIGRID_SUBGROUP_BATCHES_V1 * CHANNELS_V1,
+                        ][buffer],
                     })
                     .collect(),
             }
         }
         "gfx950_four_branch_residual" => {
-            let residual = deterministic_floats(CHANNELS_V1, 10, 0.4);
-            let branches = deterministic_floats(MIXING_STREAMS_V1 * CHANNELS_V1, 11, 0.6);
-            let gates = deterministic_floats(MIXING_STREAMS_V1 * CHANNELS_V1, 12, 0.8);
-            let expected = attention_reference::four_branch_residual_reference_v1(
-                &residual, &branches, &gates,
-            )
-            .map_err(|error| format!("residual reference failed: {error:?}"))?;
-            let lengths = [residual.len(), branches.len(), gates.len(), CHANNELS_V1];
+            let mut residual = Vec::new();
+            let mut branches = Vec::new();
+            let mut gates = Vec::new();
+            let mut expected = Vec::new();
+            for batch in 0..MULTIGRID_SUBGROUP_BATCHES_V1 {
+                let batch_residual =
+                    deterministic_floats(CHANNELS_V1, 10 + batch, 0.30 + batch as f32 * 0.002);
+                let batch_branches = deterministic_floats(
+                    MIXING_STREAMS_V1 * CHANNELS_V1,
+                    11 + batch,
+                    0.40 + batch as f32 * 0.003,
+                );
+                let batch_gates = deterministic_floats(
+                    MIXING_STREAMS_V1 * CHANNELS_V1,
+                    12 + batch,
+                    0.50 + batch as f32 * 0.004,
+                );
+                expected.extend(
+                    attention_reference::four_branch_residual_reference_v1(
+                        &batch_residual,
+                        &batch_branches,
+                        &batch_gates,
+                    )
+                    .map_err(|error| format!("residual reference failed: {error:?}"))?,
+                );
+                residual.extend(batch_residual);
+                branches.extend(batch_branches);
+                gates.extend(batch_gates);
+            }
+            let lengths = [
+                residual.len(),
+                branches.len(),
+                gates.len(),
+                MULTIGRID_SUBGROUP_BATCHES_V1 * CHANNELS_V1,
+            ];
             LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
@@ -1233,10 +1419,30 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }
         }
         "gfx950_mhc_sinkhorn_mix" => {
-            let streams = deterministic_floats(MIXING_STREAMS_V1 * CHANNELS_V1, 13, 0.7);
-            let logits = deterministic_floats(MIXING_STREAMS_V1 * MIXING_STREAMS_V1, 14, 0.5);
-            let expected = attention_reference::mhc_sinkhorn_mix_reference_v1(&streams, &logits)
-                .map_err(|error| format!("mHC reference failed: {error:?}"))?;
+            let mut streams = Vec::new();
+            let mut logits = Vec::new();
+            let mut expected = Vec::new();
+            for batch in 0..MULTIGRID_WAVE_BATCHES_V1 {
+                let batch_streams = deterministic_floats(
+                    MIXING_STREAMS_V1 * CHANNELS_V1,
+                    13 + batch,
+                    0.45 + batch as f32 * 0.01,
+                );
+                let batch_logits = deterministic_floats(
+                    MIXING_STREAMS_V1 * MIXING_STREAMS_V1,
+                    14 + batch,
+                    0.30 + batch as f32 * 0.01,
+                );
+                expected.extend(
+                    attention_reference::mhc_sinkhorn_mix_reference_v1(
+                        &batch_streams,
+                        &batch_logits,
+                    )
+                    .map_err(|error| format!("mHC reference failed: {error:?}"))?,
+                );
+                streams.extend(batch_streams);
+                logits.extend(batch_logits);
+            }
             LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
@@ -1247,8 +1453,11 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 args: (0..3)
                     .map(|buffer| PlannedArg::Slice {
                         buffer,
-                        elements: [streams.len(), logits.len(), MIXING_STREAMS_V1 * CHANNELS_V1]
-                            [buffer],
+                        elements: [
+                            streams.len(),
+                            logits.len(),
+                            MULTIGRID_WAVE_BATCHES_V1 * MIXING_STREAMS_V1 * CHANNELS_V1,
+                        ][buffer],
                     })
                     .collect(),
             }
@@ -1261,11 +1470,13 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
 #[cfg(feature = "hardware-test-hooks")]
 fn make_activations() -> Vec<u8> {
     const CODES: [u8; 5] = [0xa, 0x9, 0x0, 0x1, 0x2];
-    (0..TOKENS * HIDDEN)
+    (0..SYSTEM_BATCHES * TOKENS * HIDDEN)
         .map(|index| {
-            let token = index / HIDDEN;
+            let batch = index / (TOKENS * HIDDEN);
+            let within_batch = index % (TOKENS * HIDDEN);
+            let token = within_batch / HIDDEN;
             let depth = index % HIDDEN;
-            CODES[(token * 3 + depth * 2 + 1) % CODES.len()]
+            CODES[(batch * 4 + token * 3 + depth * 2 + 1) % CODES.len()]
         })
         .collect()
 }
@@ -1273,24 +1484,28 @@ fn make_activations() -> Vec<u8> {
 #[cfg(feature = "hardware-test-hooks")]
 fn make_expert_weights() -> Vec<u8> {
     const CODES: [u8; 5] = [0xb0, 0xa8, 0x00, 0x28, 0x30];
-    (0..ALL_EXPERTS * HIDDEN * OUTPUT)
+    (0..SYSTEM_BATCHES * ALL_EXPERTS * HIDDEN * OUTPUT)
         .map(|index| {
-            let expert = index / (HIDDEN * OUTPUT);
-            let within = index % (HIDDEN * OUTPUT);
+            let batch = index / (ALL_EXPERTS * HIDDEN * OUTPUT);
+            let within_batch = index % (ALL_EXPERTS * HIDDEN * OUTPUT);
+            let expert = within_batch / (HIDDEN * OUTPUT);
+            let within = within_batch % (HIDDEN * OUTPUT);
             let depth = within / OUTPUT;
             let column = within % OUTPUT;
-            CODES[(expert * 2 + depth * 3 + column * 4) % CODES.len()]
+            CODES[(batch * 3 + expert * 2 + depth * 3 + column * 4) % CODES.len()]
         })
         .collect()
 }
 
 #[cfg(feature = "hardware-test-hooks")]
 fn make_router_weights() -> Vec<f32> {
-    (0..EXPERTS * HIDDEN)
+    (0..SYSTEM_BATCHES * EXPERTS * HIDDEN)
         .map(|index| {
-            let expert = index / HIDDEN;
+            let batch = index / (EXPERTS * HIDDEN);
+            let within_batch = index % (EXPERTS * HIDDEN);
+            let expert = within_batch / HIDDEN;
             let depth = index % HIDDEN;
-            (((expert + 1) * (depth % 7) + depth / 13) % 9) as f32 / 64.0 - 4.0 / 64.0
+            (((expert + 1) * (depth % 7) + depth / 13 + batch * 5) % 9) as f32 / 64.0 - 4.0 / 64.0
         })
         .collect()
 }
@@ -1305,7 +1520,7 @@ fn moe_fixture() -> (
     let activations = make_activations();
     let expert_weights = make_expert_weights();
     let router_weights = make_router_weights();
-    let routing = systems_reference::moe_routing_reference(&activations, &router_weights);
+    let routing = systems_reference::batched_moe_routing_reference(&activations, &router_weights);
     (activations, expert_weights, router_weights, routing)
 }
 
@@ -1318,6 +1533,20 @@ fn hash_gram(gram: &[i32]) -> u64 {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn make_muon_shards() -> Vec<f32> {
+    (0..SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS)
+        .map(|index| {
+            let batch = index / (GRADIENT_SHARDS * MUON_ELEMENTS);
+            let within_batch = index % (GRADIENT_SHARDS * MUON_ELEMENTS);
+            let shard = within_batch / MUON_ELEMENTS;
+            let element = within_batch % MUON_ELEMENTS;
+            0.025
+                * ((shard + 1) as f32 * (((element * 5 + shard * 3 + batch * 2) % 11) as f32 - 5.0))
+        })
+        .collect()
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     match case.export {
         "gfx950_moe_route_fp4_t16_e4_k2_v1" => {
@@ -1325,10 +1554,10 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             let lengths = [
                 activations.len(),
                 router_weights.len(),
-                TOKENS * TOP_K,
-                TOKENS * TOP_K,
-                EXPERTS,
-                EXPERTS * DISPATCH_CAPACITY,
+                SYSTEM_BATCHES * TOKENS * TOP_K,
+                SYSTEM_BATCHES * TOKENS * TOP_K,
+                SYSTEM_BATCHES * EXPERTS,
+                SYSTEM_BATCHES * EXPERTS * DISPATCH_CAPACITY,
             ];
             Ok(vec![LaunchPlan {
                 label: case.label.into(),
@@ -1352,7 +1581,7 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             let (activations, weights, _, routing) = moe_fixture();
             let mut plans = Vec::new();
             for (rank, first_expert, include_shared) in [(0, 0, true), (1, 2, false)] {
-                let expected = systems_reference::moe_rank_reference(
+                let expected = systems_reference::batched_moe_rank_reference(
                     &activations,
                     &weights,
                     &routing,
@@ -1389,14 +1618,14 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                         PlannedArg::U32(u32::from(include_shared)),
                         PlannedArg::Slice {
                             buffer: 4,
-                            elements: TOKENS * OUTPUT,
+                            elements: SYSTEM_BATCHES * TOKENS * OUTPUT,
                         },
                     ],
                     buffers,
                 });
             }
             for first_expert in [3_u32, u32::MAX] {
-                let canary = vec![0.25_f32; TOKENS * OUTPUT];
+                let canary = vec![0.25_f32; SYSTEM_BATCHES * TOKENS * OUTPUT];
                 let mut preserved_output = f32_output("output", canary.clone(), 0.0);
                 let canary_bytes = value_bytes(&canary);
                 preserved_output.initial[GUARD_BYTES..GUARD_BYTES + canary_bytes.len()]
@@ -1431,7 +1660,7 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                         PlannedArg::U32(1),
                         PlannedArg::Slice {
                             buffer: 4,
-                            elements: TOKENS * OUTPUT,
+                            elements: SYSTEM_BATCHES * TOKENS * OUTPUT,
                         },
                     ],
                     buffers,
@@ -1441,10 +1670,23 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         }
         "gfx950_combine_expert_ranks_v1" => {
             let (activations, weights, _, routing) = moe_fixture();
-            let rank0 =
-                systems_reference::moe_rank_reference(&activations, &weights, &routing, 0, true);
-            let rank1 =
-                systems_reference::moe_rank_reference(&activations, &weights, &routing, 2, false);
+            let rank0 = systems_reference::batched_moe_rank_reference(
+                &activations,
+                &weights,
+                &routing,
+                0,
+                true,
+            );
+            let rank1 = systems_reference::batched_moe_rank_reference(
+                &activations,
+                &weights,
+                &routing,
+                2,
+                false,
+            );
+            let combine_elements = COMBINE_BATCHES * TOKENS * OUTPUT;
+            let rank0 = rank0[..combine_elements].to_vec();
+            let rank1 = rank1[..combine_elements].to_vec();
             let expected = rank0.iter().zip(&rank1).map(|(a, b)| a + b).collect();
             Ok(vec![LaunchPlan {
                 label: case.label.into(),
@@ -1456,42 +1698,58 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 args: (0..3)
                     .map(|buffer| PlannedArg::Slice {
                         buffer,
-                        elements: TOKENS * OUTPUT,
+                        elements: combine_elements,
                     })
                     .collect(),
             }])
         }
         "gfx950_speculative_transaction_v1" => {
-            let target = vec![11, 12, 13, 14];
-            let mut draft = vec![0; CANDIDATES * DRAFT_STEPS];
-            let mut scores = vec![0.0; CANDIDATES * DRAFT_STEPS];
-            let thresholds = vec![0.25, 0.35, 0.45, 0.55];
-            let mut deltas = vec![0.0; CANDIDATES * DRAFT_STEPS * STATE_WIDTH];
-            for candidate in 0..CANDIDATES {
+            let mut target = vec![0; SYSTEM_BATCHES * DRAFT_STEPS];
+            let mut draft = vec![0; SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS];
+            let mut scores = vec![0.0; SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS];
+            let mut thresholds = vec![0.0; SYSTEM_BATCHES * DRAFT_STEPS];
+            let mut base = vec![0.0; SYSTEM_BATCHES * STATE_WIDTH];
+            let mut deltas = vec![0.0; SYSTEM_BATCHES * CANDIDATES * DRAFT_STEPS * STATE_WIDTH];
+            for batch in 0..SYSTEM_BATCHES {
+                let target_base = batch * DRAFT_STEPS;
+                let transaction_base = batch * CANDIDATES * DRAFT_STEPS;
+                let state_base = batch * STATE_WIDTH;
+                let delta_base = batch * CANDIDATES * DRAFT_STEPS * STATE_WIDTH;
                 for step in 0..DRAFT_STEPS {
-                    draft[candidate * DRAFT_STEPS + step] = if step == candidate % 5 {
-                        90 + candidate as i32
-                    } else {
-                        target[step]
-                    };
-                    scores[candidate * DRAFT_STEPS + step] =
-                        0.2 + 0.11 * ((candidate + step) % 6) as f32;
-                    for element in 0..STATE_WIDTH {
-                        deltas[(candidate * DRAFT_STEPS + step) * STATE_WIDTH + element] =
-                            0.001 * (1 + candidate + step * 2 + element) as f32;
+                    target[target_base + step] = 11 + (batch * 17 + step) as i32;
+                    thresholds[target_base + step] =
+                        0.25 + 0.1 * step as f32 + 0.01 * (batch % 3) as f32;
+                }
+                for element in 0..STATE_WIDTH {
+                    base[state_base + element] =
+                        0.125 * (element as f32 - 3.0) + 0.03125 * batch as f32;
+                }
+                for candidate in 0..CANDIDATES {
+                    for step in 0..DRAFT_STEPS {
+                        let transaction = transaction_base + candidate * DRAFT_STEPS + step;
+                        draft[transaction] = if step == (candidate + batch) % 5 {
+                            90 + (batch * CANDIDATES + candidate) as i32
+                        } else {
+                            target[target_base + step]
+                        };
+                        scores[transaction] = 0.2 + 0.11 * ((batch + candidate + step) % 6) as f32;
+                        for element in 0..STATE_WIDTH {
+                            deltas[delta_base
+                                + (candidate * DRAFT_STEPS + step) * STATE_WIDTH
+                                + element] =
+                                0.001 * (1 + batch + candidate + step * 2 + element) as f32;
+                        }
+                    }
+                }
+                for candidate in [4, 7] {
+                    for step in 0..DRAFT_STEPS {
+                        let transaction = transaction_base + candidate * DRAFT_STEPS + step;
+                        draft[transaction] = target[target_base + step];
+                        scores[transaction] = 0.9;
                     }
                 }
             }
-            for candidate in [4, 7] {
-                for step in 0..DRAFT_STEPS {
-                    draft[candidate * DRAFT_STEPS + step] = target[step];
-                    scores[candidate * DRAFT_STEPS + step] = 0.9;
-                }
-            }
-            let base = (0..STATE_WIDTH)
-                .map(|element| 0.125 * (element as f32 - 3.0))
-                .collect::<Vec<_>>();
-            let expected = systems_reference::speculative_reference(
+            let expected = systems_reference::batched_speculative_reference(
                 &draft,
                 &target,
                 &scores,
@@ -1511,9 +1769,9 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 thresholds.len(),
                 base.len(),
                 deltas.len(),
-                CANDIDATES,
-                CANDIDATES,
-                CANDIDATES * STATE_WIDTH,
+                SYSTEM_BATCHES * CANDIDATES,
+                SYSTEM_BATCHES * CANDIDATES,
+                SYSTEM_BATCHES * CANDIDATES * STATE_WIDTH,
             ];
             Ok(vec![LaunchPlan {
                 label: case.label.into(),
@@ -1530,7 +1788,7 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                         "output_state",
                         ExpectedOutput::F32 {
                             values: expected.state,
-                            absolute_tolerance: 1.0e-7,
+                            absolute_tolerance: 2.0e-7,
                             relative_tolerance: 0.0,
                             exact_mask: Some(exact_mask),
                         },
@@ -1545,43 +1803,60 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }])
         }
         "gfx950_qwen_ngram_gather_v1" => {
-            let mut queries = vec![0; QUERIES * NGRAM];
-            for query in 0..QUERIES {
-                queries[query * NGRAM] = 100 + query as i32;
-                queries[query * NGRAM + 1] = 200 + (query % 3) as i32;
-                queries[query * NGRAM + 2] = 300 + (query * 2) as i32;
+            let mut queries = vec![0; SYSTEM_BATCHES * QUERIES * NGRAM];
+            let mut hashes = vec![0; SYSTEM_BATCHES * TABLE_SIZE];
+            let mut grams = vec![-1; SYSTEM_BATCHES * TABLE_SIZE * NGRAM];
+            let mut values = vec![-1; SYSTEM_BATCHES * TABLE_SIZE];
+            let mut priorities = vec![-1; SYSTEM_BATCHES * TABLE_SIZE];
+            for batch in 0..SYSTEM_BATCHES {
+                let query_base = batch * QUERIES * NGRAM;
+                let table_base = batch * TABLE_SIZE;
+                let gram_base = batch * TABLE_SIZE * NGRAM;
+                for query in 0..QUERIES {
+                    let base = query_base + query * NGRAM;
+                    queries[base] = 100 + (batch * QUERIES + query) as i32;
+                    queries[base + 1] = 200 + ((batch + query) % 3) as i32;
+                    queries[base + 2] = 300 + (batch * 5 + query * 2) as i32;
+                }
+                for query in 0..6 {
+                    let base = query_base + query * NGRAM;
+                    let hash = hash_gram(&queries[base..base + NGRAM]);
+                    let slot = (hash as usize + 3) & (TABLE_SIZE - 1);
+                    hashes[table_base + slot] = hash;
+                    grams[gram_base + slot * NGRAM..gram_base + (slot + 1) * NGRAM]
+                        .copy_from_slice(&queries[base..base + NGRAM]);
+                    values[table_base + slot] = 1000 + (batch * QUERIES + query) as i32;
+                    priorities[table_base + slot] = (batch + query) as i32 % 3;
+                }
+                let duplicate_hash = hash_gram(&queries[query_base..query_base + NGRAM]);
+                hashes[table_base + 1] = duplicate_hash;
+                grams[gram_base + NGRAM..gram_base + 2 * NGRAM]
+                    .copy_from_slice(&queries[query_base..query_base + NGRAM]);
+                values[table_base + 1] = 4242 + batch as i32;
+                priorities[table_base + 1] = 0;
+                hashes[table_base + 2] = duplicate_hash;
+                grams[gram_base + 2 * NGRAM..gram_base + 3 * NGRAM].copy_from_slice(&[
+                    999 + batch as i32,
+                    998,
+                    997,
+                ]);
+                values[table_base + 2] = 7777 + batch as i32;
+                priorities[table_base + 2] = 99;
             }
-            let mut hashes = vec![0; TABLE_SIZE];
-            let mut grams = vec![-1; TABLE_SIZE * NGRAM];
-            let mut values = vec![-1; TABLE_SIZE];
-            let mut priorities = vec![-1; TABLE_SIZE];
-            for query in 0..6 {
-                let hash = hash_gram(&queries[query * NGRAM..(query + 1) * NGRAM]);
-                let slot = (hash as usize + 3) & (TABLE_SIZE - 1);
-                hashes[slot] = hash;
-                grams[slot * NGRAM..(slot + 1) * NGRAM]
-                    .copy_from_slice(&queries[query * NGRAM..(query + 1) * NGRAM]);
-                values[slot] = 1000 + query as i32;
-                priorities[slot] = (query % 2) as i32;
-            }
-            let duplicate_hash = hash_gram(&queries[..NGRAM]);
-            hashes[1] = duplicate_hash;
-            grams[NGRAM..2 * NGRAM].copy_from_slice(&queries[..NGRAM]);
-            values[1] = 4242;
-            priorities[1] = 0;
-            hashes[2] = duplicate_hash;
-            grams[2 * NGRAM..3 * NGRAM].copy_from_slice(&[999, 998, 997]);
-            values[2] = 7777;
-            priorities[2] = 99;
-            let expected =
-                systems_reference::ngram_reference(&queries, &hashes, &grams, &values, &priorities);
+            let expected = systems_reference::batched_ngram_reference(
+                &queries,
+                &hashes,
+                &grams,
+                &values,
+                &priorities,
+            );
             let lengths = [
                 queries.len(),
                 hashes.len(),
                 grams.len(),
                 values.len(),
                 priorities.len(),
-                QUERIES,
+                SYSTEM_BATCHES * QUERIES,
             ];
             Ok(vec![LaunchPlan {
                 label: case.label.into(),
@@ -1602,17 +1877,15 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }])
         }
         "gfx950_stage_gradient_shard_v1" => {
-            let shards = (0..GRADIENT_SHARDS * MUON_ELEMENTS)
-                .map(|index| {
-                    let shard = index / MUON_ELEMENTS;
-                    let element = index % MUON_ELEMENTS;
-                    0.025 * ((shard + 1) as f32 * (((element * 5 + shard * 3) % 11) as f32 - 5.0))
-                })
-                .collect::<Vec<_>>();
+            let shards = make_muon_shards();
             Ok((0..GRADIENT_SHARDS)
                 .map(|shard| {
-                    let values =
-                        shards[shard * MUON_ELEMENTS..(shard + 1) * MUON_ELEMENTS].to_vec();
+                    let values = (0..SYSTEM_BATCHES)
+                        .flat_map(|batch| {
+                            let base = (batch * GRADIENT_SHARDS + shard) * MUON_ELEMENTS;
+                            shards[base..base + MUON_ELEMENTS].iter().copied()
+                        })
+                        .collect::<Vec<_>>();
                     LaunchPlan {
                         label: format!("{} {shard}", case.label),
                         buffers: vec![
@@ -1623,18 +1896,18 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                                     values,
                                     absolute_tolerance: 0.0,
                                     relative_tolerance: 0.0,
-                                    exact_mask: Some(vec![true; MUON_ELEMENTS]),
+                                    exact_mask: Some(vec![true; SYSTEM_BATCHES * MUON_ELEMENTS]),
                                 },
                             ),
                         ],
                         args: vec![
                             PlannedArg::Slice {
                                 buffer: 0,
-                                elements: MUON_ELEMENTS,
+                                elements: SYSTEM_BATCHES * MUON_ELEMENTS,
                             },
                             PlannedArg::Slice {
                                 buffer: 1,
-                                elements: MUON_ELEMENTS,
+                                elements: SYSTEM_BATCHES * MUON_ELEMENTS,
                             },
                         ],
                     }
@@ -1642,20 +1915,14 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 .collect())
         }
         "gfx950_muon_update_4x4_v1" => {
-            let shards = (0..GRADIENT_SHARDS * MUON_ELEMENTS)
-                .map(|index| {
-                    let shard = index / MUON_ELEMENTS;
-                    let element = index % MUON_ELEMENTS;
-                    0.025 * ((shard + 1) as f32 * (((element * 5 + shard * 3) % 11) as f32 - 5.0))
-                })
-                .collect::<Vec<_>>();
-            let expected = systems_reference::muon_reference(&shards);
+            let shards = make_muon_shards();
+            let expected = systems_reference::batched_muon_reference(&shards);
             Ok(vec![LaunchPlan {
                 label: case.label.into(),
                 buffers: vec![
                     input("shards", &shards),
                     f32_output("output", expected.update, 2.0e-6),
-                    f32_output("output_norm", vec![expected.norm], 2.0e-6),
+                    f32_output("output_norm", expected.norms, 2.0e-6),
                 ],
                 args: vec![
                     PlannedArg::Slice {
@@ -1664,11 +1931,11 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                     },
                     PlannedArg::Slice {
                         buffer: 1,
-                        elements: MUON_ELEMENTS,
+                        elements: SYSTEM_BATCHES * MUON_ELEMENTS,
                     },
                     PlannedArg::Slice {
                         buffer: 2,
-                        elements: 1,
+                        elements: SYSTEM_BATCHES,
                     },
                 ],
             }])
@@ -1696,6 +1963,74 @@ fn pack_mfma_blocked_output(logical_row_major: &[f32]) -> Result<Vec<f32>, BoxEr
 
 #[cfg(feature = "hardware-test-hooks")]
 fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
+    let inputs = gpt_oss_reference::deterministic_batch_inputs();
+    let expected = gpt_oss_reference::reference_batch(&inputs);
+    let expected_attention = expected
+        .attention
+        .chunks_exact(16 * 16)
+        .map(pack_mfma_blocked_output)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let expected_expert = expected
+        .expert
+        .chunks_exact(16 * 16)
+        .map(pack_mfma_blocked_output)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    require(
+        expected.top4.len() == 16 && expected.top4[0][0] == 127 && expected.top4[1][0] == 0,
+        "deterministic GPT-OSS batch did not select alternating experts 127 and 0",
+    )?;
+    let lengths = [
+        inputs.hidden_f32.len(),
+        inputs.router_f32.len(),
+        inputs.query_bf16.len(),
+        inputs.key_transposed_bf16.len(),
+        inputs.value_f32.len(),
+        inputs.sinks_f32.len(),
+        inputs.expert_activation_blocks_fp4.len(),
+        inputs.expert_weight_blocks_fp4.len(),
+        inputs.activation_scales.len(),
+        inputs.expert_weight_scales.len(),
+        expected.attention.len(),
+        expected.expert.len(),
+        expected.packed_top4.len(),
+    ];
+    Ok(vec![LaunchPlan {
+        label: case.label.into(),
+        buffers: vec![
+            input("hidden_f32", &inputs.hidden_f32),
+            input("router_f32", &inputs.router_f32),
+            input("query_bf16", &inputs.query_bf16),
+            input("key_transposed_bf16", &inputs.key_transposed_bf16),
+            input("value_f32", &inputs.value_f32),
+            input("sinks_f32", &inputs.sinks_f32),
+            input(
+                "expert_activation_blocks_fp4",
+                &inputs.expert_activation_blocks_fp4,
+            ),
+            input("expert_weight_blocks_fp4", &inputs.expert_weight_blocks_fp4),
+            input("activation_scales", &inputs.activation_scales),
+            input("expert_weight_scales", &inputs.expert_weight_scales),
+            f32_output("attention_output", expected_attention, 8.0e-3),
+            f32_output("expert_output", expected_expert, 8.0e-3),
+            output("packed_top4", ExpectedOutput::U32(expected.packed_top4)),
+        ],
+        args: (0..13)
+            .map(|buffer| PlannedArg::Slice {
+                buffer,
+                elements: lengths[buffer],
+            })
+            .collect(),
+    }])
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn gpt_oss_single_plan(case: AdvancedCase) -> Result<LaunchPlan, BoxError> {
     let inputs = gpt_oss_reference::deterministic_inputs();
     let expected = gpt_oss_reference::reference(&inputs);
     let expected_attention = pack_mfma_blocked_output(&expected.attention)?;
@@ -1719,7 +2054,7 @@ fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         expected.expert.len(),
         1,
     ];
-    Ok(vec![LaunchPlan {
+    Ok(LaunchPlan {
         label: case.label.into(),
         buffers: vec![
             input("hidden_f32", &inputs.hidden_f32),
@@ -1748,7 +2083,7 @@ fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 elements: lengths[buffer],
             })
             .collect(),
-    }])
+    })
 }
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -1934,7 +2269,7 @@ unsafe fn dispatch(
             case.label
         ),
     )?;
-    let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [case.workgroup_x, 1, 1], 0);
+    let geometry = HsaLaunchGeometryV1::new([case.grid_x(), 1, 1], [case.workgroup_x, 1, 1], 0);
     let mut storage = RuntimeKernarg::new(size)?;
     let kernarg = storage.bytes_mut();
     kernarg.copy_from_slice(explicit);
@@ -2208,9 +2543,7 @@ fn pointer_kernarg(
 
 #[cfg(feature = "hardware-test-hooks")]
 fn gpt_unfused_profile_plans() -> Result<Vec<(AdvancedCase, LaunchPlan)>, BoxError> {
-    let mut plans = gpt_oss_plans(GPT_OSS)?;
-    let full = plans.pop().ok_or("GPT-OSS launch plan is absent")?;
-    require(plans.is_empty(), "GPT-OSS launch plan was duplicated")?;
+    let full = gpt_oss_single_plan(GPT_OSS_UNFUSED_ROUTER)?;
 
     let label = "gpt-oss-120b-batch1-layer-tile-exact-unfused";
     let router = LaunchPlan {
@@ -2274,9 +2607,7 @@ fn gpt_unfused_profile_plans() -> Result<Vec<(AdvancedCase, LaunchPlan)>, BoxErr
 fn run_gpt_unfused_comparator() -> Result<(), BoxError> {
     let (bytes, digest) = read_pinned_hsaco()?;
     inspect_gpt_unfused_profile(&bytes)?;
-    let mut plans = gpt_oss_plans(GPT_OSS)?;
-    let plan = plans.pop().ok_or("GPT-OSS launch plan is absent")?;
-    require(plans.is_empty(), "GPT-OSS launch plan was duplicated")?;
+    let plan = gpt_oss_single_plan(GPT_OSS_UNFUSED_ROUTER)?;
 
     let context = GpuContext::new(0)?;
     let mut adapter = ReviewedHsaRuntimeAdapterV1::new_gfx950(context)?;
@@ -2480,7 +2811,7 @@ fn profile_plan(
                 plan.label
             ),
         )?;
-        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [case.workgroup_x, 1, 1], 0);
+        let geometry = HsaLaunchGeometryV1::new([case.grid_x(), 1, 1], [case.workgroup_x, 1, 1], 0);
         let mut storage = RuntimeKernarg::new(size)?;
         let kernarg = storage.bytes_mut();
         kernarg.copy_from_slice(&explicit);
@@ -2553,10 +2884,14 @@ fn profile_plan(
                         "id": plan.label,
                         "input_sha256": workload_sha256,
                         "buffers": buffer_identity,
-                        "cache_regime": "persistent-allocation-repeated-single-workgroup",
+                        "cache_regime": if case.grid_x() == 1 {
+                            "persistent-allocation-repeated-single-workgroup"
+                        } else {
+                            "persistent-allocation-repeated-multi-workgroup"
+                        },
                     },
                     "launch": {
-                        "grid": [1, 1, 1],
+                        "grid": [case.grid_x(), 1, 1],
                         "workgroup": [case.workgroup_x, 1, 1],
                         "dynamic_lds_bytes": 0,
                         "static_lds_bytes": case.static_lds_bytes,

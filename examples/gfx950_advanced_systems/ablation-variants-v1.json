@@ -5,7 +5,15 @@
     "workload_identity": "kernel export, shape, initialized inputs, CPU oracle, canaries, and numerical tolerance are identical across runnable variants",
     "implementation_identity": "compile-time feature, namespace, launch, LLVM hash, and HSACO hash identify a variant",
     "counted_work_scope": "algorithmic work at the fixed logical shape; address arithmetic, bounds checks, and compiler-generated instructions are reported separately from ISA",
-    "compulsory_bytes_scope": "unique bytes in all input and output buffers required by the fixed invocation"
+    "compulsory_bytes_scope": "unique bytes in all input and output buffers required by the fixed invocation",
+    "launch_scope": "the per-kernel launch records and variant namespaces below describe the retained 2026-08-29 historical ablation campaign, not the current production ABI"
+  },
+  "current_production_launch": {
+    "workgroup": [256, 1, 1],
+    "grid": [4, 1, 1],
+    "wave_oriented_decomposition": "four Wave64 batches per workgroup and four workgroups, for 16 batch-local inputs and disjoint output slices",
+    "combine_decomposition": "one 256-element batch per workgroup, for four disjoint output slices",
+    "global_synchronization": "none; every workgroup owns a complete independent batch"
   },
   "kernels": [
     {
@@ -48,9 +56,9 @@
       "pipeline": {
         "software_pipeline": "rejected",
         "multi_buffer": "rejected",
-        "reason": "the fixed single-wave token calculation is dominated by four dependent accumulators and the dispatch scan consumes the completed route map"
+        "reason": "each batch-local Wave64 token calculation is dominated by four dependent accumulators and the dispatch scan consumes that wave's completed route map"
       },
-      "tile_assessment": "16 tokens map four times over Wave64; 256 threads cover the 4 x 32 dispatch output exactly",
+      "tile_assessment": "the current production launch runs 16 independent Wave64 batches; each wave routes 16 tokens and owns a disjoint 128-element dispatch slice",
       "variants": [
         {
           "id": "canonical",
@@ -107,7 +115,7 @@
         "multi_buffer": "rejected",
         "reason": "the eager schedule exposes instruction-level parallelism across three independent one-tile activation/weight/MFMA streams; with no next K tile, it is not a multistage software pipeline and cannot double-buffer"
       },
-      "tile_assessment": "one Wave64 owns a 16x16 output through Blocked<Index1D,64,4>; changing ownership changes the typed output ABI",
+      "tile_assessment": "each of the 16 batch-local Wave64 instances owns one 16x16 output through Blocked<Index1D,64,4>; batch bases make all output slices disjoint",
       "variants": [
         {
           "id": "canonical",
@@ -119,7 +127,8 @@
           "id": "expert-serial",
           "feature": "ablation-expert-serial",
           "namespace": "6de3151d7e205de375cd16a46b09c84211346b063664d0da16cd9f9b698efe2f",
-          "isolated_change": "interleave each operand load immediately with its MFMA"
+          "isolated_change": "interleave each operand load immediately with its MFMA",
+          "current_grid4_status": "production-hsa-pass on 2026-09-03; compatibility only, no current performance claim"
         }
       ],
       "oracle": {
@@ -164,9 +173,9 @@
       "pipeline": {
         "software_pipeline": "rejected",
         "multi_buffer": "rejected",
-        "reason": "one independent add per thread leaves no producer-consumer stage to overlap"
+        "reason": "one independent add per thread in each workgroup-owned batch leaves no producer-consumer stage to overlap"
       },
-      "tile_assessment": "256 threads exactly cover 16x16; the alternate reverses lane ownership inside each wave and restores destination order with subgroup broadcast",
+      "tile_assessment": "each of four workgroups exactly covers one 256-element batch; workgroup IDs select disjoint input and output slices",
       "variants": [
         {
           "id": "canonical",
@@ -219,7 +228,7 @@
         "multi_buffer": "rejected",
         "reason": "the four acceptance decisions are a true prefix dependency and there is only one fixed transaction per lane"
       },
-      "tile_assessment": "eight lanes compute one prefix per candidate; eight state lanes per candidate reuse it",
+      "tile_assessment": "each of 16 batch-local waves uses eight lanes to compute candidate prefixes and eight state lanes per candidate to reuse them",
       "variants": [
         {
           "id": "canonical",
@@ -231,7 +240,8 @@
           "id": "speculative-recompute-prefix",
           "feature": "ablation-speculative-recompute-prefix",
           "namespace": "bdec264337e1f6c31dec20bfe6cabbebb62ad36d413a66e8876279753c46ee26",
-          "isolated_change": "recompute the identical four-step prefix independently in every state lane"
+          "isolated_change": "recompute the identical four-step prefix independently in every state lane",
+          "current_grid4_status": "production-hsa-pass on 2026-09-03; compatibility only, no current performance claim"
         }
       ],
       "oracle": {
@@ -278,7 +288,7 @@
         "multi_buffer": "rejected",
         "reason": "the fixed 16-slot priority scan is serial in best state; early exit changes duplicate resolution semantics"
       },
-      "tile_assessment": "one active lane per query; inactive Wave64 lanes are required only by the fixed launch contract",
+      "tile_assessment": "each of 16 batch-local waves assigns one active lane per query; inactive lanes remain part of the fixed Wave64 contract",
       "variants": [
         {
           "id": "canonical",
@@ -290,7 +300,8 @@
           "id": "ngram-reverse-probe",
           "feature": "ablation-ngram-reverse-probe",
           "namespace": "a62bfd564c731058a0a6b9f3b1b710180c36b311241a8db5e3e4be664e5cf449",
-          "isolated_change": "probe the same 16 slots in descending offset order while retaining priority then slot tie-breaking"
+          "isolated_change": "probe the same 16 slots in descending offset order while retaining priority then slot tie-breaking",
+          "current_grid4_status": "production-hsa-pass on 2026-09-03; compatibility only, no current performance claim"
         }
       ],
       "oracle": {
@@ -337,7 +348,7 @@
         "multi_buffer": "rejected",
         "reason": "a single 16-element copy has no following tile or independent compute stage to overlap"
       },
-      "tile_assessment": "canonical uses 16 lanes; tile4 uses four owner lanes loading four values each and subgroup broadcasts to restore the same 16 destinations",
+      "tile_assessment": "each of 16 batch-local waves copies one 4x4 shard with 16 owner lanes; batch bases select disjoint source and destination slices",
       "variants": [
         {
           "id": "canonical",
@@ -391,9 +402,9 @@
       "pipeline": {
         "software_pipeline": "rejected",
         "multi_buffer": "rejected",
-        "reason": "the five matrix updates form a true recurrence, and the fixed 4x4 matrix has no independent next tile"
+        "reason": "the five matrix updates form a true recurrence within each batch-local wave, and the fixed 4x4 matrix has no independent next tile"
       },
-      "tile_assessment": "16 active lanes own the 4x4 matrix; remaining lanes participate in subgroup collectives but do not write",
+      "tile_assessment": "each of 16 batch-local waves assigns 16 active lanes to one 4x4 matrix; batch bases make update and norm outputs disjoint",
       "variants": [
         {
           "id": "canonical",
@@ -405,7 +416,8 @@
           "id": "muon-broadcast16",
           "feature": "ablation-muon-broadcast16",
           "namespace": "6de7921154ed6a9f640c8cb2ca93cfc312b36de60ead0f02bf1157c1765ee2a9",
-          "isolated_change": "sum the same 16 active-lane squares with explicit subgroup broadcasts"
+          "isolated_change": "sum the same 16 active-lane squares with explicit subgroup broadcasts",
+          "current_grid4_status": "production-hsa-pass on 2026-09-03; compatibility only, no current performance claim"
         }
       ],
       "oracle": {
@@ -441,14 +453,15 @@
       "id": "combine-transposed",
       "feature": "ablation-combine-transposed",
       "export": "gfx950_combine_expert_ranks_v1",
-      "reason": "production lowering cannot prove the subgroup broadcast source lane is statically bounded",
+      "reason": "current WG256/grid4 semantic-to-ranked projection cannot prove the arithmetic-overflow assertion for the dynamic source-element addition",
+      "historical_reason": "the earlier production lowering could not prove the subgroup broadcast source lane was statically bounded",
       "retained_log": "logs/kernel-combine-expert-ranks-combine-transposed.log"
     },
     {
       "id": "stage-tile4",
       "feature": "ablation-stage-tile4",
       "export": "gfx950_stage_gradient_shard_v1",
-      "reason": "production lowering cannot prove the subgroup broadcast source lane is statically bounded",
+      "reason": "current WG256/grid4 target-neutral lowering cannot prove the subgroup broadcast source lane is statically bounded",
       "retained_log": "logs/kernel-stage-gradient-shard-stage-tile4.log"
     },
     {

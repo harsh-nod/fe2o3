@@ -1,7 +1,8 @@
 use fe2o3_gfx950_advanced_systems::{
     ALL_EXPERTS, CANDIDATES, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HIDDEN, MUON_ELEMENTS, NGRAM,
-    OUTPUT, QUERIES, STATE_WIDTH, TABLE_SIZE, TOKENS, TOP_K,
+    OUTPUT, QUERIES, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
     reference::{
+        batched_moe_rank_reference, batched_moe_routing_reference, batched_muon_reference,
         decode_fp8, moe_rank_reference, moe_routing_reference, muon_reference, ngram_reference,
         speculative_reference,
     },
@@ -125,4 +126,56 @@ fn muon_reference_is_finite_and_deterministic() {
 #[test]
 fn fixed_dimensions_remain_bound_to_the_hardware_fixture() {
     assert_eq!((TOKENS, HIDDEN), (16, 128));
+}
+
+#[test]
+fn batched_references_keep_all_sixteen_wave_instances_disjoint() {
+    let activations = (0..SYSTEM_BATCHES * TOKENS * HIDDEN)
+        .map(|index| {
+            let batch = index / (TOKENS * HIDDEN);
+            [0x0, 0x1, 0x2, 0x9, 0xa][(index * 7 + batch * 3) % 5]
+        })
+        .collect::<Vec<_>>();
+    let router_weights = (0..SYSTEM_BATCHES * EXPERTS * HIDDEN)
+        .map(|index| {
+            let batch = index / (EXPERTS * HIDDEN);
+            0.015625 * ((index * 5 + batch * 7) % 11) as f32 - 0.078125
+        })
+        .collect::<Vec<_>>();
+    let expert_weights = (0..SYSTEM_BATCHES * ALL_EXPERTS * HIDDEN * OUTPUT)
+        .map(|index| {
+            let batch = index / (ALL_EXPERTS * HIDDEN * OUTPUT);
+            [0x00, 0x30, 0x38, 0xb0, 0xb8][(index * 3 + batch) % 5]
+        })
+        .collect::<Vec<_>>();
+
+    let routing = batched_moe_routing_reference(&activations, &router_weights);
+    assert_eq!(routing.top_experts.len(), SYSTEM_BATCHES * TOKENS * TOP_K);
+    assert_eq!(routing.expert_counts.len(), SYSTEM_BATCHES * EXPERTS);
+    for batch in 0..SYSTEM_BATCHES {
+        let activation_base = batch * TOKENS * HIDDEN;
+        let router_base = batch * EXPERTS * HIDDEN;
+        let route_base = batch * TOKENS * TOP_K;
+        let expected = moe_routing_reference(
+            &activations[activation_base..activation_base + TOKENS * HIDDEN],
+            &router_weights[router_base..router_base + EXPERTS * HIDDEN],
+        );
+        assert_eq!(
+            &routing.top_experts[route_base..route_base + TOKENS * TOP_K],
+            expected.top_experts
+        );
+    }
+
+    let ranks = batched_moe_rank_reference(&activations, &expert_weights, &routing, 0, true);
+    assert_eq!(ranks.len(), SYSTEM_BATCHES * TOKENS * OUTPUT);
+
+    let shards = (0..SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS)
+        .map(|index| {
+            let batch = index / (GRADIENT_SHARDS * MUON_ELEMENTS);
+            0.025 * (((index * 5 + batch * 3) % 11) as f32 - 5.0)
+        })
+        .collect::<Vec<_>>();
+    let muon = batched_muon_reference(&shards);
+    assert_eq!(muon.update.len(), SYSTEM_BATCHES * MUON_ELEMENTS);
+    assert_eq!(muon.norms.len(), SYSTEM_BATCHES);
 }

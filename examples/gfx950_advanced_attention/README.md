@@ -43,6 +43,22 @@ contains:
 - AttnRes four-depth softmax aggregation, four-branch gated residual mixing,
   and a four-stream mHC mixer with three Sinkhorn iterations.
 
+Every production Rust kernel launches four `256`-thread workgroups. KDA uses
+all four Wave64s in a workgroup for one matrix-state problem, producing four
+independent batches per launch. Content-sparse and compressed-hybrid attention
+assign one independent head to each Wave64, for 16 heads per launch. DeepSeek
+sparse attention, AttnRes, and four-branch residual assign one independent
+16-channel item to each Wave16 subgroup, for 64 items per launch. mHC assigns
+one independent four-stream problem to each Wave64, for 16 items per launch.
+Inputs vary by batch and every output span has a single wave, subgroup, or
+workgroup owner.
+
+The two transpose-based kernels give each Wave64 a private 2 KiB LDS K tile.
+The compiler therefore reserves 8 KiB of static LDS for each WG256. All four
+waves execute the same stage, publication, workgroup-barrier, and transpose-read
+lifecycle uniformly, while wave-relative LDS addresses prevent cross-wave
+aliasing.
+
 Every output and sparse index is compared against an independently written CPU
 oracle using deterministic inputs. The KDA oracle is an f64 scalar,
 token-by-token implementation of the matrix recurrence; it does not reuse the
@@ -57,9 +73,8 @@ each kernel symbol. At this bounded shape, the score MFMA covers all 16 tokens;
 the sparse kernel applies its selected ragged set to softmax and the value
 reduction. The separate DeepSeek kernel instead performs FP32 Wave16 reductions
 for exactly the indexed rows; using the dense MFMA tile there
-would defeat its sparse-compute contract. The current teaching profile repeats
-the selected score reductions in four Wave16 subgroups and gives subgroup zero
-exclusive ownership of the 16 output stores. It does not reproduce the learned
+would defeat its sparse-compute contract. Each Wave16 subgroup now owns one
+independent indexed head and its 16 output stores. It does not reproduce the learned
 indexer or claim a production FlashMLA scheduling strategy.
 
 For KDA, the public inputs begin after the surrounding model projections and
@@ -67,11 +82,13 @@ short convolution: `q` and `k` are L2-normalized, `alpha` is already in
 `(0,1]`, and `beta` is already in `[0,1]`. The kernel applies the fixed
 `1/sqrt(16)` query scale. The logical recurrence stores `S[K,V]`; production
 device memory stores its transpose `H[V,K]`, allowing each 16-lane Wave16 group
-to reduce one value column. The current checked `Index1D` ownership model makes
+to reduce one value column. Each of the four workgroups receives a distinct
+state and input sequence. Its checked `Index1D` ownership model makes each
 decode output physical length 256, with each logical value replicated across
-its 16 key lanes. Prefill similarly uses four lanes per logical token in each
-256-element chunk-output buffer. The runtime verifier compares every replica
-and canary, while tutorials identify how to recover the logical outputs. This
+its 16 key lanes; the launch ABI concatenates four such spans. Prefill likewise
+uses four lanes per logical token in each 256-element chunk-output span. The
+runtime verifier compares every replica and canary, while tutorials identify
+how to recover the logical outputs. This
 fixed profile excludes learned projections, the width-four convolution, gate
 parameterization, RMS/output gating, and the output projection used by a full
 Kimi Linear layer.
@@ -96,7 +113,32 @@ numerical verification on a gfx950 host:
 ./run-mhc-sinkhorn-mix-gfx950.sh
 ```
 
-## KDA MI350 performance evidence
+## Current WG256/grid4 numerical qualification
+
+On 2026-09-03, all eight production Rust wrappers completed extraction,
+gfx950:xnack- COV6 finalization, symbol-scoped ISA inspection, and numerical
+execution on physical GPU 6 of SSH host `mi350` with ROCm 7.2.1. Every launch
+used four WG256 workgroups, exercised all disjoint non-identical problems, and
+checked immutable inputs plus output canaries. These are correctness and
+artifact-identity receipts, not latency measurements.
+
+| Kernel | Maximum absolute error | HSACO SHA-256 |
+| --- | ---: | --- |
+| KDA decode | state `2.980232239e-8`; output `7.450580597e-9` | `11af04ea552ea1e7c2a7bcad2a3dd26222ced4ffac39148015bb90b578c3f7b0` |
+| KDA chunkwise prefill | state `1.490116119e-8`; both chunks `7.450580597e-9` | `dcb9f8cc55339234e05ac814536fd8b98b2d34f8c41de9c76c6baa475edaea9c` |
+| Content-sparse attention | output `5.820766091e-11`; 48 selected IDs exact | `d609377c0e56d3589f88fb0a850c39c60a3e34cac3d53ad8f3dfcf0159d02d9d` |
+| DeepSeek sparse attention | output `5.215406418e-8`; maximum `1.490116119e-7`; normalizer `4.768371582e-7` | `1d55054669d735190e1747c2e16f510455ae89a623d93b1fb66c2037676f9437` |
+| Compressed-hybrid attention | output `5.960464478e-8` | `314ed596839d1aa04557ca26b18f9a4a2356ad67e767a3865e40a7bc0bf6a90d` |
+| AttnRes aggregate | output `4.470348358e-8` | `8622031a6d857b060b8b036e99d8e2f91068904f075fa54d7c1b88b40d6c96b3` |
+| Four-branch residual | output `1.490116119e-8` | `fd77ba3f34568aa95b7b59ebe9fc71506e317d7ac6090e3439601512fd46acdd` |
+| mHC Sinkhorn mix | output `6.705522537e-8` | `e441bf98aec02fc596f55e00477ab2f647dd776bb8756099c6168802b16b6a13` |
+
+## Historical KDA MI350 performance evidence
+
+These measurements use the preceding single-workgroup launch geometry. They
+remain provenance for the earlier implementation, but they do not measure the
+current four-workgroup kernels and must not be used as current throughput or
+latency claims until the multigrid campaign is rerun.
 
 [`kda-mi350-performance-v1.json`](kda-mi350-performance-v1.json) records the
 replicated fixed-shape KDA campaign, raw-file SHA-256 manifests, exact source
@@ -135,7 +177,12 @@ square root lowers to its target-native LLVM intrinsic. Set
 `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the documented tool and
 target-directory environment variables when validating a copied checkout.
 
-## Production compiler and qualification-oracle evidence
+## Previous single-workgroup compiler and qualification-oracle evidence
+
+The correctness and artifact identities below predate WG256/grid4 batching for
+the non-KDA kernels and grid4 batching for KDA. They establish historical
+lowering and ISA behavior only; current multigrid evidence is generated by the
+updated runners and hardware plans.
 
 On 2026-09-01, the exact matrix-state KDA wrappers passed production Rust
 lowering, COV6 linking, symbol-scoped ISA inspection, and deprecated HSA
