@@ -27,6 +27,7 @@ r20_runtime_facade_directional_chunking_proof="$script_dir/r20_runtime_facade_di
 r21_runtime_scripted_failure_seam_proof="$script_dir/r21_runtime_scripted_failure_seam_v1.rs"
 r22_batched_directional_persistent_sdma_windows_proof="$script_dir/r22_batched_directional_persistent_sdma_windows_v1.rs"
 r23_same_device_d2d_persistent_sdma_windows_proof="$script_dir/r23_same_device_d2d_persistent_sdma_windows_v1.rs"
+r24_portable_progress_proof="$script_dir/r24_portable_progress_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -283,6 +284,25 @@ negative_r23_quarantine_custody="$script_dir/negative/r23_same_device_d2d_persis
 negative_r23_quarantine_release="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_quarantine_release.rs"
 negative_r23_quarantine_entry_validity="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_quarantine_entry_validity.rs"
 negative_r23_early_continuation="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_early_continuation.rs"
+negative_r24_atomic_registration="$script_dir/negative/r24_portable_progress_v1_atomic_registration.rs"
+negative_r24_poll_budget="$script_dir/negative/r24_portable_progress_v1_poll_budget.rs"
+negative_r24_flush_budget="$script_dir/negative/r24_portable_progress_v1_flush_budget.rs"
+negative_r24_cyclic_visitation="$script_dir/negative/r24_portable_progress_v1_cyclic_visitation.rs"
+negative_r24_visit_substitution="$script_dir/negative/r24_portable_progress_v1_visit_substitution.rs"
+negative_r24_poll_before_continuation="$script_dir/negative/r24_portable_progress_v1_poll_before_continuation.rs"
+negative_r24_retryable_poll="$script_dir/negative/r24_portable_progress_v1_retryable_poll.rs"
+negative_r24_retryable_poll_progress="$script_dir/negative/r24_portable_progress_v1_retryable_poll_progress.rs"
+negative_r24_retryable_flush="$script_dir/negative/r24_portable_progress_v1_retryable_flush.rs"
+negative_r24_duplicate_event="$script_dir/negative/r24_portable_progress_v1_duplicate_event.rs"
+negative_r24_duplicate_stream="$script_dir/negative/r24_portable_progress_v1_duplicate_stream.rs"
+negative_r24_retired_capacity="$script_dir/negative/r24_portable_progress_v1_retired_capacity.rs"
+negative_r24_terminal_absorption="$script_dir/negative/r24_portable_progress_v1_terminal_absorption.rs"
+negative_r24_terminal_progress_registration="$script_dir/negative/r24_portable_progress_v1_terminal_progress_registration.rs"
+negative_r24_abandon_progress="$script_dir/negative/r24_portable_progress_v1_abandon_progress.rs"
+negative_r24_abandon_custody="$script_dir/negative/r24_portable_progress_v1_abandon_custody.rs"
+negative_r24_stop_progress="$script_dir/negative/r24_portable_progress_v1_stop_progress.rs"
+negative_r24_stop_registration="$script_dir/negative/r24_portable_progress_v1_stop_registration.rs"
+negative_r24_sixty_three_plus_two="$script_dir/negative/r24_portable_progress_v1_sixty_three_plus_two.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -331,6 +351,7 @@ expected_r20_runtime_facade_directional_chunking=$(read_pin "$pin_dir/R20_RUNTIM
 expected_r21_runtime_scripted_failure_seam=$(read_pin "$pin_dir/R21_RUNTIME_SCRIPTED_FAILURE_SEAM_SHA256")
 expected_r22_batched_directional_persistent_sdma_windows=$(read_pin "$pin_dir/R22_BATCHED_DIRECTIONAL_PERSISTENT_SDMA_WINDOWS_SHA256")
 expected_r23_same_device_d2d_persistent_sdma_windows=$(read_pin "$pin_dir/R23_SAME_DEVICE_D2D_PERSISTENT_SDMA_WINDOWS_SHA256")
+expected_r24_portable_progress=$(read_pin "$pin_dir/R24_PORTABLE_PROGRESS_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -587,6 +608,25 @@ expected_negative_r23_quarantine_custody=$(read_pin "$pin_dir/NEGATIVE_R23_QUARA
 expected_negative_r23_quarantine_release=$(read_pin "$pin_dir/NEGATIVE_R23_QUARANTINE_RELEASE_SHA256")
 expected_negative_r23_quarantine_entry_validity=$(read_pin "$pin_dir/NEGATIVE_R23_QUARANTINE_ENTRY_VALIDITY_SHA256")
 expected_negative_r23_early_continuation=$(read_pin "$pin_dir/NEGATIVE_R23_EARLY_CONTINUATION_SHA256")
+expected_negative_r24_atomic_registration=$(read_pin "$pin_dir/NEGATIVE_R24_ATOMIC_REGISTRATION_SHA256")
+expected_negative_r24_poll_budget=$(read_pin "$pin_dir/NEGATIVE_R24_POLL_BUDGET_SHA256")
+expected_negative_r24_flush_budget=$(read_pin "$pin_dir/NEGATIVE_R24_FLUSH_BUDGET_SHA256")
+expected_negative_r24_cyclic_visitation=$(read_pin "$pin_dir/NEGATIVE_R24_CYCLIC_VISITATION_SHA256")
+expected_negative_r24_visit_substitution=$(read_pin "$pin_dir/NEGATIVE_R24_VISIT_SUBSTITUTION_SHA256")
+expected_negative_r24_poll_before_continuation=$(read_pin "$pin_dir/NEGATIVE_R24_POLL_BEFORE_CONTINUATION_SHA256")
+expected_negative_r24_retryable_poll=$(read_pin "$pin_dir/NEGATIVE_R24_RETRYABLE_POLL_SHA256")
+expected_negative_r24_retryable_poll_progress=$(read_pin "$pin_dir/NEGATIVE_R24_RETRYABLE_POLL_PROGRESS_SHA256")
+expected_negative_r24_retryable_flush=$(read_pin "$pin_dir/NEGATIVE_R24_RETRYABLE_FLUSH_SHA256")
+expected_negative_r24_duplicate_event=$(read_pin "$pin_dir/NEGATIVE_R24_DUPLICATE_EVENT_SHA256")
+expected_negative_r24_duplicate_stream=$(read_pin "$pin_dir/NEGATIVE_R24_DUPLICATE_STREAM_SHA256")
+expected_negative_r24_retired_capacity=$(read_pin "$pin_dir/NEGATIVE_R24_RETIRED_CAPACITY_SHA256")
+expected_negative_r24_terminal_absorption=$(read_pin "$pin_dir/NEGATIVE_R24_TERMINAL_ABSORPTION_SHA256")
+expected_negative_r24_terminal_progress_registration=$(read_pin "$pin_dir/NEGATIVE_R24_TERMINAL_PROGRESS_REGISTRATION_SHA256")
+expected_negative_r24_abandon_progress=$(read_pin "$pin_dir/NEGATIVE_R24_ABANDON_PROGRESS_SHA256")
+expected_negative_r24_abandon_custody=$(read_pin "$pin_dir/NEGATIVE_R24_ABANDON_CUSTODY_SHA256")
+expected_negative_r24_stop_progress=$(read_pin "$pin_dir/NEGATIVE_R24_STOP_PROGRESS_SHA256")
+expected_negative_r24_stop_registration=$(read_pin "$pin_dir/NEGATIVE_R24_STOP_REGISTRATION_SHA256")
+expected_negative_r24_sixty_three_plus_two=$(read_pin "$pin_dir/NEGATIVE_R24_SIXTY_THREE_PLUS_TWO_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -638,6 +678,7 @@ check_sources() {
     check_digest "$expected_r21_runtime_scripted_failure_seam" "$r21_runtime_scripted_failure_seam_proof"
     check_digest "$expected_r22_batched_directional_persistent_sdma_windows" "$r22_batched_directional_persistent_sdma_windows_proof"
     check_digest "$expected_r23_same_device_d2d_persistent_sdma_windows" "$r23_same_device_d2d_persistent_sdma_windows_proof"
+    check_digest "$expected_r24_portable_progress" "$r24_portable_progress_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -894,6 +935,25 @@ check_sources() {
     check_digest "$expected_negative_r23_quarantine_release" "$negative_r23_quarantine_release"
     check_digest "$expected_negative_r23_quarantine_entry_validity" "$negative_r23_quarantine_entry_validity"
     check_digest "$expected_negative_r23_early_continuation" "$negative_r23_early_continuation"
+    check_digest "$expected_negative_r24_atomic_registration" "$negative_r24_atomic_registration"
+    check_digest "$expected_negative_r24_poll_budget" "$negative_r24_poll_budget"
+    check_digest "$expected_negative_r24_flush_budget" "$negative_r24_flush_budget"
+    check_digest "$expected_negative_r24_cyclic_visitation" "$negative_r24_cyclic_visitation"
+    check_digest "$expected_negative_r24_visit_substitution" "$negative_r24_visit_substitution"
+    check_digest "$expected_negative_r24_poll_before_continuation" "$negative_r24_poll_before_continuation"
+    check_digest "$expected_negative_r24_retryable_poll" "$negative_r24_retryable_poll"
+    check_digest "$expected_negative_r24_retryable_poll_progress" "$negative_r24_retryable_poll_progress"
+    check_digest "$expected_negative_r24_retryable_flush" "$negative_r24_retryable_flush"
+    check_digest "$expected_negative_r24_duplicate_event" "$negative_r24_duplicate_event"
+    check_digest "$expected_negative_r24_duplicate_stream" "$negative_r24_duplicate_stream"
+    check_digest "$expected_negative_r24_retired_capacity" "$negative_r24_retired_capacity"
+    check_digest "$expected_negative_r24_terminal_absorption" "$negative_r24_terminal_absorption"
+    check_digest "$expected_negative_r24_terminal_progress_registration" "$negative_r24_terminal_progress_registration"
+    check_digest "$expected_negative_r24_abandon_progress" "$negative_r24_abandon_progress"
+    check_digest "$expected_negative_r24_abandon_custody" "$negative_r24_abandon_custody"
+    check_digest "$expected_negative_r24_stop_progress" "$negative_r24_stop_progress"
+    check_digest "$expected_negative_r24_stop_registration" "$negative_r24_stop_registration"
+    check_digest "$expected_negative_r24_sixty_three_plus_two" "$negative_r24_sixty_three_plus_two"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -926,6 +986,7 @@ check_sources
     "$r21_runtime_scripted_failure_seam_proof" \
     "$r22_batched_directional_persistent_sdma_windows_proof" \
     "$r23_same_device_d2d_persistent_sdma_windows_proof" \
+    "$r24_portable_progress_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1178,7 +1239,26 @@ check_sources
     "$negative_r23_quarantine_custody" \
     "$negative_r23_quarantine_release" \
     "$negative_r23_quarantine_entry_validity" \
-    "$negative_r23_early_continuation"
+    "$negative_r23_early_continuation" \
+    "$negative_r24_atomic_registration" \
+    "$negative_r24_poll_budget" \
+    "$negative_r24_flush_budget" \
+    "$negative_r24_cyclic_visitation" \
+    "$negative_r24_visit_substitution" \
+    "$negative_r24_poll_before_continuation" \
+    "$negative_r24_retryable_poll" \
+    "$negative_r24_retryable_poll_progress" \
+    "$negative_r24_retryable_flush" \
+    "$negative_r24_duplicate_event" \
+    "$negative_r24_duplicate_stream" \
+    "$negative_r24_retired_capacity" \
+    "$negative_r24_terminal_absorption" \
+    "$negative_r24_terminal_progress_registration" \
+    "$negative_r24_abandon_progress" \
+    "$negative_r24_abandon_custody" \
+    "$negative_r24_stop_progress" \
+    "$negative_r24_stop_registration" \
+    "$negative_r24_sixty_three_plus_two"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1301,6 +1381,7 @@ check_positive "$r20_runtime_facade_directional_chunking_proof" 'verification re
 check_positive "$r21_runtime_scripted_failure_seam_proof" 'verification results:: 37 verified, 0 errors' r21-runtime-scripted-failure-seam
 check_positive "$r22_batched_directional_persistent_sdma_windows_proof" 'verification results:: 41 verified, 0 errors' r22-batched-directional-persistent-sdma-windows
 check_positive "$r23_same_device_d2d_persistent_sdma_windows_proof" 'verification results:: 46 verified, 0 errors' r23-same-device-d2d-persistent-sdma-windows
+check_positive "$r24_portable_progress_proof" 'verification results:: 34 verified, 0 errors' r24-portable-progress
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1557,13 +1638,32 @@ check_negative "$negative_r23_quarantine_custody" mutated_d2d_quarantine_retains
 check_negative "$negative_r23_quarantine_release" mutated_d2d_quarantine_has_no_release_route_v1 r23-quarantine-release
 check_negative "$negative_r23_quarantine_entry_validity" mutated_d2d_quarantine_entry_preserves_validity_v1 r23-quarantine-entry-validity
 check_negative "$negative_r23_early_continuation" mutated_d2d_continuation_may_precede_full_retirement_v1 r23-early-continuation
+check_negative "$negative_r24_atomic_registration" mutated_event_and_stream_registration_is_atomic_v1 r24-atomic-registration
+check_negative "$negative_r24_poll_budget" mutated_poll_budget_is_bounded_v1 r24-poll-budget
+check_negative "$negative_r24_flush_budget" mutated_flush_budget_is_bounded_v1 r24-flush-budget
+check_negative "$negative_r24_cyclic_visitation" mutated_cyclic_visitation_stays_in_roster_v1 r24-cyclic-visitation
+check_negative "$negative_r24_visit_substitution" mutated_cyclic_visit_preserves_registration_identity_v1 r24-visit-substitution
+check_negative "$negative_r24_poll_before_continuation" mutated_continuation_requires_prior_poll_v1 r24-poll-before-continuation
+check_negative "$negative_r24_retryable_poll" mutated_retryable_poll_preserves_custody_v1 r24-retryable-poll
+check_negative "$negative_r24_retryable_poll_progress" mutated_retryable_poll_retires_progress_registration_v1 r24-retryable-poll-progress
+check_negative "$negative_r24_retryable_flush" mutated_retryable_flush_preserves_registration_v1 r24-retryable-flush
+check_negative "$negative_r24_duplicate_event" mutated_duplicate_event_registration_is_atomic_v1 r24-duplicate-event
+check_negative "$negative_r24_duplicate_stream" mutated_duplicate_stream_registration_is_atomic_v1 r24-duplicate-stream
+check_negative "$negative_r24_retired_capacity" mutated_retired_registration_frees_active_capacity_v1 r24-retired-capacity
+check_negative "$negative_r24_terminal_absorption" mutated_terminal_quarantine_is_absorbing_v1 r24-terminal-absorption
+check_negative "$negative_r24_terminal_progress_registration" mutated_terminal_retires_progress_registration_v1 r24-terminal-progress-registration
+check_negative "$negative_r24_abandon_progress" mutated_abandon_is_observation_only_v1 r24-abandon-progress
+check_negative "$negative_r24_abandon_custody" mutated_drop_preserves_custody_v1 r24-abandon-custody
+check_negative "$negative_r24_stop_progress" mutated_stop_performs_no_final_progress_v1 r24-stop-progress
+check_negative "$negative_r24_stop_registration" mutated_stop_preserves_registration_history_v1 r24-stop-registration
+check_negative "$negative_r24_sixty_three_plus_two" mutated_sixty_five_packets_plan_as_sixty_three_plus_two_v1 r24-sixty-three-plus-two
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 mutations=256'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 mutations=275'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

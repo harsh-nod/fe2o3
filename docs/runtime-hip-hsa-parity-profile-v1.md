@@ -354,6 +354,48 @@ background progress, production atomic/collective authority, broad Rust device
 language, hardware refinement, and the remaining gates below are still open.
 H2H remains unsupported but is outside the V1 copy-engine list.
 
+## Current R24 Status
+
+R24 closes a concrete portable-progress liveness gap in R23's multi-window copy
+path for Send-capable runtime backends. `event_future_with_progress` atomically
+admits one event waiter and its exact source stream into the async engine. The
+engine polls events before its independently bounded, cyclic stream-flush pass,
+so observing completion of the first 63-packet window can make the two-packet
+continuation ready for publication in the same tick. Duplicate, capacity,
+invalid-handle, and event/stream mismatch failures install neither half. A
+conclusive event result stops and removes only the exact paired progress entry
+before the future becomes ready, while logical resource and native custody stay
+subject to the existing explicit-release rules. Drop abandons observation and
+future flushes without cancellation, release, or a final progress attempt.
+
+Direct KFD remains non-`Send` and thread-affine. R24 therefore adds a
+feature-gated, copy-only Worker V5 qualification child that creates, serves, and
+explicitly shuts down its KFD owner on the child's main thread. Only the
+canonical empty frame reaches graceful native shutdown; malformed or truncated
+input returns through the existing fail-closed child boundary. The parent can
+own the Send-capable Worker adapter in the progress engine without moving a KFD
+object across threads. An ignored gfx942 test submits a 256 MiB same-device D2D
+copy, asserts the exact 65-packet `63 + 2` plan and 2,048-byte tail, performs no
+caller `flush_stream`, and validates a boundary-sensitive absolute-offset
+payload in both physical allocations after completion. It is compile-qualified
+but has not run on MI300X for this commit.
+
+The independent executable R24 model has 16 focused tests. Its abstract Verus
+artifact adds 34 obligations and 19 rejected mutations for pinned totals of 494
+obligations and 275 rejected mutations. The model distinguishes active progress
+membership from retained logical event, stream, and native custody; it covers
+atomic admission, independent event/stream duplicate rejection, bounded active
+capacity over bounded append-only history, independently bounded cyclic poll and
+flush visits, poll-gated continuation, retryable-poll custody with observation
+retirement, retryable-flush membership, terminal progress retirement,
+abandonment, and stop without final progress. Executable visit-counter overflow
+is preflighted before phase or cursor mutation. No theorem connects it to
+executable Rust, Worker transport, KFD, firmware, or hardware. R24 has no MI300X
+result and makes no parity, fairness, liveness, bandwidth, latency, or speedup
+claim. Unified persistent compute/XGMI storage, production atomic/collective
+authority, broad Rust device language, hardware refinement, and the remaining
+qualification gates stay open.
+
 ## Required Gates
 
 ### G1: API and ownership
@@ -392,9 +434,12 @@ The additive runtime async progress mode is one declared portable mechanism for
 Send-capable backends: a bounded registered-stream roster receives bounded,
 cyclic `flush_stream` attempts on the owner thread while event observation keeps
 its independent budget. Ordinary async-engine construction remains
-observation-only. Direct KFD is thread-affine and therefore still requires
-caller-driven flush. These host tests establish transition behavior, not native
-liveness or scheduling parity.
+observation-only. Direct in-process KFD is thread-affine and therefore still
+requires caller-driven flush. A dedicated Worker V5 child can retain KFD on its
+main thread while exposing a Send-capable address-free adapter to the progress
+engine. The R24 native test for that composition is ignored until an exclusive
+gfx942 qualification run is available. Host tests establish transition
+behavior, not native liveness or scheduling parity.
 
 ### G3: memory and copies
 

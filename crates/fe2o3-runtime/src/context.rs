@@ -2389,6 +2389,20 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .ok_or(RuntimeValidationErrorV1::UnknownSubmission)
     }
 
+    pub(crate) fn event_stream_for_async_progress_v1(
+        &self,
+        event: RuntimeEventIdV1,
+    ) -> Result<RuntimeStreamIdV1, RuntimeValidationErrorV1> {
+        let event = self
+            .events
+            .get(&event)
+            .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+        self.submissions
+            .get(&event.submission)
+            .map(|submission| submission.stream)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)
+    }
+
     /// Performs one nonblocking completion observation for a recorded event.
     pub fn poll_event(
         &mut self,

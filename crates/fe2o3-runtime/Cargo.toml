@@ -23,6 +23,11 @@ hardware-qualification = []
 name = "gfx942-lds-diagnostic"
 required-features = ["hardware-diagnostic"]
 
+[[bin]]
+name = "fe2o3-runtime-kfd-worker-v5-qualification"
+path = "src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs"
+required-features = ["hardware-qualification"]
+
 [dependencies]
 fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true

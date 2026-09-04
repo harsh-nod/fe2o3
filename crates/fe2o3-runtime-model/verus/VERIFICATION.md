@@ -7,8 +7,8 @@ logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
 persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
 directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
 chunking, R21 runtime scripted-failure-seam, R22 batched directional
-persistent-SDMA-window, and R23 same-device D2D persistent-SDMA-window models.
-The authenticated runner proves 460 obligations and rejects 256
+persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, and R24
+portable-progress models. The authenticated runner proves 494 obligations and rejects 275
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1060,6 +1060,72 @@ HIP/HSA parity, or performance.
 | Independent move-only executable D2D window model | **Checked** | Twenty-four focused Rust tests; no Rust-to-Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Twenty-eight pinned standalone expected-negative witnesses fail only at their named postconditions; they do not import the positive R23 model. |
 | Executable Rust, R19/R22, runtime/KFD, native hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R23 proof boundary. |
+
+## R24 portable progress
+
+`r24_portable_progress_v1.rs` proves 34 obligations for an independent bounded
+portable-progress model. Registration atomically binds one existing logical
+event and stream custody pair into the progress roster after all admission
+checks; a rejected preflight, active event duplicate, active stream duplicate,
+stopped engine, or exhausted capacity leaves both abstract pair counts
+unchanged. The `event_installed` and
+`stream_installed` fields denote retained logical runtime-resource custody,
+not active async-waiter or progress-registry membership. The model bounds
+both active registration capacity and append-only history at 65,536 and
+independently bounds poll and flush work at 1,024 visits per call. Active
+capacity and duplicate checks ignore retired history, so retryable-poll,
+terminal, and abandoned occurrences permit a later exact re-registration.
+
+Poll and flush use separate stable cyclic cursors over an append-only abstract
+roster. A 65-packet transfer first exposes one 63-packet pending window. Only a
+completed poll creates the two-packet continuation, and only a later flush may
+publish it. A pending poll preserves progress eligibility. A retryable backend
+poll rejection preserves phase and logical event, stream, and native custody,
+but resolves that observer and retires its progress eligibility. A retryable
+flush preserves both logical custody and progress eligibility. Terminal
+success and terminal quarantine retire progress eligibility by setting
+`observing=false`
+while retaining the logical event, stream, and native custody; both terminal
+phases are absorbing. The vector remains an append-only historical roster, not
+a claim of live progress-registry membership. Transitions select only the
+current active occurrence, even when the same identity exists in retired
+history. Abandon and drop only disable observation; they preserve phase and
+custody. Stop retires all active abstract pair counts while preserving history
+and logical custody, without performing a final poll, flush, or cursor advance.
+
+The executable R24 model has 16 focused Rust tests. Nineteen pinned
+expected-negative witnesses cover event/stream half-installation, independent
+active event and stream duplication, retired-capacity reuse, poll and flush
+budget overruns, cyclic roster escape and identity substitution, continuation
+before poll, retryable poll custody and progress retirement, retryable flush
+progress eligibility, terminal nonabsorption and failure to retire progress
+eligibility, abandon
+progress and drop custody, Stop progress and registration mutation, and the
+exact 63+2 packet split. The proof-source policy
+forbids module inclusion, so these are authenticated standalone bounded
+mutation witnesses, not source-coupled mutation tests of the positive R24 file.
+
+R24 is an independent finite mathematical model. It does not establish a
+Rust-to-Verus correspondence theorem and does not refine runtime threads, the
+native runtime, KFD, HSA, HIP, firmware, hardware scheduling, or hardware
+liveness. Bounded visit counts and cyclic order are safety properties here;
+they do not prove that an OS thread is scheduled or that any device operation
+eventually completes.
+
+The executable model derives event identity from context generation plus event
+id, and stream identity from context generation plus stream id. The count-only
+Verus registration abstraction instead receives separate authenticated
+`event_duplicate` and `stream_duplicate` predicates; it proves each rejection
+independently but does not derive either predicate from a concrete roster.
+
+## R24 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Atomic event/stream progress pairing, independent duplicate rejection, active-capacity reuse over bounded history, independent budgets, stable cyclic visitation, poll-gated 63+2 continuation, retryable preservation, terminal progress retirement and absorption, observation-only abandon/drop, and Stop without final progress | **Proved** | Thirty-four obligations in `r24_portable_progress_v1.rs`; finite mathematical values only. |
+| Independent executable portable-progress model | **Checked** | Sixteen focused Rust tests; no Rust-to-Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Nineteen pinned standalone expected-negative witnesses fail only at their named postconditions; they do not import the positive R24 model. |
+| Rust/native runtime, runtime threads, KFD/HSA/HIP, firmware, hardware scheduling, hardware liveness, parity, or performance refinement | **Not established** | Explicitly outside the R24 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

@@ -70,12 +70,14 @@ abort policy inside that child; the
 application receives terminal backend loss without being terminated itself.
 
 The repository provides both bounded canonical codecs and server loops, but does
-not yet ship a standalone KFD worker executable. Shut down the context first,
-then shut down the returned worker backend so the transport can send its
-empty-frame termination and reap the child. V4 flush and ordinary extension
-calls may synchronously block up to the configured request timeout; drain obeys
-the caller's earlier deadline. Timeout, malformed terminal response, or terminal
-backend failure seals and reaps the worker.
+not yet ship a production standalone KFD worker executable. Feature
+`hardware-qualification` adds a copy-only KFD Worker V5 child for the exact
+gfx942 progress qualification; it rejects every machine-code launch. Shut down
+the context first, then shut down the returned worker backend so the transport
+can send its empty-frame termination and reap the child. V4 flush and ordinary
+extension calls may synchronously block up to the configured request timeout;
+drain obeys the caller's earlier deadline. Timeout, malformed terminal response,
+or terminal backend failure seals and reaps the worker.
 
 Observe each submission to a conclusive `RuntimeCompletionStatusV1`: `Succeeded`,
 a typed backend-code or cancellation failure, or `QuiescentWithoutResult` when
@@ -107,6 +109,14 @@ and never cancels or releases runtime work. Consuming shutdown wakes retained
 futures as stopped and returns the context. This engine observes completion; it
 does not publish deferred backend work, replace explicit `flush_stream`, or
 provide native asynchronous execution by itself.
+
+Progress mode additionally offers `event_future_with_progress`, which admits one
+event and its exact source stream in a single transaction. Event polling runs
+before stream flushing in each engine tick, so completion of one persistent SDMA
+window can make its continuation ready for that tick's flush. A conclusive event
+observation retires the paired progress entry before making the future ready;
+logical event, stream, submission, and native custody still require explicit
+release. Rejection installs neither half, and drop performs no final flush.
 
 The current single-device KFD adapter admits one gfx942 device and at most
 65,536 logical streams, multiplexed over exactly two persistent native compute
@@ -146,6 +156,13 @@ then the background engine emits the canonical flush request, and only then may
 the child report completion. Separate cases verify response-deadline,
 decoded-terminal, and EOF sealing. These tests validate host transport and
 runtime state propagation only; they are not native KFD or liveness evidence.
+An ignored hardware qualification compiles an exact copy-only KFD Worker V5
+child and drives a 256 MiB same-device D2D operation as a 63-packet window plus
+a two-packet continuation through the paired future, with no caller
+`flush_stream`. It validates an absolute-offset payload after completion. The
+source and destination are both read back outside the progress interval. The
+test has not yet run on the R24 commit and therefore supplies no hardware,
+liveness, parity, or performance result.
 
 Same-device `copy_async` uses the native directional SDMA queues and splits
 logical ranges larger than one linear packet into sequential packets. Live

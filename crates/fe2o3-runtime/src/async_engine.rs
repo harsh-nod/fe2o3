@@ -366,6 +366,32 @@ impl fmt::Display for RuntimeAsyncProgressRegistrationErrorV1 {
 
 impl Error for RuntimeAsyncProgressRegistrationErrorV1 {}
 
+/// Failure to atomically register one event and its source stream for progress.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeAsyncProgressEventRegistrationErrorV1 {
+    CommandQueueFull,
+    EngineStopped,
+    ReentrantCall,
+    EventCapacity,
+    ProgressCapacity,
+    DuplicateEvent,
+    DuplicateStream,
+    InvalidEvent(RuntimeValidationErrorV1),
+    InvalidStream(RuntimeValidationErrorV1),
+    EventStreamMismatch,
+}
+
+impl fmt::Display for RuntimeAsyncProgressEventRegistrationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "runtime progress event registration failed: {self:?}"
+        )
+    }
+}
+
+impl Error for RuntimeAsyncProgressEventRegistrationErrorV1 {}
+
 /// Error produced while awaiting one registered runtime event.
 #[derive(Debug)]
 pub enum RuntimeAsyncEventErrorV1<E> {
@@ -399,6 +425,7 @@ struct RuntimeAsyncFutureStateV1<E> {
 struct RuntimeAsyncFutureCellV1<E> {
     abandoned: AtomicBool,
     state: Mutex<RuntimeAsyncFutureStateV1<E>>,
+    paired_progress: Option<(RuntimeStreamIdV1, Arc<RuntimeAsyncProgressCellV1<E>>)>,
 }
 
 struct RuntimeAsyncWaiterRegistryV1<E> {
@@ -429,6 +456,21 @@ impl<E> RuntimeAsyncFutureCellV1<E> {
                 outcome: None,
                 waker: None,
             }),
+            paired_progress: None,
+        }
+    }
+
+    fn with_progress(
+        stream: RuntimeStreamIdV1,
+        progress: Arc<RuntimeAsyncProgressCellV1<E>>,
+    ) -> Self {
+        Self {
+            abandoned: AtomicBool::new(false),
+            state: Mutex::new(RuntimeAsyncFutureStateV1 {
+                outcome: None,
+                waker: None,
+            }),
+            paired_progress: Some((stream, progress)),
         }
     }
 
@@ -518,6 +560,48 @@ impl<E> Drop for RuntimeEventFutureV1<E> {
                 .take();
             drop(waker);
         }
+    }
+}
+
+/// One event future paired with background progress for its exact source stream.
+///
+/// The engine admits both registrations in one transaction. Dropping this value
+/// abandons event observation and future flush attempts; it never cancels work,
+/// releases a resource, or performs a final flush.
+#[must_use = "dropping a progress event future does not cancel or release its submission"]
+pub struct RuntimeAsyncProgressEventFutureV1<E> {
+    future: RuntimeEventFutureV1<E>,
+    progress: RuntimeAsyncProgressRegistrationV1<E>,
+}
+
+impl<E> RuntimeAsyncProgressEventFutureV1<E> {
+    pub const fn event(&self) -> RuntimeEventIdV1 {
+        self.future.event()
+    }
+
+    pub const fn stream(&self) -> RuntimeStreamIdV1 {
+        self.progress.stream()
+    }
+
+    pub fn progress_failure_count(&self) -> u64 {
+        self.progress.failure_count()
+    }
+
+    pub fn take_progress_failure(&self) -> Option<RuntimeErrorV1<E>> {
+        self.progress.take_failure()
+    }
+
+    pub fn is_progress_stopped(&self) -> bool {
+        self.progress.is_stopped()
+    }
+}
+
+impl<E> Future for RuntimeAsyncProgressEventFutureV1<E> {
+    type Output = Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        Pin::new(&mut this.future).poll(context)
     }
 }
 
@@ -645,6 +729,13 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
         stream: RuntimeStreamIdV1,
         cell: Arc<RuntimeAsyncProgressCellV1<B::Error>>,
         response: SyncSender<Result<(), RuntimeAsyncProgressRegistrationErrorV1>>,
+    },
+    RegisterEventWithProgress {
+        event: RuntimeEventIdV1,
+        stream: RuntimeStreamIdV1,
+        event_cell: Arc<RuntimeAsyncFutureCellV1<B::Error>>,
+        progress_cell: Arc<RuntimeAsyncProgressCellV1<B::Error>>,
+        response: SyncSender<Result<(), RuntimeAsyncProgressEventRegistrationErrorV1>>,
     },
     Stop,
 }
@@ -796,6 +887,63 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncProgressHandleV1<B> {
             .recv()
             .unwrap_or(Err(RuntimeAsyncProgressRegistrationErrorV1::EngineStopped))?;
         Ok(RuntimeAsyncProgressRegistrationV1 { stream, cell })
+    }
+
+    /// Atomically registers an event waiter and progress for its source stream.
+    ///
+    /// Event polling runs before stream flushing in every engine tick. This
+    /// lets an observed completed native window make its continuation ready for
+    /// the same tick's flush without requiring a caller-driven progress call.
+    /// A nonterminal polling error resolves the future and retires its paired
+    /// progress registration; explicitly register the same event and stream
+    /// again to retry observation. Retryable flush errors retain registration.
+    pub fn event_future_with_progress(
+        &self,
+        stream: RuntimeStreamIdV1,
+        event: RuntimeEventIdV1,
+    ) -> Result<
+        RuntimeAsyncProgressEventFutureV1<B::Error>,
+        RuntimeAsyncProgressEventRegistrationErrorV1,
+    > {
+        if self.observer.is_worker_thread() {
+            return Err(RuntimeAsyncProgressEventRegistrationErrorV1::ReentrantCall);
+        }
+        let progress_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let event_cell = Arc::new(RuntimeAsyncFutureCellV1::with_progress(
+            stream,
+            Arc::clone(&progress_cell),
+        ));
+        let (response_sender, response_receiver) = sync_channel(1);
+        let command = RuntimeAsyncEngineCommandV1::RegisterEventWithProgress {
+            event,
+            stream,
+            event_cell: Arc::clone(&event_cell),
+            progress_cell: Arc::clone(&progress_cell),
+            response: response_sender,
+        };
+        match self.observer.sender.try_send(command) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                return Err(RuntimeAsyncProgressEventRegistrationErrorV1::CommandQueueFull);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err(RuntimeAsyncProgressEventRegistrationErrorV1::EngineStopped);
+            }
+        }
+        response_receiver.recv().unwrap_or(Err(
+            RuntimeAsyncProgressEventRegistrationErrorV1::EngineStopped,
+        ))?;
+        Ok(RuntimeAsyncProgressEventFutureV1 {
+            future: RuntimeEventFutureV1 {
+                event,
+                cell: event_cell,
+                completed: false,
+            },
+            progress: RuntimeAsyncProgressRegistrationV1 {
+                stream,
+                cell: progress_cell,
+            },
+        })
     }
 }
 
@@ -1078,6 +1226,9 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
             stopped = poll_waiters_v1(
                 &mut context,
                 &mut waiters.entries,
+                progress_registry
+                    .as_mut()
+                    .map(|registry| &mut registry.entries),
                 &mut next_event,
                 config.polls_per_tick,
             );
@@ -1094,13 +1245,13 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
             );
         }
     }
-    for (_, cell) in core::mem::take(&mut waiters.entries) {
-        cell.complete(Err(RuntimeAsyncEventErrorV1::EngineStopped));
-    }
     if let Some(registry) = progress_registry.as_mut() {
         for (_, cell) in core::mem::take(&mut registry.entries) {
             cell.stop();
         }
+    }
+    for (_, cell) in core::mem::take(&mut waiters.entries) {
+        cell.complete(Err(RuntimeAsyncEventErrorV1::EngineStopped));
     }
     context
 }
@@ -1208,6 +1359,103 @@ fn handle_command_v1<B: RuntimeBackendV1 + Send + 'static>(
             let _ = response.send(result);
             false
         }
+        RuntimeAsyncEngineCommandV1::RegisterEventWithProgress {
+            event,
+            stream,
+            event_cell,
+            progress_cell,
+            response,
+        } => {
+            let Some(progress) = progress else {
+                let _ = response.send(Err(
+                    RuntimeAsyncProgressEventRegistrationErrorV1::EngineStopped,
+                ));
+                return false;
+            };
+            let progress_capacity = progress_config
+                .expect("a progress registry always has progress configuration")
+                .stream_capacity;
+
+            if waiters
+                .get(&event)
+                .is_some_and(|prior| prior.abandoned.load(Ordering::Acquire))
+            {
+                waiters.remove(&event);
+            }
+            if progress
+                .entries
+                .get(&stream)
+                .is_some_and(|prior| prior.abandoned.load(Ordering::Acquire))
+                && let Some(prior) = progress.entries.remove(&stream)
+            {
+                prior.stop();
+            }
+            let result = if waiters.contains_key(&event) {
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::DuplicateEvent)
+            } else if progress.entries.contains_key(&stream) {
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::DuplicateStream)
+            } else if let Err(error) = context.query_stream(stream) {
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::InvalidStream(
+                    error,
+                ))
+            } else {
+                match context.event_stream_for_async_progress_v1(event) {
+                    Err(error) => Err(RuntimeAsyncProgressEventRegistrationErrorV1::InvalidEvent(
+                        error,
+                    )),
+                    Ok(event_stream) if event_stream != stream => {
+                        Err(RuntimeAsyncProgressEventRegistrationErrorV1::EventStreamMismatch)
+                    }
+                    Ok(_) => match context.query_event(event) {
+                        Err(error) => Err(
+                            RuntimeAsyncProgressEventRegistrationErrorV1::InvalidEvent(error),
+                        ),
+                        Ok(status) if status.is_terminal() => {
+                            event_cell.complete(Ok(status));
+                            progress_cell.stop();
+                            Ok(())
+                        }
+                        Ok(RuntimeCompletionStatusV1::Pending) => {
+                            if waiters.len() >= config.waiter_capacity {
+                                waiters.retain(|_, prior| !prior.abandoned.load(Ordering::Acquire));
+                            }
+                            if progress.entries.len() >= progress_capacity {
+                                progress.entries.retain(|_, prior| {
+                                    let retained = !prior.abandoned.load(Ordering::Acquire);
+                                    if !retained {
+                                        prior.stop();
+                                    }
+                                    retained
+                                });
+                            }
+                            if waiters.len() >= config.waiter_capacity {
+                                let _ = response.send(Err(
+                                    RuntimeAsyncProgressEventRegistrationErrorV1::EventCapacity,
+                                ));
+                                return false;
+                            }
+                            if progress.entries.len() >= progress_capacity {
+                                let _ = response.send(Err(
+                                    RuntimeAsyncProgressEventRegistrationErrorV1::ProgressCapacity,
+                                ));
+                                return false;
+                            }
+                            waiters.insert(event, Arc::clone(&event_cell));
+                            progress.entries.insert(stream, Arc::clone(&progress_cell));
+                            if response.send(Ok(())).is_err() {
+                                waiters.remove(&event);
+                                progress.entries.remove(&stream);
+                                progress_cell.stop();
+                            }
+                            return false;
+                        }
+                        Ok(_) => unreachable!("all non-pending runtime statuses are terminal"),
+                    },
+                }
+            };
+            let _ = response.send(result);
+            false
+        }
         RuntimeAsyncEngineCommandV1::Stop => true,
     }
 }
@@ -1215,6 +1463,9 @@ fn handle_command_v1<B: RuntimeBackendV1 + Send + 'static>(
 fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
     context: &mut RuntimeContextV1<B>,
     waiters: &mut BTreeMap<RuntimeEventIdV1, Arc<RuntimeAsyncFutureCellV1<B::Error>>>,
+    mut progress: Option<
+        &mut BTreeMap<RuntimeStreamIdV1, Arc<RuntimeAsyncProgressCellV1<B::Error>>>,
+    >,
     next_event: &mut Option<RuntimeEventIdV1>,
     budget: usize,
 ) -> bool {
@@ -1238,17 +1489,20 @@ fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
             continue;
         };
         if cell.abandoned.load(Ordering::Acquire) {
+            stop_paired_progress_v1(cell, progress.as_deref_mut());
             waiters.remove(&event);
             continue;
         }
         match context.poll_event(event) {
             Ok(RuntimeCompletionStatusV1::Pending) => {}
             Ok(status) => {
+                stop_paired_progress_v1(cell, progress.as_deref_mut());
                 cell.complete(Ok(status));
                 waiters.remove(&event);
             }
             Err(error) => {
                 let terminal = runtime_error_is_terminal_v1(&error);
+                stop_paired_progress_v1(cell, progress.as_deref_mut());
                 cell.complete(Err(RuntimeAsyncEventErrorV1::Runtime(error)));
                 waiters.remove(&event);
                 if terminal {
@@ -1266,6 +1520,25 @@ fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
             .map(|(event, _)| *event)
     });
     false
+}
+
+fn stop_paired_progress_v1<E>(
+    event_cell: &RuntimeAsyncFutureCellV1<E>,
+    progress: Option<&mut BTreeMap<RuntimeStreamIdV1, Arc<RuntimeAsyncProgressCellV1<E>>>>,
+) {
+    let Some((stream, paired_cell)) = event_cell.paired_progress.as_ref() else {
+        return;
+    };
+    paired_cell.stop();
+    let Some(progress) = progress else {
+        return;
+    };
+    if progress
+        .get(stream)
+        .is_some_and(|registered| Arc::ptr_eq(registered, paired_cell))
+    {
+        progress.remove(stream);
+    }
 }
 
 fn flush_progress_v1<B: RuntimeBackendV1 + Send + 'static>(
@@ -1377,6 +1650,19 @@ mod tests {
         Terminal(&'static str),
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum MockProgressStepV1 {
+        Poll(usize),
+        Flush(usize),
+    }
+
+    struct MockWindowProgressV1 {
+        submission: u64,
+        window_packet_counts: VecDeque<usize>,
+        published: bool,
+        continuation_ready: bool,
+    }
+
     #[derive(Default)]
     struct MockState {
         next: u64,
@@ -1388,6 +1674,8 @@ mod tests {
         flush_calls: Vec<(u64, ThreadId)>,
         flush_outcomes: VecDeque<MockFlushOutcome>,
         flush_barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
+        window_progress: Option<MockWindowProgressV1>,
+        progress_steps: Vec<MockProgressStepV1>,
         release_calls: usize,
         panic_on_poll: bool,
     }
@@ -1524,6 +1812,25 @@ mod tests {
             if let Some(failure) = state.poll_failures.pop_front() {
                 return Err(failure);
             }
+            let mut completed = false;
+            if let Some(progress) = state.window_progress.as_mut()
+                && progress.submission == submission
+                && progress.published
+            {
+                let packet_count = progress
+                    .window_packet_counts
+                    .pop_front()
+                    .expect("a published mock window remains incomplete");
+                progress.published = false;
+                completed = progress.window_packet_counts.is_empty();
+                progress.continuation_ready = !completed;
+                state
+                    .progress_steps
+                    .push(MockProgressStepV1::Poll(packet_count));
+            }
+            if completed {
+                state.statuses.insert(submission, BackendPollV1::Succeeded);
+            }
             Ok(*state.statuses.get(&submission).unwrap())
         }
 
@@ -1585,14 +1892,33 @@ mod tests {
                 entered.wait();
                 release.wait();
             }
-            match self
-                .state
-                .lock()
-                .unwrap()
-                .flush_outcomes
-                .pop_front()
-                .unwrap_or(MockFlushOutcome::Success)
-            {
+            let outcome = {
+                let mut state = self.state.lock().unwrap();
+                let publish_continuation = state
+                    .window_progress
+                    .as_ref()
+                    .is_some_and(|progress| progress.continuation_ready);
+                if publish_continuation {
+                    let progress = state
+                        .window_progress
+                        .as_mut()
+                        .expect("checked mock window progress");
+                    progress.continuation_ready = false;
+                    progress.published = true;
+                    let packet_count = *progress
+                        .window_packet_counts
+                        .front()
+                        .expect("a continuation has one remaining mock window");
+                    state
+                        .progress_steps
+                        .push(MockProgressStepV1::Flush(packet_count));
+                }
+                state
+                    .flush_outcomes
+                    .pop_front()
+                    .unwrap_or(MockFlushOutcome::Success)
+            };
+            match outcome {
                 MockFlushOutcome::Success => Ok(()),
                 MockFlushOutcome::Rejected(message) => {
                     Err(RuntimeBackendFailureV1::Rejected(MockError(message)))
@@ -1626,6 +1952,22 @@ mod tests {
     impl Wake for WakeCounter {
         fn wake(self: Arc<Self>) {
             self.0.fetch_add(1, AtomicOrdering::SeqCst);
+        }
+    }
+
+    struct ProgressStopOrderingWake {
+        progress: Arc<RuntimeAsyncProgressCellV1<MockError>>,
+        woke: AtomicBool,
+        observed_stopped: AtomicBool,
+    }
+
+    impl Wake for ProgressStopOrderingWake {
+        fn wake(self: Arc<Self>) {
+            self.observed_stopped.store(
+                self.progress.stopped.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            self.woke.store(true, Ordering::Release);
         }
     }
 
@@ -1744,18 +2086,24 @@ mod tests {
         }
     }
 
-    fn poll_once<E>(
-        future: &mut RuntimeEventFutureV1<E>,
+    fn poll_once<E, F>(
+        future: &mut F,
         waker: &Waker,
-    ) -> Poll<Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>>> {
+    ) -> Poll<Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>>>
+    where
+        F: Future<Output = Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>>> + Unpin,
+    {
         let mut context = Context::from_waker(waker);
         Pin::new(future).poll(&mut context)
     }
 
-    fn poll_until_ready<E>(
-        future: &mut RuntimeEventFutureV1<E>,
+    fn poll_until_ready<E, F>(
+        future: &mut F,
         waker: &Waker,
-    ) -> Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>> {
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>>
+    where
+        F: Future<Output = Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>>> + Unpin,
+    {
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             match poll_once(future, waker) {
@@ -1856,10 +2204,10 @@ mod tests {
             (second_event, Arc::new(RuntimeAsyncFutureCellV1::new())),
         ]);
         let mut next_event = None;
-        poll_waiters_v1(&mut context, &mut waiters, &mut next_event, 1);
+        poll_waiters_v1(&mut context, &mut waiters, None, &mut next_event, 1);
         assert_eq!(state.lock().unwrap().poll_calls, 1);
         assert_eq!(next_event, Some(second_event));
-        poll_waiters_v1(&mut context, &mut waiters, &mut next_event, 1);
+        poll_waiters_v1(&mut context, &mut waiters, None, &mut next_event, 1);
         assert_eq!(state.lock().unwrap().poll_calls, 2);
         assert_eq!(next_event, Some(first_event));
     }
@@ -2151,6 +2499,485 @@ mod tests {
         drop(registration);
         drop(handle);
         let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn paired_registration_rolls_back_both_sides_on_capacity_and_duplicates() {
+        {
+            let (context, _state, stream, event, _submission) = progress_fixture();
+            let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+                context,
+                RuntimeAsyncEngineConfigV1::default(),
+                RuntimeAsyncProgressConfigV1::default(),
+            )
+            .unwrap();
+            let event_future = handle.observer().event_future(event).unwrap();
+            assert!(matches!(
+                handle.event_future_with_progress(stream, event),
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::DuplicateEvent)
+            ));
+            let progress = handle.register_stream(stream).unwrap();
+            drop(progress);
+            drop(event_future);
+            drop(handle);
+            let _context = engine.into_context().unwrap();
+        }
+
+        {
+            let (context, _state, stream, event, _submission) = progress_fixture();
+            let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+                context,
+                RuntimeAsyncEngineConfigV1::default(),
+                RuntimeAsyncProgressConfigV1::default(),
+            )
+            .unwrap();
+            let progress = handle.register_stream(stream).unwrap();
+            assert!(matches!(
+                handle.event_future_with_progress(stream, event),
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::DuplicateStream)
+            ));
+            let event_future = handle.observer().event_future(event).unwrap();
+            drop(event_future);
+            drop(progress);
+            drop(handle);
+            let _context = engine.into_context().unwrap();
+        }
+
+        {
+            let (mut context, state, first_stream, first_event, _submission) = progress_fixture();
+            let (second_stream, second_event, _) =
+                append_submission_with_stream(&mut context, &state, 2, "second");
+            let engine_config =
+                RuntimeAsyncEngineConfigV1::new(16, 1, 16, 1, Duration::from_millis(1)).unwrap();
+            let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+                context,
+                engine_config,
+                RuntimeAsyncProgressConfigV1::default(),
+            )
+            .unwrap();
+            let first = handle.observer().event_future(first_event).unwrap();
+            assert!(matches!(
+                handle.event_future_with_progress(second_stream, second_event),
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::EventCapacity)
+            ));
+            let second_progress = handle.register_stream(second_stream).unwrap();
+            assert_ne!(first_stream, second_stream);
+            drop(second_progress);
+            drop(first);
+            drop(handle);
+            let _context = engine.into_context().unwrap();
+        }
+
+        {
+            let (mut context, state, first_stream, _first_event, _submission) = progress_fixture();
+            let (second_stream, second_event, _) =
+                append_submission_with_stream(&mut context, &state, 2, "second");
+            let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+                context,
+                RuntimeAsyncEngineConfigV1::default(),
+                RuntimeAsyncProgressConfigV1::new(1, 1).unwrap(),
+            )
+            .unwrap();
+            let first = handle.register_stream(first_stream).unwrap();
+            assert!(matches!(
+                handle.event_future_with_progress(second_stream, second_event),
+                Err(RuntimeAsyncProgressEventRegistrationErrorV1::ProgressCapacity)
+            ));
+            let second_event_future = handle.observer().event_future(second_event).unwrap();
+            drop(second_event_future);
+            drop(first);
+            drop(handle);
+            let _context = engine.into_context().unwrap();
+        }
+    }
+
+    #[test]
+    fn paired_registration_rejects_valid_wrong_stream_without_consuming_capacity() {
+        let (mut context, state, first_stream, first_event, _submission) = progress_fixture();
+        let (second_stream, _second_event, _) =
+            append_submission_with_stream(&mut context, &state, 2, "second");
+        let engine_config =
+            RuntimeAsyncEngineConfigV1::new(16, 1, 16, 1, Duration::from_millis(1)).unwrap();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            engine_config,
+            RuntimeAsyncProgressConfigV1::new(1, 1).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            handle.event_future_with_progress(second_stream, first_event),
+            Err(RuntimeAsyncProgressEventRegistrationErrorV1::EventStreamMismatch)
+        ));
+        let correct = handle
+            .event_future_with_progress(first_stream, first_event)
+            .unwrap();
+
+        drop(correct);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn paired_progress_polls_63_packet_window_before_flushing_2_packet_continuation() {
+        let (context, state, stream, event, submission) = progress_fixture();
+        state.lock().unwrap().window_progress = Some(MockWindowProgressV1 {
+            submission,
+            window_packet_counts: VecDeque::from([63, 2]),
+            published: true,
+            continuation_ready: false,
+        });
+        let config =
+            RuntimeAsyncEngineConfigV1::new(16, 16, 16, 1, Duration::from_millis(1)).unwrap();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            config,
+            RuntimeAsyncProgressConfigV1::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        let mut future = handle.event_future_with_progress(stream, event).unwrap();
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_until_ready(&mut future, &waker),
+            Ok(RuntimeCompletionStatusV1::Succeeded)
+        ));
+        assert_eq!(future.progress_failure_count(), 0);
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.progress_steps,
+            [
+                MockProgressStepV1::Poll(63),
+                MockProgressStepV1::Flush(2),
+                MockProgressStepV1::Poll(2)
+            ]
+        );
+        assert_eq!(state.flush_calls.len(), 1);
+        drop(state);
+        drop(future);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn completed_paired_future_stops_flushing_and_reuses_both_capacities() {
+        let (mut context, state, first_stream, first_event, first_submission) = progress_fixture();
+        let (second_stream, second_event, _) =
+            append_submission_with_stream(&mut context, &state, 2, "second");
+        let engine_config =
+            RuntimeAsyncEngineConfigV1::new(16, 1, 16, 1, Duration::from_millis(1)).unwrap();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            engine_config,
+            RuntimeAsyncProgressConfigV1::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        let mut completed = handle
+            .event_future_with_progress(first_stream, first_event)
+            .unwrap();
+        state
+            .lock()
+            .unwrap()
+            .statuses
+            .insert(first_submission, BackendPollV1::Succeeded);
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_until_ready(&mut completed, &waker),
+            Ok(RuntimeCompletionStatusV1::Succeeded)
+        ));
+        assert!(completed.is_progress_stopped());
+        let flush_count = state.lock().unwrap().flush_calls.len();
+        thread::sleep(Duration::from_millis(10));
+        assert_eq!(state.lock().unwrap().flush_calls.len(), flush_count);
+
+        let replacement = handle
+            .event_future_with_progress(second_stream, second_event)
+            .unwrap();
+        assert_eq!(replacement.event(), second_event);
+        assert_eq!(replacement.stream(), second_stream);
+        drop(replacement);
+        drop(completed);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn paired_event_poll_error_stops_flushing_and_reuses_both_capacities() {
+        let (context, state, stream, event, _submission) = progress_fixture();
+        state
+            .lock()
+            .unwrap()
+            .poll_failures
+            .push_back(RuntimeBackendFailureV1::Rejected(MockError("poll")));
+        let engine_config =
+            RuntimeAsyncEngineConfigV1::new(16, 1, 16, 1, Duration::from_millis(1)).unwrap();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            engine_config,
+            RuntimeAsyncProgressConfigV1::new(1, 1).unwrap(),
+        )
+        .unwrap();
+        let mut completed = handle.event_future_with_progress(stream, event).unwrap();
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_until_ready(&mut completed, &waker),
+            Err(RuntimeAsyncEventErrorV1::Runtime(
+                RuntimeErrorV1::BackendRejected(MockError("poll"))
+            ))
+        ));
+        assert!(completed.is_progress_stopped());
+        assert!(state.lock().unwrap().flush_calls.is_empty());
+
+        let replacement = handle.event_future_with_progress(stream, event).unwrap();
+        drop(replacement);
+        drop(completed);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn terminal_paired_event_bypasses_unused_registry_capacity_checks() {
+        {
+            let (mut context, state, _first_stream, first_event, _first_submission) =
+                progress_fixture();
+            let (second_stream, second_event, second_submission) =
+                append_submission_with_stream(&mut context, &state, 2, "second");
+            state
+                .lock()
+                .unwrap()
+                .statuses
+                .insert(second_submission, BackendPollV1::Succeeded);
+            assert_eq!(
+                context.poll_event(second_event).unwrap(),
+                RuntimeCompletionStatusV1::Succeeded
+            );
+            let engine_config =
+                RuntimeAsyncEngineConfigV1::new(16, 1, 16, 1, Duration::from_millis(1)).unwrap();
+            let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+                context,
+                engine_config,
+                RuntimeAsyncProgressConfigV1::default(),
+            )
+            .unwrap();
+            let pending = handle.observer().event_future(first_event).unwrap();
+            let mut terminal = handle
+                .event_future_with_progress(second_stream, second_event)
+                .unwrap();
+            let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+            assert!(matches!(
+                poll_once(&mut terminal, &waker),
+                Poll::Ready(Ok(RuntimeCompletionStatusV1::Succeeded))
+            ));
+            assert!(terminal.is_progress_stopped());
+            drop(terminal);
+            drop(pending);
+            drop(handle);
+            let _context = engine.into_context().unwrap();
+        }
+
+        {
+            let (mut context, state, first_stream, _first_event, _first_submission) =
+                progress_fixture();
+            let (second_stream, second_event, second_submission) =
+                append_submission_with_stream(&mut context, &state, 2, "second");
+            state
+                .lock()
+                .unwrap()
+                .statuses
+                .insert(second_submission, BackendPollV1::Succeeded);
+            assert_eq!(
+                context.poll_event(second_event).unwrap(),
+                RuntimeCompletionStatusV1::Succeeded
+            );
+            let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+                context,
+                RuntimeAsyncEngineConfigV1::default(),
+                RuntimeAsyncProgressConfigV1::new(1, 1).unwrap(),
+            )
+            .unwrap();
+            let progress = handle.register_stream(first_stream).unwrap();
+            let mut terminal = handle
+                .event_future_with_progress(second_stream, second_event)
+                .unwrap();
+            let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+            assert!(matches!(
+                poll_once(&mut terminal, &waker),
+                Poll::Ready(Ok(RuntimeCompletionStatusV1::Succeeded))
+            ));
+            assert!(terminal.is_progress_stopped());
+            drop(terminal);
+            drop(progress);
+            drop(handle);
+            let _context = engine.into_context().unwrap();
+        }
+    }
+
+    #[test]
+    fn paired_progress_retains_retryable_flush_failure() {
+        let (context, state, stream, event, _submission) = progress_fixture();
+        state
+            .lock()
+            .unwrap()
+            .flush_outcomes
+            .push_back(MockFlushOutcome::Rejected("retry"));
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let future = handle.event_future_with_progress(stream, event).unwrap();
+        wait_until(|| future.progress_failure_count() != 0);
+        assert!(matches!(
+            future.take_progress_failure(),
+            Some(RuntimeErrorV1::BackendRejected(MockError("retry")))
+        ));
+        assert!(!future.is_progress_stopped());
+        drop(future);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn dropping_paired_future_frees_both_registries_without_release() {
+        let (context, state, stream, event, submission) = progress_fixture();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let future = handle.event_future_with_progress(stream, event).unwrap();
+        drop(future);
+        let replacement = handle.event_future_with_progress(stream, event).unwrap();
+        assert_eq!(replacement.event(), event);
+        assert_eq!(replacement.stream(), stream);
+        drop(replacement);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+        let state = state.lock().unwrap();
+        assert_eq!(state.release_calls, 0);
+        assert_eq!(
+            state.statuses.get(&submission),
+            Some(&BackendPollV1::Pending)
+        );
+    }
+
+    #[test]
+    fn paired_progress_terminal_failure_seals_future_and_registration() {
+        let (context, state, stream, event, _submission) = progress_fixture();
+        state
+            .lock()
+            .unwrap()
+            .flush_outcomes
+            .push_back(MockFlushOutcome::Terminal("sealed"));
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let mut future = handle.event_future_with_progress(stream, event).unwrap();
+        wait_until(|| future.is_progress_stopped());
+        assert!(matches!(
+            future.take_progress_failure(),
+            Some(RuntimeErrorV1::BackendTerminal(MockError("sealed")))
+        ));
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_until_ready(&mut future, &waker),
+            Err(RuntimeAsyncEventErrorV1::EngineStopped)
+        ));
+        drop(handle);
+        let context = engine.into_context().unwrap();
+        assert!(context.is_terminal());
+    }
+
+    #[test]
+    fn queued_stop_after_paired_registration_performs_no_poll_or_final_flush() {
+        let (context, state, stream, event, submission) = progress_fixture();
+        let config = RuntimeAsyncEngineConfigV1::default();
+        let progress_config = RuntimeAsyncProgressConfigV1::default();
+        let (sender, receiver) = sync_channel(config.command_capacity);
+        let progress_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let event_cell = Arc::new(RuntimeAsyncFutureCellV1::with_progress(
+            stream,
+            Arc::clone(&progress_cell),
+        ));
+        let (response_sender, response_receiver) = sync_channel(1);
+        sender
+            .try_send(RuntimeAsyncEngineCommandV1::RegisterEventWithProgress {
+                event,
+                stream,
+                event_cell: Arc::clone(&event_cell),
+                progress_cell: Arc::clone(&progress_cell),
+                response: response_sender,
+            })
+            .unwrap();
+        sender.try_send(RuntimeAsyncEngineCommandV1::Stop).unwrap();
+        drop(sender);
+
+        let context = run_engine_v1(
+            context,
+            receiver,
+            config,
+            Some(RuntimeAsyncProgressModeV1 {
+                config: progress_config,
+                flush_stream: flush_stream_v1::<MockBackend>,
+            }),
+        );
+        assert_eq!(response_receiver.recv().unwrap(), Ok(()));
+        assert!(progress_cell.stopped.load(Ordering::Acquire));
+        let state = state.lock().unwrap();
+        assert_eq!(state.poll_calls, 0);
+        assert!(state.flush_calls.is_empty());
+        assert_eq!(state.release_calls, 0);
+        assert_eq!(
+            state.statuses.get(&submission),
+            Some(&BackendPollV1::Pending)
+        );
+        drop(state);
+
+        let mut future = RuntimeEventFutureV1 {
+            event,
+            cell: event_cell,
+            completed: false,
+        };
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_once(&mut future, &waker),
+            Poll::Ready(Err(RuntimeAsyncEventErrorV1::EngineStopped))
+        ));
+        assert!(!context.is_terminal());
+    }
+
+    #[test]
+    fn shutdown_wakes_paired_future_only_after_progress_is_stopped() {
+        let (context, _state, stream, event, _submission) = progress_fixture();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let mut future = handle.event_future_with_progress(stream, event).unwrap();
+        let ordering = Arc::new(ProgressStopOrderingWake {
+            progress: Arc::clone(&future.progress.cell),
+            woke: AtomicBool::new(false),
+            observed_stopped: AtomicBool::new(false),
+        });
+        let waker = Waker::from(Arc::clone(&ordering));
+        assert!(poll_once(&mut future, &waker).is_pending());
+
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+
+        assert!(ordering.woke.load(Ordering::Acquire));
+        assert!(ordering.observed_stopped.load(Ordering::Acquire));
+        assert!(matches!(
+            poll_once(&mut future, &waker),
+            Poll::Ready(Err(RuntimeAsyncEventErrorV1::EngineStopped))
+        ));
+        assert!(future.is_progress_stopped());
     }
 
     #[test]

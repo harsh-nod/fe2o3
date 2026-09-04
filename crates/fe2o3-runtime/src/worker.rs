@@ -1448,8 +1448,32 @@ where
     R: Read,
     W: Write,
 {
+    serve_runtime_backend_worker_v5_in_place(&mut backend, input, output)
+}
+
+/// Serves the canonical bounded Worker V5 protocol without consuming the
+/// backend owner.
+///
+/// This is the child-process ownership form: a thread-affine native backend can
+/// remain on the serving thread and perform explicit teardown after the
+/// canonical empty shutdown frame. An I/O or protocol error returns without
+/// implying native quiescence or running teardown.
+pub fn serve_runtime_backend_worker_v5_in_place<B, R, W>(
+    backend: &mut B,
+    input: R,
+    output: W,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1
+        + RuntimeAsyncCopyBackendV1
+        + RuntimeCancellationBackendV1
+        + RuntimeAtomicBackendV1
+        + RuntimeCollectiveBackendV1,
+    R: Read,
+    W: Write,
+{
     serve_runtime_worker_v5(input, output, |request| {
-        dispatch_binary_request_v5(&mut backend, request)
+        dispatch_binary_request_v5(backend, request)
     })
 }
 
@@ -6499,6 +6523,134 @@ time.sleep(60)
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn v5_in_place_server_returns_backend_only_after_canonical_shutdown_frame() {
+        let mut requests = Vec::new();
+        write_frame_v1(&mut requests, &[]).unwrap();
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap();
+
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v5_in_place_server_does_not_treat_truncated_eof_as_clean_shutdown() {
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        let error = serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(Vec::<u8>::new()),
+            &mut responses,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::Io(ref error)
+                if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v5_in_place_server_rejects_every_truncated_frame_header() {
+        for byte_len in 1..size_of::<u32>() {
+            let mut responses = Vec::new();
+            let mut backend = ProtocolBackendV1::default();
+
+            let error = serve_runtime_backend_worker_v5_in_place(
+                &mut backend,
+                Cursor::new(vec![0_u8; byte_len]),
+                &mut responses,
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                error,
+                RuntimeWorkerErrorV1::Io(ref error)
+                    if error.kind() == io::ErrorKind::UnexpectedEof
+            ));
+            assert!(backend.calls.is_empty());
+            assert_eq!(
+                read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+                RUNTIME_WORKER_HANDSHAKE_V5
+            );
+            assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn v5_in_place_server_rejects_truncated_frame_payload() {
+        let mut requests = 4_u32.to_le_bytes().to_vec();
+        requests.extend_from_slice(&[1, 2, 3]);
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        let error = serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::Io(ref error)
+                if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v5_in_place_server_rejects_oversized_declared_frame() {
+        let declared = MAX_RUNTIME_WORKER_FRAME_BYTES_V1 + 1;
+        let requests = u32::try_from(declared).unwrap().to_le_bytes();
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        let error = serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::FrameTooLarge { actual, maximum }
+                if actual == declared && maximum == MAX_RUNTIME_WORKER_FRAME_BYTES_V1
+        ));
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
     }
 
     #[test]
