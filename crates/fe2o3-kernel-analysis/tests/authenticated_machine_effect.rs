@@ -483,7 +483,7 @@ fn run_failed_ack_delivery_repeats(repeats: usize) {
             "ACK failure cleanup {iteration} took {:?}",
             started.elapsed()
         );
-        let pid = fs::read_to_string(&pid_file).unwrap();
+        let pid = wait_for_published_pid(&pid_file);
         assert!(!Path::new(&format!("/proc/{pid}")).exists());
     }
     fs::remove_dir_all(directory).unwrap();
@@ -513,15 +513,13 @@ fn parent_session_helper_cannot_join_worker_group_and_survives_cleanup() {
         let worker = worker();
         let execution =
             thread::spawn(move || worker.analyze(payload, vec![entry()], execution_limits));
-        wait_for_file(&pid_file);
-        let pid = fs::read_to_string(&pid_file).unwrap();
+        let pid = wait_for_published_pid(&pid_file);
         let mut helper = Command::new(fixture())
             .arg(format!("--fe2o3-test-join-process-group={pid}"))
             .arg(format!("--fe2o3-test-result={}", join_result.display()))
             .spawn()
             .unwrap();
-        wait_for_file(&join_result);
-        assert_eq!(fs::read_to_string(&join_result).unwrap(), "errno=1");
+        assert_eq!(wait_for_published_text(&join_result), "errno=1");
 
         let error = execution.join().unwrap().unwrap_err();
         assert_eq!(error.kind(), &expected);
@@ -533,9 +531,21 @@ fn parent_session_helper_cannot_join_worker_group_and_survives_cleanup() {
     }
 }
 
-fn wait_for_file(path: &Path) {
+fn wait_for_published_pid(path: &Path) -> i32 {
+    let text = wait_for_published_text(path);
+    let pid = text.parse::<i32>().expect("published PID is decimal i32");
+    assert!(pid > 0, "published PID is positive");
+    pid
+}
+
+fn wait_for_published_text(path: &Path) -> String {
     let deadline = Instant::now() + Duration::from_secs(15);
-    while !path.exists() {
+    loop {
+        match fs::read_to_string(path) {
+            Ok(text) => return text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to read {}: {error}", path.display()),
+        }
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {}",

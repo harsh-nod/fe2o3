@@ -5756,13 +5756,16 @@ fn transfer_capability_terminator_v1(
                 (Some(allocation), Some(rows), Some(columns))
                     if call.arguments().len() == 5
                         && destination.place().ty() == *result
-                        && !allocation.writable =>
+                        && allocation.noalias_class == 1 =>
                 {
                     ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadViewResult(
                         ProjectedReadViewV1 {
                             root,
                             element: *element,
-                            allocation,
+                            allocation: AllocationContractV1 {
+                                writable: false,
+                                ..allocation
+                            },
                             rows,
                             columns,
                         },
@@ -26907,6 +26910,103 @@ mod tests {
                 element: SCALAR_TYPE,
             },
         )
+    }
+
+    fn strided_read_constructor_function() -> SemanticFunctionDeclV1 {
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![
+                tensor_operand(1),
+                constant(0),
+                constant(1),
+                constant(3),
+                constant(3),
+            ],
+            Some(SemanticCallDestinationV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], ENUM_TYPE).unwrap(),
+                cfg_edge(SemanticEdgeRoleV1::CallReturn, 0),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        projection_function_with_locals(
+            vec![block(132, vec![], SemanticTerminatorKindV1::Call(call))],
+            vec![
+                local(132, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(133, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(134, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn checked_shared_read_constructor_attenuates_writable_shared_abi_authority() {
+        let function = strided_read_constructor_function();
+        let callable = compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
+                result: ENUM_TYPE,
+                view: POINTER_TYPE,
+                error: SCALAR_TYPE,
+                element: SCALAR_TYPE,
+            },
+        );
+        let source = AllocationContractV1 {
+            allocation_origin: 1,
+            noalias_class: 1,
+            writable: true,
+            singleton_object: false,
+        };
+        let mut state = HashMap::new();
+        transfer_capability_terminator_v1(
+            &[callable.clone()],
+            &function,
+            0,
+            &mut state,
+            &[None, Some(source), None],
+            &[None; 3],
+            &[],
+            &HashMap::new(),
+            true,
+        )
+        .unwrap();
+        assert!(matches!(
+            state.get(&2),
+            Some(ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::ReadViewResult(ProjectedReadViewV1 {
+                    allocation: AllocationContractV1 {
+                        allocation_origin: 1,
+                        noalias_class: 1,
+                        writable: false,
+                        singleton_object: false,
+                    },
+                    ..
+                })
+            ))
+        ));
+
+        for noalias_class in [0, 2] {
+            let mut rejected = HashMap::new();
+            transfer_capability_terminator_v1(
+                &[callable.clone()],
+                &function,
+                0,
+                &mut rejected,
+                &[
+                    None,
+                    Some(AllocationContractV1 {
+                        noalias_class,
+                        ..source
+                    }),
+                    None,
+                ],
+                &[None; 3],
+                &[],
+                &HashMap::new(),
+                true,
+            )
+            .unwrap();
+            assert_eq!(rejected.get(&2), Some(&ProjectedCapabilityValueV1::Invalid));
+        }
     }
 
     #[test]

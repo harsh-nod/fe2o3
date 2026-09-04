@@ -31,6 +31,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V8: u16 = 8;
 pub const INERT_SEMANTIC_MIR_VERSION_V9: u16 = 9;
 pub const INERT_SEMANTIC_MIR_VERSION_V10: u16 = 10;
 pub const INERT_SEMANTIC_MIR_VERSION_V11: u16 = 11;
+pub const INERT_SEMANTIC_MIR_VERSION_V12: u16 = 12;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -49,6 +50,7 @@ pub enum SemanticMirWireVersionV1 {
     V9,
     V10,
     V11,
+    V12,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -64,6 +66,7 @@ impl SemanticMirWireVersionV1 {
             Self::V9 => INERT_SEMANTIC_MIR_VERSION_V9,
             Self::V10 => INERT_SEMANTIC_MIR_VERSION_V10,
             Self::V11 => INERT_SEMANTIC_MIR_VERSION_V11,
+            Self::V12 => INERT_SEMANTIC_MIR_VERSION_V12,
         }
     }
 
@@ -79,6 +82,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V9 => Some(Self::V9),
             INERT_SEMANTIC_MIR_VERSION_V10 => Some(Self::V10),
             INERT_SEMANTIC_MIR_VERSION_V11 => Some(Self::V11),
+            INERT_SEMANTIC_MIR_VERSION_V12 => Some(Self::V12),
             _ => None,
         }
     }
@@ -6000,8 +6004,8 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V10, limits)
     }
 
-    /// Admits under the exact closed V11 schema that adds checked scalar
-    /// volatile loads from immutable slices while retaining V10 scans.
+    /// Admits under the exact closed V11 schema that retains the V10 operation
+    /// encodings and adds the compiler trap terminal at its unique tag.
     pub fn admit_exact_v11(
         self,
         limits: SemanticMirLimitsV1,
@@ -6009,11 +6013,21 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V11, limits)
     }
 
+    /// Admits under the exact closed V12 schema that retains the V11 compiler
+    /// trap and adds checked scalar volatile loads from immutable slices.
+    pub fn admit_exact_v12(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V12, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
     /// workgroup pipelines occur together, V10 for target-neutral scans, and
-    /// V11 for checked volatile loads.
+    /// V11 when the compiler trap terminal is present, and V12 for checked
+    /// volatile loads.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -16338,8 +16352,7 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
-    let mut required = SemanticMirWireVersionV1::V2;
-    if request.callables.iter().any(|callable| {
+    let uses_scan = request.callables.iter().any(|callable| {
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -16347,11 +16360,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                 ..
             }
         )
-    }) {
-        required = required.max(SemanticMirWireVersionV1::V10);
-    }
-
-    if request.callables.iter().any(|callable| {
+    });
+    let uses_reduce = request.callables.iter().any(|callable| {
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -16359,8 +16369,29 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                 ..
             }
         )
+    });
+    let mut required = SemanticMirWireVersionV1::V2;
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Trap,
+                ..
+            }
+        )
     }) {
+        required = required.max(SemanticMirWireVersionV1::V11);
+    }
+
+    if uses_scan {
+        required = required.max(SemanticMirWireVersionV1::V10);
+    }
+
+    if uses_reduce {
         required = required.max(SemanticMirWireVersionV1::V9);
+    }
+    if uses_scan && uses_reduce {
+        required = required.max(SemanticMirWireVersionV1::V11);
     }
 
     if request.callables.iter().any(|callable| {
@@ -16474,7 +16505,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             }
         )
     }) {
-        required = required.max(SemanticMirWireVersionV1::V11);
+        required = required.max(SemanticMirWireVersionV1::V12);
     }
     required
 }
@@ -17318,7 +17349,17 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(3)?;
             encode_axis(writer, axis)
         }
-        SemanticCompilerIntrinsicOperationV1::Trap => writer.u8(41),
+        SemanticCompilerIntrinsicOperationV1::Trap => {
+            if wire_version != SemanticMirWireVersionV1::V11
+                && wire_version != SemanticMirWireVersionV1::V12
+            {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V11,
+                });
+            }
+            writer.u8(64)
+        }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
             dynamic_lds,
@@ -17387,13 +17428,13 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
-            if wire_version < SemanticMirWireVersionV1::V11 {
+            if wire_version != SemanticMirWireVersionV1::V12 {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
-                    required: SemanticMirWireVersionV1::V11,
+                    required: SemanticMirWireVersionV1::V12,
                 });
             }
-            writer.u8(64)?;
+            writer.u8(65)?;
             writer.u32(element.0)
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
@@ -17650,7 +17691,10 @@ fn encode_compiler_intrinsic_operation(
             element_storage,
             element,
         } => {
-            if wire_version < SemanticMirWireVersionV1::V9 {
+            if wire_version != SemanticMirWireVersionV1::V9
+                && wire_version != SemanticMirWireVersionV1::V11
+                && wire_version != SemanticMirWireVersionV1::V12
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V9,
@@ -17669,7 +17713,10 @@ fn encode_compiler_intrinsic_operation(
             element,
             kind,
         } => {
-            if wire_version < SemanticMirWireVersionV1::V10 {
+            if wire_version != SemanticMirWireVersionV1::V10
+                && wire_version != SemanticMirWireVersionV1::V11
+                && wire_version != SemanticMirWireVersionV1::V12
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V10,

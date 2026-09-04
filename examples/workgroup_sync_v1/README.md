@@ -16,15 +16,18 @@ is the only global output writer. Admission rejects mathematical sums outside
 
 ## Inclusive and exclusive scans
 
-The six `lds-scan-*-kernel` features compile ordinary attributed Rust examples
-for both modes and every admitted scalar, with exact 3-, 65-, or 255-lane
-workgroups. They use the same affine dynamic-LDS and workgroup-authority
+Six scan families expose 18 feature-isolated ordinary attributed Rust entries:
+both modes for every admitted scalar at each exact 3-, 65-, and 255-lane
+workgroup extent. They use the same affine dynamic-LDS and workgroup-authority
 contract. The public
 `inclusive_scan_sum` and `exclusive_scan_sum` terminals order prefixes by
 linear work-item rank and return one result per lane through a typed
 `DisjointSlice`. Their exact compiler, CPU simulation, schedule replay, and
 debug evidence contract is documented in
 [`target-neutral-workgroup-scan-v1.md`](../../docs/target-neutral-workgroup-scan-v1.md).
+The checked-in [`scan-u32-request.json`](scan-u32-request.json) drives the
+ordinary 3-lane source through Bundle V5 and the CPU simulator with the command
+documented there.
 
 The reduction source requests `DynamicLds::<i32>::exact_current::<64>` and
 passes that linear capability directly to the collective terminal. It obtains
@@ -78,7 +81,9 @@ The ignored neutral-collective rustc driver requires the pinned nightly. It
 authenticates the compiler-observed provider definition identities and
 recomputed complete source-closure pin, then checks semantic MIR, ranked
 PLIRON, generic LDS/tree/barrier KIR, target binding, and the LLVM route for
-the three reduction and six scan examples on both targets. The separate
+the three reduction and six canonical scan entries on both targets. The 18-entry
+Bundle V5 CPU gate independently covers every scan family at every representative
+extent. The separate
 protected reduction driver requires the authority launcher and measured Worker
 V3 and LLVM build identities. It starts again from the immutable reduction
 sources for all three scalar profiles

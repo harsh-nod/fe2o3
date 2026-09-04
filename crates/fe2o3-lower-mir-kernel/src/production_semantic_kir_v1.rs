@@ -1546,8 +1546,17 @@ pub struct ProductionSemanticKirOwnerV1 {
     canonical_kernel_ir: ProductionCanonicalKernelIrV1,
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
-    launch_roots: Option<Box<[(SemanticFunctionIdV1, u8)]>>,
+    launch_roots: Option<Box<[RetainedRankedLaunchRootV1]>>,
     generic_checks: Box<[RetainedGenericKernelChecksV1]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetainedRankedLaunchRootV1 {
+    selected_root: SemanticFunctionIdV1,
+    launch_rank: u8,
+    global_extents: [u64; 3],
+    workgroup_extents: [u64; 3],
+    full_physical_workgroups: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1805,8 +1814,8 @@ impl ProductionSemanticKirOwnerV1 {
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
         let launch_roots = roots
             .iter()
-            .map(|root| (root.selected_root, root.launch_rank))
-            .collect::<Vec<_>>()
+            .map(retained_ranked_launch_root_v1)
+            .collect::<Result<Vec<_>, _>>()?
             .into_boxed_slice();
         let (module, correspondence) = lower_module(&semantic, limits, Some(&launch_roots))?;
         let mut generic_checks = Vec::with_capacity(roots.len());
@@ -1886,7 +1895,10 @@ impl ProductionSemanticKirOwnerV1 {
                     .select_kernel_body_for_root_v1(generic_checks.selected_root)
                     .is_none()
                 || self.launch_roots.as_deref().is_none_or(|roots| {
-                    !roots.contains(&(generic_checks.selected_root, generic_checks.launch_rank))
+                    !roots.iter().any(|root| {
+                        root.selected_root == generic_checks.selected_root
+                            && root.launch_rank == generic_checks.launch_rank
+                    })
                 })
                 || !mandatory_generic_checks_are_clean(&generic_checks.lowering)
                 || !ranked_access_sources_are_well_formed(
@@ -9725,10 +9737,43 @@ fn lower_one_semantic_function_v1(
     })
 }
 
+fn retained_ranked_launch_root_v1(
+    root: &ProductionRankedSemanticProjectionRootV1,
+) -> Result<RetainedRankedLaunchRootV1, ProductionSemanticKirErrorV1> {
+    let operation = root
+        .lowering
+        .kernel()
+        .blocks()
+        .first()
+        .and_then(|block| block.operations().first());
+    let Some(ProductionRankedOperationV1::ExecutionLayout {
+        global_extents,
+        workgroup_extents,
+        full_physical_workgroups,
+        ..
+    }) = operation
+    else {
+        return Ok(RetainedRankedLaunchRootV1 {
+            selected_root: root.selected_root,
+            launch_rank: root.launch_rank,
+            global_extents: [0; 3],
+            workgroup_extents: [0; 3],
+            full_physical_workgroups: false,
+        });
+    };
+    Ok(RetainedRankedLaunchRootV1 {
+        selected_root: root.selected_root,
+        launch_rank: root.launch_rank,
+        global_extents: *global_extents,
+        workgroup_extents: *workgroup_extents,
+        full_physical_workgroups: *full_physical_workgroups,
+    })
+}
+
 fn lower_module(
     owner: &ProductionSemanticMirOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
-    authenticated_launch_roots: Option<&[(SemanticFunctionIdV1, u8)]>,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.semantic();
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
@@ -9762,7 +9807,7 @@ fn lower_module(
     }
     if authenticated_launch_roots
         .iter()
-        .map(|(root, _)| root)
+        .map(|root| &root.selected_root)
         .ne(semantic.roots().iter())
     {
         return Err(unsupported(
@@ -9793,12 +9838,12 @@ fn lower_module(
     let mut ignored_parameter_bindings = Vec::new();
     let mut closure_budget = ReachableClosureBlockBudgetV1::new(limits.max_blocks);
 
-    for (selected_root, launch_rank) in authenticated_launch_roots.iter().copied() {
+    for launch in authenticated_launch_roots.iter().copied() {
         let (root_module, root_correspondence) = lower_single_root_module(
             owner,
             limits,
-            selected_root,
-            Some(launch_rank),
+            launch.selected_root,
+            Some(launch),
             &mut closure_budget,
             false,
         )?;
@@ -9811,7 +9856,7 @@ fn lower_module(
             .any(|retained| retained.id == kernel.id || retained.entry == kernel.entry)
         {
             return Err(unsupported(
-                selected_root.index(),
+                launch.selected_root.index(),
                 None,
                 None,
                 "canonical multi-root lowering produced a duplicate kernel identity",
@@ -9825,7 +9870,7 @@ fn lower_module(
             if let Some(retained) = function_index.get(&function.id) {
                 if retained != &function {
                     return Err(unsupported(
-                        selected_root.index(),
+                        launch.selected_root.index(),
                         None,
                         None,
                         "canonical multi-root lowering cross-wired a shared helper identity",
@@ -9842,7 +9887,7 @@ fn lower_module(
         }
         let mut root_function_keys = BTreeSet::new();
         for function in root_correspondence.lowered_functions.into_vec() {
-            if function.correspondence_owner != selected_root
+            if function.correspondence_owner != launch.selected_root
                 || !root_function_keys
                     .insert((function.correspondence_owner, function.semantic_function))
             {
@@ -9863,7 +9908,7 @@ fn lower_module(
             }
         }
         let exact_root_record = |owner, function| {
-            owner == selected_root && root_function_keys.contains(&(owner, function))
+            owner == launch.selected_root && root_function_keys.contains(&(owner, function))
         };
         if root_correspondence
             .blocks
@@ -10128,12 +10173,12 @@ fn lower_single_root_module(
     owner: &ProductionSemanticMirOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
     selected_root: SemanticFunctionIdV1,
-    authenticated_launch_rank: Option<u8>,
+    authenticated_launch: Option<RetainedRankedLaunchRootV1>,
     closure_budget: &mut ReachableClosureBlockBudgetV1,
     validate_correspondence: bool,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.semantic();
-    let launch_rank = authenticated_launch_rank.unwrap_or(1);
+    let launch_rank = authenticated_launch.map_or(1, |launch| launch.launch_rank);
     if !(1..=3).contains(&launch_rank) {
         return Err(unsupported(
             0,
@@ -10392,7 +10437,7 @@ fn lower_single_root_module(
         .launch()
         .and_then(|launch| launch.required())
         .map(|required| required.as_array());
-    let entry_infallible_asserts = match (authenticated_launch_rank, required_workgroup) {
+    let entry_infallible_asserts = match (authenticated_launch, required_workgroup) {
         (Some(_), Some(required_workgroup)) => InfallibleBoundsAssertAnalysisV1::analyze(
             semantic.types(),
             semantic.callables(),
@@ -10476,7 +10521,7 @@ fn lower_single_root_module(
                 BTreeSet::new()
             },
             launch_rank,
-            authenticated_launch_rank.is_some() && index == 0,
+            authenticated_launch.is_some() && index == 0,
             remaining_operations,
         )?;
         remaining_operations = remaining_operations
@@ -10537,18 +10582,30 @@ fn lower_single_root_module(
     }
 
     let dimensions = required_workgroup;
+    let workgroup_extents = dimensions.map(|dimensions| dimensions.map(u64::from));
+    let retained_extent = |axis: usize| {
+        authenticated_launch
+            .filter(|layout| {
+                layout.full_physical_workgroups
+                    && workgroup_extents == Some(layout.workgroup_extents)
+                    && layout.global_extents[axis] == layout.workgroup_extents[axis]
+            })
+            .and_then(|layout| u32::try_from(layout.global_extents[axis]).ok())
+            .filter(|extent| *extent != 0)
+            .map_or(LaunchExtent::Dynamic, LaunchExtent::Static)
+    };
     let launch = match (launch_rank, dimensions) {
         (1, Some([_, 1, 1]) | None) => LaunchDomain::D1 {
-            x: LaunchExtent::Dynamic,
+            x: retained_extent(0),
         },
         (2, Some([_, _, 1]) | None) => LaunchDomain::D2 {
-            x: LaunchExtent::Dynamic,
-            y: LaunchExtent::Dynamic,
+            x: retained_extent(0),
+            y: retained_extent(1),
         },
         (3, Some(_) | None) => LaunchDomain::D3 {
-            x: LaunchExtent::Dynamic,
-            y: LaunchExtent::Dynamic,
-            z: LaunchExtent::Dynamic,
+            x: retained_extent(0),
+            y: retained_extent(1),
+            z: retained_extent(2),
         },
         _ => {
             return Err(unsupported(
@@ -31139,16 +31196,43 @@ mod resource_tests {
         selected_root: SemanticFunctionIdV1,
         export: &str,
     ) -> ProductionRankedSemanticProjectionRootV1 {
+        noop_ranked_root_with_layout(selected_root, export, [64, 1, 1], true)
+    }
+
+    fn noop_ranked_root_with_layout(
+        selected_root: SemanticFunctionIdV1,
+        export: &str,
+        global_extents: [u64; 3],
+        full_physical_workgroups: bool,
+    ) -> ProductionRankedSemanticProjectionRootV1 {
+        noop_ranked_root_with_ranked_layout(
+            selected_root,
+            export,
+            1,
+            global_extents,
+            [64, 1, 1],
+            full_physical_workgroups,
+        )
+    }
+
+    fn noop_ranked_root_with_ranked_layout(
+        selected_root: SemanticFunctionIdV1,
+        export: &str,
+        launch_rank: u8,
+        global_extents: [u64; 3],
+        workgroup_extents: [u64; 3],
+        full_physical_workgroups: bool,
+    ) -> ProductionRankedSemanticProjectionRootV1 {
         let kernel = ProductionRankedKernelV1::new(
             export,
             0,
             vec![ProductionRankedBlockV1::new(
                 vec![ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 1,
-                    global_extents: [64, 1, 1],
-                    workgroup_extents: [64, 1, 1],
+                    global_extents,
+                    workgroup_extents,
                     subgroup_size: 64,
-                    full_physical_workgroups: true,
+                    full_physical_workgroups,
                 }],
                 ProductionRankedTerminatorV1::Return,
             )],
@@ -31162,7 +31246,7 @@ mod resource_tests {
         .unwrap();
         ProductionRankedSemanticProjectionRootV1::new(
             selected_root,
-            1,
+            launch_rank,
             lowering,
             format!("func @{export} {{\n}}\n"),
             vec![],
@@ -31170,9 +31254,129 @@ mod resource_tests {
         )
     }
 
-    fn noop_semantic_owner_candidate(
+    #[test]
+    fn ranked_launch_layout_makes_only_one_full_workgroup_static() {
+        for (global_extents, full_physical_workgroups, expected) in [
+            (
+                [0, 1, 1],
+                true,
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                [128, 1, 1],
+                true,
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                [64, 1, 1],
+                false,
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Dynamic,
+                },
+            ),
+            (
+                [64, 1, 1],
+                true,
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Static(64),
+                },
+            ),
+        ] {
+            let receipt = ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+                noop_semantic_owner(&["single_entry"]),
+                vec![noop_ranked_root_with_layout(
+                    SemanticFunctionIdV1::from_index(0),
+                    "single_entry",
+                    global_extents,
+                    full_physical_workgroups,
+                )],
+            )
+            .unwrap();
+            let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+                receipt,
+                ProductionSemanticKirLimitsV1::default(),
+            )
+            .unwrap();
+            assert_eq!(lowered.module().kernels[0].domain, expected);
+            lowered.verify_equivalence().unwrap();
+        }
+    }
+
+    #[test]
+    fn ranked_launch_layout_retains_static_and_dynamic_axes_for_d2_and_d3() {
+        for (rank, workgroup, global, expected) in [
+            (
+                2,
+                [8, 4, 1],
+                [8, 4, 1],
+                LaunchDomain::D2 {
+                    x: LaunchExtent::Static(8),
+                    y: LaunchExtent::Static(4),
+                },
+            ),
+            (
+                2,
+                [8, 4, 1],
+                [16, 4, 1],
+                LaunchDomain::D2 {
+                    x: LaunchExtent::Dynamic,
+                    y: LaunchExtent::Static(4),
+                },
+            ),
+            (
+                3,
+                [4, 2, 8],
+                [4, 2, 8],
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Static(4),
+                    y: LaunchExtent::Static(2),
+                    z: LaunchExtent::Static(8),
+                },
+            ),
+            (
+                3,
+                [4, 2, 8],
+                [4, 6, 16],
+                LaunchDomain::D3 {
+                    x: LaunchExtent::Static(4),
+                    y: LaunchExtent::Dynamic,
+                    z: LaunchExtent::Dynamic,
+                },
+            ),
+        ] {
+            let receipt = ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
+                noop_semantic_owner_with_workgroup(
+                    &["single_entry"],
+                    workgroup.map(|extent| u32::try_from(extent).unwrap()),
+                ),
+                vec![noop_ranked_root_with_ranked_layout(
+                    SemanticFunctionIdV1::from_index(0),
+                    "single_entry",
+                    rank,
+                    global,
+                    workgroup,
+                    true,
+                )],
+            )
+            .unwrap();
+            let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+                receipt,
+                ProductionSemanticKirLimitsV1::default(),
+            )
+            .unwrap();
+            assert_eq!(lowered.module().kernels[0].domain, expected);
+            lowered.verify_equivalence().unwrap();
+        }
+    }
+
+    fn noop_semantic_owner_candidate_with_workgroup(
         exports: &[&str],
         cross_root_call: bool,
+        workgroup: [u32; 3],
     ) -> Option<ProductionSemanticMirOwnerV1> {
         let unit = SemanticTypeIdV1::from_index(0);
         let source = SemanticSourceProvenanceV1::unavailable();
@@ -31233,7 +31437,7 @@ mod resource_tests {
                 vec![body],
             )
             .unwrap();
-            let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+            let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
             let launch =
                 SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
                     .unwrap();
@@ -31264,8 +31468,22 @@ mod resource_tests {
             .ok()
     }
 
+    fn noop_semantic_owner_candidate(
+        exports: &[&str],
+        cross_root_call: bool,
+    ) -> Option<ProductionSemanticMirOwnerV1> {
+        noop_semantic_owner_candidate_with_workgroup(exports, cross_root_call, [64, 1, 1])
+    }
+
     fn noop_semantic_owner(exports: &[&str]) -> ProductionSemanticMirOwnerV1 {
         noop_semantic_owner_candidate(exports, false).unwrap()
+    }
+
+    fn noop_semantic_owner_with_workgroup(
+        exports: &[&str],
+        workgroup: [u32; 3],
+    ) -> ProductionSemanticMirOwnerV1 {
+        noop_semantic_owner_candidate_with_workgroup(exports, false, workgroup).unwrap()
     }
 
     fn helper_closure_semantic_owner() -> ProductionSemanticMirOwnerV1 {
@@ -31426,6 +31644,12 @@ mod resource_tests {
                 lowered.correspondence().lowered_functions().len(),
                 exports.len()
             );
+            assert!(lowered.module().kernels.iter().all(|kernel| matches!(
+                kernel.domain,
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Static(64)
+                }
+            )));
             let formal = crate::ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
             assert_eq!(formal.kernels().len(), exports.len());
             assert!(formal.obligations().is_none());
