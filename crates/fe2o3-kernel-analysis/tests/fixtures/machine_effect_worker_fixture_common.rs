@@ -1,8 +1,9 @@
 use sha2::{Digest, Sha256};
 use std::{
-    fs::File,
+    fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
+    path::Path,
     process::{Command, exit},
     thread,
     time::Duration,
@@ -271,27 +272,48 @@ fn run_process_group_join_helper() -> bool {
         Ok(()) => "joined".to_string(),
         Err(error) => format!("errno={}", error.raw_os_error()),
     };
-    std::fs::write(result_path, result).unwrap();
+    publish_rendezvous_text(&result_path, &result);
     thread::sleep(Duration::from_secs(30));
     true
 }
 
 fn write_pid_and_sleep(path: &[u8]) {
     let path = std::str::from_utf8(path).unwrap();
-    std::fs::write(path, std::process::id().to_string()).unwrap();
+    publish_rendezvous_text(path, &std::process::id().to_string());
     thread::sleep(Duration::from_secs(30));
 }
 
 #[allow(unsafe_code)]
 fn close_stdin_after_done_and_sleep(path: &[u8], challenge: [u8; 32]) -> ! {
     let path = std::str::from_utf8(path).unwrap();
-    std::fs::write(path, std::process::id().to_string()).unwrap();
+    publish_rendezvous_text(path, &std::process::id().to_string());
     std::io::stdout().flush().unwrap();
     write_control(std::io::stderr(), DONE_DOMAIN, challenge);
     // SAFETY: this fixture intentionally makes the protocol ACK write fail.
     unsafe { rustix::io::close(0) };
     thread::sleep(Duration::from_secs(30));
     exit(90)
+}
+
+fn publish_rendezvous_text(path: &str, text: &str) {
+    let destination = Path::new(path);
+    let mut staging_name = destination
+        .file_name()
+        .expect("rendezvous path has a file name")
+        .to_os_string();
+    staging_name.push(format!(
+        ".fe2o3-rendezvous-{}.partial",
+        std::process::id()
+    ));
+    let staging = destination.with_file_name(staging_name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)
+        .unwrap();
+    file.write_all(text.as_bytes()).unwrap();
+    drop(file);
+    fs::rename(staging, destination).unwrap();
 }
 
 fn reexec_from_spoofed_memfd() -> ! {

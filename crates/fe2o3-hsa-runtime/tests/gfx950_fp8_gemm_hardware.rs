@@ -41,7 +41,11 @@ const B_ELEMENTS: usize = K * N;
 #[cfg(feature = "hardware-test-hooks")]
 const C_ELEMENTS: usize = M * N;
 #[cfg(feature = "hardware-test-hooks")]
-const WORKGROUP_X: u32 = 64;
+const BATCHES: usize = 16;
+#[cfg(feature = "hardware-test-hooks")]
+const WORKGROUP_X: u32 = 256;
+#[cfg(feature = "hardware-test-hooks")]
+const GRID_X: u32 = 4;
 #[cfg(feature = "hardware-test-hooks")]
 const EXPLICIT_KERNARG_BYTES: usize = 48;
 #[cfg(feature = "hardware-test-hooks")]
@@ -181,7 +185,7 @@ fn inspect_profile(bytes: &[u8]) -> Result<(), BoxError> {
             && kernel.wavefront_size() == 64
             && kernel.group_segment_fixed_size() == 0
             && !kernel.uses_dynamic_stack(),
-        "gfx950 FP8 GEMM HSACO does not expose the exact static WG64 profile",
+        "gfx950 FP8 GEMM HSACO does not expose the exact static WG256 profile",
     )?;
     const EXPECTED_ARGUMENTS: [(u64, u64, ExplicitValueKind); 6] = [
         (0, 8, ExplicitValueKind::GlobalBuffer),
@@ -241,34 +245,46 @@ fn deterministic_inputs() -> (Vec<u8>, Vec<u8>) {
     const CODES: [u8; 11] = [
         0x00, 0x28, 0xa8, 0x30, 0xb0, 0x38, 0xb8, 0x3c, 0xbc, 0x40, 0xc0,
     ];
-    let lhs = (0..A_ELEMENTS)
-        .map(|index| {
+    let mut lhs = Vec::with_capacity(BATCHES * A_ELEMENTS);
+    let mut rhs = Vec::with_capacity(BATCHES * B_ELEMENTS);
+    for batch in 0..BATCHES {
+        lhs.extend((0..A_ELEMENTS).map(|index| {
             let row = index / K;
             let depth = index % K;
-            CODES[(row * 3 + depth * 5 + row * depth) % CODES.len()]
-        })
-        .collect();
-    let rhs = (0..B_ELEMENTS)
-        .map(|index| {
+            CODES[(row * 3 + depth * 5 + row * depth + batch + (batch / CODES.len()) * (depth % 5))
+                % CODES.len()]
+        }));
+        rhs.extend((0..B_ELEMENTS).map(|index| {
             let depth = index / N;
             let column = index % N;
-            CODES[(depth * 7 + column * 2 + depth * column + 1) % CODES.len()]
-        })
-        .collect();
+            CODES[(depth * 7
+                + column * 2
+                + depth * column
+                + 1
+                + batch * 3
+                + (batch / CODES.len()) * (column % 5))
+                % CODES.len()]
+        }));
+    }
     (lhs, rhs)
 }
 
 #[cfg(feature = "hardware-test-hooks")]
 fn cpu_reference(lhs: &[u8], rhs: &[u8]) -> Vec<f32> {
-    let mut output = vec![0.0; C_ELEMENTS];
-    for row in 0..M {
-        for column in 0..N {
-            let mut value = 0.0;
-            for depth in 0..K {
-                value += decode_fp8_e4m3(lhs[row * K + depth])
-                    * decode_fp8_e4m3(rhs[depth * N + column]);
+    let mut output = vec![0.0; BATCHES * C_ELEMENTS];
+    for batch in 0..BATCHES {
+        let lhs_base = batch * A_ELEMENTS;
+        let rhs_base = batch * B_ELEMENTS;
+        let output_base = batch * C_ELEMENTS;
+        for row in 0..M {
+            for column in 0..N {
+                let mut value = 0.0;
+                for depth in 0..K {
+                    value += decode_fp8_e4m3(lhs[lhs_base + row * K + depth])
+                        * decode_fp8_e4m3(rhs[rhs_base + depth * N + column]);
+                }
+                output[output_base + row * N + column] = value;
             }
-            output[row * N + column] = value;
         }
     }
     output
@@ -304,7 +320,11 @@ fn explicit_kernarg(addresses: [u64; 3]) -> [u8; EXPLICIT_KERNARG_BYTES] {
     let mut bytes = [0; EXPLICIT_KERNARG_BYTES];
     for (index, (address, elements)) in addresses
         .into_iter()
-        .zip([A_ELEMENTS, B_ELEMENTS, C_ELEMENTS])
+        .zip([
+            BATCHES * A_ELEMENTS,
+            BATCHES * B_ELEMENTS,
+            BATCHES * C_ELEMENTS,
+        ])
         .enumerate()
     {
         let offset = index * 16;
@@ -348,7 +368,7 @@ impl Drop for RuntimeKernarg {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-unsafe fn dispatch_one_wave(
+unsafe fn dispatch_multigrid(
     adapter: &mut ReviewedHsaRuntimeAdapterV1,
     executable: &ReviewedHsaExecutableV1,
     kernel: &ReviewedHsaKernelV1,
@@ -361,7 +381,7 @@ unsafe fn dispatch_one_wave(
             && resolution.kernarg_segment_alignment() == HSA_KERNARG_ALIGNMENT,
         "runtime resolution differs from the exact gfx950 FP8 GEMM ABI",
     )?;
-    let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [WORKGROUP_X, 1, 1], 0);
+    let geometry = HsaLaunchGeometryV1::new([GRID_X, 1, 1], [WORKGROUP_X, 1, 1], 0);
     let mut storage = RuntimeKernarg::new()?;
     let kernarg = storage.bytes_mut();
     kernarg[..EXPLICIT_KERNARG_BYTES].copy_from_slice(explicit);
@@ -392,7 +412,8 @@ unsafe fn dispatch_one_wave(
 #[cfg(feature = "hardware-test-hooks")]
 fn output_body_address(buffer: &ReviewedHsaHardwareTestBufferV1) -> Result<u64, BoxError> {
     require(
-        buffer.byte_len() == (C_ELEMENTS + 2 * CANARY_ELEMENTS) * std::mem::size_of::<f32>(),
+        buffer.byte_len()
+            == (BATCHES * C_ELEMENTS + 2 * CANARY_ELEMENTS) * std::mem::size_of::<f32>(),
         "guarded gfx950 FP8 GEMM output has the wrong extent",
     )?;
     Ok(buffer.device_address(CANARY_ELEMENTS * std::mem::size_of::<f32>())?)
@@ -401,11 +422,11 @@ fn output_body_address(buffer: &ReviewedHsaHardwareTestBufferV1) -> Result<u64, 
 #[cfg(feature = "hardware-test-hooks")]
 fn verify_output(actual: &[f32], expected: &[f32]) -> Result<(), BoxError> {
     require(
-        actual.len() == C_ELEMENTS + 2 * CANARY_ELEMENTS,
+        actual.len() == BATCHES * C_ELEMENTS + 2 * CANARY_ELEMENTS,
         "guarded gfx950 FP8 GEMM output length changed",
     )?;
     let (prefix, remainder) = actual.split_at(CANARY_ELEMENTS);
-    let (body, suffix) = remainder.split_at(C_ELEMENTS);
+    let (body, suffix) = remainder.split_at(BATCHES * C_ELEMENTS);
     require(
         prefix
             .iter()
@@ -419,7 +440,7 @@ fn verify_output(actual: &[f32], expected: &[f32]) -> Result<(), BoxError> {
         "gfx950 FP8 GEMM output suffix canary changed",
     )?;
     require(
-        expected.len() == C_ELEMENTS,
+        expected.len() == BATCHES * C_ELEMENTS,
         "gfx950 FP8 GEMM CPU reference has the wrong extent",
     )?;
     let mut maximum_absolute_error = 0.0_f32;
@@ -434,7 +455,8 @@ fn verify_output(actual: &[f32], expected: &[f32]) -> Result<(), BoxError> {
         maximum_absolute_error = maximum_absolute_error.max(absolute_error);
     }
     println!(
-        "PASS gfx950 FP8 GEMM outputs={C_ELEMENTS} max_absolute_error={maximum_absolute_error:.9e} tolerance={MAX_ABSOLUTE_ERROR:.1e}"
+        "PASS gfx950 FP8 GEMM batches={BATCHES} outputs={} max_absolute_error={maximum_absolute_error:.9e} tolerance={MAX_ABSOLUTE_ERROR:.1e}",
+        BATCHES * C_ELEMENTS
     );
     Ok(())
 }
@@ -453,9 +475,9 @@ fn run_hardware(bytes: Vec<u8>, digest: PayloadDigest) -> Result<(), BoxError> {
 
     let (lhs_host, rhs_host) = deterministic_inputs();
     let expected = cpu_reference(&lhs_host, &rhs_host);
-    let mut output_host = Vec::with_capacity(C_ELEMENTS + 2 * CANARY_ELEMENTS);
+    let mut output_host = Vec::with_capacity(BATCHES * C_ELEMENTS + 2 * CANARY_ELEMENTS);
     output_host.extend(std::iter::repeat_n(C_PREFIX, CANARY_ELEMENTS));
-    output_host.extend(std::iter::repeat_n(C_POISON, C_ELEMENTS));
+    output_host.extend(std::iter::repeat_n(C_POISON, BATCHES * C_ELEMENTS));
     output_host.extend(std::iter::repeat_n(C_SUFFIX, CANARY_ELEMENTS));
     let lhs = adapter.allocate_hardware_test_buffer(&lhs_host)?;
     let rhs = adapter.allocate_hardware_test_buffer(&rhs_host)?;
@@ -485,9 +507,9 @@ fn run_hardware(bytes: Vec<u8>, digest: PayloadDigest) -> Result<(), BoxError> {
                 && resolutions[0].executable_object() == executable_identity,
             "runtime resolved a substituted gfx950 FP8 GEMM kernel",
         )?;
-        // SAFETY: dispatch_one_wave owns the reviewed raw launch boundary.
+        // SAFETY: dispatch_multigrid owns the reviewed raw launch boundary.
         unsafe {
-            dispatch_one_wave(
+            dispatch_multigrid(
                 &mut adapter,
                 &executable,
                 kernel,
@@ -516,7 +538,7 @@ fn run_hardware(bytes: Vec<u8>, digest: PayloadDigest) -> Result<(), BoxError> {
     execution
 }
 
-/// Runs a Rust-produced FP8 GEMM COV6 image on one gfx950 Wave64 workgroup.
+/// Runs a Rust-produced FP8 GEMM COV6 image as four WG256 workgroups.
 ///
 /// This ignored test is non-authoritative and grants no protected evidence.
 /// Invoke it with:
@@ -527,13 +549,13 @@ fn run_hardware(bytes: Vec<u8>, digest: PayloadDigest) -> Result<(), BoxError> {
 /// FE2O3_GFX950_FP8_GEMM_SHA256=<64-lowercase-hex-digits> \
 /// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
 ///   --test gfx950_fp8_gemm_hardware \
-///   gfx950_fp8_gemm_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output \
+///   gfx950_fp8_gemm_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output \
 ///   -- --ignored --exact --nocapture
 /// ```
 #[cfg(feature = "hardware-test-hooks")]
 #[test]
 #[ignore = "non-authoritative: requires a Rust-produced digest-pinned gfx950:xnack- FP8 GEMM COV6 HSACO and MI350"]
-fn gfx950_fp8_gemm_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output()
+fn gfx950_fp8_gemm_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output()
 -> Result<(), BoxError> {
     let (bytes, digest) = read_pinned_hsaco()?;
     run_hardware(bytes, digest)
@@ -566,7 +588,11 @@ mod tests {
         assert_eq!(bytes.len(), EXPLICIT_KERNARG_BYTES);
         for (index, (address, elements)) in [0x1111_u64, 0x2222, 0x3333]
             .into_iter()
-            .zip([A_ELEMENTS, B_ELEMENTS, C_ELEMENTS])
+            .zip([
+                BATCHES * A_ELEMENTS,
+                BATCHES * B_ELEMENTS,
+                BATCHES * C_ELEMENTS,
+            ])
             .enumerate()
         {
             let offset = index * 16;
@@ -584,7 +610,11 @@ mod tests {
         let output = cpu_reference(&lhs, &rhs);
         assert_eq!(
             (lhs.len(), rhs.len(), output.len()),
-            (A_ELEMENTS, B_ELEMENTS, C_ELEMENTS)
+            (
+                BATCHES * A_ELEMENTS,
+                BATCHES * B_ELEMENTS,
+                BATCHES * C_ELEMENTS,
+            )
         );
         assert!(output.iter().all(|value| value.is_finite()));
         assert!(output.windows(2).any(|pair| pair[0] != pair[1]));
@@ -600,15 +630,15 @@ mod tests {
     fn output_validation_covers_every_element_and_both_canaries() {
         let (lhs, rhs) = deterministic_inputs();
         let expected = cpu_reference(&lhs, &rhs);
-        let mut actual = Vec::with_capacity(C_ELEMENTS + 2 * CANARY_ELEMENTS);
+        let mut actual = Vec::with_capacity(BATCHES * C_ELEMENTS + 2 * CANARY_ELEMENTS);
         actual.extend(std::iter::repeat_n(C_PREFIX, CANARY_ELEMENTS));
         actual.extend_from_slice(&expected);
         actual.extend(std::iter::repeat_n(C_SUFFIX, CANARY_ELEMENTS));
         verify_output(&actual, &expected).unwrap();
 
-        actual[CANARY_ELEMENTS + C_ELEMENTS - 1] += 2.0 * MAX_ABSOLUTE_ERROR;
+        actual[CANARY_ELEMENTS + BATCHES * C_ELEMENTS - 1] += 2.0 * MAX_ABSOLUTE_ERROR;
         assert!(verify_output(&actual, &expected).is_err());
-        actual[CANARY_ELEMENTS + C_ELEMENTS - 1] = expected[C_ELEMENTS - 1];
+        actual[CANARY_ELEMENTS + BATCHES * C_ELEMENTS - 1] = expected[BATCHES * C_ELEMENTS - 1];
         actual[0] = 0.0;
         assert!(verify_output(&actual, &expected).is_err());
         actual[0] = C_PREFIX;

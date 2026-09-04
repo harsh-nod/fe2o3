@@ -26,6 +26,9 @@ API stabilizes. Developer-preview versions may make breaking changes.
   production producers are available.
 - Executable and Verus models for the bounded logical scheduler, including
   pinned expected-negative proofs.
+- Bundle V5 source simulation in the quick start and an 18-entry ordinary-Rust
+  workgroup scan matrix covering inclusive/exclusive `u32`, `i32`, and `f32`
+  scans at 3, 65, and 255 lanes.
 
 ### Changed
 
@@ -47,3 +50,5 @@ API stabilizes. Developer-preview versions may make breaking changes.
 - Developer-preview release admission now requires the exact release commit
   and tree to be reachable from the mirror's `main` branch before tagging and
   repeats actor, ref, tag, and mirror authorization at each remote write.
+- Semantic MIR V10 remains frozen; the compiler trap terminal now uses its
+  unambiguous additive V11 encoding.

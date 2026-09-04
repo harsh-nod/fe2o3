@@ -39,7 +39,7 @@ Commands:
       on the CPU. The bundle is extraction-only evidence, not GPU equivalence.
 
   simulate-source --crate NAME --request FILE [--target gfx942|gfx950]
-      [--output BUNDLE] -- <Cargo package/feature/target selection>
+      [--bundle-version 1|5] [--output BUNDLE] -- <Cargo package/feature/target selection>
       Export and simulate any admitted kernel crate through the same general
       source/MIR/KIR path. A temporary bundle is removed unless --output is set.
 
@@ -99,11 +99,11 @@ run_exact_kir_fixture() {
 }
 
 run_simulate_source() {
-  local crate_name='' request='' output='' target=gfx942
+  local crate_name='' request='' output='' target=gfx942 bundle_version=1
   local -a cargo_args=()
   while (($# > 0)); do
     case "$1" in
-      --crate | --request | --output | --target)
+      --crate | --request | --output | --target | --bundle-version)
         (($# >= 2)) || {
           printf 'quickstart: %s requires a value\n' "$1" >&2
           return 2
@@ -113,6 +113,7 @@ run_simulate_source() {
           --request) request="$2" ;;
           --output) output="$2" ;;
           --target) target="$2" ;;
+          --bundle-version) bundle_version="$2" ;;
         esac
         shift 2
         ;;
@@ -133,6 +134,10 @@ run_simulate_source() {
   }
   [[ "${target}" == gfx942 || "${target}" == gfx950 ]] || {
     printf '%s\n' 'quickstart: --target must be exactly gfx942 or gfx950' >&2
+    return 2
+  }
+  [[ "${bundle_version}" == 1 || "${bundle_version}" == 5 ]] || {
+    printf '%s\n' 'quickstart: --bundle-version must be exactly 1 or 5' >&2
     return 2
   }
   request="$(realpath --canonicalize-existing -- "${request}")"
@@ -167,12 +172,17 @@ run_simulate_source() {
 
   cargo_workspace build --locked --quiet -p rustc-codegen-fe2o3 \
     --bin fe2o3-rustc-extract
+  local simulator_input=--bundle
+  if [[ "${bundle_version}" == 5 ]]; then
+    simulator_input=--bundle-v5
+  fi
   cargo_workspace run --locked --quiet -p rustc-codegen-fe2o3 \
     --bin fe2o3-export-sim -- \
     --crate "${crate_name}" --output "${bundle}" --target "${target}" \
-    --target-dir "${EXPORT_TARGET_DIR}" -- "${cargo_args[@]}"
+    --bundle-version "${bundle_version}" --target-dir "${EXPORT_TARGET_DIR}" -- \
+    "${cargo_args[@]}"
   cargo_workspace run --locked --quiet -p fe2o3-kir-sim-cli \
-    --bin fe2o3-kir-sim -- --bundle "${bundle}" --request "${request}"
+    --bin fe2o3-kir-sim -- "${simulator_input}" "${bundle}" --request "${request}"
 
   if ((remove_bundle == 0)); then
     printf 'quickstart: retained extraction-only simulation bundle: %s\n' "${bundle}" >&2

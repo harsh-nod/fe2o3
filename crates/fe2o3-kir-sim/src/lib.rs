@@ -5,6 +5,7 @@ mod capability;
 mod debug;
 mod execute;
 mod explore;
+mod f32_surface;
 mod model;
 mod preflight;
 mod reduce;
@@ -47,6 +48,7 @@ pub use explore::{
     SimulationExplorationFailureV1, SimulationExplorationRequestErrorV1,
     SimulationExplorationRequestV1, SimulationExplorationV1, SimulationExplorationWitnessV1,
 };
+pub use f32_surface::{F32_SCALAR_OPERATION_ROSTER_V1, F32ScalarOperationV1};
 pub use model::{
     AdmittedSimulationModuleV1, BufferArgumentErrorV1, BufferArgumentV1, BufferBackingIdV1,
     BufferViewArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, GridShapeV1,

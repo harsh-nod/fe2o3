@@ -24,11 +24,12 @@ case $PRECISION in
         TRANSPOSE_ISA=ds_read_b64_tr_b4
         WRONG_TRANSPOSE_ISA=ds_read_b64_tr_b8
         TRANSPOSE_COUNT=2
-        STATIC_LDS_BYTES=1024
+        STATIC_LDS_BYTES=4096
+        FUNCTION_TARGET_BINDINGS=2
         OUTPUT_ENV=FE2O3_GFX950_FP4_ATTENTION_OUTPUT_DIR
         HSACO_ENV=FE2O3_GFX950_FP4_ATTENTION_HSACO
         SHA256_ENV=FE2O3_GFX950_FP4_ATTENTION_SHA256
-        HARDWARE_TEST=gfx950_fp4_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output
+        HARDWARE_TEST=gfx950_fp4_attention_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output
         ;;
     fp8)
         FEATURE=kernel-fp8-attention
@@ -42,11 +43,12 @@ case $PRECISION in
         TRANSPOSE_ISA=ds_read_b64_tr_b8
         WRONG_TRANSPOSE_ISA=ds_read_b64_tr_b4
         TRANSPOSE_COUNT=4
-        STATIC_LDS_BYTES=2048
+        STATIC_LDS_BYTES=8192
+        FUNCTION_TARGET_BINDINGS=1
         OUTPUT_ENV=FE2O3_GFX950_FP8_ATTENTION_OUTPUT_DIR
         HSACO_ENV=FE2O3_GFX950_FP8_ATTENTION_HSACO
         SHA256_ENV=FE2O3_GFX950_FP8_ATTENTION_SHA256
-        HARDWARE_TEST=gfx950_fp8_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output
+        HARDWARE_TEST=gfx950_fp8_attention_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output
         ;;
     *)
         printf 'unsupported attention precision: %s (expected fp4 or fp8)\n' "$PRECISION" >&2
@@ -161,8 +163,10 @@ require_llvm_line_count() {
 require_llvm_line_count 'target triple = "amdgcn-amd-amdhsa"' 1 'AMDGPU HSA target triple'
 require_llvm_line_count 'define amdgpu_kernel' 1 'kernel definition'
 require_llvm_line_count "define amdgpu_kernel void @$SYMBOL(" 1 "$SYMBOL definition"
-require_llvm_line_count '"target-cpu"="gfx950"' 1 'gfx950 function target binding'
-require_llvm_line_count '"target-features"="-wavefrontsize32,+wavefrontsize64,-xnack"' 1 \
+require_llvm_line_count '"target-cpu"="gfx950"' "$FUNCTION_TARGET_BINDINGS" \
+    'gfx950 function target bindings'
+require_llvm_line_count '"target-features"="-wavefrontsize32,+wavefrontsize64,-xnack"' \
+    "$FUNCTION_TARGET_BINDINGS" \
     'exact Wave64/xnack- function target binding'
 require_llvm_line_count \
     'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' \
@@ -314,7 +318,7 @@ HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
         "$SHA256_ENV=$HSACO_SHA256" \
         CARGO_TARGET_DIR="$ROOT_TARGET_DIR" \
         "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" test --locked \
-        -p fe2o3-hsa-runtime --features hardware-test-hooks \
+        -p fe2o3-hsa-runtime --features hardware-qualification \
         --test gfx950_attention_hardware "$HARDWARE_TEST" \
         -- --ignored --exact --nocapture
 )

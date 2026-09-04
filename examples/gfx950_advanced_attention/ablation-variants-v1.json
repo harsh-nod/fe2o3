@@ -4,8 +4,11 @@
   "invariants": {
     "same_export_per_workload": true,
     "same_abi_inputs_and_cpu_oracle": true,
-    "workgroup": "KDA uses the authenticated 256-thread launch; other attention kernels use 64 threads",
-    "grid": [1, 1, 1]
+    "workgroup": [256, 1, 1],
+    "grid": [4, 1, 1],
+    "wave_size": 64,
+    "waves_per_workgroup": 4,
+    "ownership": "every admitted kernel maps each workgroup, Wave64, or Wave16 subgroup to a disjoint non-identical problem and output span"
   },
   "admitted": [
     {
@@ -14,10 +17,14 @@
       "production_feature": "kernel-kda-decode",
       "role": "pre-promotion 256-thread baseline",
       "isolated_change": "retain the original duplicate key read before explicit per-lane key reuse",
-      "shape": "one FP32 head; K=V=16; T=1; initial and final matrix state",
+      "shape": "four independent FP32 heads per launch; one full K=V=16, T=1 matrix-state problem per workgroup",
       "workgroup": [256, 1, 1],
-      "unique_compulsory_global_bytes": 3332,
+      "grid": [4, 1, 1],
+      "problems_per_launch": 4,
+      "unique_compulsory_global_bytes_per_problem": 3332,
+      "launch_unique_compulsory_global_bytes": 13328,
       "lds_bytes": 0,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; state max_absolute_error=2.980232239e-8; output max_absolute_error=7.450580597e-9; HSACO SHA-256=3c2fe9a7b4faccc79c1a3cb466dff402cb8806fe0b2edd5ce627d5316ddb6ea6",
       "pipeline_assessment": "the full state and output are resident in one workgroup; there is no streamed tile sequence for LDS multibuffering"
     },
     {
@@ -26,10 +33,14 @@
       "production_feature": "kernel-kda-prefill",
       "role": "independent exact sequential-recurrence baseline",
       "isolated_change": "unroll all eight recurrence steps directly instead of applying the production kernel's two exact C=4 WY/UT chunk transforms",
-      "shape": "one FP32 head; K=V=16; T=8 as two C=4 chunks; initial and final matrix state",
+      "shape": "four independent FP32 heads per launch; one full K=V=16, T=8 two-chunk matrix-state problem per workgroup",
       "workgroup": [256, 1, 1],
-      "unique_compulsory_global_bytes": 6176,
+      "grid": [4, 1, 1],
+      "problems_per_launch": 4,
+      "unique_compulsory_global_bytes_per_problem": 6176,
+      "launch_unique_compulsory_global_bytes": 24704,
       "lds_bytes": 0,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; state max_absolute_error=1.490116119e-8; chunk0 max_absolute_error=5.587935448e-9; chunk1 max_absolute_error=3.725290298e-9; HSACO SHA-256=f30663e384dca6825617539aa57342a3dbb1ddd22ed2324be2e43f3d38cb4bab",
       "pipeline_assessment": "the state stays in registers, but every token depends on the preceding updated state; the production WY/UT transform exposes independent within-chunk reductions"
     },
     {
@@ -37,11 +48,18 @@
       "kernel_export": "gfx950_content_sparse_attention",
       "baseline_feature": "kernel-content-sparse-attention",
       "isolated_change": "replace three normalized value divisions with one reciprocal after accumulating the weighted numerator",
-      "shape": "one 16x16x128 E4M3 score tile; top two of four blocks; top three of 16 tokens; 16 output channels",
-      "unique_compulsory_global_bytes": 4492,
-      "mfma_tile_flops": 65536,
-      "lds_bytes": 2048,
+      "shape": "16 independent heads per launch; one 16x16x128 E4M3 score tile per Wave64; top two of four blocks; top three of 16 tokens; 16 output channels",
+      "workgroup": [256, 1, 1],
+      "grid": [4, 1, 1],
+      "problems_per_launch": 16,
+      "unique_compulsory_global_bytes_per_problem": 4492,
+      "launch_unique_compulsory_global_bytes": 71872,
+      "mfma_tile_flops_per_problem": 65536,
+      "launch_mfma_flops": 1048576,
+      "lds_bytes_per_wave": 2048,
+      "lds_bytes_per_workgroup": 8192,
       "lds_stages": 1,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; output max_absolute_error=5.960464478e-8; 48 selected IDs exact; HSACO SHA-256=04f360a712119d97a8d01762ff7a71be9096f9a72ec8cfdd16558bb8d052bb1f",
       "pipeline_assessment": "K=128 is exactly one native MFMA tile, leaving no next K tile for a useful ping-pong stage"
     },
     {
@@ -50,11 +68,18 @@
       "production_feature": "kernel-compressed-hybrid-attention",
       "role": "pre-promotion division baseline",
       "isolated_change": "restore four local and three global normalized divisions instead of the production kernel's two reciprocal reuses",
-      "shape": "one 16x16x128 E4M3 score tile; four local tokens; three compressed four-token blocks; 16 output channels",
-      "unique_compulsory_global_bytes": 4480,
-      "mfma_tile_flops": 65536,
-      "lds_bytes": 2048,
+      "shape": "16 independent heads per launch; one 16x16x128 E4M3 score tile per Wave64; four local tokens; three compressed four-token blocks; 16 output channels",
+      "workgroup": [256, 1, 1],
+      "grid": [4, 1, 1],
+      "problems_per_launch": 16,
+      "unique_compulsory_global_bytes_per_problem": 4480,
+      "launch_unique_compulsory_global_bytes": 71680,
+      "mfma_tile_flops_per_problem": 65536,
+      "launch_mfma_flops": 1048576,
+      "lds_bytes_per_wave": 2048,
+      "lds_bytes_per_workgroup": 8192,
       "lds_stages": 1,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; output max_absolute_error=2.980232239e-8; HSACO SHA-256=2189103adcbd6f19877398d413fc5b9bd4b23b19bcc147a11342641763b54094",
       "pipeline_assessment": "K=128 is exactly one native MFMA tile, leaving no next K tile for a useful ping-pong stage; final GPU6 evidence promoted reciprocal reuse into production"
     },
     {
@@ -62,10 +87,15 @@
       "kernel_export": "gfx950_attnres_aggregate",
       "baseline_feature": "kernel-attnres-aggregate",
       "isolated_change": "make the four fixed logits and weights explicit so each is loaded and evaluated once",
-      "shape": "four residual depths by 16 channels",
-      "unique_compulsory_global_bytes": 576,
+      "shape": "64 independent items per launch; one four-depth by 16-channel item per Wave16 subgroup",
+      "workgroup": [256, 1, 1],
+      "grid": [4, 1, 1],
+      "problems_per_launch": 64,
+      "unique_compulsory_global_bytes_per_problem": 576,
+      "launch_unique_compulsory_global_bytes": 36864,
       "lds_bytes": 0,
       "lds_stages": 0,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; output max_absolute_error=4.470348358e-8; HSACO SHA-256=9a3bcdca848f1326ad53f8eb8d01e1c67494fe67f464ecc26f23dda1b094d940",
       "pipeline_assessment": "each channel is independent and the four-element softmax fits in registers"
     },
     {
@@ -73,10 +103,15 @@
       "kernel_export": "gfx950_four_branch_residual",
       "baseline_feature": "kernel-four-branch-residual",
       "isolated_change": "make all four fixed sigmoid-gated branches explicit",
-      "shape": "one residual and four branches by 16 channels",
-      "unique_compulsory_global_bytes": 640,
+      "shape": "64 independent items per launch; one residual plus four 16-channel branches per Wave16 subgroup",
+      "workgroup": [256, 1, 1],
+      "grid": [4, 1, 1],
+      "problems_per_launch": 64,
+      "unique_compulsory_global_bytes_per_problem": 640,
+      "launch_unique_compulsory_global_bytes": 40960,
       "lds_bytes": 0,
       "lds_stages": 0,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; output max_absolute_error=1.490116119e-8; HSACO SHA-256=41ae5248362fadf063c6938b025f150704577ceb6321e6e891d2c9a14e4be8b1",
       "pipeline_assessment": "each channel is independent and all branch values are register-local"
     },
     {
@@ -84,10 +119,15 @@
       "kernel_export": "gfx950_mhc_sinkhorn_mix",
       "baseline_feature": "kernel-mhc-sinkhorn-mix",
       "isolated_change": "retain the pre-wave16 scalar Sinkhorn mapping as the exact baseline for the distributed production kernel",
-      "shape": "4x4 mixing matrix; four streams by 16 channels; three Sinkhorn iterations",
-      "unique_compulsory_global_bytes": 576,
+      "shape": "16 independent items per launch; one 4x4 mixing matrix and four 16-channel streams per Wave64; three Sinkhorn iterations",
+      "workgroup": [256, 1, 1],
+      "grid": [4, 1, 1],
+      "problems_per_launch": 16,
+      "unique_compulsory_global_bytes_per_problem": 576,
+      "launch_unique_compulsory_global_bytes": 9216,
       "lds_bytes": 0,
       "lds_stages": 0,
+      "qualification": "2026-09-03 WG256/grid4 HSA PASS; output max_absolute_error=3.725290298e-8; HSACO SHA-256=87f442ff0221c089ba6c61581cd0c60dc1486df6eb4fb93732c820642117827f",
       "pipeline_assessment": "row normalization feeds column normalization in every iteration; the fixed matrix is register-local"
     }
   ],
@@ -132,7 +172,7 @@
       "kernel_export": "gfx950_content_sparse_attention and gfx950_compressed_hybrid_attention",
       "status": "structurally-inapplicable",
       "reason": "the fixed reduction depth is one native K=128 MFMA tile, so no future tile exists to prefetch while the current tile executes",
-      "retained_conclusion": "a second 2048-byte LDS copy would be duplicate staging rather than software pipelining and would change no dependency overlap"
+      "retained_conclusion": "a second wave-private stage would add another 8192 bytes per workgroup (2048 bytes per Wave64) as duplicate staging rather than software pipelining and would change no dependency overlap"
     },
     {
       "variant": "mixing-lds-staging-v1",

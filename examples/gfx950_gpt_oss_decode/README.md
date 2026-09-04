@@ -1,9 +1,9 @@
-# GPT-OSS-120B batch-1 layer-tile megakernel
+# GPT-OSS-120B multi-wave layer-tile megakernel
 
 This tutorial is a production-compiler-generated safe-Rust-to-gfx950
 qualification example for a bounded piece of one GPT-OSS-120B decode layer. It
 is not a whole-model megakernel and does not claim to run an entire transformer
-layer in one workgroup.
+layer in one dispatch.
 
 The architecture contract is pinned to OpenAI's official `gpt-oss` repository
 at commit
@@ -18,8 +18,9 @@ is the source pin for MXFP4 expert weights.
 
 ## Exact tutorial boundary
 
-The launch is one Wave64 workgroup for batch 1 and grid `[1, 1, 1]`. It
-computes:
+The launch uses four workgroups of 256 threads, with four Wave64 items per
+workgroup: grid `[4, 1, 1]`, workgroup `[256, 1, 1]`, and 16 useful
+independent items. Each wave owns one bounded batch-1 layer tile and computes:
 
 - the full 128-expert router dot product over all 2,880 hidden values and a
   deterministic stable top-4, with lower expert ID winning an exact tie;
@@ -37,10 +38,15 @@ four complete experts, SwiGLU, MLP2, residuals, and the other layers are outside
 this bounded profile.
 
 The kernel accepts every expert tile and selects the routed expert on device.
-The host does not preselect an expert. Each lane computes two router logits,
+The host does not preselect an expert. In each wave, every lane computes two router logits,
 then the wave broadcasts the two `(score, expert_id)` candidates from every
 lane and maintains stable top-4 state. This preserves the full 128-way dynamic
-routing decision while avoiding a lane-0 serial router.
+routing decision while avoiding a lane-0 serial router. The global invocation
+index determines `item = index / 64` and `lane = index % 64`. Item-major
+input slices and blocked output tiles are disjoint across all 16 waves, including
+different workgroups. The packed route is replicated over the 64 distinct
+lane-owned positions for its item, so it also has an identity-mapped disjoint
+write contract.
 
 ## Fused stages and native ISA
 
@@ -57,8 +63,8 @@ attention, and one selected expert tile in the same dispatch:
 3. Four scale-separated MXFP4 `16x16x128` MFMAs compute the selected expert
    tile. Each block is scaled and accumulated before the next fragment is
    created, reducing live accumulator state.
-4. Attention output, expert output, and four packed seven-bit expert IDs are
-   committed through disjoint output capabilities.
+4. Attention output, expert output, and the packed four seven-bit expert IDs
+   are committed through disjoint output capabilities.
 
 The compiler-qualification runner requires exactly four
 `v_mfma_f32_16x16x16_bf16` sites and four
@@ -70,8 +76,8 @@ transpose instructions rather than claiming one was used.
 [`src/reference.rs`](src/reference.rs) is an independent safe CPU oracle. It
 implements BF16 and OCP E2M1 decoding, the full router and tie rule,
 sink-softmax attention, block scaling, and selected-expert multiplication
-without calling device helpers or GPU libraries. Deterministic inputs vary by
-axis and route to expert 127.
+without calling device helpers or GPU libraries. The 16 deterministic fixtures
+are nonuniform; alternating items route to experts 127 and 0.
 
 ## Build and numerical validation
 
@@ -91,7 +97,34 @@ unset HIP_VISIBLE_DEVICES
 ROCR_VISIBLE_DEVICES=6 examples/gfx950_gpt_oss_decode/run-gfx950.sh
 ```
 
-The MI350X HSA qualification run checked all outputs, immutable inputs, output
+The current WG256/grid-`[4, 1, 1]` compatibility campaign ran on physical GPU
+7 of `ssh mi350` with `ROCR_VISIBLE_DEVICES=7`. All 16 Wave64 items owned
+disjoint input and output slices. The canonical fused kernel checked 4,096
+attention values with maximum absolute error `1.192092896e-7`, 4,096 exact
+expert values, and 1,024 exact packed-route words. Its compiler binding is
+`7194a44ee0231763c5f1e345dcb682beb0922ede14a8ce1899d41b44b2b053d0`;
+the LLVM, HSACO, and symbol-scoped ISA SHA-256 digests are respectively
+`ae9301289f784ed43a906b8e5c2165176deca52b0d629445726e9128b94c3e12`,
+`d6b2f1b54b0398cceb751d4e4a70a42b74efe368e9fbc892283a72952013daec`,
+and `f52d49e23917bc11ac4b2ea1f3d8205d200b9d6ed7365350fc1189392ee837d5`.
+
+| Current admitted kernel | Compiler binding | HSACO SHA-256 | Numerical result |
+| --- | --- | --- | --- |
+| Fused canonical | `7194a44ee0231763c5f1e345dcb682beb0922ede14a8ce1899d41b44b2b053d0` | `d6b2f1b54b0398cceb751d4e4a70a42b74efe368e9fbc892283a72952013daec` | attention 4,096, max abs `1.192092896e-7`; expert 4,096 exact; route 1,024 exact |
+| Serial router | `0d3dd5be58c3fc42b575a9028359d3be63f5f86dffd8261a24564c09ec8c77f7` | `26515f0bd0539030f076efaf88bf52c11c13fcb6acd13997bf822a207d559722` | attention 4,096, max abs `1.192092896e-7`; expert 4,096 exact; route 1,024 exact |
+| Held fragments | `94f0b2a229e36aa690afd63d7523b549390d6b62a7829a41940ee410da3f30db` | `258f002896efe9315a84db491a273f651d1cb6320b0e705e3b5a14e50859b215` | attention 4,096, max abs `1.192092896e-7`; expert 4,096 exact; route 1,024 exact |
+| Interleaved stores | `cbd2a9d218b865e59afdd868c38db0aa034933cf224bb1928b6b7873a10261e0` | `b0447014a5e5c46d2c4efc862349be399100c7357a958c5b72d1a26c77c57ac6` | attention 4,096, max abs `1.192092896e-7`; expert 4,096 exact; route 1,024 exact |
+| Router component | `eab1554fa8b5ca3dd61c081c2a94fe5b3a8dacbe6e263ce5ebecbc68138f980e` | `9ca3a3db0dd64f0de7a1a56b560fe097e826c6448817f749a7117c1016b10bc6` | 1,024 packed-route words exact |
+| Attention component | `7e4af27e8a08344360c28b8c9b735ef8c5aa55a0807601bac5042f6f59b951b1` | `fe61d17d8679f3dde03e9ef19cacb7e0e9a2475d69eebf4a6f2803cbc194e336` | 4,096 values, max abs `1.192092896e-7` |
+| Expert component | `a5299095f8322658479d027ef414fc05add7e9079610ae41797eb31507097ed7` | `3265642593dc75200cb4e078f9d8c456705b71857c8607e7eb3f491658519cb5` | 4,096 values exact |
+
+This is an end-to-end compatibility and numerical record, not a performance
+measurement or state-of-the-art claim.
+
+The following result is historical evidence for the former single-Wave64,
+grid-`[1, 1, 1]` kernel. It does not validate or measure the current
+WG256/grid-`[4, 1, 1]` compatibility update. That MI350X HSA qualification
+run checked all outputs, immutable inputs, output
 canaries, ABI size, artifact digests, and exact `gfx950:xnack-` metadata. Its
 maximum absolute attention error was `8.940696716e-8`; expert output and packed
 top-4 IDs matched exactly. The retained fused HSACO SHA-256 is
@@ -116,9 +149,10 @@ Its GPU6 run had attention maximum absolute error `1.490116119e-8`, exact
 expert output, and exact packed top-4 IDs. The three-kernel HSACO SHA-256 is
 `4be1e6224fb8c18c93bed1fe64c38641b8c392b2cae966803c0d167444c4782a`.
 
-## Optimization contribution
+## Historical optimization contribution
 
-The table separates single-process optimization smoke measurements from the
+This table is retained from the former single-Wave64 geometry. It separates
+single-process optimization smoke measurements from the
 five-process comparison below. Smoke measurements used the same ROCr dispatch
 timer and numerical checks, but are useful only for attribution within this
 artifact.
@@ -135,9 +169,10 @@ batch-1 router has one useful row, while each `16x16` MFMA executes 16 rows and
 requires padding and extra operand movement. Native matrix instructions alone
 do not make that low-utilization shape faster.
 
-## Reproducible performance result
+## Historical reproducible performance result
 
-Run the exact five-process alternating AB/BA campaign with 1,000 initial
+The following command and results apply to the former single-Wave64 artifact,
+not the current 16-item geometry. The campaign used 1,000 initial
 warmups, 30 blocks of 100 samples, and 20 rewarm dispatches before every block:
 
 ```bash
@@ -167,9 +202,10 @@ pins the summaries and retained raw-record hashes. `amd-smi` observations found
 no process entry with nonzero GPU memory, activity, or CU occupancy before or
 after a measured wrapper; clocks were not locked.
 
-## Theoretical resource floor
+## Historical single-item theoretical resource floor
 
-The fused profile has 1,509,972 unique compulsory bytes:
+One item in the former single-Wave64 profile has 1,509,972 unique compulsory
+bytes:
 
 | Data | Bytes |
 | --- | ---: |
@@ -205,6 +241,6 @@ The bound file does not provide a BF16 peak, so omitting that term makes the
 reported floor more optimistic. The qualification median is about `5,641x`
 this resource floor; the comparator is about `4,134x`. These ratios do not mean
 either kernel can approach the bound: `T_resource` assumes full-device
-occupancy, while this tutorial launches one dependent Wave64 workgroup and has
+occupancy, while that measured artifact launched one dependent Wave64 workgroup and had
 unmodeled scalar, transcendental, instruction-latency, and dispatch costs. No
 single-workgroup latency bound is fabricated from the throughput roofline.

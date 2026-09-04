@@ -1,17 +1,19 @@
 {
   "schema": "fe2o3.gfx950.gpt-oss-ablation-registry.v1",
-  "scope": "fixed-shape exact-oracle gfx950 GPT-OSS-120B batch-1 layer-tile variants",
+  "scope": "fixed-shape exact-oracle gfx950 GPT-OSS-120B 16-item layer-tile variants",
   "invariants": {
     "full_kernel_export": "gfx950_gpt_oss_120b_decode_megakernel_v1",
     "same_full_kernel_abi_inputs_and_cpu_oracle": true,
-    "batch": 1,
+    "batch_per_item": 1,
+    "items": 16,
     "hidden": 2880,
     "experts": 128,
     "selected_experts": 4,
     "attention_tokens": 16,
     "attention_channels": 16,
-    "workgroup": [64, 1, 1],
-    "grid": [1, 1, 1]
+    "waves_per_workgroup": 4,
+    "workgroup": [256, 1, 1],
+    "grid": [4, 1, 1]
   },
   "admitted": [
     {
@@ -24,7 +26,7 @@
         "grouped disjoint attention, expert, and packed-route stores"
       ],
       "lds_bytes": 0,
-      "pipeline_assessment": "the admitted implementation keeps the fixed one-wave dependency chains in registers"
+      "pipeline_assessment": "the admitted implementation keeps four independent Wave64 item dependency chains per workgroup in registers"
     },
     {
       "variant": "serial-router",
@@ -72,10 +74,10 @@
       "variant": "pipelined-attention",
       "feature": "kernel-gpt-oss-decode-pipelined-attention",
       "status": "compiler-rejected",
-      "planned_lds_bytes": 2048,
+      "planned_lds_bytes": 8192,
       "planned_stages": 2,
       "planned_prefetch_distance": 1,
-      "reason": "the ranked projection rejects a pipeline scalar because it is not an exact unsigned index expression after the exact prime, loop, and drain lifecycle is constructed",
+      "reason": "the ranked projection rejects the loop-carried pipeline epoch because its retained scalar temporary has multiple definitions before the exact prime, loop, and drain lifecycle can be admitted",
       "retained_conclusion": "this is a production-lowering feasibility rejection, not a measured slowdown"
     },
     {
@@ -98,6 +100,7 @@
     }
   ],
   "resource_floor": {
+    "status": "historical-single-item-geometry",
     "optimized_unique_compulsory_global_bytes": 1509972,
     "fp32_flops": 745472,
     "bf16_executed_flops": 32768,

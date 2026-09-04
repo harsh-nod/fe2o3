@@ -6010,8 +6010,9 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V10, limits)
     }
 
-    /// Admits under the exact closed V11 schema that adds authenticated,
-    /// bounds-checked scalar global volatile load and store terminals.
+    /// Admits under the exact closed V11 schema that retains the V10 operation
+    /// encodings and adds the compiler trap plus authenticated, bounds-checked
+    /// scalar global volatile load and store terminals at unique tags.
     pub fn admit_exact_v11(
         self,
         limits: SemanticMirLimitsV1,
@@ -6023,7 +6024,8 @@ impl InertSemanticMirRequestV1 {
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
     /// workgroup pipelines occur together, V10 for target-neutral scans, and
-    /// V11 for authenticated scalar global volatile memory terminals.
+    /// V11 when the compiler trap or authenticated scalar global volatile
+    /// memory terminals are present.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -16417,7 +16419,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
                 operation: SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
-                    | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. },
+                    | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Trap,
                 ..
             }
         )
@@ -17392,13 +17395,17 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(3)?;
             encode_axis(writer, axis)
         }
+        SemanticCompilerIntrinsicOperationV1::Trap => {
+            require_v11_wire_version(wire_version)?;
+            writer.u8(64)
+        }
         SemanticCompilerIntrinsicOperationV1::VolatileLoad {
             slice,
             element,
             raw_index,
         } => {
             require_v11_wire_version(wire_version)?;
-            writer.u8(64)?;
+            writer.u8(65)?;
             writer.u32(slice.0)?;
             writer.u32(element.0)?;
             writer.u32(raw_index.0)
@@ -17411,14 +17418,13 @@ fn encode_compiler_intrinsic_operation(
             index_space,
         } => {
             require_v11_wire_version(wire_version)?;
-            writer.u8(65)?;
+            writer.u8(66)?;
             writer.u32(disjoint_slice.0)?;
             writer.u32(index_witness.0)?;
             writer.u32(element.0)?;
             writer.u32(raw_index.0)?;
             encode_disjoint_index_space(writer, index_space)
         }
-        SemanticCompilerIntrinsicOperationV1::Trap => writer.u8(41),
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
             dynamic_lds,

@@ -24,8 +24,18 @@ use fe2o3_kir_sim::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod f32_v3;
 mod production_bundle_v5;
 mod semantic_v2;
+
+pub use f32_v3::{
+    F32_DIFFERENTIAL_CAPABILITIES_SCHEMA_V3, F32_DIFFERENTIAL_FAILURE_SCHEMA_V3,
+    F32_DIFFERENTIAL_REPLAY_SCHEMA_V3, F32_DIFFERENTIAL_SCHEMA_V3, F32CaseEvidenceV3,
+    F32DifferentialCapabilitiesV3, F32DifferentialErrorV3, F32DifferentialExclusionV3,
+    F32DifferentialFailureV3, F32DifferentialReplayV3, F32DifferentialSuccessV3,
+    F32ReducerMetadataV3, F32ReductionV3, f32_differential_capabilities_v3,
+    replay_f32_differential_case_v3, run_f32_differential_v3,
+};
 
 pub use production_bundle_v5::{
     ExactBufferExpectationV3, ExactBufferObservationV3, ExactBufferUnavailableV3,
@@ -826,6 +836,50 @@ pub fn main() -> ExitCode {
                 }
             };
         }
+        Some("f32-capabilities-v3") => {
+            if arguments.next().is_some() {
+                emit_command_error(
+                    "invalid_command_line",
+                    "usage: fe2o3-sim-differential f32-capabilities-v3",
+                );
+                return ExitCode::FAILURE;
+            }
+            return write_json_stdout(&f32_differential_capabilities_v3());
+        }
+        Some("f32-run-v3") => {
+            if arguments.next().is_some() {
+                emit_command_error(
+                    "invalid_command_line",
+                    "usage: fe2o3-sim-differential f32-run-v3",
+                );
+                return ExitCode::FAILURE;
+            }
+            return match run_f32_differential_v3() {
+                Ok(Ok(report)) => write_json_stdout(&report),
+                Ok(Err(report)) => write_json_stderr(&report),
+                Err(error) => {
+                    emit_command_error("harness_failed", &error.to_string());
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Some("f32-replay-v3") => {
+            let (case, kir_sha256, oracle_corpus_sha256) = match parse_f32_replay(arguments) {
+                Ok(replay) => replay,
+                Err(error) => {
+                    emit_command_error("invalid_command_line", &error);
+                    return ExitCode::FAILURE;
+                }
+            };
+            return match replay_f32_differential_case_v3(&case, &kir_sha256, &oracle_corpus_sha256)
+            {
+                Ok(report) => write_json_stdout(&report),
+                Err(error) => {
+                    emit_command_error("replay_rejected", &error.to_string());
+                    ExitCode::FAILURE
+                }
+            };
+        }
         _ => {}
     }
     let config = match parse(first.into_iter().chain(arguments)) {
@@ -890,6 +944,32 @@ fn parse_semantic_replay(
         seed.ok_or_else(|| usage.to_owned())?,
         case.ok_or_else(|| usage.to_owned())?,
         kir_sha256.ok_or_else(|| usage.to_owned())?,
+    ))
+}
+
+fn parse_f32_replay(
+    arguments: impl Iterator<Item = OsString>,
+) -> Result<(String, String, String), String> {
+    let usage = "usage: fe2o3-sim-differential f32-replay-v3 --case ID --kir-sha256 HEX --oracle-corpus-sha256 HEX";
+    let mut case = None;
+    let mut kir_sha256 = None;
+    let mut oracle_corpus_sha256 = None;
+    let mut arguments = arguments;
+    while let Some(name) = arguments.next() {
+        let value = arguments.next().ok_or_else(|| usage.to_owned())?;
+        let name = name.to_str().ok_or_else(|| usage.to_owned())?;
+        let value = value.to_str().ok_or_else(|| usage.to_owned())?;
+        match name {
+            "--case" => assign(&mut case, value.to_owned(), name)?,
+            "--kir-sha256" => assign(&mut kir_sha256, value.to_owned(), name)?,
+            "--oracle-corpus-sha256" => assign(&mut oracle_corpus_sha256, value.to_owned(), name)?,
+            _ => return Err(usage.to_owned()),
+        }
+    }
+    Ok((
+        case.ok_or_else(|| usage.to_owned())?,
+        kir_sha256.ok_or_else(|| usage.to_owned())?,
+        oracle_corpus_sha256.ok_or_else(|| usage.to_owned())?,
     ))
 }
 

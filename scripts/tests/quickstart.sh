@@ -71,6 +71,7 @@ grep -F -- 'fe2o3-export-sim' "${LOG}" >/dev/null
 grep -F -- 'build --locked --quiet -p rustc-codegen-fe2o3 --bin fe2o3-rustc-extract' \
   "${LOG}" >/dev/null
 grep -F -- '--crate fe2o3_fill' "${LOG}" >/dev/null
+grep -F -- '--bundle-version 1' "${LOG}" >/dev/null
 grep -F -- '--package fe2o3-fill --lib' "${LOG}" >/dev/null
 grep -F -- 'fe2o3-kir-sim' "${LOG}" >/dev/null
 grep -F -- '"hardware_observed":false' "${FIXTURE}/no-gpu.stdout" >/dev/null
@@ -106,5 +107,24 @@ set -e
 [[ "${status}" -eq 2 ]]
 grep -F -- 'requires --crate, --request, and Cargo selection after --' \
   "${FIXTURE}/invalid.stderr" >/dev/null
+
+: >"${LOG}"
+run_quickstart simulate-source --crate fe2o3_fill \
+  --request "${REPO_ROOT}/scripts/quickstart/fill-request.json" \
+  --bundle-version 5 -- --package fe2o3-fill --lib \
+  >"${FIXTURE}/v5.stdout" 2>"${FIXTURE}/v5.stderr"
+grep -F -- '--bundle-version 5' "${LOG}" >/dev/null
+grep -F -- '--bundle-v5' "${LOG}" >/dev/null
+
+set +e
+run_quickstart simulate-source --crate fe2o3_fill \
+  --request "${REPO_ROOT}/scripts/quickstart/fill-request.json" \
+  --bundle-version 4 -- --package fe2o3-fill --lib \
+  >"${FIXTURE}/invalid-version.stdout" 2>"${FIXTURE}/invalid-version.stderr"
+status=$?
+set -e
+[[ "${status}" -eq 2 ]]
+grep -F -- '--bundle-version must be exactly 1 or 5' \
+  "${FIXTURE}/invalid-version.stderr" >/dev/null
 
 printf '%s\n' 'quickstart shell tests passed'

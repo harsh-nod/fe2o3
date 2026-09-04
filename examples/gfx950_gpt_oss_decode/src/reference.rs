@@ -14,6 +14,8 @@ const MXFP4_BLOCK: usize = 32;
 const MXFP4_BLOCKS: usize = 4;
 const ATTENTION_OUTPUT_ELEMENTS: usize = MATRIX_ROWS * VALUE_TILE;
 const EXPERT_OUTPUT_ELEMENTS: usize = MATRIX_ROWS * EXPERT_N_TILE;
+const WAVE_SIZE: usize = 64;
+const PROFILE_ITEMS: usize = 16;
 
 /// Inputs to the fixed GPT-OSS layer-tile profile.
 #[derive(Clone, Debug)]
@@ -40,6 +42,31 @@ pub struct GptOssTileInputs {
     pub expert_weight_scales: Vec<f32>,
 }
 
+/// Batched inputs for four Wave64 items per workgroup and four workgroups.
+#[derive(Clone, Debug)]
+pub struct GptOssBatchInputs {
+    /// Item-major normalized hidden vectors.
+    pub hidden_f32: Vec<f32>,
+    /// Shared expert-major router weights.
+    pub router_f32: Vec<f32>,
+    /// Item-major row-major query tiles.
+    pub query_bf16: Vec<u16>,
+    /// Item-major depth-major cached key tiles.
+    pub key_transposed_bf16: Vec<u16>,
+    /// Item-major token-major cached value tiles.
+    pub value_f32: Vec<f32>,
+    /// Item-major learned attention sinks.
+    pub sinks_f32: Vec<f32>,
+    /// Item-major block-isolated E2M1 activation tiles.
+    pub expert_activation_blocks_fp4: Vec<u8>,
+    /// Shared expert-major block-isolated E2M1 weights.
+    pub expert_weight_blocks_fp4: Vec<u8>,
+    /// Item-major decoded activation scales.
+    pub activation_scales: Vec<f32>,
+    /// Shared expert-, block-, and column-major weight scales.
+    pub expert_weight_scales: Vec<f32>,
+}
+
 /// Independent observation for all megakernel outputs.
 #[derive(Clone, Debug)]
 pub struct GptOssTileReference {
@@ -51,6 +78,19 @@ pub struct GptOssTileReference {
     pub top4: [u32; TOP_K],
     /// Top-4 IDs packed into four seven-bit fields.
     pub packed_top4: u32,
+}
+
+/// Independent observation for the complete sixteen-item launch.
+#[derive(Clone, Debug)]
+pub struct GptOssBatchReference {
+    /// Concatenated attention tiles in item order.
+    pub attention: Vec<f32>,
+    /// Concatenated expert tiles in item order.
+    pub expert: Vec<f32>,
+    /// Stable top-4 IDs for every item.
+    pub top4: Vec<[u32; TOP_K]>,
+    /// Per-lane replicated packed routes in global-invocation order.
+    pub packed_top4: Vec<u32>,
 }
 
 /// Converts an f32 to BF16 bits with round-to-nearest, ties-to-even.
@@ -173,6 +213,60 @@ pub fn deterministic_inputs() -> GptOssTileInputs {
     }
 }
 
+/// Builds nonuniform deterministic inputs for every useful Wave64 item.
+pub fn deterministic_batch_inputs() -> GptOssBatchInputs {
+    let base = deterministic_inputs();
+    let mut hidden_f32 = Vec::with_capacity(PROFILE_ITEMS * HIDDEN_SIZE);
+    let mut query_bf16 = Vec::with_capacity(PROFILE_ITEMS * MATRIX_ROWS * HEAD_DIM);
+    let mut key_transposed_bf16 = Vec::with_capacity(PROFILE_ITEMS * HEAD_DIM * CONTEXT_TOKENS);
+    let mut value_f32 = Vec::with_capacity(PROFILE_ITEMS * CONTEXT_TOKENS * VALUE_TILE);
+    let mut sinks_f32 = Vec::with_capacity(PROFILE_ITEMS * MATRIX_ROWS);
+    let mut expert_activation_blocks_fp4 =
+        Vec::with_capacity(PROFILE_ITEMS * MXFP4_BLOCKS * MATRIX_ROWS * EXPERT_K_TILE);
+    let mut activation_scales = Vec::with_capacity(PROFILE_ITEMS * MXFP4_BLOCKS);
+
+    for item in 0..PROFILE_ITEMS {
+        let hidden_start = hidden_f32.len();
+        hidden_f32.extend_from_slice(&base.hidden_f32);
+        hidden_f32[hidden_start] = if item % 2 == 0 { 1.0 } else { -1.0 };
+
+        let query_start = query_bf16.len();
+        query_bf16.extend_from_slice(&base.query_bf16);
+        query_bf16[query_start] = encode_bf16(-0.75 + item as f32 * 0.0625);
+
+        key_transposed_bf16.extend_from_slice(&base.key_transposed_bf16);
+
+        let value_start = value_f32.len();
+        value_f32.extend_from_slice(&base.value_f32);
+        value_f32[value_start] = decode_bf16(encode_bf16(-0.5 + item as f32 * 0.0625));
+
+        let sink_start = sinks_f32.len();
+        sinks_f32.extend_from_slice(&base.sinks_f32);
+        sinks_f32[sink_start] = decode_bf16(encode_bf16(-0.5 + item as f32 * 0.125));
+
+        let activation_start = expert_activation_blocks_fp4.len();
+        expert_activation_blocks_fp4.extend_from_slice(&base.expert_activation_blocks_fp4);
+        expert_activation_blocks_fp4[activation_start] = (item as u8) & 0x0f;
+
+        activation_scales.extend_from_slice(&base.activation_scales);
+        let scale_start = item * MXFP4_BLOCKS;
+        activation_scales[scale_start] = [0.25, 0.5, 1.0, 2.0][item % 4];
+    }
+
+    GptOssBatchInputs {
+        hidden_f32,
+        router_f32: base.router_f32,
+        query_bf16,
+        key_transposed_bf16,
+        value_f32,
+        sinks_f32,
+        expert_activation_blocks_fp4,
+        expert_weight_blocks_fp4: base.expert_weight_blocks_fp4,
+        activation_scales,
+        expert_weight_scales: base.expert_weight_scales,
+    }
+}
+
 fn stable_top4(inputs: &GptOssTileInputs) -> [u32; TOP_K] {
     let mut logits = vec![0.0_f32; EXPERTS];
     for expert in 0..EXPERTS {
@@ -250,6 +344,70 @@ pub fn reference(inputs: &GptOssTileInputs) -> GptOssTileReference {
     }
 
     GptOssTileReference {
+        attention,
+        expert,
+        top4,
+        packed_top4,
+    }
+}
+
+/// Computes every independent item without device helpers or GPU libraries.
+pub fn reference_batch(inputs: &GptOssBatchInputs) -> GptOssBatchReference {
+    assert_eq!(inputs.hidden_f32.len(), PROFILE_ITEMS * HIDDEN_SIZE);
+    assert_eq!(
+        inputs.query_bf16.len(),
+        PROFILE_ITEMS * MATRIX_ROWS * HEAD_DIM
+    );
+    assert_eq!(
+        inputs.key_transposed_bf16.len(),
+        PROFILE_ITEMS * HEAD_DIM * CONTEXT_TOKENS
+    );
+    assert_eq!(
+        inputs.value_f32.len(),
+        PROFILE_ITEMS * CONTEXT_TOKENS * VALUE_TILE
+    );
+    assert_eq!(inputs.sinks_f32.len(), PROFILE_ITEMS * MATRIX_ROWS);
+    assert_eq!(
+        inputs.expert_activation_blocks_fp4.len(),
+        PROFILE_ITEMS * MXFP4_BLOCKS * MATRIX_ROWS * EXPERT_K_TILE
+    );
+    assert_eq!(inputs.activation_scales.len(), PROFILE_ITEMS * MXFP4_BLOCKS);
+
+    let activation_elements = MXFP4_BLOCKS * MATRIX_ROWS * EXPERT_K_TILE;
+    let mut attention = Vec::with_capacity(PROFILE_ITEMS * ATTENTION_OUTPUT_ELEMENTS);
+    let mut expert = Vec::with_capacity(PROFILE_ITEMS * EXPERT_OUTPUT_ELEMENTS);
+    let mut top4 = Vec::with_capacity(PROFILE_ITEMS);
+    let mut packed_top4 = Vec::with_capacity(PROFILE_ITEMS * WAVE_SIZE);
+    for item in 0..PROFILE_ITEMS {
+        let tile = GptOssTileInputs {
+            hidden_f32: inputs.hidden_f32[item * HIDDEN_SIZE..(item + 1) * HIDDEN_SIZE].to_vec(),
+            router_f32: inputs.router_f32.clone(),
+            query_bf16: inputs.query_bf16
+                [item * MATRIX_ROWS * HEAD_DIM..(item + 1) * MATRIX_ROWS * HEAD_DIM]
+                .to_vec(),
+            key_transposed_bf16: inputs.key_transposed_bf16
+                [item * HEAD_DIM * CONTEXT_TOKENS..(item + 1) * HEAD_DIM * CONTEXT_TOKENS]
+                .to_vec(),
+            value_f32: inputs.value_f32
+                [item * CONTEXT_TOKENS * VALUE_TILE..(item + 1) * CONTEXT_TOKENS * VALUE_TILE]
+                .to_vec(),
+            sinks_f32: inputs.sinks_f32[item * MATRIX_ROWS..(item + 1) * MATRIX_ROWS].to_vec(),
+            expert_activation_blocks_fp4: inputs.expert_activation_blocks_fp4
+                [item * activation_elements..(item + 1) * activation_elements]
+                .to_vec(),
+            expert_weight_blocks_fp4: inputs.expert_weight_blocks_fp4.clone(),
+            activation_scales: inputs.activation_scales
+                [item * MXFP4_BLOCKS..(item + 1) * MXFP4_BLOCKS]
+                .to_vec(),
+            expert_weight_scales: inputs.expert_weight_scales.clone(),
+        };
+        let result = reference(&tile);
+        attention.extend(result.attention);
+        expert.extend(result.expert);
+        top4.push(result.top4);
+        packed_top4.extend(std::iter::repeat_n(result.packed_top4, WAVE_SIZE));
+    }
+    GptOssBatchReference {
         attention,
         expert,
         top4,

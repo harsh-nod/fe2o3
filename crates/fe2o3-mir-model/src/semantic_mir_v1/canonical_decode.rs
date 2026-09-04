@@ -150,7 +150,7 @@ impl AdmittedInertSemanticMirV1 {
     ///
     /// Production collection deliberately selects at least V5 even when an
     /// older schema could represent the same model. This decoder preserves the
-    /// declared V5, V6, or V7 schema instead of re-admitting under the minimum
+    /// declared production schema instead of re-admitting under the minimum
     /// compatible version. It grants no producer, proof, compiler, artifact,
     /// publication, load, or launch authority.
     pub fn decode_current_production_canonical(
@@ -269,7 +269,9 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
-    /// Decodes only canonical V11 bytes.
+    /// Decodes bytes canonical specifically under the closed V11 schema that
+    /// adds the compiler trap and authenticated volatile memory terminals at
+    /// their unique tags.
     pub fn decode_exact_v11_canonical(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -1565,7 +1567,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V11 {
-            65
+            66
         } else if self.wire_version == SemanticMirWireVersionV1::V10 {
             63
         } else if self.wire_version == SemanticMirWireVersionV1::V9 {
@@ -1978,12 +1980,13 @@ impl<'a> CanonicalDecoderV1<'a> {
                     _ => unreachable!(),
                 },
             },
-            64 => SemanticCompilerIntrinsicOperationV1::VolatileLoad {
+            64 => SemanticCompilerIntrinsicOperationV1::Trap,
+            65 => SemanticCompilerIntrinsicOperationV1::VolatileLoad {
                 slice: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
                 raw_index: SemanticTypeIdV1(self.u32()?),
             },
-            65 => SemanticCompilerIntrinsicOperationV1::VolatileStore {
+            66 => SemanticCompilerIntrinsicOperationV1::VolatileStore {
                 disjoint_slice: SemanticTypeIdV1(self.u32()?),
                 index_witness: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
@@ -2722,6 +2725,85 @@ mod tests {
         .unwrap()
     }
 
+    fn non_scan_trap_request() -> InertSemanticMirRequestV1 {
+        let request = minimal_request();
+        let never = SemanticTypeIdV1::from_index(u32::try_from(request.types.len()).unwrap());
+        let mut types = request.types.into_vec();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1(identity(130)),
+            SemanticLayoutIdentityV1(identity(131)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                SemanticFieldsShapeV1::Primitive,
+                SemanticRustcVariantsV1::Empty,
+                SemanticBackendReprV1::memory(true),
+                None,
+                true,
+                None,
+                1,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Never,
+        ));
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1(identity(132)),
+            SemanticLayoutIdentityV1(identity(133)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(never, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let trap = SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1(identity(134)),
+                SemanticItemDefinitionIdentityV1(identity(135)),
+                SemanticMonomorphizationIdentityV1(identity(136)),
+                SemanticGenericTypeArgumentsIdentityV1(identity(137)),
+                SemanticConstGenericArgumentsIdentityV1(identity(138)),
+                SemanticSourceProvenanceV1::unavailable(),
+                abi,
+            ),
+            operation: SemanticCompilerIntrinsicOperationV1::Trap,
+            operation_identity: SemanticCompilerIntrinsicIdentityV1(identity(139)),
+        };
+        let mut callables = request.callables.into_vec();
+        callables.push(trap);
+        let mut functions = request.functions.into_vec();
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![],
+            None,
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        functions[0].blocks[0] = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1(identity(140)),
+            SemanticSourceProvenanceV1::unavailable(),
+            vec![],
+            SemanticTerminatorV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticTerminatorKindV1::Call(call),
+            ),
+        )
+        .unwrap();
+        InertSemanticMirRequestV1::new_with_callables(
+            request.target,
+            types,
+            request.allocations.into_vec(),
+            request.statics.into_vec(),
+            request.vtables.into_vec(),
+            functions,
+            callables,
+            request.roots.into_vec(),
+        )
+        .unwrap()
+    }
+
     fn component_round_trip<T: Debug + Eq>(
         value: T,
         encode: impl Fn(&mut CanonicalWriterV1, &T) -> Result<(), SemanticMirErrorV1>,
@@ -2779,7 +2861,7 @@ mod tests {
     }
 
     #[test]
-    fn current_production_decoder_preserves_exact_v5_through_v9_custody() {
+    fn current_production_decoder_preserves_exact_v5_through_v11_custody() {
         let limits = SemanticMirLimitsV1::default();
         let admitted = [
             minimal_request().admit_exact_v5(limits).unwrap(),
@@ -2787,6 +2869,8 @@ mod tests {
             minimal_request().admit_exact_v7(limits).unwrap(),
             minimal_request().admit_exact_v8(limits).unwrap(),
             minimal_request().admit_exact_v9(limits).unwrap(),
+            minimal_request().admit_exact_v10(limits).unwrap(),
+            minimal_request().admit_exact_v11(limits).unwrap(),
         ];
         for original in admitted {
             let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
@@ -3805,7 +3889,7 @@ mod tests {
                 index_space: SemanticDisjointIndexSpaceV1::Index1d,
             },
         ];
-        for (operation, tag) in operations.into_iter().zip([64, 65]) {
+        for (operation, tag) in operations.into_iter().zip([65, 66]) {
             let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V11);
             assert_eq!(encoded[0], tag);
             for wire_version in [
@@ -3826,6 +3910,75 @@ mod tests {
                 assert!(decoder.compiler_intrinsic().is_err());
             }
         }
+    }
+
+    #[test]
+    fn trap_round_trips_only_at_its_unique_v11_tag() {
+        let operation = SemanticCompilerIntrinsicOperationV1::Trap;
+        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V11);
+        assert_eq!(encoded, [64]);
+
+        for wire_version in [
+            SemanticMirWireVersionV1::V7,
+            SemanticMirWireVersionV1::V8,
+            SemanticMirWireVersionV1::V9,
+            SemanticMirWireVersionV1::V10,
+        ] {
+            let mut writer = CanonicalWriterV1::new(1);
+            assert!(matches!(
+                encode_compiler_intrinsic_operation(&mut writer, operation, wire_version),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    required: SemanticMirWireVersionV1::V11,
+                    ..
+                })
+            ));
+
+            let mut decoder = CanonicalDecoderV1::new(&[64], SemanticMirLimitsV1::default());
+            decoder.wire_version = wire_version;
+            assert!(decoder.compiler_intrinsic().is_err());
+        }
+    }
+
+    #[test]
+    fn non_scan_trap_selects_and_round_trips_current_production_v11() {
+        let request = non_scan_trap_request();
+        assert_eq!(
+            minimum_wire_version(&request),
+            SemanticMirWireVersionV1::V11
+        );
+        let admitted = request
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .unwrap();
+        assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V11);
+        assert!(matches!(
+            AdmittedInertSemanticMirV1::decode_exact_v10_canonical(
+                admitted.canonical_encoding(),
+                SemanticMirLimitsV1::default(),
+            ),
+            Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected: SemanticMirWireVersionV1::V10,
+                actual: SemanticMirWireVersionV1::V11,
+            })
+        ));
+        let exact = AdmittedInertSemanticMirV1::decode_exact_v11_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(exact.canonical_encoding(), admitted.canonical_encoding());
+        let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            admitted.canonical_encoding(),
+            SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+        assert!(decoded.callables().iter().any(|callable| matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Trap,
+                ..
+            }
+        )));
     }
 
     #[test]

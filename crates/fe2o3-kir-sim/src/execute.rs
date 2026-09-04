@@ -2045,6 +2045,7 @@ pub(crate) fn conservative_execution_resident_bytes(
     admitted_resident_bytes: usize,
     request: &SimulationRequestV1,
     limits: SimulationLimitsV1,
+    reserved_call_depth: usize,
     reachable_ssa_values: usize,
     plan_identity_bytes: usize,
     reachable_indices_capacity: usize,
@@ -2130,24 +2131,24 @@ pub(crate) fn conservative_execution_resident_bytes(
     )?)?;
     resident.add_product(
         workgroup_participants,
-        geometric_vec_bytes::<RuntimeFrame<'static>>(limits.max_call_depth)?,
+        geometric_vec_bytes::<RuntimeFrame<'static>>(reserved_call_depth)?,
     )?;
     // InvocationMachine::new owns the next frame before it is moved into one reserved stack.
     resident.add_bytes(size_of::<RuntimeFrame<'static>>())?;
     let values_per_frame = reserved_hash_map_bytes::<ValueId, RuntimeValue>(reachable_ssa_values)?;
     resident.add_product(
-        workgroup_participants.checked_mul(limits.max_call_depth)?,
+        workgroup_participants.checked_mul(reserved_call_depth)?,
         values_per_frame,
     )?;
     let incoming_per_frame = reserved_vec_bytes::<RuntimeValue>(reachable_ssa_values)?;
     resident.add_product(
-        workgroup_participants.checked_mul(limits.max_call_depth)?,
+        workgroup_participants.checked_mul(reserved_call_depth)?,
         incoming_per_frame,
     )?;
     resident.add_product(reserved_vec_bytes::<RuntimeValue>(reachable_ssa_values)?, 2)?;
     resident.add_bytes(partitioned_geometric_vec_bytes::<FrameAllocation>(
         limits.max_allocations,
-        workgroup_participants.checked_mul(limits.max_call_depth)?,
+        workgroup_participants.checked_mul(reserved_call_depth)?,
     )?)?;
     resident.add_bytes(reserved_vec_bytes::<WorkgroupAllocation>(
         workgroup_allocation_sites,
@@ -2182,6 +2183,7 @@ mod execution_resident_tests {
                 0,
                 &request,
                 limits,
+                limits.max_call_depth,
                 0,
                 0,
                 0,
@@ -5930,14 +5932,40 @@ fn prepare_collective_wait(
         OperationKind::Gfx950LdsTranspose(transpose) => {
             let input = match transpose.kind {
                 Gfx950LdsTransposeOperationKindV1::Current { format } => {
+                    let invocation = engine.invocation.ok_or_else(|| {
+                        engine.at(
+                            site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "gfx950 transpose workgroup invocation",
+                            ),
+                        )
+                    })?;
+                    let participants = invocation
+                        .workgroup_size
+                        .into_iter()
+                        .try_fold(1_u32, u32::checked_mul)
+                        .ok_or_else(|| {
+                            engine.at(
+                                site,
+                                SimulationExecutionErrorKindV1::InternalInvariant(
+                                    "preflighted gfx950 transpose workgroup size",
+                                ),
+                            )
+                        })?;
+                    let tile_bytes = format.lds_bytes();
                     let memory = WorkgroupMemory {
                         element: Type::Scalar(ScalarType::U8),
-                        extent: WorkgroupMemoryExtent::Static(format.lds_bytes()),
+                        extent: WorkgroupMemoryExtent::Static(tile_bytes * (participants / 64)),
                         alignment: 64,
                     };
-                    CollectiveInput::TransposeCurrent {
-                        storage: engine.workgroup_pointer(site, &memory)?,
-                    }
+                    let mut storage = engine.workgroup_pointer(site, &memory)?;
+                    let wave = invocation.local[0] / 64;
+                    let wave_base = usize::try_from(wave * tile_bytes).unwrap();
+                    let wave_end = usize::try_from((wave + 1) * tile_bytes).unwrap();
+                    storage.byte_offset = wave_base;
+                    storage.lower_bound = wave_base;
+                    storage.upper_bound = wave_end;
+                    CollectiveInput::TransposeCurrent { storage }
                 }
                 Gfx950LdsTransposeOperationKindV1::Stage {
                     storage,

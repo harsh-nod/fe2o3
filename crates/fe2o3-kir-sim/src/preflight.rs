@@ -10,6 +10,7 @@ use fe2o3_kernel_ir::{
     ScalarType, Terminator, Type, UnaryOp, ValueId, VolatileProvenanceContract,
 };
 
+use crate::f32_surface::{F32ScalarOperationV1, admits_f32_scalar_operation};
 use crate::resident::{
     ResidentLedger, conservative_hash_map_bytes_for_entries, geometric_vec_bytes,
     partitioned_geometric_vec_bytes, reserved_bool_vec_bytes, reserved_vec_bytes,
@@ -534,7 +535,7 @@ pub(crate) fn preflight(
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
     }
-    validate_acyclic_call_depth(module, entry, limits)?;
+    let reserved_call_depth = validate_acyclic_call_depth(module, entry, limits)?;
     validate_arguments(entry, request, target, limits)?;
     let workgroup_resources = validate_workgroup_resources(
         module,
@@ -576,6 +577,7 @@ pub(crate) fn preflight(
         admitted_resident_bytes,
         request,
         limits,
+        reserved_call_depth,
         reachable_ssa_values,
         kernel_identity_bytes,
         reachable_function_indices.capacity(),
@@ -752,7 +754,9 @@ fn validate_workgroup_resources(
                             ..
                         },
                     ) => (
-                        usize::try_from(format.lds_bytes()).ok(),
+                        usize::try_from(format.lds_bytes())
+                            .ok()
+                            .and_then(|bytes| bytes.checked_mul(participants / 64)),
                         "static workgroup allocation bytes",
                     ),
                     _ => continue,
@@ -1212,7 +1216,7 @@ fn validate_acyclic_call_depth(
     module: &Module,
     entry: &Function,
     limits: SimulationLimitsV1,
-) -> Result<(), SimulationPreflightErrorV1> {
+) -> Result<usize, SimulationPreflightErrorV1> {
     let mut functions = HashMap::new();
     functions
         .try_reserve(module.functions.len())
@@ -1437,7 +1441,17 @@ fn validate_acyclic_call_depth(
         "acyclic call depth",
         maximum as u64,
         limits.max_call_depth as u64,
-    )
+    )?;
+    let recursive = component_sizes.iter().any(|size| *size > 1)
+        || graph
+            .iter()
+            .enumerate()
+            .any(|(source, edges)| edges.contains(&source));
+    Ok(if recursive {
+        limits.max_call_depth
+    } else {
+        maximum
+    })
 }
 
 struct CallGraphDfsFrame {
@@ -2000,6 +2014,9 @@ pub(crate) fn supported_cast(
 }
 
 pub(crate) fn supports_unary(op: UnaryOp, ty: ScalarType) -> bool {
+    if ty == ScalarType::F32 {
+        return admits_f32_scalar_operation(F32ScalarOperationV1::Unary(op));
+    }
     match op {
         UnaryOp::Not => ty == ScalarType::Bool || ty.is_integer(),
         UnaryOp::Negate => ty.is_signed_integer() || ty.is_float(),
@@ -2007,6 +2024,9 @@ pub(crate) fn supports_unary(op: UnaryOp, ty: ScalarType) -> bool {
 }
 
 pub(crate) fn supports_binary(op: BinaryOp, lhs: ScalarType, rhs: ScalarType) -> bool {
+    if lhs == ScalarType::F32 || rhs == ScalarType::F32 {
+        return lhs == rhs && admits_f32_scalar_operation(F32ScalarOperationV1::Binary(op));
+    }
     match op {
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
             if lhs == ScalarType::Bool && rhs == ScalarType::Bool =>
@@ -2033,6 +2053,9 @@ pub(crate) fn supports_compare(
     if lhs != rhs {
         return false;
     }
+    if lhs == ScalarType::F32 {
+        return admits_f32_scalar_operation(F32ScalarOperationV1::Compare(predicate));
+    }
     if lhs == ScalarType::Bool {
         matches!(
             predicate,
@@ -2043,15 +2066,8 @@ pub(crate) fn supports_compare(
     }
 }
 
-const fn supports_float_function(function: F32MathFunction) -> bool {
-    matches!(
-        function,
-        F32MathFunction::FusedMultiplyAdd
-            | F32MathFunction::Floor
-            | F32MathFunction::Ceil
-            | F32MathFunction::Truncate
-            | F32MathFunction::RoundTiesEven
-    )
+fn supports_float_function(function: F32MathFunction) -> bool {
+    admits_f32_scalar_operation(F32ScalarOperationV1::Math(function))
 }
 
 fn validate_arguments(
@@ -2260,6 +2276,63 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn call_depth_test_function(name: &str, callees: &[&str], kernel: bool) -> Function {
+        let mut block = fe2o3_kernel_ir::BasicBlock::new(BlockId(0));
+        for callee in callees {
+            block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: (*callee).into(),
+                    arguments: vec![],
+                },
+            ));
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        if kernel {
+            Function::kernel_entry(
+                name,
+                fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+                vec![],
+                vec![block],
+            )
+        } else {
+            Function::internal_helper(
+                name,
+                fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+                vec![],
+                vec![block],
+            )
+        }
+    }
+
+    #[test]
+    fn resident_call_depth_uses_proven_acyclic_depth_but_bounds_recursion() {
+        let limits = SimulationLimitsV1 {
+            max_call_depth: 64,
+            ..SimulationLimitsV1::default()
+        };
+        let mut acyclic = Module::new("acyclic-depth");
+        acyclic
+            .functions
+            .push(call_depth_test_function("root", &["leaf"], true));
+        acyclic
+            .functions
+            .push(call_depth_test_function("leaf", &[], false));
+        assert_eq!(
+            validate_acyclic_call_depth(&acyclic, &acyclic.functions[0], limits).unwrap(),
+            2
+        );
+
+        let mut recursive = Module::new("recursive-depth");
+        recursive
+            .functions
+            .push(call_depth_test_function("root", &["root"], true));
+        assert_eq!(
+            validate_acyclic_call_depth(&recursive, &recursive.functions[0], limits).unwrap(),
+            limits.max_call_depth
+        );
+    }
 
     #[test]
     fn dynamic_at_least_reports_its_exact_unrepresented_authority_boundary() {

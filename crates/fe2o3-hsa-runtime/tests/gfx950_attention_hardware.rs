@@ -39,7 +39,11 @@ const VALUE_ELEMENTS: usize = TOKENS * VALUE_COLUMNS;
 #[cfg(feature = "hardware-test-hooks")]
 const OUTPUT_ELEMENTS: usize = TOKENS * VALUE_COLUMNS;
 #[cfg(feature = "hardware-test-hooks")]
-const WORKGROUP_X: u32 = 64;
+const BATCHES: usize = 16;
+#[cfg(feature = "hardware-test-hooks")]
+const WORKGROUP_X: u32 = 256;
+#[cfg(feature = "hardware-test-hooks")]
+const GRID_X: u32 = 4;
 #[cfg(feature = "hardware-test-hooks")]
 const EXPLICIT_KERNARG_BYTES: usize = 64;
 #[cfg(feature = "hardware-test-hooks")]
@@ -110,7 +114,7 @@ const FP4_CASE: AttentionCase = AttentionCase {
     descriptor: "gfx950_fp4_attention_rust.kd",
     hsaco_env: "FE2O3_GFX950_FP4_ATTENTION_HSACO",
     sha256_env: "FE2O3_GFX950_FP4_ATTENTION_SHA256",
-    static_lds_bytes: 1024,
+    static_lds_bytes: 4096,
     precision: AttentionPrecision::Fp4E2M1,
 };
 
@@ -121,7 +125,7 @@ const FP8_CASE: AttentionCase = AttentionCase {
     descriptor: "gfx950_fp8_attention_rust.kd",
     hsaco_env: "FE2O3_GFX950_FP8_ATTENTION_HSACO",
     sha256_env: "FE2O3_GFX950_FP8_ATTENTION_SHA256",
-    static_lds_bytes: 2048,
+    static_lds_bytes: 8192,
     precision: AttentionPrecision::Fp8E4M3,
 };
 
@@ -249,7 +253,7 @@ fn inspect_profile(case: AttentionCase, bytes: &[u8]) -> Result<(), BoxError> {
             && kernel.group_segment_fixed_size() == case.static_lds_bytes
             && !kernel.uses_dynamic_stack(),
         format!(
-            "{} HSACO does not expose its exact static WG64/LDS profile",
+            "{} HSACO does not expose its exact static WG256/LDS profile",
             case.label
         ),
     )?;
@@ -337,64 +341,87 @@ struct AttentionInputs {
 #[cfg(feature = "hardware-test-hooks")]
 fn deterministic_inputs(case: AttentionCase) -> AttentionInputs {
     let codes = case.precision.input_codes();
-    let query = (0..QUERY_ELEMENTS)
-        .map(|index| {
+    let mut query = Vec::with_capacity(BATCHES * QUERY_ELEMENTS);
+    let mut key = Vec::with_capacity(BATCHES * KEY_ELEMENTS);
+    let mut value = Vec::with_capacity(BATCHES * VALUE_ELEMENTS);
+    for batch in 0..BATCHES {
+        query.extend((0..QUERY_ELEMENTS).map(|index| {
             let row = index / HEAD_DIMENSION;
             let depth = index % HEAD_DIMENSION;
-            codes[(row * 11 + depth * 5 + row * depth * 3 + 1) % codes.len()]
-        })
-        .collect();
-    let key = (0..KEY_ELEMENTS)
-        .map(|index| {
+            codes[(row * 11
+                + depth * 5
+                + row * depth * 3
+                + 1
+                + batch
+                + (batch / codes.len()) * (depth % 5))
+                % codes.len()]
+        }));
+        key.extend((0..KEY_ELEMENTS).map(|index| {
             let token = index / HEAD_DIMENSION;
             let depth = index % HEAD_DIMENSION;
-            codes[(token * 7 + depth * 3 + token * depth * 5 + 2) % codes.len()]
-        })
-        .collect();
-    let value = (0..VALUE_ELEMENTS)
-        .map(|index| {
+            codes[(token * 7
+                + depth * 3
+                + token * depth * 5
+                + 2
+                + batch * 2
+                + (batch / codes.len()) * (depth % 5))
+                % codes.len()]
+        }));
+        value.extend((0..VALUE_ELEMENTS).map(|index| {
             let token = index / VALUE_COLUMNS;
             let column = index % VALUE_COLUMNS;
-            codes[(token * 5 + column * 2 + token * column * 3 + 4) % codes.len()]
-        })
-        .collect();
+            codes[(token * 5
+                + column * 2
+                + token * column * 3
+                + 4
+                + batch * 3
+                + (batch / codes.len()) * (column % 5))
+                % codes.len()]
+        }));
+    }
     AttentionInputs { query, key, value }
 }
 
 #[cfg(feature = "hardware-test-hooks")]
 fn cpu_reference(case: AttentionCase, inputs: &AttentionInputs) -> Vec<f32> {
     let scale = (HEAD_DIMENSION as f64).sqrt().recip();
-    let mut output = vec![0.0; OUTPUT_ELEMENTS];
+    let mut output = vec![0.0; BATCHES * OUTPUT_ELEMENTS];
     let mut scores = [0.0_f64; TOKENS];
-    for row in 0..TOKENS {
-        for token in 0..TOKENS {
-            let mut dot = 0.0_f64;
-            for depth in 0..HEAD_DIMENSION {
-                let query = case
-                    .precision
-                    .decode(inputs.query[row * HEAD_DIMENSION + depth]);
-                let key = case
-                    .precision
-                    .decode(inputs.key[token * HEAD_DIMENSION + depth]);
-                dot += f64::from(query) * f64::from(key);
-            }
-            scores[token] = dot * scale;
-        }
-        let maximum = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let mut denominator = 0.0_f64;
-        for score in &mut scores {
-            *score = (*score - maximum).exp();
-            denominator += *score;
-        }
-        for column in 0..VALUE_COLUMNS {
-            let mut result = 0.0_f64;
+    for batch in 0..BATCHES {
+        let query_base = batch * QUERY_ELEMENTS;
+        let key_base = batch * KEY_ELEMENTS;
+        let value_base = batch * VALUE_ELEMENTS;
+        let output_base = batch * OUTPUT_ELEMENTS;
+        for row in 0..TOKENS {
             for token in 0..TOKENS {
-                let value = case
-                    .precision
-                    .decode(inputs.value[token * VALUE_COLUMNS + column]);
-                result += (scores[token] / denominator) * f64::from(value);
+                let mut dot = 0.0_f64;
+                for depth in 0..HEAD_DIMENSION {
+                    let query = case
+                        .precision
+                        .decode(inputs.query[query_base + row * HEAD_DIMENSION + depth]);
+                    let key = case
+                        .precision
+                        .decode(inputs.key[key_base + token * HEAD_DIMENSION + depth]);
+                    dot += f64::from(query) * f64::from(key);
+                }
+                scores[token] = dot * scale;
             }
-            output[row * VALUE_COLUMNS + column] = result as f32;
+            let maximum = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let mut denominator = 0.0_f64;
+            for score in &mut scores {
+                *score = (*score - maximum).exp();
+                denominator += *score;
+            }
+            for column in 0..VALUE_COLUMNS {
+                let mut result = 0.0_f64;
+                for token in 0..TOKENS {
+                    let value = case
+                        .precision
+                        .decode(inputs.value[value_base + token * VALUE_COLUMNS + column]);
+                    result += (scores[token] / denominator) * f64::from(value);
+                }
+                output[output_base + row * VALUE_COLUMNS + column] = result as f32;
+            }
         }
     }
     output
@@ -431,10 +458,10 @@ fn explicit_kernarg(addresses: [u64; 4]) -> [u8; EXPLICIT_KERNARG_BYTES] {
     for (index, (address, elements)) in addresses
         .into_iter()
         .zip([
-            QUERY_ELEMENTS,
-            KEY_ELEMENTS,
-            VALUE_ELEMENTS,
-            OUTPUT_ELEMENTS,
+            BATCHES * QUERY_ELEMENTS,
+            BATCHES * KEY_ELEMENTS,
+            BATCHES * VALUE_ELEMENTS,
+            BATCHES * OUTPUT_ELEMENTS,
         ])
         .enumerate()
     {
@@ -479,7 +506,7 @@ impl Drop for RuntimeKernarg {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-unsafe fn dispatch_one_wave(
+unsafe fn dispatch_multigrid(
     case: AttentionCase,
     adapter: &mut ReviewedHsaRuntimeAdapterV1,
     executable: &ReviewedHsaExecutableV1,
@@ -497,7 +524,7 @@ unsafe fn dispatch_one_wave(
             case.label
         ),
     )?;
-    let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [WORKGROUP_X, 1, 1], 0);
+    let geometry = HsaLaunchGeometryV1::new([GRID_X, 1, 1], [WORKGROUP_X, 1, 1], 0);
     let mut storage = RuntimeKernarg::new(case)?;
     let kernarg = storage.bytes_mut();
     kernarg.copy_from_slice(explicit);
@@ -543,7 +570,8 @@ fn output_body_address(
     buffer: &ReviewedHsaHardwareTestBufferV1,
 ) -> Result<u64, BoxError> {
     require(
-        buffer.byte_len() == (OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS) * std::mem::size_of::<f32>(),
+        buffer.byte_len()
+            == (BATCHES * OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS) * std::mem::size_of::<f32>(),
         format!("guarded {} output has the wrong extent", case.label),
     )?;
     Ok(buffer.device_address(CANARY_ELEMENTS * std::mem::size_of::<f32>())?)
@@ -552,11 +580,11 @@ fn output_body_address(
 #[cfg(feature = "hardware-test-hooks")]
 fn verify_output(case: AttentionCase, actual: &[f32], expected: &[f32]) -> Result<(), BoxError> {
     require(
-        actual.len() == OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS,
+        actual.len() == BATCHES * OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS,
         format!("guarded {} output length changed", case.label),
     )?;
     let (prefix, remainder) = actual.split_at(CANARY_ELEMENTS);
-    let (body, suffix) = remainder.split_at(OUTPUT_ELEMENTS);
+    let (body, suffix) = remainder.split_at(BATCHES * OUTPUT_ELEMENTS);
     require(
         prefix
             .iter()
@@ -570,7 +598,7 @@ fn verify_output(case: AttentionCase, actual: &[f32], expected: &[f32]) -> Resul
         format!("{} output suffix canary changed", case.label),
     )?;
     require(
-        expected.len() == OUTPUT_ELEMENTS,
+        expected.len() == BATCHES * OUTPUT_ELEMENTS,
         format!("{} CPU reference has the wrong extent", case.label),
     )?;
     let mut maximum_absolute_error = 0.0_f32;
@@ -588,7 +616,8 @@ fn verify_output(case: AttentionCase, actual: &[f32], expected: &[f32]) -> Resul
     }
     println!(
         "PASS {} outputs={} max_absolute_error={maximum_absolute_error:.9e} abs_tolerance={MAX_ABSOLUTE_ERROR:.1e} rel_tolerance={MAX_RELATIVE_ERROR:.1e}",
-        case.label, OUTPUT_ELEMENTS
+        case.label,
+        BATCHES * OUTPUT_ELEMENTS
     );
     Ok(())
 }
@@ -614,9 +643,12 @@ fn run_hardware(
 
     let inputs = deterministic_inputs(case);
     let expected = cpu_reference(case, &inputs);
-    let mut output_host = Vec::with_capacity(OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS);
+    let mut output_host = Vec::with_capacity(BATCHES * OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS);
     output_host.extend(std::iter::repeat_n(OUTPUT_PREFIX, CANARY_ELEMENTS));
-    output_host.extend(std::iter::repeat_n(OUTPUT_POISON, OUTPUT_ELEMENTS));
+    output_host.extend(std::iter::repeat_n(
+        OUTPUT_POISON,
+        BATCHES * OUTPUT_ELEMENTS,
+    ));
     output_host.extend(std::iter::repeat_n(OUTPUT_SUFFIX, CANARY_ELEMENTS));
     let query = adapter.allocate_hardware_test_buffer(&inputs.query)?;
     let key = adapter.allocate_hardware_test_buffer(&inputs.key)?;
@@ -650,9 +682,9 @@ fn run_hardware(
                 && resolutions[0].executable_object() == executable_identity,
             format!("runtime resolved a substituted {} kernel", case.label),
         )?;
-        // SAFETY: dispatch_one_wave owns the reviewed raw launch boundary.
+        // SAFETY: dispatch_multigrid owns the reviewed raw launch boundary.
         unsafe {
-            dispatch_one_wave(
+            dispatch_multigrid(
                 case,
                 &mut adapter,
                 &executable,
@@ -690,7 +722,7 @@ fn run_hardware(
     execution
 }
 
-/// Runs Rust-produced FP4 attention on one gfx950 Wave64 workgroup.
+/// Runs Rust-produced FP4 attention as four WG256 workgroups.
 ///
 /// This ignored test is non-authoritative and grants no protected evidence.
 /// Invoke it with:
@@ -701,19 +733,19 @@ fn run_hardware(
 /// FE2O3_GFX950_FP4_ATTENTION_SHA256=<64-lowercase-hex-digits> \
 /// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
 ///   --test gfx950_attention_hardware \
-///   gfx950_fp4_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output \
+///   gfx950_fp4_attention_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output \
 ///   -- --ignored --exact --nocapture
 /// ```
 #[cfg(feature = "hardware-test-hooks")]
 #[test]
 #[ignore = "non-authoritative: requires a Rust-produced digest-pinned gfx950:xnack- FP4 attention COV6 HSACO and MI350"]
-fn gfx950_fp4_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output()
+fn gfx950_fp4_attention_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output()
 -> Result<(), BoxError> {
     let (bytes, digest) = read_pinned_hsaco(FP4_CASE)?;
     run_hardware(FP4_CASE, bytes, digest)
 }
 
-/// Runs Rust-produced FP8 attention on one gfx950 Wave64 workgroup.
+/// Runs Rust-produced FP8 attention as four WG256 workgroups.
 ///
 /// This ignored test is non-authoritative and grants no protected evidence.
 /// Invoke it with:
@@ -724,13 +756,13 @@ fn gfx950_fp4_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_
 /// FE2O3_GFX950_FP8_ATTENTION_SHA256=<64-lowercase-hex-digits> \
 /// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
 ///   --test gfx950_attention_hardware \
-///   gfx950_fp8_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output \
+///   gfx950_fp8_attention_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output \
 ///   -- --ignored --exact --nocapture
 /// ```
 #[cfg(feature = "hardware-test-hooks")]
 #[test]
 #[ignore = "non-authoritative: requires a Rust-produced digest-pinned gfx950:xnack- FP8 attention COV6 HSACO and MI350"]
-fn gfx950_fp8_attention_rust_cov6_runs_one_wave_and_matches_every_cpu_reference_output()
+fn gfx950_fp8_attention_rust_cov6_runs_multigrid_and_matches_every_cpu_reference_output()
 -> Result<(), BoxError> {
     let (bytes, digest) = read_pinned_hsaco(FP8_CASE)?;
     run_hardware(FP8_CASE, bytes, digest)
@@ -770,8 +802,8 @@ mod tests {
     fn exact_cases_are_distinct_and_bind_reviewed_profiles() {
         assert_eq!(FP4_CASE.export, "gfx950_fp4_attention_rust");
         assert_eq!(FP8_CASE.export, "gfx950_fp8_attention_rust");
-        assert_eq!(FP4_CASE.static_lds_bytes, 1024);
-        assert_eq!(FP8_CASE.static_lds_bytes, 2048);
+        assert_eq!(FP4_CASE.static_lds_bytes, 4096);
+        assert_eq!(FP8_CASE.static_lds_bytes, 8192);
         assert_ne!(FP4_CASE, FP8_CASE);
         assert_ne!(FP4_CASE.hsaco_env, FP8_CASE.hsaco_env);
         assert_ne!(FP4_CASE.sha256_env, FP8_CASE.sha256_env);
@@ -783,10 +815,10 @@ mod tests {
         for (index, (address, elements)) in [0x1111_u64, 0x2222, 0x3333, 0x4444]
             .into_iter()
             .zip([
-                QUERY_ELEMENTS,
-                KEY_ELEMENTS,
-                VALUE_ELEMENTS,
-                OUTPUT_ELEMENTS,
+                BATCHES * QUERY_ELEMENTS,
+                BATCHES * KEY_ELEMENTS,
+                BATCHES * VALUE_ELEMENTS,
+                BATCHES * OUTPUT_ELEMENTS,
             ])
             .enumerate()
         {
@@ -804,10 +836,10 @@ mod tests {
         for case in [FP4_CASE, FP8_CASE] {
             let inputs = deterministic_inputs(case);
             let output = cpu_reference(case, &inputs);
-            assert_eq!(inputs.query.len(), QUERY_ELEMENTS);
-            assert_eq!(inputs.key.len(), KEY_ELEMENTS);
-            assert_eq!(inputs.value.len(), VALUE_ELEMENTS);
-            assert_eq!(output.len(), OUTPUT_ELEMENTS);
+            assert_eq!(inputs.query.len(), BATCHES * QUERY_ELEMENTS);
+            assert_eq!(inputs.key.len(), BATCHES * KEY_ELEMENTS);
+            assert_eq!(inputs.value.len(), BATCHES * VALUE_ELEMENTS);
+            assert_eq!(output.len(), BATCHES * OUTPUT_ELEMENTS);
             assert!(output.iter().all(|value| value.is_finite()));
             assert!(output.windows(2).any(|pair| pair[0] != pair[1]));
             assert!(
@@ -826,16 +858,16 @@ mod tests {
         for case in [FP4_CASE, FP8_CASE] {
             let inputs = deterministic_inputs(case);
             let expected = cpu_reference(case, &inputs);
-            let mut actual = Vec::with_capacity(OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS);
+            let mut actual = Vec::with_capacity(BATCHES * OUTPUT_ELEMENTS + 2 * CANARY_ELEMENTS);
             actual.extend(std::iter::repeat_n(OUTPUT_PREFIX, CANARY_ELEMENTS));
             actual.extend_from_slice(&expected);
             actual.extend(std::iter::repeat_n(OUTPUT_SUFFIX, CANARY_ELEMENTS));
             verify_output(case, &actual, &expected).unwrap();
 
-            let last = CANARY_ELEMENTS + OUTPUT_ELEMENTS - 1;
+            let last = CANARY_ELEMENTS + BATCHES * OUTPUT_ELEMENTS - 1;
             actual[last] = f32::NAN;
             assert!(verify_output(case, &actual, &expected).is_err());
-            actual[last] = expected[OUTPUT_ELEMENTS - 1];
+            actual[last] = expected[BATCHES * OUTPUT_ELEMENTS - 1];
             actual[0] = 0.0;
             assert!(verify_output(case, &actual, &expected).is_err());
             actual[0] = OUTPUT_PREFIX;

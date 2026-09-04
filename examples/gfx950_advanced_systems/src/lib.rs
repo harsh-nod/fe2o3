@@ -136,6 +136,10 @@ pub const GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER: &str = "the retained productio
 
 /// Number of MoE tokens.
 pub const TOKENS: usize = 16;
+/// Independent wave-owned systems instances in one launch.
+pub const SYSTEM_BATCHES: usize = 16;
+/// Independent 256-element combine batches in one launch.
+pub const COMBINE_BATCHES: usize = 4;
 /// MoE input width.
 pub const HIDDEN: usize = 128;
 /// MoE output width.

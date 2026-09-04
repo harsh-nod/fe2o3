@@ -854,6 +854,11 @@ impl<'a> Analyzer<'a> {
                 lhs,
                 rhs,
             } if self.is_workgroup_index_quotient(*lhs, *rhs) => Variation::WorkgroupUniform,
+            OperationKind::Binary {
+                op: BinaryOp::Divide,
+                lhs,
+                rhs,
+            } if self.is_wave64_index_quotient(*lhs, *rhs) => Variation::SubgroupUniform,
             OperationKind::Unary { .. }
             | OperationKind::Binary { .. }
             | OperationKind::Compare { .. }
@@ -892,6 +897,28 @@ impl<'a> Analyzer<'a> {
             Axis::Z => workgroup_size.z,
         };
         extent != 0 && self.unsigned_constant(rhs) == Some(u64::from(extent))
+    }
+
+    fn is_wave64_index_quotient(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        if self.workgroup_size != Some(WorkgroupSize::new(256, 1, 1))
+            || self.unsigned_constant(rhs) != Some(64)
+        {
+            return false;
+        }
+        matches!(
+            self.value_definitions
+                .get(&lhs)
+                .map(|operation| &operation.kind),
+            Some(OperationKind::Intrinsic(
+                fe2o3_kernel_ir::IntrinsicOperation {
+                    kind: IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Global,
+                        axis: Axis::X,
+                    },
+                    ..
+                }
+            ))
+        )
     }
 
     fn unsigned_constant(&self, value: ValueId) -> Option<u64> {
