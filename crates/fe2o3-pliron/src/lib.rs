@@ -1,7 +1,12 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod kir_bridge_v1;
+mod optimization_v1;
 mod production;
+
+pub use kir_bridge_v1::*;
+pub use optimization_v1::*;
 
 pub use production::{
     ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,

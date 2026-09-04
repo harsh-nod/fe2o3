@@ -271,6 +271,17 @@ The initial pass order is deliberately conservative:
 9. uniformity, divergence, barrier, and synchronization validation;
 10. ABI preparation and target-independent call lowering.
 
+The implemented Wave 1 route assigns this work to three bounded stages rather
+than pretending the whole list is one Pliron pass manager. Ranked recipe
+construction performs unreachable-block pruning, CFG/guard normalization,
+explicit memory typing, and checked index folding. Target-neutral lowering
+performs scalar/fragment SSA promotion, aggregate ABI decomposition, intrinsic
+lowering, and GPU/tensor/MFMA legalization. After formal memory admission and
+target binding, the fixed V2 Pliron optimizer runs SCCP, CFG simplification,
+select canonicalization, DCE, local pure CSE, DCE, and CFG cleanup. General loop
+unrolling, alias-driven memory optimization, global CSE, scheduling, and cost
+models remain disabled pending their legality and coordinate-map contracts.
+
 No optimization is required for semantic correctness. A pass may reject or
 leave code unchanged, but it may not select an old compiler route.
 

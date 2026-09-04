@@ -11,7 +11,9 @@ workspace. It provides:
 - byte- and tree-guarded textual operation import that requires exact
   end-of-input and recursive verification before returning an owner handle;
 - owner-scoped dialect-registration services with bounded typed actions;
-- deterministic, bounded pass plans over real Pliron `Pass` values.
+- deterministic, bounded pass plans over real Pliron `Pass` values;
+- a typed canonical-KIR bridge for executable `gpu.*` SSA; and
+- a sealed optimizer executor for the fixed fe2o3 pass vocabulary.
 
 The context identity and typed dialect-registration primitives are implemented
 once in the lower-level `fe2o3-pliron-owner-core` crate. Admitted dialect
@@ -40,10 +42,12 @@ machine-code and HSACO authority.
 
 ## Boundary
 
-This crate does not define fe2o3 dialect operations, canonicalize IR, select a
-production compiler, publish artifacts, grant proof or launch authority, or
-use COMGR. Pliron pointers, arena identities, printer text, and diagnostics
-are never used as canonical fe2o3 identities.
+This crate does not define fe2o3 dialect operations, select a production
+compiler, publish artifacts, grant proof or launch authority, or use COMGR. It
+does execute a closed, owner-authenticated optimization plan selected by
+`fe2o3-kernel-opt`; it never accepts an arbitrary caller-provided pass.
+Pliron pointers, arena identities, printer text, and diagnostics are never
+used as canonical fe2o3 identities.
 
 The shell bounds registration count before collecting caller input, each
 dialect hook to 128 typed registration actions, pass-plan count, names, and
@@ -79,10 +83,11 @@ registry entry, so cloned stale handles cannot be revived by later arena
 allocation. Handle identities and their debug representations are not
 canonical data.
 
-The crate does not execute a generic pass plan. Although an authenticated root
-now exists, invoking an arbitrary caller-provided Pliron `Pass` would give that
-pass a contextless pointer and `&mut Context`. Generic execution remains
-disabled until compiler transformations use a sealed owner-aware service.
+The crate does not execute a generic pass plan. Invoking an arbitrary
+caller-provided Pliron `Pass` would give that pass a contextless pointer and
+`&mut Context`. `PlironOptimizationPlanV1` instead accepts only the closed
+fe2o3 pass enum, authenticates the root, bounds structural work, recursively
+verifies every changed checkpoint, and poisons the private session on failure.
 Hook and upstream diagnostic text is not copied into stable diagnostics; the
 shell emits fixed fe2o3 codes and messages instead. Hook and upstream unwinds
 remain contained by the session-construction boundary.
@@ -103,8 +108,9 @@ identity.
 target-neutral ranked-memory schema. It admits only bounded data recipes,
 constructs the module and function inside `ProductionPlironSessionV1`, performs
 recursive Pliron verification, and consumes a `ConstructedGraphStageV1`
-through the fixed bounds, atomic-legality, global race, barrier convergence,
-workgroup-memory, and declared semantic-refinement passes. Atomic accesses must
+through the fixed tensor-layout, memory-bounds, atomic-legality, race-freedom,
+hierarchical-ownership, barrier-convergence, pipeline-protocol,
+workgroup-memory, and semantic-refinement passes. Atomic accesses must
 retain explicit ordering and scope, and cannot pass without a bounded matching
 target capability; system scope additionally remains incomplete until
 coherent-allocation provenance is authenticated. The complete fixed sequence
@@ -161,11 +167,9 @@ owner-authenticated handles.
 - `Dialect::register` is idempotent upstream. This shell preflights the complete
   registration list and rejects duplicate fe2o3 dialect declarations before
   constructing a context or invoking any hook.
-- D0 plans only a flat list of leaf passes. Nested pass-manager values are
-  rejected because their hidden children would evade the shell's pass-count
-  bound. Pass name and manager inspection panics poison the plan and return a
-  typed error. The plan is metadata only and cannot be executed through this
-  crate.
+- Generic shell plans remain metadata-only flat lists of leaf passes. The
+  separate sealed optimization executor rejects hidden nested managers,
+  authenticates its root, and constructs the fixed upstream passes internally.
 - Pliron arena pointers and diagnostic display values are context-internal and
   are not suitable canonical identities. They are absent from manifests
   produced here.

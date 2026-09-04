@@ -10,6 +10,12 @@ fe2o3_run_gfx942() {
     : "${FE2O3_EXAMPLE_HSACO_ENV:?missing FE2O3_EXAMPLE_HSACO_ENV}"
     : "${FE2O3_EXAMPLE_LINK_DEVICE_LIBS:?missing FE2O3_EXAMPLE_LINK_DEVICE_LIBS}"
 
+    local compile_only=${FE2O3_EXAMPLE_COMPILE_ONLY:-0}
+    if [[ "$compile_only" != 0 && "$compile_only" != 1 ]]; then
+        printf 'FE2O3_EXAMPLE_COMPILE_ONLY must be 0 or 1\n' >&2
+        return 2
+    fi
+
     local repo_root toolchain root_target output_dir rocm_dir sysroot extractor
     local llvm_ir linked_ir object hsaco amd_target binding_path binding compiler_input
     repo_root=$(cd -- "$FE2O3_EXAMPLE_DIR/../.." && pwd)
@@ -22,7 +28,7 @@ fe2o3_run_gfx942() {
     trap 'rm -rf -- "${FE2O3_RUN_WORK_DIR:?}"' EXIT
 
     sysroot=$(rustup run "$toolchain" rustc --print sysroot)
-    extractor="$root_target/debug/fe2o3-rustc-extract"
+    extractor=${FE2O3_RUSTC_EXTRACTOR:-$root_target/debug/fe2o3-rustc-extract}
     llvm_ir="$FE2O3_RUN_WORK_DIR/$FE2O3_EXAMPLE_STEM.ll"
     linked_ir="$FE2O3_RUN_WORK_DIR/$FE2O3_EXAMPLE_STEM.bc"
     object="$FE2O3_RUN_WORK_DIR/$FE2O3_EXAMPLE_STEM.o"
@@ -35,12 +41,18 @@ fe2o3_run_gfx942() {
     fi
 
     mkdir -p -- "$output_dir"
-    CARGO_TARGET_DIR="$root_target" rustup run "$toolchain" cargo build \
-        --locked --manifest-path "$repo_root/Cargo.toml" \
-        -p rustc-codegen-fe2o3 --bin fe2o3-rustc-extract
+    if [[ -z ${FE2O3_RUSTC_EXTRACTOR:-} ]]; then
+        CARGO_TARGET_DIR="$root_target" rustup run "$toolchain" cargo build \
+            --locked --manifest-path "$repo_root/Cargo.toml" \
+            -p rustc-codegen-fe2o3 --bin fe2o3-rustc-extract
+    fi
+    if [[ ! -f "$extractor" || -L "$extractor" || ! -x "$extractor" ]]; then
+        printf 'production rustc extractor is not a regular executable: %s\n' "$extractor" >&2
+        return 1
+    fi
 
     (
-        cd -- "$FE2O3_EXAMPLE_DIR"
+        cd -- "$FE2O3_EXAMPLE_DIR" || exit
         FE2O3_EXTRACT_CRATE_V1="$FE2O3_EXAMPLE_CRATE" \
         FE2O3_EXTRACT_CRATE_BINDING_PATH_V1="$binding_path" \
         FE2O3_EXTRACT_GFX942_LLVM_PATH_V1="$llvm_ir" \
@@ -89,8 +101,15 @@ fe2o3_run_gfx942() {
         -c "$compiler_input" -o "$object"
     "$rocm_dir/llvm/bin/ld.lld" -shared "$object" -o "$hsaco"
 
+    if [[ "$compile_only" == 1 ]]; then
+        printf 'COMPILE PASS: %s reached gfx942:xnack- HSACO; hardware execution skipped\n' \
+            "$FE2O3_EXAMPLE_STEM"
+        printf 'HSACO: %s\n' "$hsaco"
+        return 0
+    fi
+
     (
-        cd -- "$FE2O3_EXAMPLE_DIR"
+        cd -- "$FE2O3_EXAMPLE_DIR" || exit
         env -u FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2 \
             "$FE2O3_EXAMPLE_HSACO_ENV=$hsaco" \
             "FE2O3_CRATE_BINDING_ID_V1=$binding" \

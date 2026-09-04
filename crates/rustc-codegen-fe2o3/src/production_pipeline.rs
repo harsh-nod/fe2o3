@@ -62,6 +62,7 @@ pub(crate) enum ProductionPipelineError {
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
+    TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetLowering(dialect_amdgcn::LoweringErrors),
@@ -170,6 +171,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::TargetBinding(error) => {
                 write!(formatter, "production compilation AMDGPU target binding failed: {error}")
             }
+            Self::TargetOptimization(error) => write!(
+                formatter,
+                "production compilation target-KIR optimization failed: {error}"
+            ),
             Self::TargetKernelIrV8(error) => write!(
                 formatter,
                 "production compilation target-bound Kernel IR V8 identity failed: {error}"
@@ -248,6 +253,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
+            Self::TargetOptimization(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetLowering(error) => Some(error),
@@ -425,6 +431,7 @@ pub(crate) struct TargetLoweredProductionCompilation {
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     target_module: fe2o3_kernel_ir::Module,
+    target_optimization: fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
     workgroups: Box<[(String, fe2o3_kernel_ir::WorkgroupSize)]>,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindings,
@@ -883,6 +890,10 @@ impl FormalMemoryAdmittedProductionCompilation {
         )
         .map_err(ProductionPipelineError::TargetBinding)?;
         let (target_module, kernel_ids) = target_bound.into_parts();
+        let (target_module, _canonical_target_module, target_optimization) =
+            fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)
+                .map_err(ProductionPipelineError::TargetOptimization)?
+                .into_parts();
         if kernel_ids.len() != target_module.kernels.len()
             || kernel_ids
                 .iter()
@@ -935,6 +946,7 @@ impl FormalMemoryAdmittedProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
+            target_optimization,
             workgroups,
             llvm_ir,
             bindings,
@@ -1080,6 +1092,26 @@ impl TargetLoweredProductionCompilation {
         false
     }
 
+    pub(crate) fn target_optimization_pass_count(&self) -> usize {
+        self.target_optimization.passes().len()
+    }
+
+    pub(crate) fn target_optimization_mutating_pass_count(&self) -> usize {
+        self.target_optimization
+            .passes()
+            .iter()
+            .filter(|pass| pass.pliron().changed())
+            .count()
+    }
+
+    pub(crate) const fn target_optimization_initial_epoch(&self) -> u64 {
+        self.target_optimization.initial_epoch()
+    }
+
+    pub(crate) const fn target_optimization_final_epoch(&self) -> u64 {
+        self.target_optimization.final_epoch()
+    }
+
     pub(crate) fn into_inert_worker_handoff_for_extraction(
         self,
     ) -> Result<fe2o3_compiler_ffi::CompilerModuleHandoffV2, ProductionPipelineError> {
@@ -1087,6 +1119,7 @@ impl TargetLoweredProductionCompilation {
             admitted,
             ranked_verification: _,
             target_module,
+            target_optimization: _,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1137,6 +1170,7 @@ impl TargetLoweredProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
+            target_optimization,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1179,6 +1213,7 @@ impl TargetLoweredProductionCompilation {
                 ranked_verification,
                 &admitted,
                 &target_module,
+                &target_optimization,
                 &llvm_ir,
                 semantic_debug_inputs,
             )
@@ -1207,7 +1242,7 @@ impl TargetLoweredProductionCompilation {
         self,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), applied {} structurally replayed target-KIR optimization pass(es), including {} mutating pass(es), across epoch {}..={} (semantic preservation is not yet formally proved), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
@@ -1218,6 +1253,10 @@ impl TargetLoweredProductionCompilation {
             self.runtime_bounds_requirement_count(),
             self.runtime_alias_requirement_count(),
             self.inter_invocation_conflict_count(),
+            self.target_optimization_pass_count(),
+            self.target_optimization_mutating_pass_count(),
+            self.target_optimization_initial_epoch(),
+            self.target_optimization_final_epoch(),
             self.workgroup_sizes(),
             self.llvm_ir().len(),
             self.bindings.rustc_target.profile().device_target(),
@@ -1228,6 +1267,7 @@ impl TargetLoweredProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
+            target_optimization,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1278,6 +1318,7 @@ impl TargetLoweredProductionCompilation {
             ranked_verification,
             &admitted,
             &target_module,
+            &target_optimization,
             &llvm_ir,
             semantic_debug_inputs,
         )
@@ -3432,7 +3473,27 @@ mod tests {
             .next()
             .expect("bounded target-lowering body");
         assert!(transaction.contains("dialect_amdgcn::bind_production_target_v1("));
+        assert!(
+            transaction.contains(
+                "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)"
+            )
+        );
         assert!(transaction.contains("dialect_amdgcn::bind_production_llvm22_worker_layout_v1("));
+        let bind = transaction
+            .find("dialect_amdgcn::bind_production_target_v1(")
+            .expect("target binding");
+        let optimize = transaction
+            .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)")
+            .expect("fixed production optimizer");
+        let lower = transaction
+            .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
+            .expect("AMDGPU LLVM lowering");
+        assert!(bind < optimize && optimize < lower);
+        let implementation = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production implementation");
+        assert_eq!(implementation.matches("&target_optimization,").count(), 2);
         assert!(!transaction.contains("required_capabilities.insert"));
     }
 

@@ -173,23 +173,30 @@ implementations.
 ### Pliron framework
 
 The Pliron framework owns context construction and identity, dialect
-registration APIs, operation verification, detached transformation services,
-and the single KIR bridge. Generic pass execution is withheld until Pliron
-provides owner-aware operation handles as tracked by
-[#140](https://github.com/harsh-nod/fe2o3/issues/140). Planned operation families are
+registration APIs, operation verification, closed transformation services,
+and the single KIR bridge. Production exposes only an owner-authenticated,
+versioned pass roster; caller-supplied generic pass execution remains withheld.
+Planned operation families are
 `mir.*`, `kernel.*`, `schedule.*`,
 `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
 
 `fe2o3-pliron` constructs the pinned D0 context and private identity anchor and
-validates bounded pass plans without executing them. Seven always-Pliron target-neutral dialect shells implement
-`kernel.*`, `schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and
-`autotune.*`. `dialect-mir` is primarily the compatibility facade over
+executes its bounded closed optimizer plan over the production `gpu.*` graph.
+Seven always-Pliron target-neutral dialect crates implement `kernel.*`,
+`schedule.*`, `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
+`dialect-mir` is primarily the compatibility facade over
 `fe2o3-mir-model`; its bounded `mir.*` Pliron module/function/block shell is
-available only through the non-default `pliron` feature. These are verified
-in-memory representations, not a connected compiler pipeline.
+available only through the non-default `pliron` feature. Except for the
+production KIR-to-`gpu.*` optimizer bridge, these are verified in-memory
+representations rather than connected production stages.
 The `kernel.*` shell additionally owns ranked-memory and closed-CFG operations
 with local MLIR-style verifiers. `fe2o3-kernel-analysis` owns their bounded,
 non-mutating whole-function bounds stage and terminal pre-lowering check.
+`fe2o3-kernel-opt` owns the deterministic, bounded Pliron-backed V2 Kernel IR
+transformation policy used by new production compilation; canonical IR data
+and structural verification remain owned by `fe2o3-kernel-ir`. Historical V1
+wire records are replay data, not a live optimizer API. A future pass adds an
+analysis dependency only when it consumes an immutable stamped report.
 Its target-neutral analyses remain available without the default
 `authenticated-machine-effect` feature, so the production Pliron owner does
 not inherit process-control machinery; rustc enables that feature explicitly
@@ -225,13 +232,15 @@ NOT depend on host runtime, integration drivers, or fixtures.
 
 No production path may introduce COMGR or shell-mediated GPU linking.
 
-`fe2o3-amdgcn-model` currently owns the existing Pliron-independent AMDGPU
-vocabulary and strict lowering implementation. `dialect-amdgcn` is a thin
-compatibility re-export under the historical package name; it is not yet the
-future `amdgcn.*` Pliron dialect. Canonical AMD target identities and
-capabilities remain in `fe2o3-amd-target`. The production-directed finalizer
-continues to use one pinned upstream LLVM build, target-machine object emission,
-and in-process LLD linking in the isolated worker.
+`fe2o3-amdgcn-model` currently owns the KIR-based AMDGPU vocabulary and strict
+lowering implementation. Its replay receipt reconstructs the sealed target-KIR
+optimizer, but does not expose Pliron handles or a selectable pass pipeline.
+`dialect-amdgcn` is a thin compatibility re-export under the historical package
+name; it is not yet the future `amdgcn.*` Pliron dialect. Canonical AMD target
+identities and capabilities remain in `fe2o3-amd-target`. The
+production-directed finalizer continues to use one pinned upstream LLVM build,
+target-machine object emission, and in-process LLD linking in the isolated
+worker.
 
 ### Verification
 

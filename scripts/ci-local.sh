@@ -1200,6 +1200,8 @@ run_generic_core() {
   run_check
   run_backend_build
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
+  run_step kernel-compile-matrix-shell-tests \
+    bash scripts/tests/kernel-compile-matrix.sh
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
@@ -1321,6 +1323,8 @@ run_rocm_compile() {
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \
       --ignored --exact
+  run_step rocm-kernel-compile-matrix \
+    bash scripts/kernel-compile-matrix.sh gfx942
 }
 
 require_gpu_access() {

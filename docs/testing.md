@@ -407,6 +407,55 @@ independent hardened G1 code-object fixture. It builds one private,
 content-addressed `cargo-fe2o3` production driver for `doctor`; neither that
 driver nor any backend child receives a qualification selector.
 
+The site-backed general-kernel regression matrix compiles the current dynamic
+GEMM, row-softmax, FlashAttention, grouped-expert MoE, and GEMM autoresearch
+sources through the production extractor, external ROCm finalization, and a
+nonempty gfx942 HSACO check:
+
+```text
+scripts/kernel-compile-matrix.sh gfx942
+```
+
+The `rocm-compile` lane runs this matrix after its focused production compiler
+and code-object tests. The generic lane runs the matrix's hermetic shell test,
+which substitutes fixture tools and verifies orchestration without requiring
+ROCm or a GPU.
+
+The separate gfx950 matrix covers the 20 production Rust kernels represented
+by the kernels site:
+
+```text
+scripts/kernel-compile-matrix.sh gfx950
+```
+
+Low precision: `kernel-fp4-gemm`, `kernel-fp8-gemm`,
+`kernel-fp4-attention`, and `kernel-fp8-attention`.
+
+Advanced attention: `kernel-kda-decode`, `kernel-kda-prefill`,
+`kernel-content-sparse-attention`, `kernel-deepseek-sparse-attention`,
+`kernel-compressed-hybrid-attention`, `kernel-attnres-aggregate`,
+`kernel-four-branch-residual`, and `kernel-mhc-sinkhorn-mix`.
+
+Advanced systems: `kernel-moe-route`, `kernel-moe-expert-rank`,
+`kernel-combine-expert-ranks`, `kernel-speculative-transaction`,
+`kernel-qwen-ngram-gather`, `kernel-stage-gradient-shard`, and
+`kernel-muon-update`.
+
+GPT-OSS: `kernel-gpt-oss-decode`.
+
+Compile-only mode still validates the checked-in manifest and therefore
+requires the exact reviewed ROCm 7.2.1 Clang, LLD, and device-library closure.
+It does not require an MI350X and does not inspect or execute any GPU. The
+gfx950 matrix is intentionally not in the gfx942-only `rocm-compile` lane.
+
+Every target and artifact directory is created under one private temporary
+root and removed when the command exits. The matrix deliberately stops before
+the qualification host runner, reports `hardware_observed=false`, and makes no
+numerical or execution claim. It does not cover the basic Cargo regression
+manifest, proof/source-model-only packages, gfx950 ablation variants, or HIP
+comparators. Neither cross-compilation target is hardware or numerical
+coverage.
+
 ## Hardware smoke
 
 Hardware execution is deliberately opt-in:

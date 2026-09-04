@@ -69,6 +69,12 @@ LD_LLD=${LD_LLD:-$ROCM_PATH/llvm/bin/ld.lld}
 OBJDUMP=${OBJDUMP:-$ROCM_PATH/llvm/bin/llvm-objdump}
 READOBJ=${READOBJ:-$ROCM_PATH/llvm/bin/llvm-readobj}
 SHA256SUM=${SHA256SUM:-sha256sum}
+COMPILE_ONLY=${FE2O3_EXAMPLE_COMPILE_ONLY:-0}
+
+if [[ $COMPILE_ONLY != 0 && $COMPILE_ONLY != 1 ]]; then
+    printf 'FE2O3_EXAMPLE_COMPILE_ONLY must be 0 or 1\n' >&2
+    exit 2
+fi
 
 for executable in "$RUSTUP" "$CLANG" "$LD_LLD" "$OBJDUMP" "$READOBJ" "$SHA256SUM"; do
     if [[ ! -x $executable ]] && ! command -v -- "$executable" >/dev/null 2>&1; then
@@ -109,8 +115,8 @@ else
         --locked --manifest-path "$REPO_ROOT/Cargo.toml" \
         -p rustc-codegen-fe2o3 --bin fe2o3-rustc-extract
 fi
-if [[ ! -x $EXTRACTOR ]]; then
-    printf 'generic rustc extractor is unavailable: %s\n' "$EXTRACTOR" >&2
+if [[ ! -f $EXTRACTOR || -L $EXTRACTOR || ! -x $EXTRACTOR ]]; then
+    printf 'generic rustc extractor must be a regular executable: %s\n' "$EXTRACTOR" >&2
     exit 1
 fi
 
@@ -309,6 +315,12 @@ for forbidden in v_cvt_f32_fp4 v_cvt_f32_fp8 v_dot; do
 done
 
 HSACO=$(cd -- "$(dirname -- "$HSACO")" && pwd -P)/$(basename -- "$HSACO")
+if [[ $COMPILE_ONLY == 1 ]]; then
+    printf 'COMPILE PASS: %s reached validated gfx950:xnack- HSACO; hardware execution skipped\n' \
+        "$SYMBOL"
+    printf 'HSACO: %s\n' "$HSACO"
+    exit 0
+fi
 HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
 (
     cd -- "$REPO_ROOT"

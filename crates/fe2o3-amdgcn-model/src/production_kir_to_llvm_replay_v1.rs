@@ -6,6 +6,15 @@ use fe2o3_kernel_ir::{
     MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1, Module, VerifiedCanonicalKernelIrErrorV8,
     VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
 };
+use fe2o3_kernel_opt::{
+    KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2,
+    KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2, KernelIrPlironOptimizationErrorV2,
+    KernelIrPlironOptimizationLimitsV2, KernelIrPlironOptimizationPolicyV2,
+    KernelIrPlironOptimizationReportV2, KernelIrPlironProductionPassV2,
+    KernelIrPlironStructuralReplayAdmissionErrorV2,
+    admit_production_kernel_ir_structural_replay_v2, optimize_production_kernel_ir_module_v2,
+    production_kernel_ir_pliron_optimization_limits_v2,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -27,7 +36,10 @@ use crate::{
 const EVIDENCE_MAGIC_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/V1\0";
 const EVIDENCE_VERSION_V1: u16 = 1;
 const EVIDENCE_VERSION_V2: u16 = 2;
+const EVIDENCE_VERSION_V4: u16 = 4;
 const EXACT_DETERMINISTIC_REPLAY_CLAIM_V1: u8 = 1;
+const EXACT_PLIRON_TARGET_OPTIMIZATION_POLICY_V4: u16 = 2;
+const NO_SEMANTIC_PRESERVATION_CLAIM_V4: u8 = 0;
 const RESERVED_V1: u8 = 0;
 const GFX942_PROFILE_TAG_V1: u8 = 1;
 const GFX950_PROFILE_TAG_V1: u8 = 2;
@@ -108,6 +120,220 @@ impl ProductionKirToLlvmReplayEvidenceIdentityV1 {
     }
 }
 
+/// Stable pass identity recorded by Pliron-backed production replay V4.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionPlironOptimizationPassV4 {
+    SparseConditionalConstantPropagation,
+    SimplifyControlFlow,
+    SelectSameValueCanonicalization,
+    DeadCodeElimination,
+    LocalPureCommonSubexpressionElimination,
+}
+
+/// Frozen resource limits recorded by Pliron-backed production replay V4.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionPlironOptimizationLimitsV4 {
+    max_input_canonical_bytes: u64,
+    max_output_canonical_bytes: u64,
+    max_dialects: u64,
+    max_passes: u64,
+    max_diagnostic_bytes: u64,
+    max_optimization_passes: u64,
+    max_graph_work: u64,
+    max_work_units: u64,
+}
+
+impl ProductionPlironOptimizationLimitsV4 {
+    pub const fn max_input_canonical_bytes(self) -> u64 {
+        self.max_input_canonical_bytes
+    }
+
+    pub const fn max_output_canonical_bytes(self) -> u64 {
+        self.max_output_canonical_bytes
+    }
+
+    pub const fn max_dialects(self) -> u64 {
+        self.max_dialects
+    }
+
+    pub const fn max_passes(self) -> u64 {
+        self.max_passes
+    }
+
+    pub const fn max_diagnostic_bytes(self) -> u64 {
+        self.max_diagnostic_bytes
+    }
+
+    pub const fn max_optimization_passes(self) -> u64 {
+        self.max_optimization_passes
+    }
+
+    pub const fn max_graph_work(self) -> u64 {
+        self.max_graph_work
+    }
+
+    pub const fn max_work_units(self) -> u64 {
+        self.max_work_units
+    }
+}
+
+/// One ordered production optimizer pass and its deterministic accounting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionPlironOptimizationPassReportV4 {
+    pass: ProductionPlironOptimizationPassV4,
+    changed: bool,
+    input_epoch: u64,
+    output_epoch: u64,
+    input_graph_work: u64,
+    output_graph_work: u64,
+    work_units: u64,
+}
+
+impl ProductionPlironOptimizationPassReportV4 {
+    pub const fn pass(self) -> ProductionPlironOptimizationPassV4 {
+        self.pass
+    }
+
+    pub const fn changed(self) -> bool {
+        self.changed
+    }
+
+    pub const fn input_epoch(self) -> u64 {
+        self.input_epoch
+    }
+
+    pub const fn output_epoch(self) -> u64 {
+        self.output_epoch
+    }
+
+    pub const fn input_graph_work(self) -> u64 {
+        self.input_graph_work
+    }
+
+    pub const fn output_graph_work(self) -> u64 {
+        self.output_graph_work
+    }
+
+    pub const fn work_units(self) -> u64 {
+        self.work_units
+    }
+}
+
+/// Deterministic accounting for the fixed production optimizer pass roster.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionPlironOptimizationReportV4 {
+    initial_epoch: u64,
+    final_epoch: u64,
+    initial_graph_work: u64,
+    final_graph_work: u64,
+    invalidated_handle_count: u64,
+    work_units: u64,
+    passes: Vec<ProductionPlironOptimizationPassReportV4>,
+}
+
+impl ProductionPlironOptimizationReportV4 {
+    pub const fn initial_epoch(&self) -> u64 {
+        self.initial_epoch
+    }
+
+    pub const fn final_epoch(&self) -> u64 {
+        self.final_epoch
+    }
+
+    pub const fn initial_graph_work(&self) -> u64 {
+        self.initial_graph_work
+    }
+
+    pub const fn final_graph_work(&self) -> u64 {
+        self.final_graph_work
+    }
+
+    pub const fn invalidated_handle_count(&self) -> u64 {
+        self.invalidated_handle_count
+    }
+
+    pub const fn work_units(&self) -> u64 {
+        self.work_units
+    }
+
+    pub fn passes(&self) -> &[ProductionPlironOptimizationPassReportV4] {
+        &self.passes
+    }
+}
+
+/// Exact replay transcript for the fixed production V2 optimizer.
+///
+/// Bridge digests bind the optimizer's canonical KIR V10 import and export.
+/// The surrounding replay identities retain the exact V8/V9 production
+/// envelope supplied by the current compilation transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionTargetOptimizationAuditV4 {
+    optimizer_policy_version: u16,
+    pre_optimization_target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    input_bridge_digest: [u8; 32],
+    input_bridge_bytes: u64,
+    output_bridge_digest: [u8; 32],
+    output_bridge_bytes: u64,
+    correspondence_digest: [u8; 32],
+    correspondence_count: u64,
+    limits: ProductionPlironOptimizationLimitsV4,
+    report: ProductionPlironOptimizationReportV4,
+}
+
+impl ProductionTargetOptimizationAuditV4 {
+    pub const fn optimizer_policy_version(&self) -> u16 {
+        self.optimizer_policy_version
+    }
+
+    pub const fn pre_optimization_target_bound_kernel_ir_identity(
+        &self,
+    ) -> ProductionReplayKernelIrIdentityV1 {
+        self.pre_optimization_target_bound_kernel_ir
+    }
+
+    pub const fn limits(&self) -> ProductionPlironOptimizationLimitsV4 {
+        self.limits
+    }
+
+    pub const fn input_bridge_digest(&self) -> [u8; 32] {
+        self.input_bridge_digest
+    }
+
+    pub const fn input_bridge_bytes(&self) -> u64 {
+        self.input_bridge_bytes
+    }
+
+    pub const fn output_bridge_digest(&self) -> [u8; 32] {
+        self.output_bridge_digest
+    }
+
+    pub const fn output_bridge_bytes(&self) -> u64 {
+        self.output_bridge_bytes
+    }
+
+    pub const fn correspondence_digest(&self) -> [u8; 32] {
+        self.correspondence_digest
+    }
+
+    pub const fn correspondence_count(&self) -> u64 {
+        self.correspondence_count
+    }
+
+    pub const fn report(&self) -> &ProductionPlironOptimizationReportV4 {
+        &self.report
+    }
+
+    pub const fn establishes_semantic_preservation(&self) -> bool {
+        false
+    }
+
+    pub fn changed(&self) -> bool {
+        self.input_bridge_digest != self.output_bridge_digest
+            || self.input_bridge_bytes != self.output_bridge_bytes
+            || self.report.passes.iter().any(|pass| pass.changed)
+    }
+}
+
 /// Inert canonical evidence for deterministic production KIR-to-LLVM replay.
 ///
 /// Decoding establishes bounded canonical structure only. Call
@@ -120,6 +346,7 @@ pub struct CanonicalProductionKirToLlvmReplayEvidenceV1 {
     profile: ProductionAmdTargetProfileV1,
     neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
     target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    target_optimization_v4: Option<ProductionTargetOptimizationAuditV4>,
     kernel_ids: Box<[KernelId]>,
     pre_descriptor_llvm: Box<str>,
 }
@@ -166,6 +393,59 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         Ok(validated.into_evidence())
     }
 
+    /// Constructs optimizer-bound V4 evidence after independently replaying
+    /// target binding, the fixed production V2 optimizer, and LLVM lowering.
+    pub fn from_optimized_live_inputs_v4(
+        neutral_kernel_ir: &[u8],
+        optimized_target_bound_module: &Module,
+        live_optimization: &KernelIrPlironOptimizationReportV2,
+        profile: ProductionAmdTargetProfileV1,
+        pre_descriptor_llvm: &str,
+    ) -> Result<Self, ProductionKirToLlvmReplayErrorV1> {
+        let version = infer_kernel_ir_version(neutral_kernel_ir)?;
+        let (_, neutral_module, neutral_identity) =
+            decode_exact_kernel_ir(neutral_kernel_ir, version)?;
+        let target_bound = bind_production_target_v1(&neutral_module, profile)
+            .map_err(ProductionKirToLlvmReplayErrorV1::TargetBinding)?;
+        let kernel_ids = target_bound.kernel_ids().to_vec();
+        let (_, pre_optimization_target_identity) =
+            canonicalize_target_module(target_bound.module(), version)?;
+        let optimization_admission = admit_production_kernel_ir_structural_replay_v2(
+            target_bound.module(),
+            optimized_target_bound_module,
+            live_optimization,
+        )
+        .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimizationAdmission)?;
+        let (target_owner, target_identity) =
+            canonicalize_target_module(optimized_target_bound_module, version)?;
+        classify_replay_llvm(
+            optimized_target_bound_module,
+            &kernel_ids,
+            profile,
+            target_owner.semantic_anchor_identity(),
+            pre_descriptor_llvm,
+        )?;
+
+        let target_optimization = snapshot_target_optimization_v4(
+            pre_optimization_target_identity,
+            optimization_admission.report(),
+        )?;
+        let canonical_bytes = encode_evidence_v4(
+            profile,
+            neutral_identity,
+            target_identity,
+            &target_optimization,
+            &kernel_ids,
+            pre_descriptor_llvm,
+        )?;
+        let evidence = Self::decode(&canonical_bytes)?;
+        let validated = evidence.validate_against_neutral_kernel_ir(neutral_kernel_ir)?;
+        if validated.target_bound_module() != optimized_target_bound_module {
+            return Err(ProductionKirToLlvmReplayErrorV1::LiveTargetModuleMismatch);
+        }
+        Ok(validated.into_evidence())
+    }
+
     /// Strictly decodes and byte-for-byte re-encodes one bounded evidence record.
     pub fn decode(bytes: &[u8]) -> Result<Self, ProductionKirToLlvmReplayErrorV1> {
         if bytes.len() > MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1 {
@@ -176,8 +456,10 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidHeader);
         }
         let version = reader.u16()?;
-        if !matches!(version, EVIDENCE_VERSION_V1 | EVIDENCE_VERSION_V2)
-            || reader.u8()? != EXACT_DETERMINISTIC_REPLAY_CLAIM_V1
+        if !matches!(
+            version,
+            EVIDENCE_VERSION_V1 | EVIDENCE_VERSION_V2 | EVIDENCE_VERSION_V4
+        ) || reader.u8()? != EXACT_DETERMINISTIC_REPLAY_CLAIM_V1
         {
             return Err(ProductionKirToLlvmReplayErrorV1::InvalidHeader);
         }
@@ -188,6 +470,9 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         }
         let neutral_kernel_ir = decode_kernel_ir_identity(&mut reader, kernel_ir_version)?;
         let target_bound_kernel_ir = decode_kernel_ir_identity(&mut reader, kernel_ir_version)?;
+        let target_optimization_v4 = (version == EVIDENCE_VERSION_V4)
+            .then(|| decode_target_optimization_v4(&mut reader, kernel_ir_version))
+            .transpose()?;
         let kernel_count = if version == EVIDENCE_VERSION_V1 {
             1
         } else {
@@ -235,13 +520,23 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
 
         let pre_descriptor_llvm = try_owned_string(pre_descriptor_llvm)?;
 
-        let canonical_bytes = encode_evidence(
-            profile,
-            neutral_kernel_ir,
-            target_bound_kernel_ir,
-            &kernel_ids,
-            &pre_descriptor_llvm,
-        )?;
+        let canonical_bytes = match &target_optimization_v4 {
+            Some(optimization) => encode_evidence_v4(
+                profile,
+                neutral_kernel_ir,
+                target_bound_kernel_ir,
+                optimization,
+                &kernel_ids,
+                &pre_descriptor_llvm,
+            )?,
+            None => encode_evidence(
+                profile,
+                neutral_kernel_ir,
+                target_bound_kernel_ir,
+                &kernel_ids,
+                &pre_descriptor_llvm,
+            )?,
+        };
         if canonical_bytes.as_slice() != bytes {
             return Err(ProductionKirToLlvmReplayErrorV1::NonCanonical);
         }
@@ -252,6 +547,7 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             profile,
             neutral_kernel_ir,
             target_bound_kernel_ir,
+            target_optimization_v4,
             kernel_ids: kernel_ids.into_boxed_slice(),
             pre_descriptor_llvm: pre_descriptor_llvm.into_boxed_str(),
         })
@@ -276,26 +572,53 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         if target_bound.kernel_ids() != self.kernel_ids.as_ref() {
             return Err(ProductionKirToLlvmReplayErrorV1::KernelIdMismatch);
         }
-        let (target_owner, target_identity) =
+        let (_, pre_optimization_target_identity) =
             canonicalize_target_module(target_bound.module(), version)?;
+        let target_bound_module = match &self.target_optimization_v4 {
+            Some(optimization) => {
+                if optimization.pre_optimization_target_bound_kernel_ir
+                    != pre_optimization_target_identity
+                {
+                    return Err(ProductionKirToLlvmReplayErrorV1::IdentityMismatch {
+                        field: "pre-optimization target-bound Kernel IR",
+                    });
+                }
+                let optimized = optimize_production_kernel_ir_module_v2(target_bound.module())
+                    .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimization)?;
+                let replayed = snapshot_target_optimization_v4(
+                    pre_optimization_target_identity,
+                    optimized.report(),
+                )?;
+                if &replayed != optimization {
+                    return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+                }
+                optimized.into_parts().0
+            }
+            None => target_bound.module().clone(),
+        };
+        let (target_owner, target_identity) =
+            canonicalize_target_module(&target_bound_module, version)?;
         if target_identity != self.target_bound_kernel_ir {
             return Err(ProductionKirToLlvmReplayErrorV1::IdentityMismatch {
                 field: "target-bound Kernel IR",
             });
         }
         let llvm_mode = classify_replay_llvm(
-            target_bound.module(),
+            &target_bound_module,
             &self.kernel_ids,
             self.profile,
             target_owner.semantic_anchor_identity(),
             &self.pre_descriptor_llvm,
         )?;
         let structural_binding = target_bound
-            .admit_exact_structural_binding_v1(&neutral_module, neutral_identity, target_identity)
+            .admit_exact_structural_binding_v1(
+                &neutral_module,
+                neutral_identity,
+                pre_optimization_target_identity,
+            )
             .map_err(|_| ProductionKirToLlvmReplayErrorV1::IdentityMismatch {
                 field: "target structural coordinate binding",
             })?;
-        let (target_bound_module, _) = target_bound.into_parts();
         Ok(ValidatedProductionKirToLlvmReplayV1 {
             evidence: self,
             llvm_mode,
@@ -324,6 +647,13 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
 
     pub const fn target_bound_kernel_ir_identity(&self) -> ProductionReplayKernelIrIdentityV1 {
         self.target_bound_kernel_ir
+    }
+
+    /// Returns the fixed production V2 optimizer transcript for V4 evidence.
+    pub const fn target_pliron_optimization_v4(
+        &self,
+    ) -> Option<&ProductionTargetOptimizationAuditV4> {
+        self.target_optimization_v4.as_ref()
     }
 
     /// Returns every replay-bound kernel identity in canonical module order.
@@ -383,6 +713,17 @@ impl ValidatedProductionKirToLlvmReplayV1 {
 
     pub const fn has_exact_kir_to_llvm_replay(&self) -> bool {
         true
+    }
+
+    pub const fn has_exact_target_optimization_replay(&self) -> bool {
+        self.evidence.target_optimization_v4.is_some()
+    }
+
+    pub fn has_target_optimization_mutations(&self) -> bool {
+        self.evidence
+            .target_optimization_v4
+            .as_ref()
+            .is_some_and(ProductionTargetOptimizationAuditV4::changed)
     }
 
     pub const fn establishes_formal_semantic_refinement(&self) -> bool {
@@ -649,13 +990,381 @@ fn replay_historical_kernel_llvm(
     .map_err(ProductionKirToLlvmReplayErrorV1::LayoutBinding)
 }
 
-fn encode_evidence(
-    profile: ProductionAmdTargetProfileV1,
+fn checked_u64(value: usize) -> Result<u64, ProductionKirToLlvmReplayErrorV1> {
+    u64::try_from(value).map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)
+}
+
+fn snapshot_pliron_limits_v4(
+    limits: KernelIrPlironOptimizationLimitsV2,
+) -> Result<ProductionPlironOptimizationLimitsV4, ProductionKirToLlvmReplayErrorV1> {
+    let shell = limits.shell();
+    let pliron = limits.pliron();
+    Ok(ProductionPlironOptimizationLimitsV4 {
+        max_input_canonical_bytes: checked_u64(limits.max_input_canonical_bytes())?,
+        max_output_canonical_bytes: checked_u64(limits.max_output_canonical_bytes())?,
+        max_dialects: checked_u64(shell.max_dialects())?,
+        max_passes: checked_u64(shell.max_passes())?,
+        max_diagnostic_bytes: checked_u64(shell.max_diagnostic_bytes())?,
+        max_optimization_passes: checked_u64(pliron.max_passes())?,
+        max_graph_work: checked_u64(pliron.max_graph_work())?,
+        max_work_units: checked_u64(pliron.max_work_units())?,
+    })
+}
+
+fn production_pliron_limits_v4()
+-> Result<ProductionPlironOptimizationLimitsV4, ProductionKirToLlvmReplayErrorV1> {
+    snapshot_pliron_limits_v4(production_kernel_ir_pliron_optimization_limits_v2())
+}
+
+fn report_pliron_pass_v4(
+    name: &str,
+) -> Result<ProductionPlironOptimizationPassV4, ProductionKirToLlvmReplayErrorV1> {
+    match name {
+        "sparse-conditional-constant-propagation" => {
+            Ok(ProductionPlironOptimizationPassV4::SparseConditionalConstantPropagation)
+        }
+        "simplify-control-flow" => Ok(ProductionPlironOptimizationPassV4::SimplifyControlFlow),
+        "select-same-value-canonicalization" => {
+            Ok(ProductionPlironOptimizationPassV4::SelectSameValueCanonicalization)
+        }
+        "dead-code-elimination" => Ok(ProductionPlironOptimizationPassV4::DeadCodeElimination),
+        "local-pure-common-subexpression-elimination" => {
+            Ok(ProductionPlironOptimizationPassV4::LocalPureCommonSubexpressionElimination)
+        }
+        _ => Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch),
+    }
+}
+
+const fn production_policy_pass_v4(
+    pass: KernelIrPlironProductionPassV2,
+) -> ProductionPlironOptimizationPassV4 {
+    match pass {
+        KernelIrPlironProductionPassV2::SparseConditionalConstantPropagation => {
+            ProductionPlironOptimizationPassV4::SparseConditionalConstantPropagation
+        }
+        KernelIrPlironProductionPassV2::SimplifyControlFlow => {
+            ProductionPlironOptimizationPassV4::SimplifyControlFlow
+        }
+        KernelIrPlironProductionPassV2::SelectSameValueCanonicalization => {
+            ProductionPlironOptimizationPassV4::SelectSameValueCanonicalization
+        }
+        KernelIrPlironProductionPassV2::DeadCodeElimination => {
+            ProductionPlironOptimizationPassV4::DeadCodeElimination
+        }
+        KernelIrPlironProductionPassV2::LocalPureCommonSubexpressionElimination => {
+            ProductionPlironOptimizationPassV4::LocalPureCommonSubexpressionElimination
+        }
+    }
+}
+
+fn snapshot_target_optimization_v4(
+    pre_optimization_target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    report: &KernelIrPlironOptimizationReportV2,
+) -> Result<ProductionTargetOptimizationAuditV4, ProductionKirToLlvmReplayErrorV1> {
+    let optimizer_policy_version = match report.policy() {
+        KernelIrPlironOptimizationPolicyV2::ProductionV1 => {
+            KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2
+        }
+        KernelIrPlironOptimizationPolicyV2::Configurable => {
+            return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+        }
+    };
+    let mut passes = Vec::new();
+    passes
+        .try_reserve_exact(report.passes().len())
+        .map_err(|_| ProductionKirToLlvmReplayErrorV1::AllocationFailure)?;
+    for pass in report.passes() {
+        let pliron = pass.pliron();
+        passes.push(ProductionPlironOptimizationPassReportV4 {
+            pass: report_pliron_pass_v4(pliron.pass().name())?,
+            changed: pliron.changed(),
+            input_epoch: pass.input_epoch(),
+            output_epoch: pass.output_epoch(),
+            input_graph_work: checked_u64(pliron.input_graph_work())?,
+            output_graph_work: checked_u64(pliron.output_graph_work())?,
+            work_units: checked_u64(pliron.work_units())?,
+        });
+    }
+    let pliron = report.pliron();
+    let input = report.input_digest();
+    let output = report.output_digest();
+    let correspondence = report.bridge().correspondence_digest();
+    let audit = ProductionTargetOptimizationAuditV4 {
+        optimizer_policy_version,
+        pre_optimization_target_bound_kernel_ir,
+        input_bridge_digest: input.digest(),
+        input_bridge_bytes: input.canonical_bytes(),
+        output_bridge_digest: output.digest(),
+        output_bridge_bytes: output.canonical_bytes(),
+        correspondence_digest: correspondence.digest(),
+        correspondence_count: correspondence.count(),
+        limits: snapshot_pliron_limits_v4(report.limits())?,
+        report: ProductionPlironOptimizationReportV4 {
+            initial_epoch: report.initial_epoch(),
+            final_epoch: report.final_epoch(),
+            initial_graph_work: checked_u64(pliron.initial_graph_work())?,
+            final_graph_work: checked_u64(pliron.final_graph_work())?,
+            invalidated_handle_count: checked_u64(pliron.invalidated_handle_count())?,
+            work_units: checked_u64(pliron.work_units())?,
+            passes,
+        },
+    };
+    validate_target_optimization_audit_v4(&audit)?;
+    Ok(audit)
+}
+
+fn validate_target_optimization_audit_v4(
+    audit: &ProductionTargetOptimizationAuditV4,
+) -> Result<(), ProductionKirToLlvmReplayErrorV1> {
+    let expected_limits = production_pliron_limits_v4()?;
+    if audit.optimizer_policy_version != KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2
+        || audit.limits != expected_limits
+        || audit.input_bridge_digest == [0; 32]
+        || audit.output_bridge_digest == [0; 32]
+        || audit.correspondence_digest == [0; 32]
+        || audit.input_bridge_bytes == 0
+        || audit.output_bridge_bytes == 0
+        || audit.correspondence_count == 0
+        || audit.input_bridge_bytes > audit.limits.max_input_canonical_bytes
+        || audit.output_bridge_bytes > audit.limits.max_output_canonical_bytes
+        || audit.report.initial_epoch != 0
+        || audit.report.passes.len() != KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2.len()
+        || audit.report.initial_graph_work == 0
+        || audit.report.final_graph_work == 0
+        || audit.report.initial_graph_work > audit.limits.max_graph_work
+        || audit.report.final_graph_work > audit.limits.max_graph_work
+        || audit.report.invalidated_handle_count != 0
+        || audit.report.work_units > audit.limits.max_work_units
+    {
+        return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+    }
+
+    let mut epoch = audit.report.initial_epoch;
+    let mut graph_work = audit.report.initial_graph_work;
+    let mut expected_total_work = audit
+        .report
+        .initial_graph_work
+        .checked_mul(2)
+        .ok_or(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch)?;
+    for (pass, expected_pass) in audit
+        .report
+        .passes
+        .iter()
+        .zip(KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2)
+    {
+        let expected_epoch = epoch
+            .checked_add(u64::from(pass.changed))
+            .ok_or(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch)?;
+        let expected_pass_work = pass
+            .output_graph_work
+            .checked_mul(2)
+            .and_then(|output| pass.input_graph_work.checked_add(output))
+            .ok_or(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch)?;
+        if pass.pass != production_policy_pass_v4(expected_pass)
+            || pass.input_epoch != epoch
+            || pass.output_epoch != expected_epoch
+            || pass.input_graph_work != graph_work
+            || pass.output_graph_work == 0
+            || pass.output_graph_work > audit.limits.max_graph_work
+            || pass.work_units != expected_pass_work
+        {
+            return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+        }
+        epoch = expected_epoch;
+        graph_work = pass.output_graph_work;
+        expected_total_work = expected_total_work
+            .checked_add(pass.work_units)
+            .ok_or(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch)?;
+    }
+    expected_total_work = expected_total_work
+        .checked_add(audit.report.final_graph_work)
+        .and_then(|work| work.checked_add(1))
+        .ok_or(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch)?;
+    if audit.report.final_epoch != epoch
+        || audit.report.final_graph_work != graph_work
+        || audit.report.work_units != expected_total_work
+    {
+        return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+    }
+    Ok(())
+}
+
+const fn encode_optimization_pass_v4(pass: ProductionPlironOptimizationPassV4) -> u8 {
+    match pass {
+        ProductionPlironOptimizationPassV4::SparseConditionalConstantPropagation => 1,
+        ProductionPlironOptimizationPassV4::SimplifyControlFlow => 2,
+        ProductionPlironOptimizationPassV4::SelectSameValueCanonicalization => 3,
+        ProductionPlironOptimizationPassV4::DeadCodeElimination => 4,
+        ProductionPlironOptimizationPassV4::LocalPureCommonSubexpressionElimination => 5,
+    }
+}
+
+fn decode_optimization_pass_v4(
+    tag: u8,
+) -> Result<ProductionPlironOptimizationPassV4, ProductionKirToLlvmReplayErrorV1> {
+    match tag {
+        1 => Ok(ProductionPlironOptimizationPassV4::SparseConditionalConstantPropagation),
+        2 => Ok(ProductionPlironOptimizationPassV4::SimplifyControlFlow),
+        3 => Ok(ProductionPlironOptimizationPassV4::SelectSameValueCanonicalization),
+        4 => Ok(ProductionPlironOptimizationPassV4::DeadCodeElimination),
+        5 => Ok(ProductionPlironOptimizationPassV4::LocalPureCommonSubexpressionElimination),
+        _ => Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch),
+    }
+}
+
+fn encode_target_optimization_v4(
+    bytes: &mut Vec<u8>,
+    audit: &ProductionTargetOptimizationAuditV4,
+) -> Result<(), ProductionKirToLlvmReplayErrorV1> {
+    validate_target_optimization_audit_v4(audit)?;
+    bytes.extend_from_slice(&EXACT_PLIRON_TARGET_OPTIMIZATION_POLICY_V4.to_le_bytes());
+    bytes.extend_from_slice(&audit.optimizer_policy_version.to_le_bytes());
+    bytes.push(NO_SEMANTIC_PRESERVATION_CLAIM_V4);
+    bytes.push(RESERVED_V1);
+    encode_kernel_ir_identity(bytes, audit.pre_optimization_target_bound_kernel_ir);
+    bytes.extend_from_slice(&audit.input_bridge_digest);
+    bytes.extend_from_slice(&audit.input_bridge_bytes.to_le_bytes());
+    bytes.extend_from_slice(&audit.output_bridge_digest);
+    bytes.extend_from_slice(&audit.output_bridge_bytes.to_le_bytes());
+    bytes.extend_from_slice(&audit.correspondence_digest);
+    bytes.extend_from_slice(&audit.correspondence_count.to_le_bytes());
+    for limit in [
+        audit.limits.max_input_canonical_bytes,
+        audit.limits.max_output_canonical_bytes,
+        audit.limits.max_dialects,
+        audit.limits.max_passes,
+        audit.limits.max_diagnostic_bytes,
+        audit.limits.max_optimization_passes,
+        audit.limits.max_graph_work,
+        audit.limits.max_work_units,
+    ] {
+        bytes.extend_from_slice(&limit.to_le_bytes());
+    }
+    for value in [
+        audit.report.initial_epoch,
+        audit.report.final_epoch,
+        audit.report.initial_graph_work,
+        audit.report.final_graph_work,
+        audit.report.invalidated_handle_count,
+        audit.report.work_units,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend_from_slice(
+        &u32::try_from(audit.report.passes.len())
+            .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?
+            .to_le_bytes(),
+    );
+    for pass in &audit.report.passes {
+        bytes.push(encode_optimization_pass_v4(pass.pass));
+        bytes.push(u8::from(pass.changed));
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        for value in [
+            pass.input_epoch,
+            pass.output_epoch,
+            pass.input_graph_work,
+            pass.output_graph_work,
+            pass.work_units,
+        ] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn decode_target_optimization_v4(
+    reader: &mut Reader<'_>,
+    kernel_ir_version: ProductionReplayKernelIrVersionV1,
+) -> Result<ProductionTargetOptimizationAuditV4, ProductionKirToLlvmReplayErrorV1> {
+    if reader.u16()? != EXACT_PLIRON_TARGET_OPTIMIZATION_POLICY_V4 {
+        return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+    }
+    let optimizer_policy_version = reader.u16()?;
+    if reader.u8()? != NO_SEMANTIC_PRESERVATION_CLAIM_V4 || reader.u8()? != RESERVED_V1 {
+        return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+    }
+    let pre_optimization_target_bound_kernel_ir =
+        decode_kernel_ir_identity(reader, kernel_ir_version)?;
+    let input_bridge_digest = reader.fixed::<32>()?;
+    let input_bridge_bytes = reader.u64()?;
+    let output_bridge_digest = reader.fixed::<32>()?;
+    let output_bridge_bytes = reader.u64()?;
+    let correspondence_digest = reader.fixed::<32>()?;
+    let correspondence_count = reader.u64()?;
+    let limits = ProductionPlironOptimizationLimitsV4 {
+        max_input_canonical_bytes: reader.u64()?,
+        max_output_canonical_bytes: reader.u64()?,
+        max_dialects: reader.u64()?,
+        max_passes: reader.u64()?,
+        max_diagnostic_bytes: reader.u64()?,
+        max_optimization_passes: reader.u64()?,
+        max_graph_work: reader.u64()?,
+        max_work_units: reader.u64()?,
+    };
+    let initial_epoch = reader.u64()?;
+    let final_epoch = reader.u64()?;
+    let initial_graph_work = reader.u64()?;
+    let final_graph_work = reader.u64()?;
+    let invalidated_handle_count = reader.u64()?;
+    let work_units = reader.u64()?;
+    let pass_count = reader.usize_u32()?;
+    if pass_count != KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2.len() {
+        return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+    }
+    let mut passes = Vec::new();
+    passes
+        .try_reserve_exact(pass_count)
+        .map_err(|_| ProductionKirToLlvmReplayErrorV1::AllocationFailure)?;
+    for _ in 0..pass_count {
+        let pass = decode_optimization_pass_v4(reader.u8()?)?;
+        let changed = match reader.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch),
+        };
+        if reader.u16()? != 0 {
+            return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+        }
+        passes.push(ProductionPlironOptimizationPassReportV4 {
+            pass,
+            changed,
+            input_epoch: reader.u64()?,
+            output_epoch: reader.u64()?,
+            input_graph_work: reader.u64()?,
+            output_graph_work: reader.u64()?,
+            work_units: reader.u64()?,
+        });
+    }
+    let audit = ProductionTargetOptimizationAuditV4 {
+        optimizer_policy_version,
+        pre_optimization_target_bound_kernel_ir,
+        input_bridge_digest,
+        input_bridge_bytes,
+        output_bridge_digest,
+        output_bridge_bytes,
+        correspondence_digest,
+        correspondence_count,
+        limits,
+        report: ProductionPlironOptimizationReportV4 {
+            initial_epoch,
+            final_epoch,
+            initial_graph_work,
+            final_graph_work,
+            invalidated_handle_count,
+            work_units,
+            passes,
+        },
+    };
+    validate_target_optimization_audit_v4(&audit)?;
+    Ok(audit)
+}
+
+fn validate_evidence_fields(
     neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
     target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
     kernel_ids: &[KernelId],
     pre_descriptor_llvm: &str,
-) -> Result<Vec<u8>, ProductionKirToLlvmReplayErrorV1> {
+) -> Result<(), ProductionKirToLlvmReplayErrorV1> {
     if neutral_kernel_ir.version != target_bound_kernel_ir.version
         || neutral_kernel_ir.byte_len == 0
         || target_bound_kernel_ir.byte_len == 0
@@ -675,6 +1384,105 @@ fn encode_evidence(
     {
         return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
     }
+    Ok(())
+}
+
+fn encode_evidence_v4(
+    profile: ProductionAmdTargetProfileV1,
+    neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    target_optimization: &ProductionTargetOptimizationAuditV4,
+    kernel_ids: &[KernelId],
+    pre_descriptor_llvm: &str,
+) -> Result<Vec<u8>, ProductionKirToLlvmReplayErrorV1> {
+    validate_evidence_fields(
+        neutral_kernel_ir,
+        target_bound_kernel_ir,
+        kernel_ids,
+        pre_descriptor_llvm,
+    )?;
+    if target_optimization
+        .pre_optimization_target_bound_kernel_ir
+        .version
+        != neutral_kernel_ir.version
+    {
+        return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
+    }
+    validate_target_optimization_audit_v4(target_optimization)?;
+    let kernel_bytes = kernel_ids.iter().try_fold(0_usize, |total, kernel_id| {
+        total
+            .checked_add(4)
+            .and_then(|value| value.checked_add(kernel_id.as_str().len()))
+            .ok_or(ProductionKirToLlvmReplayErrorV1::Overflow)
+    })?;
+    let optimization_bytes = (6 + 40 + 80 + 40 + 64 + 48 + 4_usize)
+        .checked_add(
+            KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2
+                .len()
+                .checked_mul(44)
+                .ok_or(ProductionKirToLlvmReplayErrorV1::Overflow)?,
+        )
+        .ok_or(ProductionKirToLlvmReplayErrorV1::Overflow)?;
+    let total = EVIDENCE_MAGIC_V1
+        .len()
+        .checked_add(2 + 4 + 40 + 40 + optimization_bytes + 4 + 4)
+        .and_then(|value| value.checked_add(kernel_bytes))
+        .and_then(|value| value.checked_add(pre_descriptor_llvm.len()))
+        .ok_or(ProductionKirToLlvmReplayErrorV1::Overflow)?;
+    if total > MAX_PRODUCTION_KIR_TO_LLVM_REPLAY_EVIDENCE_BYTES_V1 {
+        return Err(ProductionKirToLlvmReplayErrorV1::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(total)
+        .map_err(|_| ProductionKirToLlvmReplayErrorV1::AllocationFailure)?;
+    bytes.extend_from_slice(EVIDENCE_MAGIC_V1);
+    bytes.extend_from_slice(&EVIDENCE_VERSION_V4.to_le_bytes());
+    bytes.push(EXACT_DETERMINISTIC_REPLAY_CLAIM_V1);
+    bytes.push(encode_profile(profile));
+    bytes.push(neutral_kernel_ir.version.tag());
+    bytes.push(RESERVED_V1);
+    encode_kernel_ir_identity(&mut bytes, neutral_kernel_ir);
+    encode_kernel_ir_identity(&mut bytes, target_bound_kernel_ir);
+    encode_target_optimization_v4(&mut bytes, target_optimization)?;
+    bytes.extend_from_slice(
+        &u32::try_from(kernel_ids.len())
+            .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?
+            .to_le_bytes(),
+    );
+    for kernel_id in kernel_ids {
+        bytes.extend_from_slice(
+            &u32::try_from(kernel_id.as_str().len())
+                .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(kernel_id.as_str().as_bytes());
+    }
+    bytes.extend_from_slice(
+        &u32::try_from(pre_descriptor_llvm.len())
+            .map_err(|_| ProductionKirToLlvmReplayErrorV1::Overflow)?
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(pre_descriptor_llvm.as_bytes());
+    if bytes.len() != total {
+        return Err(ProductionKirToLlvmReplayErrorV1::InvalidLength);
+    }
+    Ok(bytes)
+}
+
+fn encode_evidence(
+    profile: ProductionAmdTargetProfileV1,
+    neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    kernel_ids: &[KernelId],
+    pre_descriptor_llvm: &str,
+) -> Result<Vec<u8>, ProductionKirToLlvmReplayErrorV1> {
+    validate_evidence_fields(
+        neutral_kernel_ir,
+        target_bound_kernel_ir,
+        kernel_ids,
+        pre_descriptor_llvm,
+    )?;
     let kernel_bytes = kernel_ids.iter().try_fold(0_usize, |total, kernel_id| {
         total
             .checked_add(4)
@@ -816,12 +1624,15 @@ pub enum ProductionKirToLlvmReplayErrorV1 {
     InvalidUtf8,
     NonCanonical,
     IdentityMismatch { field: &'static str },
+    OptimizationAuditMismatch,
     KernelIdMismatch,
     LiveTargetModuleMismatch,
     LlvmMismatch,
     KernelIrV8(VerifiedCanonicalKernelIrErrorV8),
     KernelIrV9(VerifiedCanonicalKernelIrErrorV9),
     TargetBinding(ProductionTargetBindingErrorV1),
+    TargetOptimization(KernelIrPlironOptimizationErrorV2),
+    TargetOptimizationAdmission(KernelIrPlironStructuralReplayAdmissionErrorV2),
     TargetLowering(LoweringErrors),
     LayoutBinding(ProductionLlvmLayoutBindingErrorV1),
 }
@@ -860,6 +1671,8 @@ impl fmt::Display for ProductionKirToLlvmReplayErrorV1 {
                 formatter,
                 "production KIR-to-LLVM replay changed the exact {field} identity"
             ),
+            Self::OptimizationAuditMismatch => formatter
+                .write_str("production KIR-to-LLVM replay optimizer audit is not canonical"),
             Self::KernelIdMismatch => formatter
                 .write_str("production KIR-to-LLVM replay changed the exact kernel identity"),
             Self::LiveTargetModuleMismatch => formatter
@@ -871,6 +1684,15 @@ impl fmt::Display for ProductionKirToLlvmReplayErrorV1 {
             Self::KernelIrV9(error) => write!(formatter, "exact KIR V9 validation failed: {error}"),
             Self::TargetBinding(error) => {
                 write!(formatter, "target-binding replay failed: {error}")
+            }
+            Self::TargetOptimization(error) => {
+                write!(formatter, "target-KIR optimization replay failed: {error}")
+            }
+            Self::TargetOptimizationAdmission(error) => {
+                write!(
+                    formatter,
+                    "target-KIR structural replay admission failed: {error}"
+                )
             }
             Self::TargetLowering(error) => {
                 write!(formatter, "AMDGPU lowering replay failed: {error}")
@@ -888,6 +1710,8 @@ impl Error for ProductionKirToLlvmReplayErrorV1 {
             Self::KernelIrV8(error) => Some(error),
             Self::KernelIrV9(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
+            Self::TargetOptimization(error) => Some(error),
+            Self::TargetOptimizationAdmission(error) => Some(error),
             Self::TargetLowering(error) => Some(error),
             Self::LayoutBinding(error) => Some(error),
             _ => None,
@@ -1106,6 +1930,129 @@ mod tests {
         )
         .unwrap();
         (neutral_bytes, target_module, llvm, evidence)
+    }
+
+    #[test]
+    fn optimized_v4_replay_round_trips_the_fixed_v2_optimizer() {
+        let neutral = VerifiedCanonicalKernelIrV8::from_module(neutral_module("optimized_v4"))
+            .unwrap()
+            .into_canonical_bytes();
+        let (_, decoded_neutral, _) =
+            decode_exact_kernel_ir(&neutral, ProductionReplayKernelIrVersionV1::V8).unwrap();
+        let target =
+            bind_production_target_v1(&decoded_neutral, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let optimized = optimize_production_kernel_ir_module_v2(target.module()).unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV8::from_module(optimized.module().clone()).unwrap();
+        let llvm = replay_llvm(
+            optimized.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+            ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner),
+        )
+        .unwrap();
+
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
+            &neutral,
+            optimized.module(),
+            optimized.report(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            &llvm,
+        )
+        .unwrap();
+        assert_eq!(
+            u16::from_le_bytes(
+                evidence.canonical_bytes()[EVIDENCE_MAGIC_V1.len()..EVIDENCE_MAGIC_V1.len() + 2]
+                    .try_into()
+                    .unwrap(),
+            ),
+            EVIDENCE_VERSION_V4,
+        );
+        let audit = evidence.target_pliron_optimization_v4().unwrap();
+        assert_eq!(
+            audit.optimizer_policy_version(),
+            KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2,
+        );
+        assert_eq!(
+            audit.report().passes().len(),
+            KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2.len(),
+        );
+        assert!(audit.changed());
+
+        let decoded =
+            CanonicalProductionKirToLlvmReplayEvidenceV1::decode(evidence.canonical_bytes())
+                .unwrap();
+        let validated = decoded
+            .validate_against_neutral_kernel_ir(&neutral)
+            .unwrap();
+        assert_eq!(validated.target_bound_module(), optimized.module());
+        assert!(validated.has_exact_target_optimization_replay());
+        assert!(validated.has_target_optimization_mutations());
+        assert!(!validated.establishes_formal_semantic_refinement());
+    }
+
+    #[test]
+    fn optimized_v4_replay_rejects_nonproduction_and_cross_spliced_reports() {
+        let neutral = VerifiedCanonicalKernelIrV8::from_module(neutral_module("live_v4"))
+            .unwrap()
+            .into_canonical_bytes();
+        let (_, decoded_neutral, _) =
+            decode_exact_kernel_ir(&neutral, ProductionReplayKernelIrVersionV1::V8).unwrap();
+        let target =
+            bind_production_target_v1(&decoded_neutral, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let optimized = optimize_production_kernel_ir_module_v2(target.module()).unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV8::from_module(optimized.module().clone()).unwrap();
+        let llvm = replay_llvm(
+            optimized.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+            ProductionSemanticAnchorKirIdentityV1::from_v8(&target_owner),
+        )
+        .unwrap();
+        let configurable = fe2o3_kernel_opt::optimize_kernel_ir_module_v2(
+            target.module(),
+            KernelIrPlironOptimizationLimitsV2::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
+                &neutral,
+                optimized.module(),
+                configurable.report(),
+                ProductionAmdTargetProfileV1::Gfx942,
+                &llvm,
+            ),
+            Err(
+                ProductionKirToLlvmReplayErrorV1::TargetOptimizationAdmission(
+                    KernelIrPlironStructuralReplayAdmissionErrorV2::NonProductionReport
+                )
+            )
+        ));
+
+        let other_target = bind_production_target_v1(
+            &neutral_module("other_live_v4"),
+            ProductionAmdTargetProfileV1::Gfx942,
+        )
+        .unwrap();
+        let other_optimized =
+            optimize_production_kernel_ir_module_v2(other_target.module()).unwrap();
+        assert!(matches!(
+            CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
+                &neutral,
+                optimized.module(),
+                other_optimized.report(),
+                ProductionAmdTargetProfileV1::Gfx942,
+                &llvm,
+            ),
+            Err(
+                ProductionKirToLlvmReplayErrorV1::TargetOptimizationAdmission(
+                    KernelIrPlironStructuralReplayAdmissionErrorV2::ReportMismatch
+                )
+            )
+        ));
     }
 
     #[test]
