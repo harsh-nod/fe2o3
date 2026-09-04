@@ -2147,6 +2147,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
         | ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d
+        | ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
         | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
@@ -2333,6 +2334,10 @@ mod tests {
     fn terminal_expansion_arities_are_closed() {
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
+            Some(0)
+        );
+        assert_eq!(
+            terminal_argument_count_v1(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent),
             Some(0)
         );
         assert_eq!(

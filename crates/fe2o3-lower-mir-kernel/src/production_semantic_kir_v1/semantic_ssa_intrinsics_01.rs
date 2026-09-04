@@ -11,6 +11,13 @@ fn compiler_issued_ssa_bindings_v1(
         };
         require_current_production_intrinsic_v1(operation)?;
         match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
+                insert_compiler_issued_ssa_binding_v1(
+                    &mut bindings,
+                    *scope,
+                    SemanticPromotedBindingV1::WorkgroupLdsScope,
+                )?
+            }
             SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context } => {
                 insert_compiler_issued_ssa_binding_v1(
                     &mut bindings,

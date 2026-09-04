@@ -37,6 +37,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V9: u16 = 9;
 pub const INERT_SEMANTIC_MIR_VERSION_V10: u16 = 10;
 pub const INERT_SEMANTIC_MIR_VERSION_V11: u16 = 11;
 pub const INERT_SEMANTIC_MIR_VERSION_V12: u16 = 12;
+pub const INERT_SEMANTIC_MIR_VERSION_V13: u16 = 13;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -56,6 +57,7 @@ pub enum SemanticMirWireVersionV1 {
     V10,
     V11,
     V12,
+    V13,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -72,6 +74,7 @@ impl SemanticMirWireVersionV1 {
             Self::V10 => INERT_SEMANTIC_MIR_VERSION_V10,
             Self::V11 => INERT_SEMANTIC_MIR_VERSION_V11,
             Self::V12 => INERT_SEMANTIC_MIR_VERSION_V12,
+            Self::V13 => INERT_SEMANTIC_MIR_VERSION_V13,
         }
     }
 
@@ -88,6 +91,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V10 => Some(Self::V10),
             INERT_SEMANTIC_MIR_VERSION_V11 => Some(Self::V11),
             INERT_SEMANTIC_MIR_VERSION_V12 => Some(Self::V12),
+            INERT_SEMANTIC_MIR_VERSION_V13 => Some(Self::V13),
             _ => None,
         }
     }
@@ -5246,6 +5250,10 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     GridDimension(SemanticAxisV1),
     /// Executes the target's canonical trap instruction and never returns.
     Trap,
+    /// Creates the ambient compiler-owned identity for the current workgroup's LDS.
+    WorkgroupLdsScopeCurrent {
+        scope: SemanticTypeIdV1,
+    },
     /// Creates one exact compiler-owned allocation in the current workgroup's LDS.
     DynamicLdsExactCurrent {
         scope: SemanticTypeIdV1,
@@ -6101,12 +6109,22 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V12, limits)
     }
 
+    /// Admits under the exact closed V13 schema that retains V12 and adds the
+    /// compiler-owned current-workgroup LDS scope terminal.
+    pub fn admit_exact_v13(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V13, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
     /// workgroup pipelines occur together, V10 for target-neutral scans, and
-    /// V11 when the compiler trap terminal is present, and V12 for checked
-    /// volatile loads.
+    /// V11 when the compiler trap terminal is present, V12 for checked
+    /// volatile loads, and V13 for compiler-owned workgroup LDS scope
+    /// acquisition.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7708,6 +7726,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
         | SemanticCompilerIntrinsicOperationV1::Trap
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts { .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. }
@@ -7873,6 +7892,15 @@ fn compiler_intrinsic_signature_matches(
                     request.types[output.0 as usize].shape,
                     SemanticTypeShapeV1::Never
                 )
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
+            inputs.is_empty()
+                && output == scope
+                && abi.arguments().is_empty()
+                && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+                && abi.return_value().adjusted().is_none()
+                && abi.return_value().pointee_override().is_none()
+                && exact_inhabited_aggregate_zst(request, scope)
         }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
@@ -8751,6 +8779,35 @@ fn compiler_intrinsic_signature_matches(
                 && checked_mutable_access_result_matches(request, output, element)
         }
     }
+}
+
+fn exact_inhabited_aggregate_zst(
+    request: &InertSemanticMirRequestV1,
+    ty: SemanticTypeIdV1,
+) -> bool {
+    let Some(declaration) = request.types.get(ty.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(aggregate) = &declaration.shape else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = &declaration.layout.details else {
+        return false;
+    };
+    declaration.layout.size_bytes == Some(0)
+        && !declaration.layout.uninhabited
+        && matches!(
+            declaration.layout.backend_repr,
+            SemanticBackendReprV1::Memory { sized: true }
+        )
+        && aggregate.fields.len() == layout.field_offsets.len()
+        && layout.field_offsets.iter().all(|offset| *offset == 0)
+        && layout.padding.is_empty()
+        && aggregate.fields.iter().all(|field| {
+            request.types.get(field.0 as usize).is_some_and(|field| {
+                field.layout.size_bytes == Some(0) && !field.layout.uninhabited
+            })
+        })
 }
 
 fn mfma_operand_contract_valid(contract: SemanticMfmaOperandContractV1) -> bool {
@@ -15488,6 +15545,9 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
+        SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
+            pending.push_back(scope);
+        }
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
             pending.push_back(element);
         }
@@ -16483,6 +16543,17 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     }) {
         required = required.max(SemanticMirWireVersionV1::V12);
     }
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { .. },
+                ..
+            }
+        )
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V13);
+    }
     required
 }
 
@@ -17328,6 +17399,7 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::Trap => {
             if wire_version != SemanticMirWireVersionV1::V11
                 && wire_version != SemanticMirWireVersionV1::V12
+                && wire_version != SemanticMirWireVersionV1::V13
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17335,6 +17407,16 @@ fn encode_compiler_intrinsic_operation(
                 });
             }
             writer.u8(64)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
+            if wire_version != SemanticMirWireVersionV1::V13 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V13,
+                });
+            }
+            writer.u8(66)?;
+            writer.u32(scope.0)
         }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
@@ -17404,7 +17486,9 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
-            if wire_version != SemanticMirWireVersionV1::V12 {
+            if wire_version != SemanticMirWireVersionV1::V12
+                && wire_version != SemanticMirWireVersionV1::V13
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V12,
@@ -17670,6 +17754,7 @@ fn encode_compiler_intrinsic_operation(
             if wire_version != SemanticMirWireVersionV1::V9
                 && wire_version != SemanticMirWireVersionV1::V11
                 && wire_version != SemanticMirWireVersionV1::V12
+                && wire_version != SemanticMirWireVersionV1::V13
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17692,6 +17777,7 @@ fn encode_compiler_intrinsic_operation(
             if wire_version != SemanticMirWireVersionV1::V10
                 && wire_version != SemanticMirWireVersionV1::V11
                 && wire_version != SemanticMirWireVersionV1::V12
+                && wire_version != SemanticMirWireVersionV1::V13
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -20360,6 +20446,80 @@ mod private_tests {
             &request,
             SemanticCompilerIntrinsicOperationV1::Trap,
             &abi(unit),
+        ));
+    }
+
+    #[test]
+    fn workgroup_lds_scope_current_requires_an_exact_ignored_aggregate_zst() {
+        let scope = SemanticTypeIdV1::from_index(0);
+        let unit = SemanticTypeIdV1::from_index(1);
+        let opaque_zst = SemanticTypeIdV1::from_index(2);
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([6; 32])),
+            vec![
+                test_type(
+                    7,
+                    SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                        Some(0),
+                        1,
+                        SemanticBackendReprV1::memory(true),
+                        false,
+                        SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+                    )
+                    .unwrap(),
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                ),
+                test_type(
+                    8,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Unit,
+                ),
+                test_type(
+                    9,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+        let abi = |inputs: Vec<SemanticTypeIdV1>, output| {
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256([10; 32]),
+                SemanticLayoutIdentityV1::from_sha256([11; 32]),
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                inputs.into_iter().map(value).collect(),
+                value(output),
+            )
+            .unwrap()
+        };
+
+        assert!(compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope },
+            &abi(vec![], scope),
+        ));
+        assert!(!compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope },
+            &abi(vec![scope], scope),
+        ));
+        assert!(!compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope },
+            &abi(vec![], unit),
+        ));
+        assert!(!compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope: opaque_zst },
+            &abi(vec![], opaque_zst),
         ));
     }
 

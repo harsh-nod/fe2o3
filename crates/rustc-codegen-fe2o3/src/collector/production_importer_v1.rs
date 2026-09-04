@@ -6,9 +6,10 @@ use std::fmt;
 use dialect_amdgcn::DeviceValueDiagnosticItem;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_ROOTS_V1,
-    InertSemanticMirRequestV1, SemanticBf16ConversionKindV1, SemanticCallableDeclV1,
-    SemanticCallableIdV1, SemanticCompilerIntrinsicIdentityV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1,
+    InertSemanticMirRequestV1, SemanticAbiPassModeV1, SemanticBackendReprV1,
+    SemanticBf16ConversionKindV1, SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCanonAbiV1,
+    SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticDisjointIndexSpaceV1, SemanticExternAbiV1, SemanticF32MathFunctionV1,
     SemanticFunctionAbiV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
     SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1,
     SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1,
@@ -906,6 +907,27 @@ fn terminal_operation_v1<'tcx>(
                 && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::GridDimension(axis))
+        }
+        ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && abi.canon_abi() == SemanticCanonAbiV1::Rust
+                && abi.extern_abi() == SemanticExternAbiV1::Rust
+                && !abi.c_variadic()
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::WorkgroupLdsScope,
+                )
+                && output == abi.return_value().ty()
+                && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+                && abi.return_value().adjusted().is_none()
+                && abi.return_value().pointee_override().is_none()
+                && abi.arguments().is_empty()
+                && abi.hidden_arguments().is_empty()
+                && semantic_exact_inhabited_aggregate_zst_v1(types, output) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope: output })
         }
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent
             if inputs.len() == 1
@@ -2626,6 +2648,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
         | ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice
         | ProductionTerminalExpansionV1::StridedReadView2DLoadOr
+        | ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
         | ProductionTerminalExpansionV1::DynamicLdsExactCurrent
         | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
         | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
@@ -2897,6 +2920,35 @@ fn semantic_f32_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> b
             SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })
         )
     })
+}
+
+fn semantic_exact_inhabited_aggregate_zst_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> bool {
+    let Some(declaration) = types.get(ty.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
+        return false;
+    };
+    declaration.layout().size_bytes() == Some(0)
+        && !declaration.layout().is_uninhabited()
+        && matches!(
+            declaration.layout().backend_repr(),
+            SemanticBackendReprV1::Memory { sized: true }
+        )
+        && aggregate.fields().len() == layout.field_offsets().len()
+        && layout.field_offsets().iter().all(|offset| *offset == 0)
+        && layout.padding().is_empty()
+        && aggregate.fields().iter().all(|field| {
+            types.get(field.index() as usize).is_some_and(|field| {
+                field.layout().size_bytes() == Some(0) && !field.layout().is_uninhabited()
+            })
+        })
 }
 
 fn semantic_bf16_storage_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
@@ -3973,6 +4025,7 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3 => 114,
             TerminalIdentitySchemaV1::CombinedV4 => 117,
         },
+        ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]
@@ -4290,12 +4343,13 @@ mod tests {
                 ProductionTerminalExpansionV1::MemoryVolatileLoad,
                 ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
+                ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent,
             ]
             .map(|expansion| terminal_operation_tag_for_schema_v1(
                 expansion,
                 TerminalIdentitySchemaV1::CombinedV4,
             )),
-            [113, 114, 115, 116, 117],
+            [113, 114, 115, 116, 117, 118],
         );
         assert_eq!(
             [

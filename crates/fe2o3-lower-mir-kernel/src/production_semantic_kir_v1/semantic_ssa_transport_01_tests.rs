@@ -669,6 +669,30 @@
             Some(SemanticValueBindingV1::WorkgroupLdsScope)
         ));
         assert!(lowering.locals[3].is_none());
+
+        let aggregate = SemanticRvalueKindV1::Aggregate(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAggregateRvalueV1::new(
+                SemanticAggregateKindV1::Aggregate,
+                vec![],
+            )
+            .unwrap(),
+        );
+        let mut operations = Vec::new();
+        for ty in [scope_ty, same_shape_ty] {
+            assert!(matches!(
+                lowering
+                    .lower_rvalue(
+                        SemanticBlockIdV1::from_index(0),
+                        Some(0),
+                        ty,
+                        &aggregate,
+                        &mut operations,
+                    )
+                    .unwrap(),
+                SemanticValueBindingV1::Aggregate(fields) if fields.is_empty()
+            ));
+        }
+        assert!(operations.is_empty());
     }
 
     fn allocation_provenance_fixture_v1(

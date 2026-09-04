@@ -14451,6 +14451,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         })?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
+                self.require_call_argument_count(block, call, 0)?;
+                if destination.place().ty() != *scope {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "current LDS scope destination type changed",
+                    ));
+                }
+                SemanticValueBindingV1::WorkgroupLdsScope
+            }
             SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
                 dynamic_lds,
                 element_storage,

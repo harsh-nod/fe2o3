@@ -1041,6 +1041,24 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
         assert!(!bundle.grants_load_authority());
         assert!(!bundle.grants_launch_authority());
 
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            semantic.wire_version(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V13
+        );
+        assert!(semantic.callables().iter().any(|callable| matches!(
+            callable,
+            fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    fe2o3_mir_model::semantic_mir_v1::SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { .. },
+                ..
+            }
+        )));
+
         let (_, module) =
             fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
                 bundle.canonical_kir_v10().to_vec(),
@@ -1053,15 +1071,6 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
             .unwrap();
         let function = module.function(&kernel.entry).unwrap();
         let body = function.body.as_ref().unwrap();
-        assert!(
-            module
-                .functions
-                .iter()
-                .filter(|function| function.body.is_some())
-                .count()
-                >= 2,
-            "the ordinary source must retain the reviewed WorkgroupLdsScope constructor"
-        );
         let operations = body
             .blocks
             .iter()
