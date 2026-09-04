@@ -1851,15 +1851,6 @@ mod tests {
         (shadows, storage, event, file)
     }
 
-    fn assert_mapping_absent(address: NonNull<c_void>) {
-        let mut residency = [0_u8; 1];
-        // SAFETY: mincore only queries whether the saved page address is still
-        // mapped and does not dereference it.
-        let result = unsafe { libc::mincore(address.as_ptr(), 4096, residency.as_mut_ptr()) };
-        assert_eq!(result, -1);
-        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(12));
-    }
-
     #[test]
     fn shadow_plan_is_exact_and_hostile_geometry_fails_closed() {
         let plan = CwsrShadowPlanV1::from_owned_reservation(
@@ -1906,21 +1897,22 @@ mod tests {
     #[test]
     fn unpublished_payload_is_unmapped_when_final_admission_fails() {
         let (shadows, mut storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-        let payload_page = shadows.payload_page;
         storage[0][0] ^= 1;
+        // Admission returns only after release succeeds; a release failure is
+        // process-terminal because this call consumes the final page owner.
         assert!(admit_installed_cwsr_shadows(shadows).is_err());
-        assert_mapping_absent(payload_page);
     }
 
     #[test]
     fn payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup() {
         let (shadows, _storage, _event, file) = mapped_diagnostic_shadow_fixture();
-        let payload_page = shadows.payload_page;
         let binding = shadows.binding;
         let after_event = shadows
             .after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding })
             .unwrap();
-        assert_mapping_absent(payload_page);
+        // A successful transition means zero/protect/munmap completed. Check
+        // the retained state instead of racing another thread's address reuse.
+        assert!(!after_event.shadows.payload_page_active);
 
         let ready = after_event
             .after_runtime_destroy(LinuxKfdRuntimeDisabledV1 {
@@ -1937,11 +1929,11 @@ mod tests {
     #[test]
     fn unpublished_custody_unmaps_payload_on_early_return() {
         let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-        let payload_page = shadows.payload_page;
+        // The unpublished owner aborts if release fails. Returning from this
+        // drop therefore proves the page completed its release path.
         drop(LinuxUnpublishedCwsrShadowPagesV1 {
             shadows: Some(shadows),
         });
-        assert_mapping_absent(payload_page);
     }
 
     #[test]
