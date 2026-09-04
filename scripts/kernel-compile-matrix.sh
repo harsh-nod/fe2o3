@@ -50,9 +50,10 @@ Usage: scripts/kernel-compile-matrix.sh [gfx942|gfx950]
 Compile a fixed fe2o3-kernels production-source matrix through the
 fe2o3 extractor and ROCm finalizer without executing any kernel.
 
-The gfx950 matrix requires the exact manifest-pinned ROCm 7.2.1 Clang, LLD,
-and device-library closure. Neither target covers proof-only examples, the
-basic Cargo regression manifest, hardware behavior, or numerical results.
+The gfx950 matrix defaults to the exact manifest-pinned ROCm 7.2.1 Clang, LLD,
+and device-library closure. Set FE2O3_GFX950_OCML_MANIFEST explicitly to use
+the checked-in ROCm 7.2.4 closure. Neither target covers proof-only examples,
+the basic Cargo regression manifest, hardware behavior, or numerical results.
 EOF
 }
 
@@ -78,7 +79,7 @@ printf 'kernel compile matrix: target=%s mode=compile-only kernels=%d hardware_o
   "${TARGET}" "${#CASES[@]}"
 if [[ ${TARGET} == gfx950 ]]; then
   printf '%s\n' \
-    'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 Clang/LLD/device-library closure required'
+    'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required'
 fi
 
 MATRIX_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-kernel-compile-matrix.XXXXXXXX")"
@@ -157,7 +158,7 @@ printf 'MATRIX PASS target=%s compiled=%d hardware_executed=0 artifacts=temporar
   "${TARGET}" "${passed}"
 if [[ ${TARGET} == gfx942 ]]; then
   printf '%s\n' \
-    'MATRIX LIMITATION gfx950 requires its separate exact ROCm 7.2.1 matrix; source-model-only, proof-only, and basic Cargo examples are not covered'
+    'MATRIX LIMITATION gfx950 requires its separate exact ROCm 7.2.1 or 7.2.4 matrix; source-model-only, proof-only, and basic Cargo examples are not covered'
 else
   printf '%s\n' \
     'MATRIX LIMITATION gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered'

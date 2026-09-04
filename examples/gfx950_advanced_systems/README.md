@@ -75,8 +75,10 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 The expert runner requires exactly three mixed FP4/FP8
 `v_mfma_f32_16x16x128_f8f6f4` instructions with `cbsz:4`: two rank-local
 experts and the optional shared expert. Routing and expert exponential math
-links only the reviewed ROCm 7.2.1 OCML `exp` closure shared with the
-low-precision examples; Muon square root uses the gfx950 native LLVM intrinsic.
+links only the selected reviewed OCML `exp` closure shared with the
+low-precision examples. ROCm 7.2.1 remains the default and the checked-in ROCm
+7.2.4 manifest is an explicit alternative; Muon square root uses the gfx950
+native LLVM intrinsic.
 The per-kernel harness checks immutable inputs, output canaries, exact integer
 and rollback state, and bounded floating-point tolerances against the CPU
 references. Set `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the

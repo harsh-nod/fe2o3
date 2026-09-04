@@ -14,6 +14,10 @@ readonly FAKE_BIN="${TEST_ROOT}/bin"
 readonly FAKE_ROCM="${TEST_ROOT}/rocm"
 readonly GFX950_DEVICE_LIBS="${TEST_ROOT}/gfx950-device-libs"
 readonly GFX950_MANIFEST="${TEST_ROOT}/gfx950-ocml-rocm-7.2.1.manifest"
+readonly GFX950_MANIFEST_724="${TEST_ROOT}/gfx950-ocml-rocm-7.2.4.manifest"
+readonly GFX950_MANIFEST_UNREVIEWED="${TEST_ROOT}/gfx950-ocml-rocm-7.2.5.manifest"
+readonly GFX950_MANIFEST_BAD_DIGEST="${TEST_ROOT}/gfx950-ocml-bad-digest.manifest"
+readonly CHECKED_GFX950_MANIFEST_724="${REPO_ROOT}/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.4.manifest"
 readonly LOG="${TEST_ROOT}/commands.log"
 trap 'rm -rf -- "${TEST_ROOT}"' EXIT
 
@@ -93,6 +97,7 @@ case "${1:-}" in
           transpose_calls=0
           ocml_calls=0
           lds=0
+          extra_target_function=0
           case "$feature" in
             kernel-fp4-gemm)
               symbol=gfx950_fp4_gemm_rust; fp4_mfma=1 ;;
@@ -101,11 +106,12 @@ case "${1:-}" in
             kernel-fp4-attention)
               symbol=gfx950_fp4_attention_rust; fp4_mfma=1
               transpose=llvm.amdgcn.ds.read.tr4.b64.v2i32
-              transpose_calls=2; ocml_calls=4; lds=1024 ;;
+              transpose_calls=2; ocml_calls=4; lds=4096
+              extra_target_function=1 ;;
             kernel-fp8-attention)
               symbol=gfx950_fp8_attention_rust; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
-              transpose_calls=4; ocml_calls=4; lds=2048 ;;
+              transpose_calls=4; ocml_calls=4; lds=8192 ;;
             kernel-kda-decode)
               symbol=gfx950_kda_decode ;;
             kernel-kda-prefill)
@@ -113,13 +119,13 @@ case "${1:-}" in
             kernel-content-sparse-attention)
               symbol=gfx950_content_sparse_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
-              transpose_calls=4; ocml_calls=1; lds=2048 ;;
+              transpose_calls=4; ocml_calls=1; lds=8192 ;;
             kernel-deepseek-sparse-attention)
               symbol=gfx950_deepseek_sparse_attention; ocml_calls=1 ;;
             kernel-compressed-hybrid-attention)
               symbol=gfx950_compressed_hybrid_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
-              transpose_calls=4; ocml_calls=1; lds=2048 ;;
+              transpose_calls=4; ocml_calls=1; lds=8192 ;;
             kernel-attnres-aggregate)
               symbol=gfx950_attnres_aggregate; ocml_calls=1 ;;
             kernel-four-branch-residual)
@@ -176,6 +182,11 @@ case "${1:-}" in
             fi
             printf '  ret void\n}\n'
             printf 'attributes #0 = { "target-cpu"="gfx950" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" }\n'
+            if ((extra_target_function > 0)); then
+              printf 'define internal float @decode_fp4_e2m1(i8 %%bits) #1 {\n'
+              printf '  ret float 0.0\n}\n'
+              printf 'attributes #1 = { "target-cpu"="gfx950" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" }\n'
+            fi
             if ((fp4_mfma + fp8_mfma + mixed_mfma > 0)); then
               printf 'declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32()\n'
             fi
@@ -262,19 +273,19 @@ case "$key" in
   gfx950-fp4-gemm) symbol=gfx950_fp4_gemm_rust ;;
   gfx950-fp8-gemm) symbol=gfx950_fp8_gemm_rust ;;
   gfx950-fp4-attention)
-    symbol=gfx950_fp4_attention_rust; kernarg=64; lds=1024 ;;
+    symbol=gfx950_fp4_attention_rust; kernarg=64; lds=4096 ;;
   gfx950-fp8-attention)
-    symbol=gfx950_fp8_attention_rust; kernarg=64; lds=2048 ;;
+    symbol=gfx950_fp8_attention_rust; kernarg=64; lds=8192 ;;
   kernel-kda-decode)
     symbol=gfx950_kda_decode; kernarg=128; workgroup=256 ;;
   kernel-kda-prefill)
     symbol=gfx950_kda_chunkwise_prefill; kernarg=144; workgroup=256 ;;
   kernel-content-sparse-attention)
-    symbol=gfx950_content_sparse_attention; kernarg=96; lds=2048 ;;
+    symbol=gfx950_content_sparse_attention; kernarg=96; lds=8192 ;;
   kernel-deepseek-sparse-attention)
     symbol=gfx950_deepseek_sparse_attention; kernarg=112 ;;
   kernel-compressed-hybrid-attention)
-    symbol=gfx950_compressed_hybrid_attention; kernarg=80; lds=2048 ;;
+    symbol=gfx950_compressed_hybrid_attention; kernarg=80; lds=8192 ;;
   kernel-attnres-aggregate)
     symbol=gfx950_attnres_aggregate; kernarg=48 ;;
   kernel-four-branch-residual)
@@ -299,6 +310,9 @@ case "$key" in
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kernarg=208 ;;
   *) exit 99 ;;
 esac
+if [[ $key == kernel-* ]]; then
+  workgroup=256
+fi
 cat <<EOF_METADATA
 Format: elf64-amdgpu
 Machine: EM_AMDGPU
@@ -401,10 +415,11 @@ chmod 700 \
   "${FAKE_ROCM}/llvm/bin/llvm-readobj" \
   "${FAKE_ROCM}/llvm/bin/llvm-objdump"
 
-{
+write_fixture_manifest() {
+  local rocm_version=$1
   printf '%s\n' \
     'schema=fe2o3-gfx950-ocml-closure-v1' \
-    'rocm_version=7.2.1' \
+    "rocm_version=${rocm_version}" \
     'llvm_version=22.0.0git' \
     "canonical_device_library_dir=${GFX950_DEVICE_LIBS}"
   for library in \
@@ -423,7 +438,55 @@ chmod 700 \
     "$(sha256sum -- "${FAKE_ROCM}/llvm/bin/clang" | awk '{ print $1 }')"
   printf 'lld=%s\n' \
     "$(sha256sum -- "${FAKE_ROCM}/llvm/bin/ld.lld" | awk '{ print $1 }')"
-} >"${GFX950_MANIFEST}"
+}
+
+write_fixture_manifest 7.2.1 >"${GFX950_MANIFEST}"
+write_fixture_manifest 7.2.4 >"${GFX950_MANIFEST_724}"
+write_fixture_manifest 7.2.5 >"${GFX950_MANIFEST_UNREVIEWED}"
+sed \
+  's/^ocml\.bc=.*/ocml.bc=0000000000000000000000000000000000000000000000000000000000000000/' \
+  "${GFX950_MANIFEST_724}" >"${GFX950_MANIFEST_BAD_DIGEST}"
+
+[[ ! -L ${CHECKED_GFX950_MANIFEST_724} && -f ${CHECKED_GFX950_MANIFEST_724} ]]
+[[ $(wc -l <"${CHECKED_GFX950_MANIFEST_724}") -eq 15 ]]
+[[ $(sha256sum -- "${CHECKED_GFX950_MANIFEST_724}" | awk '{ print $1 }') == \
+  330a4190d140bfd9b9eeeefa97302241c9e422e140e0044d4cb9f49d0c24696e ]]
+
+validate_fixture_manifest() {
+  local manifest=$1
+  # SC2016: the child shell expands the closure variables after sourcing it.
+  # shellcheck disable=SC2016
+  env \
+    SCRIPT_DIR="${REPO_ROOT}/examples/gfx950_low_precision" \
+    CLANG="${FAKE_ROCM}/llvm/bin/clang" \
+    LD_LLD="${FAKE_ROCM}/llvm/bin/ld.lld" \
+    SHA256SUM=sha256sum \
+    FE2O3_GFX950_OCML_MANIFEST="${manifest}" \
+    bash -c '
+      set -Eeuo pipefail
+      source "$SCRIPT_DIR/gfx950-ocml-closure.sh"
+      validate_gfx950_ocml_closure
+      [[ ${#GFX950_OCML_CLANG_ARGS[@]} -eq 36 ]]
+    '
+}
+
+validate_fixture_manifest "${GFX950_MANIFEST}"
+validate_fixture_manifest "${GFX950_MANIFEST_724}"
+set +e
+unreviewed_output=$(validate_fixture_manifest "${GFX950_MANIFEST_UNREVIEWED}" 2>&1)
+unreviewed_status=$?
+set -e
+[[ ${unreviewed_status} -eq 1 ]]
+grep -F -- 'gfx950 OCML manifest has an unreviewed ROCm version: 7.2.5' \
+  <<<"${unreviewed_output}" >/dev/null
+
+set +e
+bad_digest_output=$(validate_fixture_manifest "${GFX950_MANIFEST_BAD_DIGEST}" 2>&1)
+bad_digest_status=$?
+set -e
+[[ ${bad_digest_status} -eq 1 ]]
+grep -F -- 'gfx950 OCML input digest mismatch: ocml.bc' \
+  <<<"${bad_digest_output}" >/dev/null
 
 success_output="${TEST_ROOT}/success.out"
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
@@ -440,7 +503,7 @@ grep -F -- \
   'MATRIX PASS target=gfx942 compiled=5 hardware_executed=0 artifacts=temporary' \
   "${success_output}" >/dev/null
 grep -F -- \
-  'MATRIX LIMITATION gfx950 requires its separate exact ROCm 7.2.1 matrix; source-model-only, proof-only, and basic Cargo examples are not covered' \
+  'MATRIX LIMITATION gfx950 requires its separate exact ROCm 7.2.1 or 7.2.4 matrix; source-model-only, proof-only, and basic Cargo examples are not covered' \
   "${success_output}" >/dev/null
 for name in \
   tiled-gemm \
@@ -464,17 +527,20 @@ gfx950_output="${TEST_ROOT}/gfx950.out"
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
 CARGO=cargo \
 ROCM_PATH="${FAKE_ROCM}" \
-FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST}" \
+FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST_724}" \
 TMPDIR="${TEST_ROOT}/tmp" \
 KERNEL_MATRIX_TEST_LOG="${LOG}" \
 KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
-  bash "${MATRIX_SCRIPT}" gfx950 >"${gfx950_output}" 2>&1
+  bash "${MATRIX_SCRIPT}" gfx950 >"${gfx950_output}" 2>&1 || {
+    cat "${gfx950_output}" >&2
+    exit 1
+  }
 
 grep -F -- \
   'kernel compile matrix: target=gfx950 mode=compile-only kernels=20 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 Clang/LLD/device-library closure required' \
+  'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PASS target=gfx950 compiled=20 hardware_executed=0 artifacts=temporary' \

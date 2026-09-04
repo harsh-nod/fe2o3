@@ -6,7 +6,7 @@
 validate_gfx950_ocml_closure() {
     local manifest=${FE2O3_GFX950_OCML_MANIFEST:-$SCRIPT_DIR/gfx950-ocml-rocm-7.2.1.manifest}
     local expected_key_count=15
-    local key actual file
+    local key actual file rocm_version
     local -a libraries=(
         ocml.bc
         ockl.bc
@@ -37,12 +37,20 @@ validate_gfx950_ocml_closure() {
         awk -F= -v requested="$requested" '$1 == requested { print $2 }' "$manifest"
     }
 
+    rocm_version=$(manifest_value rocm_version)
     if [[ $(manifest_value schema) != fe2o3-gfx950-ocml-closure-v1 ]] ||
-        [[ $(manifest_value rocm_version) != 7.2.1 ]] ||
         [[ $(manifest_value llvm_version) != 22.0.0git ]]; then
         printf 'gfx950 OCML manifest version is not the reviewed v1 closure\n' >&2
         return 1
     fi
+    case $rocm_version in
+        7.2.1 | 7.2.4) ;;
+        *)
+            printf 'gfx950 OCML manifest has an unreviewed ROCm version: %s\n' \
+                "$rocm_version" >&2
+            return 1
+            ;;
+    esac
 
     GFX950_OCML_DEVICE_LIBRARY_DIR=$(manifest_value canonical_device_library_dir)
     if [[ -z $GFX950_OCML_DEVICE_LIBRARY_DIR ]] ||

@@ -444,9 +444,19 @@ Advanced systems: `kernel-moe-route`, `kernel-moe-expert-rank`,
 GPT-OSS: `kernel-gpt-oss-decode`.
 
 Compile-only mode still validates the checked-in manifest and therefore
-requires the exact reviewed ROCm 7.2.1 Clang, LLD, and device-library closure.
-It does not require an MI350X and does not inspect or execute any GPU. The
-gfx950 matrix is intentionally not in the gfx942-only `rocm-compile` lane.
+requires an exact reviewed Clang, LLD, and device-library closure. ROCm 7.2.1
+remains the default. Select the checked-in ROCm 7.2.4 closure explicitly:
+
+```text
+ROCM_PATH=/opt/rocm-7.2.4 \
+FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.4.manifest" \
+  scripts/kernel-compile-matrix.sh gfx950
+```
+
+The manifest pins the observed ROCm 7.2.4 Clang, LLD, and all nine bitcode
+inputs by SHA-256. This does not require an MI350X and does not inspect or
+execute any GPU. The gfx950 matrix is intentionally not in the gfx942-only
+`rocm-compile` lane.
 
 Every target and artifact directory is created under one private temporary
 root and removed when the command exits. The matrix deliberately stops before
