@@ -9,7 +9,7 @@ error[E0308]: mismatched types
   = note: expected array `[ServiceFixedDispatchPacketV1; _]`
             found struct `ServiceFixedBatchV1<'_, 1>`
 note: method defined here
- --> src/authenticated_service_queue.rs
+ --> src/authenticated_service_queue/lifecycle.rs
   |
   |     pub fn bind_retained<const N: usize>(
   |            ^^^^^^^^^^^^^
