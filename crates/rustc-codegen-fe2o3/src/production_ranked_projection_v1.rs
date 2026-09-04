@@ -29,6 +29,8 @@ use fe2o3_lower_mir_kernel::{
     ProductionRankedAccessSourceV1, ProductionRankedExecutableEffectOriginV1,
     ProductionRankedExecutableEffectSourceV1,
 };
+#[cfg(test)]
+use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
     SemanticAbiPointeeKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
@@ -1598,6 +1600,17 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
+    UnresolvedCallableEffect {
+        block: usize,
+        source: SemanticSourceProvenanceV1,
+        callee: u32,
+        tail: bool,
+    },
+    UnresolvedDropEffect {
+        block: usize,
+        source: SemanticSourceProvenanceV1,
+        drop_glue: u32,
+    },
     MissingAllocationProvenance {
         local: u32,
         projections: usize,
@@ -1650,6 +1663,26 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     "semantic-to-ranked projection incomplete: {detail}"
                 )
             }
+            Self::UnresolvedCallableEffect {
+                block,
+                source,
+                callee,
+                tail,
+            } => write!(
+                formatter,
+                "semantic-to-ranked projection incomplete: a {}call terminator before exact callable memory-effect summaries are available; semantic block bb{block} at {} targets callable {callee}",
+                if *tail { "tail " } else { "" },
+                source_label(*source),
+            ),
+            Self::UnresolvedDropEffect {
+                block,
+                source,
+                drop_glue,
+            } => write!(
+                formatter,
+                "semantic-to-ranked projection incomplete: a drop terminator before exact drop-glue memory-effect summaries are available; semantic block bb{block} at {} targets drop glue {drop_glue}",
+                source_label(*source),
+            ),
             Self::MissingAllocationProvenance {
                 local,
                 projections,
@@ -1733,6 +1766,8 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::Compile { error, .. } => Some(error),
             Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
+            | Self::UnresolvedCallableEffect { .. }
+            | Self::UnresolvedDropEffect { .. }
             | Self::MissingAllocationProvenance { .. }
             | Self::UnprovenAssert { .. }
             | Self::Unsupported(_)
@@ -1804,6 +1839,40 @@ struct DefinedCallableDirectSummaryV1 {
     empty_eligible: bool,
     deterministic_scalar_eligible: bool,
     callees: Vec<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct DefinedCallableTerminatorEligibilityV1 {
+    empty_eligible: bool,
+    deterministic_scalar_eligible: bool,
+}
+
+impl DefinedCallableTerminatorEligibilityV1 {
+    const fn shared(eligible: bool) -> Self {
+        Self {
+            empty_eligible: eligible,
+            deterministic_scalar_eligible: eligible,
+        }
+    }
+}
+
+fn scalar_defined_callable_intrinsic_eligibility_v1(
+    operation: SemanticCompilerIntrinsicOperationV1,
+    scalar_eligible: bool,
+) -> DefinedCallableTerminatorEligibilityV1 {
+    match operation {
+        SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+            DefinedCallableTerminatorEligibilityV1::shared(scalar_eligible)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::GridDimension(_) => {
+            DefinedCallableTerminatorEligibilityV1 {
+                empty_eligible: scalar_eligible,
+                deterministic_scalar_eligible: false,
+            }
+        }
+        _ => DefinedCallableTerminatorEligibilityV1::shared(false),
+    }
 }
 
 fn charge_defined_callable_summary_work_v1(
@@ -2381,7 +2450,7 @@ fn scalar_defined_callable_call_v1(
     callees: &mut Vec<usize>,
     call_edges: &mut usize,
     work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
+) -> Result<DefinedCallableTerminatorEligibilityV1, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1 + call.arguments().len())?;
     let mut eligible = call.variadic_argument_abis().is_empty()
         && matches!(
@@ -2396,23 +2465,19 @@ fn scalar_defined_callable_call_v1(
             scalar_defined_callable_destination_v1(types, function, destination.place(), work)?;
     }
     let Some(callable) = callables.get(call.callee().index() as usize) else {
-        return Ok(false);
+        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
     };
-    if matches!(
-        callable,
-        SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::FabsF32,
-            ..
-        }
-    ) {
-        return Ok(eligible);
+    if let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable {
+        return Ok(scalar_defined_callable_intrinsic_eligibility_v1(
+            *operation, eligible,
+        ));
     }
     let SemanticCallableDeclV1::Defined { function: callee } = callable else {
-        return Ok(false);
+        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
     };
     let callee = callee.index() as usize;
     if callee >= function_count {
-        return Ok(false);
+        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
     }
     *call_edges =
         call_edges
@@ -2431,7 +2496,7 @@ fn scalar_defined_callable_call_v1(
         )
     })?;
     callees.push(callee);
-    Ok(eligible)
+    Ok(DefinedCallableTerminatorEligibilityV1::shared(eligible))
 }
 
 fn scalar_defined_callable_tail_call_v1(
@@ -2443,7 +2508,7 @@ fn scalar_defined_callable_tail_call_v1(
     callees: &mut Vec<usize>,
     call_edges: &mut usize,
     work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
+) -> Result<DefinedCallableTerminatorEligibilityV1, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1 + call.arguments().len())?;
     let mut eligible = matches!(
         call.unwind(),
@@ -2453,23 +2518,19 @@ fn scalar_defined_callable_tail_call_v1(
         eligible &= scalar_defined_callable_operand_v1(types, function, argument, work)?;
     }
     let Some(callable) = callables.get(call.callee().index() as usize) else {
-        return Ok(false);
+        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
     };
-    if matches!(
-        callable,
-        SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::FabsF32,
-            ..
-        }
-    ) {
-        return Ok(eligible);
+    if let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable {
+        return Ok(scalar_defined_callable_intrinsic_eligibility_v1(
+            *operation, eligible,
+        ));
     }
     let SemanticCallableDeclV1::Defined { function: callee } = callable else {
-        return Ok(false);
+        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
     };
     let callee = callee.index() as usize;
     if callee >= function_count {
-        return Ok(false);
+        return Ok(DefinedCallableTerminatorEligibilityV1::shared(false));
     }
     *call_edges =
         call_edges
@@ -2488,7 +2549,7 @@ fn scalar_defined_callable_tail_call_v1(
         )
     })?;
     callees.push(callee);
-    Ok(eligible)
+    Ok(DefinedCallableTerminatorEligibilityV1::shared(eligible))
 }
 
 fn scalar_defined_callable_assert_message_v1(
@@ -2531,14 +2592,18 @@ fn scalar_defined_callable_terminator_v1(
     callees: &mut Vec<usize>,
     call_edges: &mut usize,
     work: &mut usize,
-) -> Result<bool, ProductionRankedProjectionErrorV1> {
+) -> Result<DefinedCallableTerminatorEligibilityV1, ProductionRankedProjectionErrorV1> {
     charge_defined_callable_summary_work_v1(work, 1)?;
     match terminator {
         SemanticTerminatorKindV1::Goto(_)
         | SemanticTerminatorKindV1::Return
-        | SemanticTerminatorKindV1::Unreachable => Ok(true),
+        | SemanticTerminatorKindV1::Unreachable => {
+            Ok(DefinedCallableTerminatorEligibilityV1::shared(true))
+        }
         SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
-            scalar_defined_callable_operand_v1(types, function, discriminant, work)
+            Ok(DefinedCallableTerminatorEligibilityV1::shared(
+                scalar_defined_callable_operand_v1(types, function, discriminant, work)?,
+            ))
         }
         SemanticTerminatorKindV1::Call(call) => scalar_defined_callable_call_v1(
             types,
@@ -2566,16 +2631,20 @@ fn scalar_defined_callable_terminator_v1(
             target,
             unwind,
             ..
-        } => Ok(assert_proved
-            && target.role() == SemanticEdgeRoleV1::AssertSuccess
-            && matches!(unwind, SemanticUnwindActionV1::Unreachable)
-            && scalar_defined_callable_operand_v1(types, function, condition, work)?
-            && scalar_defined_callable_assert_message_v1(types, function, message, work)?),
+        } => Ok(DefinedCallableTerminatorEligibilityV1::shared(
+            assert_proved
+                && target.role() == SemanticEdgeRoleV1::AssertSuccess
+                && matches!(unwind, SemanticUnwindActionV1::Unreachable)
+                && scalar_defined_callable_operand_v1(types, function, condition, work)?
+                && scalar_defined_callable_assert_message_v1(types, function, message, work)?,
+        )),
         SemanticTerminatorKindV1::Drop { .. }
         | SemanticTerminatorKindV1::FalseEdge { .. }
         | SemanticTerminatorKindV1::UnwindResume
         | SemanticTerminatorKindV1::UnwindTerminate
-        | SemanticTerminatorKindV1::Abort => Ok(false),
+        | SemanticTerminatorKindV1::Abort => {
+            Ok(DefinedCallableTerminatorEligibilityV1::shared(false))
+        }
     }
 }
 
@@ -2627,7 +2696,7 @@ fn direct_defined_callable_summary_v1(
             deterministic_scalar_eligible &=
                 statement_eligible && deterministic_scalar_defined_callable_statement_v1(statement);
         }
-        let terminator_eligible = if scalar_base_eligible {
+        let terminator_eligibility = if scalar_base_eligible {
             scalar_defined_callable_terminator_v1(
                 types,
                 function,
@@ -2645,15 +2714,15 @@ fn direct_defined_callable_summary_v1(
             )?
         } else {
             charge_defined_callable_summary_work_v1(work, 1)?;
-            matches!(
+            DefinedCallableTerminatorEligibilityV1::shared(matches!(
                 block.terminator().kind(),
                 SemanticTerminatorKindV1::Goto(_)
                     | SemanticTerminatorKindV1::Return
                     | SemanticTerminatorKindV1::Unreachable
-            )
+            ))
         };
-        empty_eligible &= terminator_eligible;
-        deterministic_scalar_eligible &= terminator_eligible;
+        empty_eligible &= terminator_eligibility.empty_eligible;
+        deterministic_scalar_eligible &= terminator_eligibility.deterministic_scalar_eligible;
     }
     Ok(DefinedCallableDirectSummaryV1 {
         empty_eligible,
@@ -3268,8 +3337,8 @@ fn project_and_verify_ranked_root_v1(
         .iter()
         .any(ProjectedSemanticBlockV1::has_memory_access)
     {
-        if let Some(detail) = incomplete {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
+        if let Some(error) = incomplete.take() {
+            return Err(error);
         }
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a kernel without a statically ranked indexed memory access",
@@ -3285,9 +3354,9 @@ fn project_and_verify_ranked_root_v1(
             )
         })
     {
-        incomplete.get_or_insert(
+        incomplete.get_or_insert(ProductionRankedProjectionErrorV1::Incomplete(
             "a concurrent memory effect before exact invocation-index projection is available",
-        );
+        ));
     }
     let (blocks, sources, executable_effect_sources) = build_ranked_cfg(
         semantic.types(),
@@ -3316,8 +3385,8 @@ fn project_and_verify_ranked_root_v1(
         blocks,
     )
     .map_err(ProductionRankedProjectionErrorV1::Recipe)?;
-    if let Some(detail) = incomplete {
-        return Err(ProductionRankedProjectionErrorV1::Incomplete(detail));
+    if let Some(error) = incomplete {
+        return Err(error);
     }
     let lowering = if reference_bindings.as_slice().is_empty() {
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
@@ -14169,32 +14238,32 @@ impl<'a> SemanticAssertProofsV1<'a> {
         }
 
         if value.checked.operation() == SemanticCheckedBinaryOpV1::Multiply {
-            let mut combined_offset_maximum = 0_u128;
+            let mut combined_offset_maximum = Some(0_u128);
             for (offset, offset_use) in offsets.iter() {
-                let Some(range) =
-                    self.range_at_operand(offset, offset_use.block, offset_use.statement)?
-                else {
-                    return Ok(false);
-                };
-                let Some(maximum) = combined_offset_maximum.checked_add(range.maximum) else {
-                    return Ok(false);
-                };
-                combined_offset_maximum = maximum;
+                combined_offset_maximum = combined_offset_maximum
+                    .zip(self.range_at_operand(offset, offset_use.block, offset_use.statement)?)
+                    .and_then(|(combined, range)| combined.checked_add(range.maximum));
             }
 
             for (index, extent) in [
                 (value.checked.left(), value.checked.right()),
                 (value.checked.right(), value.checked.left()),
             ] {
-                let Some(extent_range) = self.range_at_operand(
-                    extent,
-                    value.definition.block,
-                    value.definition.statement,
-                )?
-                else {
-                    continue;
-                };
-                if combined_offset_maximum >= extent_range.minimum {
+                let numeric_offset_bound = self
+                    .range_at_operand(extent, value.definition.block, value.definition.statement)?
+                    .zip(combined_offset_maximum)
+                    .is_some_and(|(extent_range, offset_maximum)| {
+                        offset_maximum < extent_range.minimum
+                    });
+                if !numeric_offset_bound
+                    && !self.proves_nested_offset_sum_below_product_extent_v1(
+                        offsets,
+                        extent,
+                        value.definition,
+                        sum_site,
+                        scalar_type,
+                    )?
+                {
                     continue;
                 }
                 let index_bounds = self.authenticated_strict_unsigned_bounds_v1(
@@ -14244,6 +14313,115 @@ impl<'a> SemanticAssertProofsV1<'a> {
             offsets.pop();
             if proved {
                 return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn proves_nested_offset_sum_below_product_extent_v1(
+        &mut self,
+        offsets: &[(SemanticOperandV1, ScalarAssignmentSiteV1)],
+        extent: &SemanticOperandV1,
+        extent_use: ScalarAssignmentSiteV1,
+        sum_site: ScalarAssignmentSiteV1,
+        scalar_type: SemanticTypeIdV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let Some(extent_product) =
+            self.authenticated_checked_binary_source_v1(extent, extent_use)?
+        else {
+            return Ok(false);
+        };
+        if extent_product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
+            || extent_product.checked.left().ty() != scalar_type
+            || extent_product.checked.right().ty() != scalar_type
+        {
+            return Ok(false);
+        }
+
+        for (scaled_offset_index, (scaled_offset, scaled_offset_use)) in offsets.iter().enumerate()
+        {
+            let Some(offset_product) =
+                self.authenticated_checked_binary_source_v1(scaled_offset, *scaled_offset_use)?
+            else {
+                continue;
+            };
+            if offset_product.checked.operation() != SemanticCheckedBinaryOpV1::Multiply
+                || offset_product.checked.left().ty() != scalar_type
+                || offset_product.checked.right().ty() != scalar_type
+            {
+                continue;
+            }
+
+            let mut residual_maximum = Some(0_u128);
+            for (offset_index, (offset, offset_use)) in offsets.iter().enumerate() {
+                if offset_index == scaled_offset_index {
+                    continue;
+                }
+                residual_maximum = residual_maximum
+                    .zip(self.range_at_operand(offset, offset_use.block, offset_use.statement)?)
+                    .and_then(|(combined, range)| combined.checked_add(range.maximum));
+            }
+            let Some(residual_maximum) = residual_maximum else {
+                continue;
+            };
+
+            for (inner_index, offset_stride) in [
+                (
+                    offset_product.checked.left(),
+                    offset_product.checked.right(),
+                ),
+                (
+                    offset_product.checked.right(),
+                    offset_product.checked.left(),
+                ),
+            ] {
+                let Some(stride_range) = self.range_at_operand(
+                    offset_stride,
+                    offset_product.definition.block,
+                    offset_product.definition.statement,
+                )?
+                else {
+                    continue;
+                };
+                if residual_maximum >= stride_range.minimum {
+                    continue;
+                }
+                let inner_bounds = self.authenticated_strict_unsigned_bounds_v1(
+                    inner_index,
+                    offset_product.definition,
+                    sum_site,
+                )?;
+                for (inner_upper, extent_stride) in [
+                    (
+                        extent_product.checked.left(),
+                        extent_product.checked.right(),
+                    ),
+                    (
+                        extent_product.checked.right(),
+                        extent_product.checked.left(),
+                    ),
+                ] {
+                    if !self.same_checked_product_operand_v1(
+                        offset_stride,
+                        offset_product.definition,
+                        extent_stride,
+                        extent_product.definition,
+                    )? {
+                        continue;
+                    }
+                    for (bound, bound_use) in &inner_bounds {
+                        if self.same_checked_product_operand_v1(
+                            bound,
+                            *bound_use,
+                            inner_upper,
+                            extent_product.definition,
+                        )? {
+                            // inner<inner_upper and residual<stride establish
+                            // inner*stride+residual < inner_upper*stride.
+                            return Ok(true);
+                        }
+                    }
+                }
             }
         }
         Ok(false)
@@ -20084,11 +20262,15 @@ fn projected_block_uses_bounds_check(
 
 fn retain_incomplete(
     result: Result<(), ProductionRankedProjectionErrorV1>,
-    incomplete: &mut Option<&'static str>,
+    incomplete: &mut Option<ProductionRankedProjectionErrorV1>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match result {
-        Err(ProductionRankedProjectionErrorV1::Incomplete(detail)) => {
-            incomplete.get_or_insert(detail);
+        Err(
+            error @ (ProductionRankedProjectionErrorV1::Incomplete(_)
+            | ProductionRankedProjectionErrorV1::UnresolvedCallableEffect { .. }
+            | ProductionRankedProjectionErrorV1::UnresolvedDropEffect { .. }),
+        ) => {
+            incomplete.get_or_insert(error);
             Ok(())
         }
         result => result,
@@ -20492,10 +20674,12 @@ fn project_terminator_accesses(
             next_value,
             ranked_ir,
         ),
-        SemanticTerminatorKindV1::Drop { .. } => {
-            Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a drop terminator before exact drop-glue memory-effect summaries are available",
-            ))
+        SemanticTerminatorKindV1::Drop { drop_glue, .. } => {
+            Err(ProductionRankedProjectionErrorV1::UnresolvedDropEffect {
+                block: block_index,
+                source,
+                drop_glue: drop_glue.index(),
+            })
         }
         SemanticTerminatorKindV1::Assert { condition, .. } => project_operand_read(
             types,
@@ -20625,7 +20809,14 @@ fn project_direct_call_accesses(
     ) {
         return Ok(());
     }
-    require_bounds_neutral_callable(callables, callable_effects, call.callee())?;
+    require_bounds_neutral_callable(
+        callables,
+        callable_effects,
+        call.callee(),
+        block_index,
+        source,
+        false,
+    )?;
     for argument in call.arguments() {
         project_operand_read(
             types,
@@ -20689,7 +20880,14 @@ fn project_tail_call_accesses(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    require_bounds_neutral_callable(callables, callable_effects, call.callee())?;
+    require_bounds_neutral_callable(
+        callables,
+        callable_effects,
+        call.callee(),
+        block_index,
+        source,
+        true,
+    )?;
     for argument in call.arguments() {
         project_operand_read(
             types,
@@ -20716,6 +20914,9 @@ fn require_bounds_neutral_callable(
     callables: &[SemanticCallableDeclV1],
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     callable: SemanticCallableIdV1,
+    block: usize,
+    source: SemanticSourceProvenanceV1,
+    tail: bool,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match callables.get(callable.index() as usize) {
         Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) => Ok(()),
@@ -20727,9 +20928,14 @@ fn require_bounds_neutral_callable(
         Some(
             SemanticCallableDeclV1::Defined { .. } | SemanticCallableDeclV1::DeviceFfiImport { .. },
         )
-        | None => Err(ProductionRankedProjectionErrorV1::Incomplete(
-            "a call terminator before exact callable memory-effect summaries are available",
-        )),
+        | None => Err(
+            ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
+                block,
+                source,
+                callee: callable.index(),
+                tail,
+            },
+        ),
     }
 }
 
@@ -26306,32 +26512,51 @@ mod tests {
             SemanticUnwindActionV1::Unreachable,
         )
         .unwrap();
-        assert_unsupported(
-            audit_function(&projection_function(vec![block(
-                42,
-                vec![],
-                SemanticTerminatorKindV1::Call(call),
-            )])),
+        let call_error = audit_function(&projection_function(vec![block(
+            42,
+            vec![],
+            SemanticTerminatorKindV1::Call(call),
+        )]))
+        .unwrap_err();
+        assert!(matches!(
+            &call_error,
+            ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
+                block: 0,
+                callee: 0,
+                tail: false,
+                ..
+            }
+        ));
+        assert!(call_error.to_string().contains(
             "a call terminator before exact callable memory-effect summaries are available",
-        );
+        ));
 
         let edge = SemanticControlFlowEdgeV1::new(
             SemanticEdgeRoleV1::DropReturn,
             SemanticBlockIdV1::from_index(0),
         );
-        assert_unsupported(
-            audit_function(&projection_function(vec![block(
-                43,
-                vec![],
-                SemanticTerminatorKindV1::Drop {
-                    place: scalar_place(),
-                    drop_glue: SemanticFunctionIdV1::from_index(0),
-                    target: edge,
-                    unwind: SemanticUnwindActionV1::Unreachable,
-                },
-            )])),
+        let drop_error = audit_function(&projection_function(vec![block(
+            43,
+            vec![],
+            SemanticTerminatorKindV1::Drop {
+                place: scalar_place(),
+                drop_glue: SemanticFunctionIdV1::from_index(0),
+                target: edge,
+                unwind: SemanticUnwindActionV1::Unreachable,
+            },
+        )]))
+        .unwrap_err();
+        assert!(matches!(
+            &drop_error,
+            ProductionRankedProjectionErrorV1::UnresolvedDropEffect {
+                block: 0,
+                drop_glue: 0,
+                ..
+            }
+        ));
+        assert!(drop_error.to_string().contains(
             "a drop terminator before exact drop-glue memory-effect summaries are available",
-        );
+        ));
     }
 
     #[test]
@@ -26440,6 +26665,30 @@ mod tests {
             source_label(SemanticSourceProvenanceV1::unavailable()),
             "Rust source location unavailable",
         );
+    }
+
+    #[test]
+    fn unresolved_callable_diagnostic_retains_available_source_provenance() {
+        let origin = SemanticSourceOriginV1::new(
+            SemanticSourceFileIdentityV1::from_sha256(bytes(0xab)),
+            100,
+            120,
+            37,
+            11,
+            37,
+            31,
+        )
+        .unwrap();
+        let error = ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
+            block: 19,
+            source: SemanticSourceProvenanceV1::new(Some(origin), Some(origin)),
+            callee: 23,
+            tail: false,
+        };
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("semantic block bb19"));
+        assert!(diagnostic.contains("Rust source abababababab:37:11"));
+        assert!(diagnostic.contains("callable 23"));
     }
 
     fn tensor_operand(local: u32) -> SemanticOperandV1 {
@@ -31148,6 +31397,474 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum RelationalNestedFlatIndexHostilityV1 {
+        Exact,
+        ExactSwappedProducts,
+        WrongDimensionUpper,
+        WrongDimensionStride,
+        MissingInnerBound,
+        WrongInnerBound,
+        MissingDimensionAssertion,
+        MissingOuterWitness,
+        MissingInnerProductAssertion,
+        MissingBaseAssertion,
+        MissingFirstAssertion,
+        ExtraTailReachesStride,
+        RedefinedInnerAfterGuard,
+        RedefinedUpperBetweenDimensionAndGuard,
+        RedefinedUpperAfterGuard,
+        RedefinedStrideBetweenProducts,
+        RedefinedLaneAfterGuard,
+        EscapedInner,
+        EscapedUpper,
+        EscapedStride,
+        EscapedLane,
+    }
+
+    fn relational_nested_flat_index_function(
+        hostility: RelationalNestedFlatIndexHostilityV1,
+    ) -> SemanticFunctionDeclV1 {
+        let dimension_upper = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::WrongDimensionUpper
+        ) {
+            6
+        } else {
+            4
+        };
+        let dimension_stride = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::WrongDimensionStride
+        ) {
+            8
+        } else {
+            7
+        };
+        let inner_bound = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::WrongInnerBound
+        ) {
+            6
+        } else {
+            4
+        };
+        let tail = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::ExtraTailReachesStride
+        ) {
+            5
+        } else {
+            4
+        };
+        let swapped_products = matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::ExactSwappedProducts
+        );
+        let (dimension_left, dimension_right) = if swapped_products {
+            (dimension_stride, dimension_upper)
+        } else {
+            (dimension_upper, dimension_stride)
+        };
+        let (inner_left, inner_right) = if swapped_products { (7, 3) } else { (3, 7) };
+        let mut dimension_statements = vec![
+            typed_assignment(
+                7,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 8, 8)),
+            ),
+            typed_assignment(
+                8,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 9, 8)),
+            ),
+            typed_assignment(
+                9,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 4, 8)),
+            ),
+            typed_assignment(
+                10,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, tail, 8)),
+            ),
+        ];
+        let escaped = match hostility {
+            RelationalNestedFlatIndexHostilityV1::EscapedInner => Some(3),
+            RelationalNestedFlatIndexHostilityV1::EscapedUpper => Some(4),
+            RelationalNestedFlatIndexHostilityV1::EscapedStride => Some(7),
+            RelationalNestedFlatIndexHostilityV1::EscapedLane => Some(5),
+            _ => None,
+        };
+        if let Some(local) = escaped {
+            dimension_statements.push(typed_assignment(
+                26,
+                U64_POINTER_TYPE,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: typed_place(local, U64_TYPE),
+                },
+            ));
+        }
+        dimension_statements.push(typed_assignment(
+            11,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                SemanticCheckedBinaryOpV1::Multiply,
+                typed_operand(dimension_left, U64_TYPE),
+                typed_operand(dimension_right, U64_TYPE),
+            )),
+        ));
+
+        let dimension_terminator = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::MissingDimensionAssertion
+        ) {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1))
+        } else {
+            checked_overflow_terminator(
+                11,
+                SemanticBinaryOpV1::Multiply,
+                typed_operand(dimension_left, U64_TYPE),
+                typed_operand(dimension_right, U64_TYPE),
+                1,
+            )
+        };
+        let outer_terminator = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::MissingOuterWitness
+        ) {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2))
+        } else {
+            checked_overflow_terminator(
+                13,
+                SemanticBinaryOpV1::Multiply,
+                typed_operand(2, U64_TYPE),
+                typed_operand(12, U64_TYPE),
+                2,
+            )
+        };
+        let mut outer_statements = vec![typed_assignment(
+            12,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(checked_field_operand(11, 0, U64_TYPE)),
+        )];
+        if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::RedefinedUpperBetweenDimensionAndGuard
+        ) {
+            outer_statements.push(typed_assignment(
+                4,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+            ));
+        }
+        outer_statements.push(typed_assignment(
+            13,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                SemanticCheckedBinaryOpV1::Multiply,
+                typed_operand(2, U64_TYPE),
+                typed_operand(12, U64_TYPE),
+            )),
+        ));
+        let (row_guard, row_terminator) =
+            strict_success_guard_v1(14, 1, 2, 3, 11, StrictSuccessFormV1::LessThan);
+        let (inner_guard, inner_terminator) =
+            strict_success_guard_v1(15, 3, inner_bound, 4, 11, StrictSuccessFormV1::LessThan);
+        let (lane_guard, lane_terminator) =
+            strict_success_guard_v1(16, 5, 9, 5, 11, StrictSuccessFormV1::LessThan);
+
+        let mut inner_product_statements = vec![typed_assignment(
+            18,
+            U64_TYPE,
+            SemanticRvalueKindV1::Use(checked_field_operand(17, 0, U64_TYPE)),
+        )];
+        if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::RedefinedInnerAfterGuard
+        ) {
+            inner_product_statements.push(typed_assignment(
+                3,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(2, U64_TYPE)),
+            ));
+        }
+        if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::RedefinedUpperAfterGuard
+        ) {
+            inner_product_statements.push(typed_assignment(
+                4,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(6, U64_TYPE)),
+            ));
+        }
+        if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::RedefinedStrideBetweenProducts
+        ) {
+            inner_product_statements.push(typed_assignment(
+                7,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(8, U64_TYPE)),
+            ));
+        }
+        if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::RedefinedLaneAfterGuard
+        ) {
+            inner_product_statements.push(typed_assignment(
+                5,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_operand(8, U64_TYPE)),
+            ));
+        }
+        inner_product_statements.push(typed_assignment(
+            19,
+            CHECKED_U64_TYPE,
+            SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                SemanticCheckedBinaryOpV1::Multiply,
+                typed_operand(inner_left, U64_TYPE),
+                typed_operand(inner_right, U64_TYPE),
+            )),
+        ));
+        let inner_product_terminator = if matches!(
+            hostility,
+            RelationalNestedFlatIndexHostilityV1::MissingInnerProductAssertion
+        ) {
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 7))
+        } else {
+            checked_overflow_terminator(
+                19,
+                SemanticBinaryOpV1::Multiply,
+                typed_operand(inner_left, U64_TYPE),
+                typed_operand(inner_right, U64_TYPE),
+                7,
+            )
+        };
+
+        projection_function_with_locals(
+            vec![
+                block(230, dimension_statements, dimension_terminator),
+                block(231, outer_statements, outer_terminator),
+                block(232, vec![row_guard], row_terminator),
+                block(
+                    233,
+                    if matches!(
+                        hostility,
+                        RelationalNestedFlatIndexHostilityV1::MissingInnerBound
+                    ) {
+                        vec![]
+                    } else {
+                        vec![inner_guard]
+                    },
+                    if matches!(
+                        hostility,
+                        RelationalNestedFlatIndexHostilityV1::MissingInnerBound
+                    ) {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 4))
+                    } else {
+                        inner_terminator
+                    },
+                ),
+                block(234, vec![lane_guard], lane_terminator),
+                block(
+                    235,
+                    vec![typed_assignment(
+                        17,
+                        CHECKED_U64_TYPE,
+                        SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                            SemanticCheckedBinaryOpV1::Multiply,
+                            typed_operand(1, U64_TYPE),
+                            typed_operand(12, U64_TYPE),
+                        )),
+                    )],
+                    checked_overflow_terminator(
+                        17,
+                        SemanticBinaryOpV1::Multiply,
+                        typed_operand(1, U64_TYPE),
+                        typed_operand(12, U64_TYPE),
+                        6,
+                    ),
+                ),
+                block(236, inner_product_statements, inner_product_terminator),
+                block(
+                    237,
+                    vec![
+                        typed_assignment(
+                            20,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(checked_field_operand(19, 0, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            21,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    typed_operand(18, U64_TYPE),
+                                    typed_operand(20, U64_TYPE),
+                                ),
+                            ),
+                        ),
+                    ],
+                    if matches!(
+                        hostility,
+                        RelationalNestedFlatIndexHostilityV1::MissingBaseAssertion
+                    ) {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 8))
+                    } else {
+                        checked_overflow_terminator(
+                            21,
+                            SemanticBinaryOpV1::Add,
+                            typed_operand(18, U64_TYPE),
+                            typed_operand(20, U64_TYPE),
+                            8,
+                        )
+                    },
+                ),
+                block(
+                    238,
+                    vec![
+                        typed_assignment(
+                            22,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(checked_field_operand(21, 0, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            23,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    typed_operand(22, U64_TYPE),
+                                    typed_operand(5, U64_TYPE),
+                                ),
+                            ),
+                        ),
+                    ],
+                    if matches!(
+                        hostility,
+                        RelationalNestedFlatIndexHostilityV1::MissingFirstAssertion
+                    ) {
+                        SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 9))
+                    } else {
+                        checked_overflow_terminator(
+                            23,
+                            SemanticBinaryOpV1::Add,
+                            typed_operand(22, U64_TYPE),
+                            typed_operand(5, U64_TYPE),
+                            9,
+                        )
+                    },
+                ),
+                block(
+                    239,
+                    vec![
+                        typed_assignment(
+                            24,
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(checked_field_operand(23, 0, U64_TYPE)),
+                        ),
+                        typed_assignment(
+                            25,
+                            CHECKED_U64_TYPE,
+                            SemanticRvalueKindV1::CheckedBinary(
+                                SemanticCheckedBinaryRvalueV1::new(
+                                    SemanticCheckedBinaryOpV1::Add,
+                                    typed_operand(24, U64_TYPE),
+                                    typed_operand(10, U64_TYPE),
+                                ),
+                            ),
+                        ),
+                    ],
+                    checked_overflow_terminator(
+                        25,
+                        SemanticBinaryOpV1::Add,
+                        typed_operand(24, U64_TYPE),
+                        typed_operand(10, U64_TYPE),
+                        10,
+                    ),
+                ),
+                block(240, vec![], SemanticTerminatorKindV1::Return),
+                block(241, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(230, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(231, U64_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(232, U64_TYPE, SemanticLocalRoleV1::Argument(1)),
+                local(233, U64_TYPE, SemanticLocalRoleV1::Argument(2)),
+                local(234, U64_TYPE, SemanticLocalRoleV1::Argument(3)),
+                local(235, U64_TYPE, SemanticLocalRoleV1::Argument(4)),
+                local(236, U64_TYPE, SemanticLocalRoleV1::Argument(5)),
+                local(237, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(238, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(239, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(240, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(241, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(242, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(243, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(244, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(245, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(246, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(247, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(248, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(249, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(250, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(251, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(252, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(253, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(254, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(255, CHECKED_U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(229, U64_POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
+    #[test]
+    fn relational_nested_flat_index_requires_matching_dimensions_and_custody() {
+        let exact =
+            relational_nested_flat_index_function(RelationalNestedFlatIndexHostilityV1::Exact);
+        assert!(proves_nested_flat_index_fixture_v1(&exact, 8));
+        assert!(proves_nested_flat_index_fixture_v1(&exact, 9));
+        let swapped = relational_nested_flat_index_function(
+            RelationalNestedFlatIndexHostilityV1::ExactSwappedProducts,
+        );
+        assert!(proves_nested_flat_index_fixture_v1(&swapped, 8));
+        assert!(proves_nested_flat_index_fixture_v1(&swapped, 9));
+
+        for hostility in [
+            RelationalNestedFlatIndexHostilityV1::WrongDimensionUpper,
+            RelationalNestedFlatIndexHostilityV1::WrongDimensionStride,
+            RelationalNestedFlatIndexHostilityV1::MissingInnerBound,
+            RelationalNestedFlatIndexHostilityV1::WrongInnerBound,
+            RelationalNestedFlatIndexHostilityV1::MissingDimensionAssertion,
+            RelationalNestedFlatIndexHostilityV1::MissingOuterWitness,
+            RelationalNestedFlatIndexHostilityV1::MissingInnerProductAssertion,
+            RelationalNestedFlatIndexHostilityV1::MissingBaseAssertion,
+            RelationalNestedFlatIndexHostilityV1::MissingFirstAssertion,
+            RelationalNestedFlatIndexHostilityV1::ExtraTailReachesStride,
+            RelationalNestedFlatIndexHostilityV1::RedefinedInnerAfterGuard,
+            RelationalNestedFlatIndexHostilityV1::RedefinedUpperBetweenDimensionAndGuard,
+            RelationalNestedFlatIndexHostilityV1::RedefinedUpperAfterGuard,
+            RelationalNestedFlatIndexHostilityV1::RedefinedStrideBetweenProducts,
+            RelationalNestedFlatIndexHostilityV1::RedefinedLaneAfterGuard,
+            RelationalNestedFlatIndexHostilityV1::EscapedInner,
+            RelationalNestedFlatIndexHostilityV1::EscapedUpper,
+            RelationalNestedFlatIndexHostilityV1::EscapedStride,
+            RelationalNestedFlatIndexHostilityV1::EscapedLane,
+        ] {
+            assert!(
+                !proves_nested_flat_index_fixture_v1(
+                    &relational_nested_flat_index_function(hostility),
+                    9,
+                ),
+                "{hostility:?} authenticated a substituted relational flat-index proof",
+            );
+        }
+    }
+
     #[test]
     fn nested_flat_index_path_is_fail_closed_at_depth_and_type_boundaries() {
         let function = nested_flat_index_function(NestedFlatIndexHostilityV1::Exact);
@@ -35032,6 +35749,7 @@ mod tests {
                 &mut work,
             )
             .unwrap()
+            .empty_eligible
         );
         let assertion = SemanticTerminatorKindV1::Assert {
             condition: typed_operand(0, BOOL_TYPE),
@@ -35053,6 +35771,7 @@ mod tests {
                 &mut work,
             )
             .unwrap()
+            .empty_eligible
         );
 
         let plain = |ty| {
@@ -35157,6 +35876,7 @@ mod tests {
                     &mut work,
                 )
                 .unwrap()
+                .empty_eligible
             );
         }
     }
@@ -35187,6 +35907,9 @@ mod tests {
                 &callables,
                 &summaries,
                 SemanticCallableIdV1::from_index(1),
+                0,
+                SemanticSourceProvenanceV1::unavailable(),
+                false,
             )
             .is_ok()
         );
@@ -35662,6 +36385,63 @@ mod tests {
 
         assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
         assert!(summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0)));
+    }
+
+    #[test]
+    fn geometry_wrappers_are_empty_but_never_deterministic_scalar() {
+        for operation in [
+            SemanticCompilerIntrinsicOperationV1::GridDimension(SemanticAxisV1::X),
+            SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(SemanticAxisV1::X),
+        ] {
+            for function in [
+                scalar_summary_calling_helper(172, 1),
+                scalar_summary_tail_calling_helper(173, 1),
+            ] {
+                let functions = vec![function];
+                let callables = vec![
+                    SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+                    compiler_intrinsic_callable(operation),
+                ];
+                let summaries = derive_defined_callable_empty_effect_summaries_v1(
+                    &projection_types(),
+                    &functions,
+                    &callables,
+                )
+                .unwrap();
+
+                assert!(summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+                assert!(
+                    !summaries
+                        .is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0),)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_geometry_context_and_effect_intrinsics_remain_rejected() {
+        for operation in [
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex(SemanticAxisV1::X),
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+        ] {
+            let functions = vec![scalar_summary_calling_helper(174, 1)];
+            let callables = vec![
+                SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+                compiler_intrinsic_callable(operation),
+            ];
+            let summaries = derive_defined_callable_empty_effect_summaries_v1(
+                &projection_types(),
+                &functions,
+                &callables,
+            )
+            .unwrap();
+
+            assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+            assert!(
+                !summaries
+                    .is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0),)
+            );
+        }
     }
 
     #[test]
