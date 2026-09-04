@@ -85,7 +85,7 @@ pub fn row_softmax_general_v1(
     // The second uniform reduction forms the row's FP32 normalizer.
     let mut local_sum = 0.0_f32;
     // The row-striped capability clips the logical edge and proves unique stores.
-    component = 0;
+    let mut component = 0;
     while component < 64 {
         let column = lane + component * 64;
         local_sum += math.exp_f32(input.load_or(row, column, f32::NEG_INFINITY) - maximum);
@@ -93,7 +93,7 @@ pub fn row_softmax_general_v1(
     }
     let denominator = subgroup.subgroup_reduce_sum_f32::<64>(local_sum);
 
-    component = 0;
+    let mut component = 0;
     while component < 64 {
         if let Some(element) = output.get_row_striped_2d_mut(
             &output_stripe,
