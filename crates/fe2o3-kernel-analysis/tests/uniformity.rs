@@ -58,8 +58,12 @@ fn add(id: u32, lhs: u32, rhs: u32) -> Operation {
 }
 
 fn binary(id: u32, op: BinaryOp, lhs: u32, rhs: u32) -> Operation {
+    binary_with_type(id, op, lhs, rhs, Type::INDEX)
+}
+
+fn binary_with_type(id: u32, op: BinaryOp, lhs: u32, rhs: u32, ty: Type) -> Operation {
     Operation::effect_free(
-        ValueDef::new(ValueId(id), Type::INDEX),
+        ValueDef::new(ValueId(id), ty),
         OperationKind::Binary {
             op,
             lhs: ValueId(lhs),
@@ -863,6 +867,612 @@ fn workgroup_quotient_accepts_only_value_preserving_unsigned_cast_chains() {
 }
 
 #[test]
+fn workgroup_quotient_accepts_production_usize_bitcast_through_an_ssa_carrier() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        cast(1, CastKind::Bitcast, 0, Type::Scalar(ScalarType::U64)),
+        constant(2, Constant::U64(64)),
+        constant(3, Constant::U64(0)),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(1), ValueId(2)],
+    });
+
+    let mut carried = BasicBlock::new(BlockId(1));
+    carried.parameters.extend([
+        ValueDef::new(ValueId(10), Type::Scalar(ScalarType::U64)),
+        ValueDef::new(ValueId(11), Type::Scalar(ScalarType::U64)),
+    ]);
+    carried.operations.extend([
+        binary_with_type(12, BinaryOp::Divide, 10, 11, Type::Scalar(ScalarType::U64)),
+        compare(13, 12, 3),
+    ]);
+    carried.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(13),
+        then_target: BlockId(2),
+        then_arguments: vec![],
+        else_target: BlockId(3),
+        else_arguments: vec![],
+    });
+    let mut barrier = returning(2);
+    barrier.operations.push(workgroup_barrier());
+
+    let function = function(vec![], vec![entry, carried, barrier, returning(3)]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_workgroup_quotient_usize_transport");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(10)), Variation::Varying);
+    assert_eq!(report.value(ValueId(12)), Variation::WorkgroupUniform);
+    assert_eq!(
+        report.block_control(BlockId(2)),
+        Variation::WorkgroupUniform
+    );
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn workgroup_quotient_usize_transport_rejects_other_casts_and_malformed_types() {
+    let global_x = IntrinsicKind::InvocationIndex {
+        kind: IndexKind::Global,
+        axis: Axis::X,
+    };
+    let mut entry = returning(0);
+    entry.operations = vec![
+        intrinsic(0, global_x),
+        constant(1, Constant::U64(64)),
+        cast(2, CastKind::Bitcast, 0, Type::Scalar(ScalarType::U64)),
+        binary_with_type(3, BinaryOp::Divide, 2, 1, Type::Scalar(ScalarType::U64)),
+        cast(4, CastKind::ZeroExtend, 0, Type::Scalar(ScalarType::U64)),
+        binary_with_type(5, BinaryOp::Divide, 4, 1, Type::Scalar(ScalarType::U64)),
+        cast(6, CastKind::Bitcast, 0, Type::Scalar(ScalarType::I64)),
+        constant(7, Constant::I64(64)),
+        binary_with_type(8, BinaryOp::Divide, 6, 7, Type::Scalar(ScalarType::I64)),
+        Operation::effect_free(
+            ValueDef::new(ValueId(9), Type::INDEX),
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: ValueId(0),
+                to: Type::Scalar(ScalarType::U64),
+            },
+        ),
+        constant(10, Constant::Index(64)),
+        binary(11, BinaryOp::Divide, 9, 10),
+        Operation::effect_free(
+            ValueDef::new(ValueId(12), Type::Scalar(ScalarType::U64)),
+            OperationKind::Intrinsic(IntrinsicOperation::new(global_x, Type::INDEX)),
+        ),
+        cast(13, CastKind::Bitcast, 12, Type::INDEX),
+        binary(14, BinaryOp::Divide, 13, 10),
+        Operation::effect_free(
+            ValueDef::new(ValueId(15), Type::INDEX),
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                global_x,
+                Type::Scalar(ScalarType::U64),
+            )),
+        ),
+        binary(16, BinaryOp::Divide, 15, 10),
+        Operation::new(
+            vec![
+                ValueDef::new(ValueId(17), Type::Scalar(ScalarType::U64)),
+                ValueDef::new(ValueId(18), Type::Scalar(ScalarType::U64)),
+            ],
+            OperationKind::Cast {
+                kind: CastKind::Bitcast,
+                value: ValueId(0),
+                to: Type::Scalar(ScalarType::U64),
+            },
+        ),
+        binary_with_type(19, BinaryOp::Divide, 17, 1, Type::Scalar(ScalarType::U64)),
+    ];
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_workgroup_quotient_usize_transport_hostile");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(3)), Variation::WorkgroupUniform);
+    for value in [5, 8, 11, 14, 16, 19] {
+        assert_eq!(report.value(ValueId(value)), Variation::Varying);
+    }
+}
+
+#[test]
+fn workgroup_quotient_accepts_trivial_ssa_carriers_across_a_divergent_diamond() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::U8(64)),
+        constant(2, Constant::Index(0)),
+        compare(3, 0, 2),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(3),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(0), ValueId(1)],
+        else_target: BlockId(2),
+        else_arguments: vec![ValueId(0), ValueId(1)],
+    });
+
+    let mut left = BasicBlock::new(BlockId(1));
+    left.parameters.extend([
+        ValueDef::new(ValueId(10), Type::INDEX),
+        ValueDef::new(ValueId(11), Type::Scalar(ScalarType::U8)),
+    ]);
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(10), ValueId(11)],
+    });
+
+    let mut right = BasicBlock::new(BlockId(2));
+    right.parameters.extend([
+        ValueDef::new(ValueId(12), Type::INDEX),
+        ValueDef::new(ValueId(13), Type::Scalar(ScalarType::U8)),
+    ]);
+    right.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(12), ValueId(13)],
+    });
+
+    let mut merge = BasicBlock::new(BlockId(3));
+    merge.parameters.extend([
+        ValueDef::new(ValueId(20), Type::INDEX),
+        ValueDef::new(ValueId(21), Type::Scalar(ScalarType::U8)),
+    ]);
+    merge.operations.extend([
+        zero_extend_to_index(22, 21),
+        binary(23, BinaryOp::Divide, 20, 22),
+        compare(24, 23, 2),
+    ]);
+    merge.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(24),
+        then_target: BlockId(4),
+        then_arguments: vec![],
+        else_target: BlockId(5),
+        else_arguments: vec![],
+    });
+    let mut barrier = returning(4);
+    barrier.operations.push(workgroup_barrier());
+
+    let function = function(
+        vec![],
+        vec![entry, left, right, merge, barrier, returning(5)],
+    );
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_workgroup_quotient_ssa_diamond");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(20)), Variation::Varying);
+    assert_eq!(report.value(ValueId(21)), Variation::GridUniform);
+    assert_eq!(report.value(ValueId(23)), Variation::WorkgroupUniform);
+    assert_eq!(
+        report.block_control(BlockId(4)),
+        Variation::WorkgroupUniform
+    );
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn wave64_quotient_accepts_direct_self_loop_ssa_carriers() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        constant(1, Constant::Index(64)),
+        constant(2, Constant::Bool(false)),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(0), ValueId(1)],
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header.parameters.extend([
+        ValueDef::new(ValueId(10), Type::INDEX),
+        ValueDef::new(ValueId(11), Type::INDEX),
+    ]);
+    header.operations.push(binary(12, BinaryOp::Divide, 10, 11));
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(10), ValueId(11)],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+
+    let function = function(vec![], vec![entry, header, returning(2)]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(256, 1, 1));
+    let mut module = Module::new("uniformity_wave64_quotient_ssa_self_loop");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(12)), Variation::SubgroupUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn quotient_ssa_carriers_reject_different_origins_wrong_axes_and_wrong_divisors() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        intrinsic(
+            1,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::Y,
+            },
+        ),
+        constant(2, Constant::Index(64)),
+        constant(3, Constant::Index(32)),
+        constant(4, Constant::Index(0)),
+        compare(5, 0, 4),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(5),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(0), ValueId(2), ValueId(0), ValueId(3), ValueId(1)],
+        else_target: BlockId(2),
+        else_arguments: vec![ValueId(1), ValueId(2), ValueId(0), ValueId(3), ValueId(1)],
+    });
+
+    let branch_parameters = || {
+        vec![
+            ValueDef::new(ValueId(10), Type::INDEX),
+            ValueDef::new(ValueId(11), Type::INDEX),
+            ValueDef::new(ValueId(12), Type::INDEX),
+            ValueDef::new(ValueId(13), Type::INDEX),
+            ValueDef::new(ValueId(14), Type::INDEX),
+        ]
+    };
+    let mut left = BasicBlock::new(BlockId(1));
+    left.parameters = branch_parameters();
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![
+            ValueId(10),
+            ValueId(11),
+            ValueId(12),
+            ValueId(13),
+            ValueId(14),
+        ],
+    });
+    let mut right = BasicBlock::new(BlockId(2));
+    right.parameters = vec![
+        ValueDef::new(ValueId(15), Type::INDEX),
+        ValueDef::new(ValueId(16), Type::INDEX),
+        ValueDef::new(ValueId(17), Type::INDEX),
+        ValueDef::new(ValueId(18), Type::INDEX),
+        ValueDef::new(ValueId(19), Type::INDEX),
+    ];
+    right.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![
+            ValueId(15),
+            ValueId(16),
+            ValueId(17),
+            ValueId(18),
+            ValueId(19),
+        ],
+    });
+
+    let mut merge = BasicBlock::new(BlockId(3));
+    merge.parameters = (20..=24)
+        .map(|value| ValueDef::new(ValueId(value), Type::INDEX))
+        .collect();
+    merge.operations.extend([
+        binary(25, BinaryOp::Divide, 20, 21),
+        binary(26, BinaryOp::Divide, 22, 23),
+        binary(27, BinaryOp::Divide, 24, 21),
+        compare(28, 25, 4),
+    ]);
+    merge.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(28),
+        then_target: BlockId(4),
+        then_arguments: vec![],
+        else_target: BlockId(5),
+        else_arguments: vec![],
+    });
+    let mut barrier = returning(4);
+    barrier.operations.push(workgroup_barrier());
+
+    let function = function(
+        vec![],
+        vec![entry, left, right, merge, barrier, returning(5)],
+    );
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D2 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_quotient_ssa_hostile");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    for value in 25..=27 {
+        assert_eq!(report.value(ValueId(value)), Variation::Varying);
+    }
+    assert_eq!(report.block_control(BlockId(4)), Variation::Varying);
+    assert!(report.diagnostics().iter().any(|diagnostic| matches!(
+        diagnostic,
+        Diagnostic::DivergentBarrier {
+            block: BlockId(4),
+            ..
+        }
+    )));
+}
+
+#[test]
+fn quotient_ssa_carriers_reject_malformed_incoming_edge_arities() {
+    for (module_name, arguments) in [
+        ("uniformity_quotient_ssa_short_edge", vec![ValueId(0)]),
+        (
+            "uniformity_quotient_ssa_extra_edge",
+            vec![ValueId(0), ValueId(1), ValueId(1)],
+        ),
+    ] {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations.extend([
+            intrinsic(
+                0,
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::X,
+                },
+            ),
+            constant(1, Constant::Index(64)),
+        ]);
+        entry.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments,
+        });
+
+        let mut carried = BasicBlock::new(BlockId(1));
+        carried.parameters.extend([
+            ValueDef::new(ValueId(10), Type::INDEX),
+            ValueDef::new(ValueId(11), Type::INDEX),
+        ]);
+        carried
+            .operations
+            .push(binary(12, BinaryOp::Divide, 10, 11));
+        carried.terminator = Some(Terminator::Return { values: vec![] });
+
+        let function = function(vec![], vec![entry, carried]);
+        let mut kernel = Kernel::new(
+            "test_kernel",
+            function.id.clone(),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        let mut module = Module::new(module_name);
+        module.functions.push(function.clone());
+        module.kernels.push(kernel);
+
+        let report = analyze_kernel_entry(&module, &function);
+        assert_eq!(report.value(ValueId(12)), Variation::Varying);
+        assert!(report.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            Diagnostic::Unsupported {
+                reason: UnsupportedReason::MalformedControlFlow,
+                ..
+            }
+        )));
+    }
+}
+
+#[test]
+fn quotient_ssa_carriers_reject_index_u64_type_confusion() {
+    for (module_name, carrier_type, global_value, divisor_value) in [
+        (
+            "uniformity_quotient_ssa_index_to_u64_edge",
+            Type::Scalar(ScalarType::U64),
+            ValueId(0),
+            ValueId(1),
+        ),
+        (
+            "uniformity_quotient_ssa_u64_to_index_edge",
+            Type::INDEX,
+            ValueId(2),
+            ValueId(3),
+        ),
+    ] {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations.extend([
+            intrinsic(
+                0,
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::X,
+                },
+            ),
+            constant(1, Constant::Index(64)),
+            cast(2, CastKind::Bitcast, 0, Type::Scalar(ScalarType::U64)),
+            constant(3, Constant::U64(64)),
+        ]);
+        entry.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![global_value, divisor_value],
+        });
+
+        let mut carried = BasicBlock::new(BlockId(1));
+        carried.parameters.extend([
+            ValueDef::new(ValueId(10), carrier_type.clone()),
+            ValueDef::new(ValueId(11), carrier_type.clone()),
+        ]);
+        carried
+            .operations
+            .push(binary_with_type(12, BinaryOp::Divide, 10, 11, carrier_type));
+        carried.terminator = Some(Terminator::Return { values: vec![] });
+
+        let function = function(vec![], vec![entry, carried]);
+        let mut kernel = Kernel::new(
+            "test_kernel",
+            function.id.clone(),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        let mut module = Module::new(module_name);
+        module.functions.push(function.clone());
+        module.kernels.push(kernel);
+
+        let report = analyze_kernel_entry(&module, &function);
+        assert_eq!(report.value(ValueId(12)), Variation::Varying);
+        assert!(report.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            Diagnostic::Unsupported {
+                reason: UnsupportedReason::MalformedControlFlow,
+                ..
+            }
+        )));
+    }
+}
+
+#[test]
+fn cfg_edges_validate_function_parameter_types() {
+    for (carrier_type, expected, malformed) in [
+        (Type::Scalar(ScalarType::U64), Variation::GridUniform, false),
+        (Type::INDEX, Variation::Varying, true),
+    ] {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![ValueId(0)],
+        });
+        let mut carried = BasicBlock::new(BlockId(1));
+        carried
+            .parameters
+            .push(ValueDef::new(ValueId(10), carrier_type));
+        carried.terminator = Some(Terminator::Return { values: vec![] });
+        let kernel = Function::definition(
+            "test",
+            Signature::new(vec![Type::Scalar(ScalarType::U64)], vec![]),
+            vec![ValueId(0)],
+            vec![entry, carried],
+        );
+
+        let report = analyze_as_kernel(&kernel);
+        assert_eq!(report.value(ValueId(10)), expected);
+        assert_eq!(
+            report.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::Unsupported {
+                    reason: UnsupportedReason::MalformedControlFlow,
+                    ..
+                }
+            )),
+            malformed,
+        );
+    }
+}
+
+#[test]
+fn quotient_constant_proof_authenticates_the_exact_cast_source_result() {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        intrinsic(
+            0,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Global,
+                axis: Axis::X,
+            },
+        ),
+        Operation::new(
+            vec![
+                ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U8)),
+                ValueDef::new(ValueId(2), Type::Scalar(ScalarType::I8)),
+            ],
+            OperationKind::Constant(Constant::U8(64)),
+        ),
+        zero_extend_to_index(3, 2),
+        binary(4, BinaryOp::Divide, 0, 3),
+    ]);
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+
+    let function = function(vec![], vec![entry]);
+    let mut kernel = Kernel::new(
+        "test_kernel",
+        function.id.clone(),
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("uniformity_quotient_exact_constant_result");
+    module.functions.push(function.clone());
+    module.kernels.push(kernel);
+
+    let report = analyze_kernel_entry(&module, &function);
+    assert_eq!(report.value(ValueId(4)), Variation::Varying);
+}
+
+#[test]
 fn workgroup_contract_selection_rejects_conflicting_duplicate_entries() {
     let mut entry = returning(0);
     entry.operations = vec![
@@ -1074,6 +1684,333 @@ fn dominated_private_slot_round_trip_preserves_kernel_parameter_uniformity() {
     assert_eq!(report.value(ValueId(2)), Variation::GridUniform);
     assert_eq!(report.block_control(BlockId(1)), Variation::GridUniform);
     assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn exact_private_slot_carriers_preserve_uniformity_across_a_divergent_diamond() {
+    let pointer_type = Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        private_slot(1),
+        private_store(1, 0),
+        intrinsic(
+            2,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(3, Constant::Index(0)),
+        compare(4, 2, 3),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(4),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(1)],
+        else_target: BlockId(2),
+        else_arguments: vec![ValueId(1)],
+    });
+
+    let mut left = BasicBlock::new(BlockId(1));
+    left.parameters
+        .push(ValueDef::new(ValueId(10), pointer_type.clone()));
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(10)],
+    });
+    let mut right = BasicBlock::new(BlockId(2));
+    right
+        .parameters
+        .push(ValueDef::new(ValueId(11), pointer_type.clone()));
+    right.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![ValueId(11)],
+    });
+
+    let mut merge = BasicBlock::new(BlockId(3));
+    merge
+        .parameters
+        .push(ValueDef::new(ValueId(12), pointer_type));
+    merge.operations.extend([
+        private_load(13, 12),
+        constant(14, Constant::Index(0)),
+        compare(15, 13, 14),
+    ]);
+    merge.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(15),
+        then_target: BlockId(4),
+        then_arguments: vec![],
+        else_target: BlockId(5),
+        else_arguments: vec![],
+    });
+    let mut barrier = returning(4);
+    barrier.operations.push(workgroup_barrier());
+    let kernel = function(
+        vec![ValueId(0)],
+        vec![entry, left, right, merge, barrier, returning(5)],
+    );
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(13)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(4)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn exact_private_slot_carriers_preserve_uniformity_across_a_self_loop() {
+    let pointer_type = Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        private_slot(1),
+        private_store(1, 0),
+        constant(2, Constant::Bool(false)),
+    ]);
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(1)],
+    });
+
+    let mut header = BasicBlock::new(BlockId(1));
+    header
+        .parameters
+        .push(ValueDef::new(ValueId(10), pointer_type));
+    header
+        .operations
+        .extend([private_load(11, 10), workgroup_barrier()]);
+    header.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(10)],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let kernel = function(vec![ValueId(0)], vec![entry, header, returning(2)]);
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(11)), Variation::GridUniform);
+    assert_eq!(report.block_control(BlockId(1)), Variation::GridUniform);
+    assert!(report.diagnostics().is_empty());
+}
+
+#[test]
+fn private_slot_carriers_require_exact_types_across_the_entire_chain() {
+    let pointer_type = Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite);
+    let mismatched_pointer_type = Type::pointer(
+        Type::Scalar(ScalarType::U64),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+
+    for (middle_type, expected, malformed) in [
+        (pointer_type.clone(), Variation::GridUniform, false),
+        (mismatched_pointer_type, Variation::Varying, true),
+    ] {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations.extend([
+            constant(0, Constant::Index(7)),
+            private_slot(1),
+            private_store(1, 0),
+        ]);
+        entry.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: vec![ValueId(1)],
+        });
+
+        let mut middle = BasicBlock::new(BlockId(1));
+        middle
+            .parameters
+            .push(ValueDef::new(ValueId(10), middle_type));
+        middle.terminator = Some(Terminator::Branch {
+            target: BlockId(2),
+            arguments: vec![ValueId(10)],
+        });
+
+        let mut load = BasicBlock::new(BlockId(2));
+        load.parameters
+            .push(ValueDef::new(ValueId(20), pointer_type.clone()));
+        load.operations.push(private_load(21, 20));
+        load.terminator = Some(Terminator::Return { values: vec![] });
+
+        let kernel = function(vec![], vec![entry, middle, load]);
+        let report = analyze_as_kernel(&kernel);
+        assert_eq!(report.value(ValueId(21)), expected);
+        assert_eq!(
+            report.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::Unsupported {
+                    reason: UnsupportedReason::MalformedControlFlow,
+                    ..
+                }
+            )),
+            malformed,
+        );
+    }
+}
+
+#[test]
+fn mixed_private_slot_carriers_do_not_mint_uniform_loads() {
+    let pointer_type = Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.extend([
+        private_slot(1),
+        private_slot(2),
+        private_store(1, 0),
+        private_store(2, 0),
+        intrinsic(
+            3,
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::Local,
+                axis: Axis::X,
+            },
+        ),
+        constant(4, Constant::Index(0)),
+        compare(5, 3, 4),
+    ]);
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(5),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(1)],
+        else_target: BlockId(1),
+        else_arguments: vec![ValueId(2)],
+    });
+    let mut merge = BasicBlock::new(BlockId(1));
+    merge
+        .parameters
+        .push(ValueDef::new(ValueId(10), pointer_type));
+    merge.operations.push(private_load(11, 10));
+    merge.terminator = Some(Terminator::Return { values: vec![] });
+    let kernel = function(vec![ValueId(0)], vec![entry, merge]);
+
+    let report = analyze_as_kernel(&kernel);
+
+    assert_eq!(report.value(ValueId(11)), Variation::Varying);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PrivateCarrierEscapeCase {
+    Call,
+    GetElementPointer,
+    Return,
+    StoreAsValue,
+    MalformedTransport,
+}
+
+#[test]
+fn private_slot_carriers_escape_through_every_non_transport_use() {
+    let pointer_type = Type::pointer(Type::INDEX, AddressSpace::Private, AccessMode::ReadWrite);
+    for case in [
+        PrivateCarrierEscapeCase::Call,
+        PrivateCarrierEscapeCase::GetElementPointer,
+        PrivateCarrierEscapeCase::Return,
+        PrivateCarrierEscapeCase::StoreAsValue,
+        PrivateCarrierEscapeCase::MalformedTransport,
+    ] {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations.extend([
+            constant(0, Constant::Index(7)),
+            private_slot(1),
+            private_store(1, 0),
+        ]);
+        entry.terminator = Some(Terminator::Branch {
+            target: BlockId(1),
+            arguments: if matches!(case, PrivateCarrierEscapeCase::MalformedTransport) {
+                vec![ValueId(1), ValueId(1)]
+            } else {
+                vec![ValueId(1)]
+            },
+        });
+
+        let mut carried = BasicBlock::new(BlockId(1));
+        carried
+            .parameters
+            .push(ValueDef::new(ValueId(10), pointer_type.clone()));
+        match case {
+            PrivateCarrierEscapeCase::Call => carried.operations.push(Operation::new(
+                vec![],
+                OperationKind::Call {
+                    callee: FunctionId::new("opaque_private_pointer_user"),
+                    arguments: vec![ValueId(10)],
+                },
+            )),
+            PrivateCarrierEscapeCase::GetElementPointer => {
+                carried.operations.extend([
+                    constant(21, Constant::Index(0)),
+                    Operation::effect_free(
+                        ValueDef::new(ValueId(22), pointer_type.clone()),
+                        OperationKind::GetElementPointer {
+                            base: ValueId(10),
+                            offset: ValueId(21),
+                        },
+                    ),
+                ]);
+            }
+            PrivateCarrierEscapeCase::StoreAsValue => {
+                carried.operations.extend([
+                    Operation::effect_free(
+                        ValueDef::new(
+                            ValueId(21),
+                            Type::pointer(
+                                pointer_type.clone(),
+                                AddressSpace::Private,
+                                AccessMode::ReadWrite,
+                            ),
+                        ),
+                        OperationKind::Alloca {
+                            element: pointer_type.clone(),
+                            count: None,
+                            address_space: AddressSpace::Private,
+                            alignment: 8,
+                        },
+                    ),
+                    Operation::new(
+                        vec![],
+                        OperationKind::Store {
+                            pointer: ValueId(21),
+                            value: ValueId(10),
+                            access: MemoryAccess::new(AddressSpace::Private, 8),
+                        },
+                    ),
+                ]);
+            }
+            PrivateCarrierEscapeCase::Return | PrivateCarrierEscapeCase::MalformedTransport => {}
+        }
+        carried.operations.push(private_load(20, 10));
+        carried.terminator = Some(if matches!(case, PrivateCarrierEscapeCase::Return) {
+            Terminator::Return {
+                values: vec![ValueId(10)],
+            }
+        } else {
+            Terminator::Return { values: vec![] }
+        });
+        let result_types = matches!(case, PrivateCarrierEscapeCase::Return)
+            .then(|| vec![pointer_type.clone()])
+            .unwrap_or_default();
+        let kernel = Function::definition(
+            "test",
+            Signature::new(vec![], result_types),
+            vec![],
+            vec![entry, carried],
+        );
+
+        let report = analyze_as_kernel(&kernel);
+
+        assert_eq!(
+            report.value(ValueId(20)),
+            Variation::Varying,
+            "case {case:?} retained a private-slot summary after escape"
+        );
+        if matches!(case, PrivateCarrierEscapeCase::MalformedTransport) {
+            assert!(report.diagnostics().iter().any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::Unsupported {
+                    reason: UnsupportedReason::MalformedControlFlow,
+                    ..
+                }
+            )));
+        }
+    }
 }
 
 #[test]

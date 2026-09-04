@@ -28,7 +28,8 @@ Related documents:
 The permanent architecture has one executable route:
 
 ```text
-Rust kernel collection -> semantic MIR -> verified middle end -> Kernel IR
+Rust kernel collection -> semantic MIR -> verified middle end -> semantic SSA plan
+    -> ranked verification -> Kernel IR
     -> typed AMDGPU/LLVM lowering -> upstream LLVM/LLD -> inspected HSACO
     -> Worker V3 verification -> generated typed pure-KFD dispatch
 ```
@@ -59,6 +60,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   evidence, verified Kernel IR, target-gated AMDGPU lowering, and exact
   fail-closed profiles for representative elementwise, scalar GEMM, tiled GEMM,
   row softmax, Flash Attention, MoE, Wave64 collective, LDS, and atomic slices.
+- Every admitted production semantic function passes through the shared,
+  bounded SSA planner before ranked verification. `ProductionSemanticSsaOwnerV1`
+  retains the unchanged semantic MIR, one deterministic plan per function, and
+  aggregate resource accounting; `SsaSemanticMirStage` makes that step a
+  production typestate requirement rather than an optional analysis.
 - The production-directed finalizer runs outside rustc and uses one pinned
   upstream LLVM build for module linking, optimization, target-machine object
   emission, and in-process LLD linking. It neither uses COMGR nor shells out to
@@ -492,7 +498,7 @@ continue to point downward according to the machine-checked
 | Component | Responsibility | Must not own |
 |:--|:--|:--|
 | `fe2o3-rustc-front` | Kernel discovery, final mono-item collection, `rustc_public` conversion, source spans | GPU lowering, host launch packing |
-| `fe2o3-mir-model` | Pliron-independent semantic MIR types, executable schema/wire, control-flow analysis, and mem2reg | Pliron handles, AMD lowering, runtime handles |
+| `fe2o3-mir-model` | Pliron-independent semantic MIR types, executable schema/wire, control-flow analysis, mem2reg, and bounded generic SSA construction plans | Pliron handles, AMD lowering, runtime handles |
 | `dialect-mir` | Historical MIR compatibility facade; optional bounded Pliron `mir.*` shell behind feature `pliron` | Durable MIR identity, production selection, target lowering |
 | `fe2o3-kernel-ir` | Canonical target-neutral Kernel IR, SIMT domains, effects, address spaces, barriers, atomics, and capabilities | Pliron identity, Rust compiler types, HIP calls |
 | `fe2o3-pliron` | Pinned Pliron context, private context identities, registration, and bounded pass-plan validation | Generic pass execution over contextless pointers, fe2o3 dialect semantics, production selection, artifact authority |
@@ -572,9 +578,110 @@ the information needed to implement Rust correctly:
 - constants, statics, relocations, and source locations;
 - volatile and atomic memory semantics.
 
-Import starts with one memory slot per non-zero-sized MIR local. A verified
-mem2reg pass then creates SSA values. This keeps cross-block MIR translation
-simple while avoiding permanent stack traffic.
+SSA construction uses a mixed value/memory classification. Locals whose
+storage is not observed are eligible for value SSA; address-taken, aliased,
+atomic, volatile, projection-mutated, and drop-observed storage is retained
+rather than forced into SSA. This boundary is conservative: retention is valid
+even when a stronger alias or escape analysis could prove promotion safe.
+
+The Pliron-independent planner computes reachable blocks, liveness, dominators,
+pruned iterated dominance-frontier merge placement, sparse block transport
+arguments, event definitions and uses, and per-edge arguments. Values defined
+in dominating blocks remain direct SSA references; only live merge values
+become block parameters. Inverse per-variable
+definition rows and generation-marked IDF worklists avoid a promoted-variable
+by block scan during merge placement. One linear table maps semantic variable IDs into a compact
+promoted-variable domain; block bit matrices, edge-definition indices, and
+value-resolution scratch use only that compact domain, so nonpromotable locals
+are not multiplied by the block count. Edge identity includes its source
+ordinal, so duplicate source-to-target edges and call normal/unwind results
+remain distinct. Edge-local definitions apply only to their exact edge.
+Irreducible reachable control flow is accepted;
+unreachable blocks are accounted against input limits and then omitted from
+the plan. A promoted use or required edge transport without a path-available
+definition fails closed. Separate limits cover variables, blocks, edges,
+events, edge definitions, output items, storage words, and work units, and all
+resource arithmetic is checked. The production adapter adds deterministic,
+identity-bound resource bounds for borrow classification, implicit entries,
+retained-local analysis, and worst-case partial-move state cloning; aggregate
+limits cover those phases as well as the generic planner.
+
+Promotion is paired with two semantic certificates. The partial-move
+certificate tracks canonical field, constant-index, and enum-downcast paths,
+merges maybe-moved state at joins, reaches a loop fixed point, and permits an
+exact field reinitialization without clearing a moved sibling. Reading a moved
+path or its parent fails closed; unions, dynamic indices, missing layout/type
+evidence, and paths outside the closed model are rejected. The transparent
+borrow certificate is use-sensitive: a borrow may stop making its source local
+storage-observable only when its result has exactly one direct consumer at the
+exact accepted argument of a registered compiler intrinsic. Escapes, ordinary
+calls, multiple consumers, and nonmatching arguments retain the source in
+memory.
+
+Optimized rustc MIR may erase the producer of the ambient
+`WorkgroupLdsScope` zero-sized value while retaining its intrinsic borrows. A
+narrow entry-value rule handles only that case. It requires the exact scope
+type named by `DynamicLdsExactCurrent` or `WorkgroupPipelineCreate`, an
+inhabited zero-sized aggregate layout with no padding, a promotable temporary,
+no definition, kill, or edge definition, and only certified transparent uses.
+The selected local is recorded in the SSA identity. An unrelated same-shaped
+zero-sized type is not accepted.
+
+`ProductionSemanticSsaOwnerV1` adapts every admitted semantic function to that
+planner before ranked verification, retains the unchanged source owner, binds
+each function identity to its plan identity and resource report, and requires
+exact replay before custody advances. KIR lowering independently replays the
+plan, creates block parameters and exact predecessor arguments from it, retains
+direct dominating definitions by SSA identity, and seeds only certified
+implicit entry values. Capability values do not lose their proof metadata at
+those block boundaries: witnesses and pointers transport their scalar or
+pointer representation together with the statically checked index-space,
+disjointness, access, and availability contract. Bounded exact-origin
+resolution follows whole-value aliases and matching enum payload paths through
+rustc's nested `Option`, `Result`, and `ControlFlow` desugaring. Substitution of
+an ordinary scalar, a mismatched payload, or a witness from another index space
+is rejected. Enum-variant facts are keyed by exact SSA value, renamed only by
+certified edge transport, intersected at joins, and invalidated by calls or
+conflicting predecessors; the fixed-point work and retained fact storage have
+separate checked limits.
+
+The Ranked V1 path remains an index-only analysis overlay; it is not the
+general SSA representation. Unresolved multiway semantic switches are
+projected into a bounded, source-order-preserving binary analysis tree. The
+projection deduplicates parallel successors, accounts for every synthetic
+block, and forwards the exact live induction arguments through the tree.
+
+Dereferenced external memory and the authenticated LDS path continue through
+their existing memory operations. Address-observable retained locals with an
+exact scalar or metadata-free 32/64-bit pointer layout are materialized as
+private KIR slots. Entry allocas, argument initialization, loads, stores,
+moves, storage lifetime events, and call destinations use a bounded
+definite-initialization analysis; the slots are memory state and never become
+block parameters. Aggregates, dynamically sized values, fat pointers, and
+layouts that KIR cannot represent exactly still fail closed before lowering.
+Retained slot allocations remain `ReadWrite`; shared borrows and immutable
+address-of operations create an explicit KIR V11 same-pointee, same-space
+`ReadWrite`-to-`ReadOnly` restriction. Formal allocation derivation follows
+that restricted view as pointer identity, while any later unsupported escape
+still fails closed. General Rust reference helpers require provenance-keyed
+address-space specialization before a private retained borrow can cross a
+helper ABI; that specialization is not implemented, and this architecture does
+not claim all-Rust lowering.
+Likewise, a generic Semantic MIR CFG whose entry has a backedge requires a
+synthetic preheader that production lowering does not yet materialize. Valid
+rustc MIR cannot have a predecessor of `START_BLOCK`; the importer rechecks
+that invariant and charges every inspected edge to its cumulative validation
+work budget. The generic planner continues to model cyclic entries explicitly,
+including their external entry definitions. These are explicit representation
+boundaries, not traversal-order fallbacks.
+
+This establishes deterministic structural SSA planning, semantic-side
+certification, and KIR replay, not a machine-checked semantic-refinement
+theorem. The compiler is not formally verified by this work. It also does not
+imply that every Rust frontend construct is accepted: unsupported MIR is still
+rejected at the appropriate import or lowering boundary. "General" here means
+that the planner is CFG- and kernel-independent across the modeled semantic
+MIR, not that all Rust language features have lowering support.
 
 ### `gpu.*`: target-neutral kernel IR
 

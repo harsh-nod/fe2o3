@@ -146,6 +146,7 @@ impl ProductionTargetBoundKernelIrV1 {
         digest.update([match neutral_kernel_ir.version() {
             ProductionReplayKernelIrVersionV1::V8 => 8,
             ProductionReplayKernelIrVersionV1::V9 => 9,
+            ProductionReplayKernelIrVersionV1::V11 => 11,
         }]);
         for identity in [neutral_kernel_ir, target_bound_kernel_ir] {
             digest.update(identity.sha256());

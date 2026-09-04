@@ -41,7 +41,7 @@ impl KernelIrPlironProductionPassV2 {
         self.pliron().name()
     }
 
-    const fn pliron(self) -> fe2o3_pliron::PlironOptimizationPassV1 {
+    pub(crate) const fn pliron(self) -> fe2o3_pliron::PlironOptimizationPassV1 {
         use fe2o3_pliron::PlironOptimizationPassV1;
 
         match self {
@@ -225,6 +225,26 @@ pub struct KernelIrPlironOptimizationReportV2 {
 }
 
 impl KernelIrPlironOptimizationReportV2 {
+    pub(crate) fn from_parts(
+        policy: KernelIrPlironOptimizationPolicyV2,
+        limits: KernelIrPlironOptimizationLimitsV2,
+        initial_epoch: u64,
+        final_epoch: u64,
+        bridge: KirBridgeOptimizedReceiptV1,
+        pliron: PlironOptimizationReportV1,
+        passes: Vec<KernelIrPlironOptimizationPassReportV2>,
+    ) -> Self {
+        Self {
+            policy,
+            limits,
+            initial_epoch,
+            final_epoch,
+            bridge,
+            pliron,
+            passes,
+        }
+    }
+
     pub const fn policy(&self) -> KernelIrPlironOptimizationPolicyV2 {
         self.policy
     }
@@ -565,7 +585,7 @@ fn optimize_kernel_ir_module_with_policy_at_epoch_v2(
     })
 }
 
-fn epoch_reports(
+pub(crate) fn epoch_reports(
     reports: &[PlironOptimizationPassReportV1],
     initial_epoch: u64,
 ) -> Result<(Vec<KernelIrPlironOptimizationPassReportV2>, u64), KernelIrPlironOptimizationErrorV2> {

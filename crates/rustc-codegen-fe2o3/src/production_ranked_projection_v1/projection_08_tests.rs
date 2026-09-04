@@ -827,6 +827,232 @@
         )
     }
 
+    fn explicit_multi_switch(successor_count: usize) -> SemanticFunctionDeclV1 {
+        assert!(successor_count >= 2);
+        let explicit = (0..successor_count - 1)
+            .map(|index| {
+                SemanticSwitchTargetV1::new(
+                    index as u128,
+                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, index as u32 + 1),
+                )
+            })
+            .collect();
+        let mut blocks = Vec::with_capacity(successor_count + 1);
+        blocks.push(block(
+            205,
+            vec![],
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: tensor_operand(1),
+                targets: SemanticSwitchTargetsV1::new(
+                    explicit,
+                    cfg_edge(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        successor_count as u32,
+                    ),
+                )
+                .unwrap(),
+            },
+        ));
+        blocks.extend(
+            (0..successor_count)
+                .map(|_| block(206, vec![], SemanticTerminatorKindV1::Return)),
+        );
+        projection_function_with_locals(
+            blocks,
+            vec![
+                local(205, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(206, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
+    fn parallel_switch(
+        explicit_count: usize,
+        explicit_target: u32,
+        otherwise_target: u32,
+        otherwise_terminator: SemanticTerminatorKindV1,
+    ) -> SemanticFunctionDeclV1 {
+        assert!(explicit_count > 0);
+        let explicit = (0..explicit_count)
+            .map(|value| {
+                SemanticSwitchTargetV1::new(
+                    value as u128,
+                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, explicit_target),
+                )
+            })
+            .collect();
+        projection_function_with_locals(
+            vec![
+                block(
+                    207,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: tensor_operand(1),
+                        targets: SemanticSwitchTargetsV1::new(
+                            explicit,
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, otherwise_target),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(208, vec![], SemanticTerminatorKindV1::Return),
+                block(209, vec![], otherwise_terminator),
+            ],
+            vec![
+                local(207, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(208, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
+    #[test]
+    fn unresolved_multiway_switch_preserves_distinct_successors_in_source_order() {
+        let function = explicit_multi_switch(4);
+        assert_eq!(
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
+            ProjectedCfgTerminatorV1::AnalysisMultiSplit {
+                blocks: vec![1, 2, 3, 4],
+            }
+        );
+    }
+
+    #[test]
+    fn unresolved_switch_coalesces_parallel_targets_without_losing_order() {
+        let function = explicit_binary_switch_with_targets(
+            [0, 1],
+            [1, 1],
+            vec![],
+            SemanticTerminatorKindV1::Return,
+        );
+        assert_eq!(
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
+            ProjectedCfgTerminatorV1::AnalysisSplit {
+                first_block: 1,
+                second_block: 3,
+            }
+        );
+
+        let function = explicit_binary_switch_with_targets(
+            [0, 1],
+            [3, 3],
+            vec![],
+            SemanticTerminatorKindV1::Return,
+        );
+        assert_eq!(
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
+            ProjectedCfgTerminatorV1::Branch(3)
+        );
+
+        let function = parallel_switch(1, 1, 1, SemanticTerminatorKindV1::Return);
+        assert_eq!(
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
+            ProjectedCfgTerminatorV1::Branch(1)
+        );
+
+        let function = explicit_binary_switch_with_targets(
+            [0, 1],
+            [1, 1],
+            vec![],
+            SemanticTerminatorKindV1::Unreachable,
+        );
+        assert_eq!(
+            projected_cfg_terminator(
+                &function,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
+            ProjectedCfgTerminatorV1::Branch(1)
+        );
+    }
+
+    #[test]
+    fn raw_parallel_switch_edges_are_bounded_separately_from_unique_successors() {
+        let collapsed = parallel_switch(
+            MAX_RANKED_BOUNDS_BLOCKS + 1,
+            1,
+            2,
+            SemanticTerminatorKindV1::Return,
+        );
+        assert_eq!(
+            projected_cfg_terminator(
+                &collapsed,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            )
+            .unwrap(),
+            ProjectedCfgTerminatorV1::AnalysisSplit {
+                first_block: 1,
+                second_block: 2,
+            }
+        );
+
+        let excessive = parallel_switch(
+            MAX_RANKED_BOUNDS_EDGES,
+            1,
+            2,
+            SemanticTerminatorKindV1::Return,
+        );
+        assert!(matches!(
+            projected_cfg_terminator(
+                &excessive,
+                0,
+                &[],
+                false,
+                &[],
+                &[const { None }; 2],
+                &[],
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "analysis switch edge count exceeds the ranked edge limit"
+            ))
+        ));
+    }
+
     #[test]
     fn explicit_zero_one_switch_elides_only_an_empty_unreachable_fallback() {
         let function = explicit_binary_switch_with_fallback(

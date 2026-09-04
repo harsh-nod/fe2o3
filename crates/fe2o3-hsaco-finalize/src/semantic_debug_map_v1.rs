@@ -800,19 +800,15 @@ fn multi_root_finalizer_view_v1<'a>(
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let mut synthetic_by_block = payload
-            .synthetics()
-            .iter()
-            .map(|record| {
-                (
-                    (record.semantic_function(), record.kernel_ir_block()),
-                    *record,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
+        let mut synthetic_by_block = BTreeMap::<_, Vec<_>>::new();
+        for record in payload.synthetics() {
+            synthetic_by_block
+                .entry((record.semantic_function(), record.kernel_ir_block()))
+                .or_default()
+                .push(*record);
+        }
         if statement_by_site.len() != payload.statements().len()
             || terminator_by_site.len() != payload.terminators().len()
-            || synthetic_by_block.len() != payload.synthetics().len()
         {
             return Err(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence);
         }
@@ -831,19 +827,34 @@ fn multi_root_finalizer_view_v1<'a>(
                     .find(|block| block.id.0 == kir_block_id)
                     .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
                 let mut next = 0_u32;
-                if let Some(synthetic) =
+                if let Some(mut synthetics) =
                     synthetic_by_block.remove(&(semantic_function, kir_block_id))
                 {
-                    if synthetic.rule()
-                        != MultiRootCorrespondenceSyntheticRuleV2::EnumPayloadStorage
-                        || synthetic.first_operation() != 0
-                        || synthetic.operation_count() == 0
-                    {
-                        return Err(
+                    synthetics.sort_unstable_by_key(|span| span.first_operation());
+                    let mut previous_rule = None;
+                    for synthetic in synthetics {
+                        let rule_order = match synthetic.rule() {
+                            MultiRootCorrespondenceSyntheticRuleV2::RetainedLocalStorage => 0_u8,
+                            MultiRootCorrespondenceSyntheticRuleV2::EnumPayloadStorage => 1_u8,
+                            MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap => {
+                                return Err(
+                                    FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence,
+                                );
+                            }
+                        };
+                        if synthetic.first_operation() != next
+                            || synthetic.operation_count() == 0
+                            || previous_rule.is_some_and(|previous| previous >= rule_order)
+                        {
+                            return Err(
+                                FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence,
+                            );
+                        }
+                        next = next.checked_add(synthetic.operation_count()).ok_or(
                             FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence,
-                        );
+                        )?;
+                        previous_rule = Some(rule_order);
                     }
-                    next = synthetic.operation_count();
                 }
                 for statement in 0..source.statements().len() {
                     let statement = u32::try_from(statement).map_err(|_| {
@@ -892,10 +903,11 @@ fn multi_root_finalizer_view_v1<'a>(
                 let synthetic = synthetic_by_block
                     .remove(&(semantic_function, block.id.0))
                     .ok_or(FinalizedSemanticDebugMapErrorV1::InvalidSemanticCorrespondence)?;
-                if synthetic.rule()
-                    != MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap
-                    || synthetic.first_operation() != 0
-                    || synthetic.operation_count() as usize != block.operations.len()
+                if synthetic.len() != 1
+                    || synthetic[0].rule()
+                        != MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap
+                    || synthetic[0].first_operation() != 0
+                    || synthetic[0].operation_count() as usize != block.operations.len()
                     || block.operations.is_empty()
                     || block.terminator.is_none()
                 {

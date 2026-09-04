@@ -5,19 +5,21 @@ explicit subset of verified canonical Kernel IR. The frozen
 `AdmittedSimulationModuleV1::admit` route consumes exact V7 custody;
 `admit_v9` consumes exact V9 custody for additive f32 wave collectives, and
 `admit_v10` consumes exact V10 custody for those collectives plus additive
-memory-intrinsic execution. Raw in-memory modules and other wire formats are
-not execution inputs. The production compiler's Bundle V4 exporter binds
-exact V7 KIR and its Bundle V5 exporter binds exact V10 KIR; neither bundle
-grants execution or hardware authority.
+memory-intrinsic execution. `admit_v11` consumes exact V11 custody, including
+the target-neutral pointer-access restriction operation. Raw in-memory modules
+and other wire formats are not execution inputs. The production compiler's
+Bundle V4 exporter binds exact V7 KIR, Bundle V5 binds exact V10 KIR, and the
+current Bundle V6 route binds exact V11 KIR. None grants execution or hardware
+authority.
 
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies V7, V9, and V10 separately, names those rows as declared tool-contract facts with no authority, and
+identifies V7, V9, V10, and V11 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,751,390 bytes and its regression test rejects
+compact V1 document is fixed at 4,779,513 bytes and its regression test rejects
 any unreviewed schema-size change.
 
 The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
@@ -27,6 +29,13 @@ that the ISA or hardware supports it, or that a physical execution was
 observed. Those remain separate compiler, artifact, runtime, and qualification
 contracts. In particular, V9/V10 f32 wave ownership must not be read as a
 `gfx942` hardware-availability claim.
+
+V11 `RestrictPointerAccess` preserves pointer identity, pointee type, and
+address space while changing only `ReadWrite` access to `ReadOnly`. Preflight
+rejects access widening, identity relabeling, write-only substitution, and any
+pointee or address-space change. Execution copies the pointer provenance and
+allocation identity while narrowing its access; it does not create Rust
+reference validity or aliasing evidence.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
@@ -178,7 +187,7 @@ event-sink failures, replay failures, and internal scheduler failures are typed
 boundaries rather than reduction targets.
 
 `SimulationFailureReductionReportV1` independently binds the admitted V7, V9,
-or V10 KIR identity, full structured request context, target, every simulation
+V10, or V11 KIR identity, full structured request context, target, every simulation
 and reduction limit, original schedule and decisions, minimized prefix,
 completed failure-terminating reproducer decisions, attempt coverage, exact
 failure fingerprint, and integrity identities. Its strict canonical JSON codec
@@ -251,7 +260,7 @@ generic-address-space atomics, all other external calls, generic barriers,
 legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
 non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
 operations, V7 memory intrinsics,
-V10 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
+V10/V11 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
 volatile access, target-layout mismatches, and inline assembly remain typed
 unsupported states. Pointer distance additionally rejects distinct logical
 allocations because the CPU model has no physical-address equality claim. F32 square root
@@ -263,8 +272,9 @@ GPU floating-point modes, GPU timing, GPU performance, or prove memory-model
 race freedom.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, or
-an exact V9/V10 owner with `AdmittedSimulationModuleV1::admit_v9` or
-`AdmittedSimulationModuleV1::admit_v10`, then
+an exact V9/V10/V11 owner with `AdmittedSimulationModuleV1::admit_v9`,
+`AdmittedSimulationModuleV1::admit_v10`, or
+`AdmittedSimulationModuleV1::admit_v11`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
 byte-addressed buffer arguments in `SimulationRequestV1`. Index scalars,
 buffers, and views are bound to the 32- or 64-bit layout used to construct them;

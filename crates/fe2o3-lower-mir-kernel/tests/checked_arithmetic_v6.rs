@@ -667,18 +667,15 @@ fn tuple_results_flow_independently_through_liveness_cfg_assert_and_switch() {
     assert_eq!(*condition, join.parameters[1].id);
     assert_eq!(*then_target, BlockId(7));
     assert_eq!(*else_target, BlockId(4));
-    assert_eq!(
-        else_arguments,
-        &vec![join.parameters[0].id, join.parameters[1].id]
-    );
+    assert!(else_arguments.is_empty());
 
     let switch = by_id(4);
-    assert_eq!(switch.parameters.len(), 2);
+    assert!(switch.parameters.is_empty());
     let Terminator::Switch { selector, .. } = switch.terminator.as_ref().unwrap() else {
         panic!("wrapped value must remain an integer switch selector");
     };
-    assert_eq!(*selector, switch.parameters[0].id);
-    assert_ne!(*selector, switch.parameters[1].id);
+    assert_eq!(*selector, join.parameters[0].id);
+    assert_ne!(*selector, join.parameters[1].id);
     assert_eq!(by_id(7).operations.len(), 1);
 
     let spans = lowered.correspondence().statement_operation_spans();
@@ -733,18 +730,22 @@ fn checked_lowering_is_deterministic_in_module_and_correspondence_order() {
 }
 
 #[test]
-fn checked_statement_operation_budget_is_exact_and_fail_closed() {
-    assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            constant_u32_owner(SemanticCheckedBinaryOpV1::Multiply),
-            ProductionSemanticKirLimitsV1::new_with_max_operations(1, 1, 1, 2),
+fn checked_statement_resource_budget_is_exact_and_fail_closed() {
+    let below = ProductionSemanticKirOwnerV1::try_lower(
+        constant_u32_owner(SemanticCheckedBinaryOpV1::Multiply),
+        ProductionSemanticKirLimitsV1::new_with_max_operations(1, 1, 1, 2),
+    );
+    assert!(
+        matches!(
+            below,
+            Err(ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::AnalysisWork,
+                actual: 3,
+                limit: 2,
+            })
         ),
-        Err(ProductionSemanticKirErrorV1::ResourceLimit {
-            resource: ProductionSemanticKirResourceV1::Operations,
-            actual: 3,
-            limit: 2,
-        })
-    ));
+        "unexpected below-boundary result: {below:?}"
+    );
 
     let exact = ProductionSemanticKirOwnerV1::try_lower(
         constant_u32_owner(SemanticCheckedBinaryOpV1::Multiply),

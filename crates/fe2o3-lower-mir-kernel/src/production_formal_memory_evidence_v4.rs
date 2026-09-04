@@ -116,6 +116,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         let kernel_ir_version = match reader.u16()? {
             8 => ProductionCanonicalKernelIrVersionV1::V8,
             9 => ProductionCanonicalKernelIrVersionV1::V9,
+            11 => ProductionCanonicalKernelIrVersionV1::V11,
             _ => return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidHeader),
         };
         if reader.u16()? != 0 {
@@ -387,6 +388,7 @@ fn encode(
         match canonical_kernel_ir.version() {
             ProductionCanonicalKernelIrVersionV1::V8 => 8,
             ProductionCanonicalKernelIrVersionV1::V9 => 9,
+            ProductionCanonicalKernelIrVersionV1::V11 => 11,
         },
     );
     push_u16(&mut bytes, 0);

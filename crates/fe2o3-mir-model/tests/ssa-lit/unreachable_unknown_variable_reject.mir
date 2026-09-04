@@ -1,0 +1,9 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA input site Event { block: SsaBlockIdV1(1), event: 0 } names variable 1, outside 0..1
+
+entry b0
+variables v0
+block b0
+block b1
+use v1

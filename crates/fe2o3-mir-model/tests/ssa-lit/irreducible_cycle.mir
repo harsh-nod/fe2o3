@@ -1,0 +1,24 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: rpo [b0,b1,b2,b3]
+// CHECK: block b1 live=[v0] merge=[] transport=[]
+// CHECK: block b2 live=[v0] merge=[] transport=[]
+// CHECK: block b3 live=[v0] merge=[] transport=[]
+// CHECK: event 0 use v0=d0
+// CHECK-NOT: REJECT
+
+entry b0
+variables v0
+entry-def v0
+block b0
+edge r1 b1
+edge r2 b2
+block b1
+use v0
+edge r1 b2
+block b2
+use v0
+edge r1 b1
+edge r2 b3
+block b3
+use v0

@@ -148,6 +148,9 @@ const fn source_isa_unavailable_code(
         ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9 => {
             "source_projection_for_kir_v9"
         }
+        ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV11 => {
+            "source_projection_for_kir_v11"
+        }
     }
 }
 

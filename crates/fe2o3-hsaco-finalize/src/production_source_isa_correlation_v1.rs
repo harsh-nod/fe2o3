@@ -39,6 +39,8 @@ pub enum ProductionSourceIsaCorrelationUnavailableV1 {
     /// unavailable. V1 validates the independent anchor/artifact path and refuses to infer V9
     /// source coordinates.
     SourceProjectionForKirV9,
+    /// Exact replay is KIR V11 and no exact V7 source projection exists.
+    SourceProjectionForKirV11,
 }
 
 #[derive(Debug)]
@@ -610,7 +612,11 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         let semantic_admission = self
             .admit_production_semantic_debug_map_v1()
             .map_err(ProductionSourceIsaCorrelationErrorV1::SemanticDebugMap)?;
-        if replay.structural_binding().version() == ProductionReplayKernelIrVersionV1::V9 {
+        let replay_version = replay.structural_binding().version();
+        if matches!(
+            replay_version,
+            ProductionReplayKernelIrVersionV1::V9 | ProductionReplayKernelIrVersionV1::V11
+        ) {
             return match semantic_admission {
                 ProductionFinalizedSemanticDebugAdmissionV1::Unavailable(reason)
                     if is_exact_v9_source_projection_gap(reason) => match self
@@ -619,7 +625,17 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                 {
                     ProductionSemanticAnchorAdmissionV1::Admitted(_) => {
                         Ok(UnboxedProductionSourceIsaCorrelationAdmissionV1::Unavailable(
-                            ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9,
+                            match replay_version {
+                                ProductionReplayKernelIrVersionV1::V9 => {
+                                    ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
+                                }
+                                ProductionReplayKernelIrVersionV1::V11 => {
+                                    ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV11
+                                }
+                                ProductionReplayKernelIrVersionV1::V8 => unreachable!(
+                                    "the source-projection branch admits only KIR V9 or V11"
+                                ),
+                            },
                         ))
                     }
                     ProductionSemanticAnchorAdmissionV1::Unavailable(reason) => {

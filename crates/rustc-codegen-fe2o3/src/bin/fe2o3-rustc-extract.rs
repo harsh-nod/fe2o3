@@ -30,6 +30,7 @@ const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2: &str = "FE2O3_EXTRACT_SIMULATION_BU
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
+const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 
 fn main() {
@@ -38,12 +39,14 @@ fn main() {
     let simulation_v3 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3);
     let simulation_v4 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4);
     let simulation_v5 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5);
+    let simulation_v6 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6);
     let (simulation_output, version) = match select_simulation_output(
         simulation_v1,
         simulation_v2,
         simulation_v3,
         simulation_v4,
         simulation_v5,
+        simulation_v6,
     ) {
         Ok(selected) => selected,
         Err(error) => {
@@ -116,6 +119,7 @@ enum ExtractionModeV1 {
     SimulationBundleV3(OsString),
     SimulationBundleV4(OsString),
     SimulationBundleV5(OsString),
+    SimulationBundleV6(OsString),
 }
 
 fn select_simulation_output(
@@ -124,36 +128,42 @@ fn select_simulation_output(
     v3: Option<OsString>,
     v4: Option<OsString>,
     v5: Option<OsString>,
+    v6: Option<OsString>,
 ) -> Result<(Option<OsString>, u16), String> {
     let count = usize::from(v1.is_some())
         + usize::from(v2.is_some())
         + usize::from(v3.is_some())
         + usize::from(v4.is_some())
-        + usize::from(v5.is_some());
+        + usize::from(v5.is_some())
+        + usize::from(v6.is_some());
     if count > 1 {
         return Err(format!(
-            "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4}, and {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5} are mutually exclusive"
+            "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4}, {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5}, and {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6} are mutually exclusive"
         ));
     }
-    match (v1, v2, v3, v4, v5) {
-        (Some(output), None, None, None, None) => Ok((Some(output), 1)),
-        (None, Some(output), None, None, None) if output.is_empty() => Err(format!(
+    match (v1, v2, v3, v4, v5, v6) {
+        (Some(output), None, None, None, None, None) => Ok((Some(output), 1)),
+        (None, Some(output), None, None, None, None) if output.is_empty() => Err(format!(
             "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2} must not be empty"
         )),
-        (None, Some(output), None, None, None) => Ok((Some(output), 2)),
-        (None, None, Some(output), None, None) if output.is_empty() => Err(format!(
+        (None, Some(output), None, None, None, None) => Ok((Some(output), 2)),
+        (None, None, Some(output), None, None, None) if output.is_empty() => Err(format!(
             "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3} must not be empty"
         )),
-        (None, None, Some(output), None, None) => Ok((Some(output), 3)),
-        (None, None, None, Some(output), None) if output.is_empty() => Err(format!(
+        (None, None, Some(output), None, None, None) => Ok((Some(output), 3)),
+        (None, None, None, Some(output), None, None) if output.is_empty() => Err(format!(
             "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4} must not be empty"
         )),
-        (None, None, None, Some(output), None) => Ok((Some(output), 4)),
-        (None, None, None, None, Some(output)) if output.is_empty() => Err(format!(
+        (None, None, None, Some(output), None, None) => Ok((Some(output), 4)),
+        (None, None, None, None, Some(output), None) if output.is_empty() => Err(format!(
             "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5} must not be empty"
         )),
-        (None, None, None, None, Some(output)) => Ok((Some(output), 5)),
-        (None, None, None, None, None) => Ok((None, 1)),
+        (None, None, None, None, Some(output), None) => Ok((Some(output), 5)),
+        (None, None, None, None, None, Some(output)) if output.is_empty() => Err(format!(
+            "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6} must not be empty"
+        )),
+        (None, None, None, None, None, Some(output)) => Ok((Some(output), 6)),
+        (None, None, None, None, None, None) => Ok((None, 1)),
         _ => unreachable!("multiple simulation output variables were rejected"),
     }
 }
@@ -166,6 +176,7 @@ fn select_simulation_mode(
         && let ExtractionModeV1::SimulationBundle(output) = &mut selected.mode
     {
         selected.mode = match version {
+            6 => ExtractionModeV1::SimulationBundleV6(std::mem::take(output)),
             5 => ExtractionModeV1::SimulationBundleV5(std::mem::take(output)),
             4 => ExtractionModeV1::SimulationBundleV4(std::mem::take(output)),
             3 => ExtractionModeV1::SimulationBundleV3(std::mem::take(output)),
@@ -517,6 +528,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::SimulationBundleV6(output) => {
+            rustc_codegen_fe2o3::run_production_simulation_bundle_extraction_driver_v6(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
     }
     if let Some(output) = selected.crate_binding_output {
         publish_selected_crate_binding_v1(&output, selected.crate_binding)?;
@@ -596,6 +613,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(output, Some(OsString::from("kernel-v2.fe2sim")));
@@ -607,14 +625,18 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .is_err()
         );
-        assert!(select_simulation_output(None, Some(OsString::new()), None, None, None).is_err());
+        assert!(
+            select_simulation_output(None, Some(OsString::new()), None, None, None, None).is_err()
+        );
         let (_, version) = select_simulation_output(
             None,
             None,
             Some(OsString::from("kernel-v3.fe2sim")),
+            None,
             None,
             None,
         )
@@ -626,9 +648,20 @@ mod tests {
             None,
             None,
             Some(OsString::from("kernel-v5.fe2sim")),
+            None,
         )
         .unwrap();
         assert_eq!(version, 5);
+        let (_, version) = select_simulation_output(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(OsString::from("kernel-v6.fe2sim")),
+        )
+        .unwrap();
+        assert_eq!(version, 6);
     }
 
     fn package_identity(version: &str, manifest_byte: u8) -> PortablePackageIdentityV1 {

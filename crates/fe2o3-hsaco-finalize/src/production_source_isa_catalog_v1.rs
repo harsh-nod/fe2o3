@@ -80,6 +80,7 @@ pub enum ProductionSourceIsaCatalogErrorV1 {
     NonCanonicalRecordOrder,
     ExactProjectionMismatch,
     SourceProjectionForKirV9Unavailable,
+    SourceProjectionForKirV11Unavailable,
     ResourceLimit,
     AllocationFailure,
 }
@@ -130,6 +131,7 @@ pub enum ProductionSourceIsaCatalogTargetV1 {
 pub enum ProductionSourceIsaCatalogKirVersionV1 {
     V8,
     V9,
+    V11,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1140,6 +1142,9 @@ impl ProductionSourceIsaCatalogV1 {
         if kir_version == ProductionSourceIsaCatalogKirVersionV1::V9 {
             return Err(ProductionSourceIsaCatalogErrorV1::SourceProjectionForKirV9Unavailable);
         }
+        if kir_version == ProductionSourceIsaCatalogKirVersionV1::V11 {
+            return Err(ProductionSourceIsaCatalogErrorV1::SourceProjectionForKirV11Unavailable);
+        }
         if decoder.take(6)?.iter().any(|byte| *byte != 0) {
             return Err(ProductionSourceIsaCatalogErrorV1::InvalidHeader);
         }
@@ -1525,6 +1530,7 @@ fn structural_snapshot(
     let kir_version = match binding.version() {
         ProductionReplayKernelIrVersionV1::V8 => ProductionSourceIsaCatalogKirVersionV1::V8,
         ProductionReplayKernelIrVersionV1::V9 => ProductionSourceIsaCatalogKirVersionV1::V9,
+        ProductionReplayKernelIrVersionV1::V11 => ProductionSourceIsaCatalogKirVersionV1::V11,
     };
     let neutral = binding.neutral_kernel_ir();
     let target_bound = binding.target_bound_kernel_ir();
@@ -1880,6 +1886,7 @@ fn encode_structural_binding(
     output.push(match binding.kir_version {
         ProductionSourceIsaCatalogKirVersionV1::V8 => 8,
         ProductionSourceIsaCatalogKirVersionV1::V9 => 9,
+        ProductionSourceIsaCatalogKirVersionV1::V11 => 11,
     });
     output.extend_from_slice(&[0; 6]);
     encode_catalog_content_identity(output, binding.neutral_kernel_ir);
@@ -2183,6 +2190,7 @@ fn decode_kir_version(
     match value {
         8 => Ok(ProductionSourceIsaCatalogKirVersionV1::V8),
         9 => Ok(ProductionSourceIsaCatalogKirVersionV1::V9),
+        11 => Ok(ProductionSourceIsaCatalogKirVersionV1::V11),
         _ => Err(ProductionSourceIsaCatalogErrorV1::InvalidStructuralBinding),
     }
 }
@@ -2758,6 +2766,14 @@ mod tests {
         assert!(matches!(
             InertProductionSourceIsaCatalogV1::from_canonical_bytes(&unavailable_v9),
             Err(ProductionSourceIsaCatalogErrorV1::SourceProjectionForKirV9Unavailable)
+        ));
+
+        let mut unavailable_v11 = base.clone();
+        unavailable_v11[217] = 11;
+        rehash(&mut unavailable_v11);
+        assert!(matches!(
+            InertProductionSourceIsaCatalogV1::from_canonical_bytes(&unavailable_v11),
+            Err(ProductionSourceIsaCatalogErrorV1::SourceProjectionForKirV11Unavailable)
         ));
 
         let mut invalid_kind = base.clone();

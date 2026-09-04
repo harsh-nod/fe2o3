@@ -939,39 +939,72 @@ fn validate_exact_operation_spans_v4(
                 .ok_or_else(|| structural_v4("corresponding KIR block is absent"))?;
             let mut next_operation = 0_usize;
 
-            if let Some(synthetic) = synthetics_by_block.remove(&(function_index, kir_block_id)) {
-                if synthetic.len() != 1
-                    || synthetic[0].rule() != MirToKirSyntheticRuleEvidenceV4::EnumPayloadStorage
-                    || synthetic[0].first_operation() != 0
-                    || synthetic[0].operation_count() == 0
-                {
-                    return Err(structural_v4(
-                        "mapped KIR block has invalid synthetic prologue coverage",
-                    ));
-                }
-                next_operation = checked_span_end_v4(
-                    synthetic[0].first_operation(),
-                    synthetic[0].operation_count(),
-                    target.operations.len(),
-                )?;
-                if !target.operations[..next_operation].iter().all(|operation| {
-                    matches!(
-                        operation.kind,
-                        OperationKind::Alloca {
-                            address_space: AddressSpace::Private,
-                            ..
-                        } | OperationKind::Load {
-                            access: MemoryAccess {
-                                address_space: AddressSpace::Private,
-                                ..
-                            },
-                            ..
+            if let Some(mut synthetics) =
+                synthetics_by_block.remove(&(function_index, kir_block_id))
+            {
+                synthetics.sort_unstable_by_key(|span| span.first_operation());
+                let mut previous_rule = None;
+                for synthetic in synthetics {
+                    let rule_order = match synthetic.rule() {
+                        MirToKirSyntheticRuleEvidenceV4::RetainedLocalStorage => 0_u8,
+                        MirToKirSyntheticRuleEvidenceV4::EnumPayloadStorage => 1_u8,
+                        MirToKirSyntheticRuleEvidenceV4::RuntimeAssertFailureTrap => {
+                            return Err(structural_v4(
+                                "mapped KIR block has runtime-assert synthetic custody",
+                            ));
                         }
-                    )
-                }) {
-                    return Err(structural_v4(
-                        "enum-payload synthetic span contains a non-private-storage operation",
-                    ));
+                    };
+                    if synthetic.operation_count() == 0
+                        || usize::try_from(synthetic.first_operation()) != Ok(next_operation)
+                        || previous_rule.is_some_and(|previous| previous >= rule_order)
+                    {
+                        return Err(structural_v4(
+                            "mapped KIR block has invalid synthetic prologue coverage",
+                        ));
+                    }
+                    let end = checked_span_end_v4(
+                        synthetic.first_operation(),
+                        synthetic.operation_count(),
+                        target.operations.len(),
+                    )?;
+                    let valid = target.operations[next_operation..end]
+                        .iter()
+                        .all(|operation| match synthetic.rule() {
+                            MirToKirSyntheticRuleEvidenceV4::RetainedLocalStorage => matches!(
+                                operation.kind,
+                                OperationKind::Alloca {
+                                    address_space: AddressSpace::Private,
+                                    ..
+                                } | OperationKind::Store {
+                                    access: MemoryAccess {
+                                        address_space: AddressSpace::Private,
+                                        ..
+                                    },
+                                    ..
+                                }
+                            ),
+                            MirToKirSyntheticRuleEvidenceV4::EnumPayloadStorage => matches!(
+                                operation.kind,
+                                OperationKind::Alloca {
+                                    address_space: AddressSpace::Private,
+                                    ..
+                                } | OperationKind::Load {
+                                    access: MemoryAccess {
+                                        address_space: AddressSpace::Private,
+                                        ..
+                                    },
+                                    ..
+                                }
+                            ),
+                            MirToKirSyntheticRuleEvidenceV4::RuntimeAssertFailureTrap => false,
+                        });
+                    if !valid {
+                        return Err(structural_v4(
+                            "synthetic prologue contains an operation outside its storage rule",
+                        ));
+                    }
+                    next_operation = end;
+                    previous_rule = Some(rule_order);
                 }
             }
 

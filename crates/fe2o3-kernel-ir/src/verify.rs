@@ -931,9 +931,24 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 let Some(from) = self.ty(*value).cloned() else {
                     return;
                 };
-                match (from.as_scalar(), to.as_scalar()) {
-                    (Some(from_scalar), Some(to_scalar)) => {
-                        if !valid_scalar_cast(*kind, from_scalar, to_scalar) {
+                match (kind, &from, to) {
+                    (
+                        CastKind::RestrictPointerAccess,
+                        Type::Pointer(from_pointer),
+                        Type::Pointer(to_pointer),
+                    ) if from_pointer.pointee == to_pointer.pointee
+                        && from_pointer.address_space == to_pointer.address_space
+                        && from_pointer.access == AccessMode::ReadWrite
+                        && to_pointer.access == AccessMode::ReadOnly => {}
+                    (CastKind::RestrictPointerAccess, _, _) => {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidCast,
+                            format!("invalid {kind:?} cast from {from:?} to {to:?}"),
+                        );
+                    }
+                    (_, Type::Scalar(from_scalar), Type::Scalar(to_scalar)) => {
+                        if !valid_scalar_cast(*kind, *from_scalar, *to_scalar) {
                             self.emit(
                                 location.clone(),
                                 DiagnosticCode::InvalidCast,
@@ -945,7 +960,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                         self.emit(
                             location.clone(),
                             DiagnosticCode::InvalidOperandType,
-                            format!("casts require scalar types, found {from:?} to {to:?}"),
+                            format!("casts require compatible scalar or pointer types, found {from:?} to {to:?}"),
                         );
                     }
                 }
@@ -2470,6 +2485,7 @@ fn valid_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType) -> bool {
     };
 
     match kind {
+        CastKind::RestrictPointerAccess => false,
         CastKind::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
         CastKind::ZeroExtend => {
             (from == ScalarType::Bool || (from.is_integer() && !from.is_signed_integer()))

@@ -1,0 +1,21 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: block b0 live=[v0] merge=[] transport=[]
+// CHECK: edge e0:0 role=r1 target=b1 defines=[v0] args=[]
+// CHECK: ssa-definitions=[v0=d1]
+// CHECK: edge e0:1 role=r2 target=b2 defines=[] args=[]
+// CHECK: block b1 live=[v0] merge=[] transport=[]
+// CHECK: event 0 use v0=d1
+// CHECK: block b2 live=[v0] merge=[] transport=[]
+// CHECK: event 0 use v0=d0
+
+entry b0
+variables v0
+entry-def v0
+block b0
+edge r1 b1 defines v0
+edge r2 b2
+block b1
+use v0
+block b2
+use v0

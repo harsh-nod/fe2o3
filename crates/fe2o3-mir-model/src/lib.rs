@@ -10,6 +10,7 @@ mod semantic_type;
 pub mod semantic_type_v2;
 mod semantic_u32_induction;
 mod semantic_u32_induction_evidence_v1;
+mod ssa;
 
 pub use control_flow::{
     MAX_MIR_CONTROL_FLOW_WORK_UNITS, MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK, MirControlFlowAnalysis,
@@ -91,4 +92,13 @@ pub use semantic_u32_induction_evidence_v1::{
     SemanticU32InductionBlockSiteEvidenceV1, SemanticU32InductionEvidenceErrorV1,
     SemanticU32InductionNoOverflowCertificateEvidenceV1, SemanticU32InductionPlaceEvidenceV1,
     SemanticU32InductionStatementSiteEvidenceV1,
+};
+pub use ssa::{
+    HARD_MAX_SSA_BLOCKS_V1, HARD_MAX_SSA_EDGE_DEFINITIONS_V1, HARD_MAX_SSA_EDGES_V1,
+    HARD_MAX_SSA_EVENTS_V1, HARD_MAX_SSA_OUTPUT_ITEMS_V1, HARD_MAX_SSA_STORAGE_WORDS_V1,
+    HARD_MAX_SSA_VARIABLES_V1, HARD_MAX_SSA_WORK_UNITS_V1, SsaArgumentV1, SsaBlockIdV1,
+    SsaBlockInputV1, SsaConstructionInputV1, SsaConstructionPlanV1, SsaDefinitionIdV1, SsaEdgeIdV1,
+    SsaEdgeInputV1, SsaEdgeRoleV1, SsaEventV1, SsaInputSiteV1, SsaPlanIdentityV1,
+    SsaPlannerErrorV1, SsaPlannerLimitsV1, SsaPlannerResourceReportV1, SsaPlannerResourceV1,
+    SsaResolvedEventV1, SsaValueV1, SsaVariableIdV1, plan_ssa_v1, plan_ssa_with_limits_v1,
 };

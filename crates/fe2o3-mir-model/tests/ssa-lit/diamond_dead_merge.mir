@@ -1,0 +1,19 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: promoted [v0]
+// CHECK: block b3 live=[] merge=[] transport=[]
+// CHECK-NOT: merge=[v0]
+// CHECK-NOT: args=[v0=
+
+entry b0
+variables v0
+block b0
+edge r1 b1
+edge r2 b2
+block b1
+def v0
+edge r1 b3
+block b2
+def v0
+edge r1 b3
+block b3

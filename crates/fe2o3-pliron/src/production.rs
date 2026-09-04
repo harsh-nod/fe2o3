@@ -34,6 +34,7 @@ mod parallel_reference_contract_v1;
 mod ranked;
 mod semantic_expression_v2;
 mod semantic_mir;
+mod semantic_ssa;
 mod total_output_refinement_v2;
 
 pub use middle_end_evidence_v4::*;
@@ -45,6 +46,7 @@ pub use parallel_reference_contract_v1::*;
 pub use ranked::*;
 pub use semantic_expression_v2::*;
 pub use semantic_mir::*;
+pub use semantic_ssa::*;
 pub use total_output_refinement_v2::*;
 
 /// Hard cap for construction recipes registered during one production session.

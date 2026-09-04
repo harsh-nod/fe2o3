@@ -18,7 +18,8 @@
 //! adds gfx950 FP8 scaled matrix operations and layouts without changing the
 //! frozen V1-V7 encodings.
 //! [`encode_module_v9`] adds gfx950 collectives and LDS transpose operations;
-//! [`encode_module_v10`] adds exact typed memory intrinsics without changing V1-V9.
+//! [`encode_module_v10`] adds exact typed memory intrinsics without changing V1-V9;
+//! [`encode_module_v11`] adds one-way pointer access restriction casts without changing V1-V10.
 //! Decoding establishes wire well-formedness only.
 //! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V10
 //! reconstruct kernel-entry and import roles from their legacy records; they
@@ -36,6 +37,8 @@
 //! binding exact production KIR V8 or V9 to an exact same-module KIR V10
 //! execution encoding and the matching debug and storage metadata. It changes
 //! no V1-V4 bytes and grants no compiler, load, launch, or hardware authority.
+//! [`VerifiedSimulationBundleV6`] applies the same authority-free contract to
+//! exact same-module KIR V11 without changing any V1-V5 bytes.
 //!
 //! [`SemanticDebugMapDocumentV1`] is a separate, finalized-artifact-bound sidecar for exact
 //! bidirectional source/MIR/KIR/schedule/LLVM/ISA correlation. It represents optimization shape
@@ -48,6 +51,7 @@
 //! instance codecs do not alter or extend any frozen module wire format.
 
 mod canonical_kir_v10;
+mod canonical_kir_v11;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
@@ -76,6 +80,7 @@ mod simulation_bundle_v2;
 mod simulation_bundle_v3;
 mod simulation_bundle_v4;
 mod simulation_bundle_v5;
+mod simulation_bundle_v6;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -88,6 +93,7 @@ pub use canonical_kir_v7::*;
 pub use canonical_kir_v8::*;
 pub use canonical_kir_v9::*;
 pub use canonical_kir_v10::*;
+pub use canonical_kir_v11::*;
 pub use control_flow::*;
 pub use debug_source_map_v1::*;
 pub use debug_source_map_v2::*;
@@ -125,6 +131,7 @@ pub use simulation_bundle_v2::*;
 pub use simulation_bundle_v3::*;
 pub use simulation_bundle_v4::*;
 pub use simulation_bundle_v5::*;
+pub use simulation_bundle_v6::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;

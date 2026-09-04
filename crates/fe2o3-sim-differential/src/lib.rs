@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 
 mod f32_v3;
 mod production_bundle_v5;
+mod production_bundle_v6;
 mod semantic_v2;
 
 pub use f32_v3::{
@@ -46,6 +47,17 @@ pub use production_bundle_v5::{
     ProductionSemanticConformanceV3, ProductionSemanticDispositionV3,
     ProductionSemanticUnavailableReasonV3, production_semantic_capabilities_v3,
     run_production_semantic_conformance_v3,
+};
+
+pub use production_bundle_v6::{
+    ExactBufferExpectationV4, ExactBufferObservationV4, ExactBufferUnavailableV4,
+    MAX_PRODUCTION_CONFORMANCE_CASE_ID_BYTES_V4, MAX_PRODUCTION_CONFORMANCE_EXPECTED_BYTES_V4,
+    MAX_PRODUCTION_CONFORMANCE_OUTPUTS_V4, PRODUCTION_SEMANTIC_CAPABILITIES_SCHEMA_V4,
+    PRODUCTION_SEMANTIC_CONFORMANCE_SCHEMA_V4, ProductionSemanticCapabilitiesV4,
+    ProductionSemanticCapabilityV4, ProductionSemanticCaseV4, ProductionSemanticConformanceErrorV4,
+    ProductionSemanticConformanceV4, ProductionSemanticDispositionV4,
+    ProductionSemanticUnavailableReasonV4, production_semantic_capabilities_v4,
+    run_production_semantic_conformance_v4,
 };
 
 pub use semantic_v2::{

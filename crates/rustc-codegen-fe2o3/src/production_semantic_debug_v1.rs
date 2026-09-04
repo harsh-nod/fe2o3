@@ -928,6 +928,7 @@ fn validate_multi_root_correspondence_v1(
                 (
                     record.semantic_function(),
                     match record.rule() {
+                        MultiRootCorrespondenceSyntheticRuleV2::RetainedLocalStorage => 3_u8,
                         MultiRootCorrespondenceSyntheticRuleV2::EnumPayloadStorage => 1_u8,
                         MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap => 2_u8,
                     },
@@ -945,6 +946,7 @@ fn validate_multi_root_correspondence_v1(
                 (
                     record.semantic_function().index(),
                     match record.rule() {
+                        SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => 3_u8,
                         SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => 1_u8,
                         SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => 2_u8,
                     },

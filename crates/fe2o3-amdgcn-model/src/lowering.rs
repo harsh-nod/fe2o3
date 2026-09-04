@@ -10,10 +10,10 @@ use fe2o3_kernel_ir::{
     AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE, AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE,
     AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
-    AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME, AddressSpace as KernelAddressSpace,
-    AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic,
-    AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind,
-    CheckedBinaryOperator, ComparePredicate, Constant,
+    AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME, AccessMode,
+    AddressSpace as KernelAddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint,
+    AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY,
+    BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant,
     DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
     FloatConversionKind, FloatOperation, Function, FunctionBody, FunctionId, FunctionRole,
     Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
@@ -28,9 +28,9 @@ use fe2o3_kernel_ir::{
     SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY, SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY,
     ScalarType, Signature, SynchronizationScope, TargetCapability, TensorInstructionProfileV1,
     Terminator, Type, UnaryOp, ValueId, VerificationErrors, VerifiedCanonicalKernelIrV8,
-    VerifiedCanonicalKernelIrV9, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
-    WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
-    verify_module,
+    VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11, WaveF32ReductionKindV1,
+    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
+    WorkgroupSize, analyze_control_flow, verify_module,
 };
 use sha2::{Digest, Sha256};
 
@@ -234,6 +234,14 @@ impl ProductionSemanticAnchorKirIdentityV1 {
     pub fn from_v9(owner: &VerifiedCanonicalKernelIrV9) -> Self {
         Self {
             version: 9,
+            sha256: *owner.identity().digest(),
+            byte_len: owner.identity().canonical_length(),
+        }
+    }
+
+    pub fn from_v11(owner: &VerifiedCanonicalKernelIrV11) -> Self {
+        Self {
+            version: 11,
             sha256: *owner.identity().digest(),
             byte_len: owner.identity().canonical_length(),
         }
@@ -856,6 +864,8 @@ fn validate_semantic_anchor_identity_v1(
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v8(&owner) == expected),
         9 => VerifiedCanonicalKernelIrV9::from_module(module.clone())
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v9(&owner) == expected),
+        11 => VerifiedCanonicalKernelIrV11::from_module(module.clone())
+            .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v11(&owner) == expected),
         _ => unreachable!("semantic anchor identities have a closed version constructor"),
     };
     if !matches {
@@ -6301,6 +6311,19 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Cast { kind, value, to } => {
                 let (value_name, from) = self.value(*value);
+                if *kind == CastKind::RestrictPointerAccess {
+                    writeln!(
+                        output,
+                        "  {} = select i1 true, {} {}, {} {}",
+                        result_name.expect("validated result"),
+                        llvm_type(from),
+                        value_name,
+                        llvm_type(from),
+                        value_name,
+                    )
+                    .unwrap();
+                    return Ok(());
+                }
                 if *kind == CastKind::Bitcast && llvm_type(from) == llvm_type(to) {
                     writeln!(
                         output,
@@ -8778,6 +8801,16 @@ fn validate_cast(
     to: &Type,
     target: LoweringTarget,
 ) -> Result<(), String> {
+    if kind == CastKind::RestrictPointerAccess {
+        let valid = matches!((from, to), (Type::Pointer(from), Type::Pointer(to))
+            if from.pointee == to.pointee
+                && from.address_space == to.address_space
+                && from.access == AccessMode::ReadWrite
+                && to.access == AccessMode::ReadOnly);
+        return valid
+            .then_some(())
+            .ok_or_else(|| format!("unsupported {kind:?} cast from {from:?} to {to:?}"));
+    }
     let (Some(from_scalar), Some(to_scalar)) = (from.as_scalar(), to.as_scalar()) else {
         return Err(format!(
             "G1 casts require scalar types, found {from:?} to {to:?}"
@@ -8789,6 +8822,7 @@ fn validate_cast(
     let from_width = llvm_width(from_scalar);
     let to_width = llvm_width(to_scalar);
     let valid = match kind {
+        CastKind::RestrictPointerAccess => unreachable!("handled pointer restriction"),
         CastKind::Truncate => {
             supported_integer(from_scalar) && supported_integer(to_scalar) && from_width > to_width
         }
@@ -9100,6 +9134,9 @@ fn compare_opcode(ty: &Type) -> &'static str {
 
 fn cast_opcode(kind: CastKind, from: &Type, to: &Type) -> &'static str {
     match kind {
+        CastKind::RestrictPointerAccess => {
+            unreachable!("pointer access restriction uses an identity select")
+        }
         CastKind::Truncate => "trunc",
         CastKind::ZeroExtend => "zext",
         CastKind::SignExtend => "sext",

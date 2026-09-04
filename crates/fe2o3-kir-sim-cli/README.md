@@ -1,11 +1,12 @@
 # fe2o3-kir-sim
 
 fe2o3-kir-sim is the standalone, Linux-only command-line boundary for bounded
-deterministic CPU execution of exact verified canonical Kernel IR V7:
+deterministic CPU execution of supported exact verified canonical Kernel IR:
 
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json
     fe2o3-kir-sim --bundle-v5 kernel.fe2sim --request request.json
+    fe2o3-kir-sim --bundle-v6 kernel.fe2sim --request request.json
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json --output result.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
       --record-seeded-schedule schedule.json --schedule-seed 42
@@ -23,7 +24,8 @@ observation only. It grants no source-refinement, proof, compiler, artifact,
 load, launch, GPU-equivalence, race-freedom, timing, performance, or performance
 prediction authority.
 
-`--bundle` and `--kir-v7` are mutually exclusive. Bundle admission securely
+`--bundle`, `--bundle-v5`, `--bundle-v6`, and `--kir-v7` are mutually
+exclusive. Legacy bundle admission securely
 captures one bounded regular file, strictly decodes and revalidates
 `VerifiedSimulationBundleV1`, maps its exact admitted gfx942/gfx950 target to
 the CPU target profile, and executes only its embedded canonical V7 bytes. It
@@ -43,6 +45,13 @@ revalidates the exact production V8/V9 identity and lossless same-module KIR
 V10 encoding, then executes that V10 module under the bundle's exact target.
 It does not reinterpret legacy `--bundle` bytes, silently downgrade V10
 operations, invoke hardware, or grant compiler or runtime authority.
+
+`--bundle-v6` is the current strict route for self-contained Bundle V6. It
+revalidates exact canonical KIR V11 and executes only that retained V11 module
+under the bundle's exact target. V11 adds the verified same-pointee,
+same-address-space `ReadWrite` to `ReadOnly` pointer restriction; the CLI does
+not widen access or reinterpret V1/V5 bundle bytes as V6. Bundle V5 remains a
+supported frozen KIR V10 compatibility route.
 
 The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
 

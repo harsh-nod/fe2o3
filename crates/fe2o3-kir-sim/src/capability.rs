@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_751_390;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_779_513;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -21,6 +21,8 @@ pub const SCALAR_CAPABILITY_ROWS_V1: usize = SimulationCapabilityProfileV1::COUN
         + BINARY_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len()
         + COMPARE_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len()
         + CAST_OPERATIONS.len() * SCALAR_TYPES.len() * SCALAR_TYPES.len());
+pub const POINTER_CAPABILITY_ROWS_V1: usize =
+    SimulationCapabilityProfileV1::COUNT * SimulationKirWireVersionV1::COUNT;
 
 const SCALAR_TYPES: [ScalarType; 16] = [
     ScalarType::Bool,
@@ -112,10 +114,11 @@ pub enum SimulationKirWireVersionV1 {
     V7,
     V9,
     V10,
+    V11,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 3] = [Self::V7, Self::V9, Self::V10];
+    const ALL: [Self; 4] = [Self::V7, Self::V9, Self::V10, Self::V11];
     const COUNT: usize = Self::ALL.len();
 }
 
@@ -225,6 +228,7 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     FloatOperation,
     FloatFunction,
     InvalidIntegerCast,
+    InvalidPointerAccessRestriction,
     ExternalCall,
     NonInternalCall,
     WorkgroupAllocation,
@@ -342,6 +346,17 @@ pub struct SimulationScalarCapabilityRowV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SimulationPointerCapabilityRowV1 {
+    pub profile: SimulationCapabilityProfileV1,
+    pub kir_wire_version: SimulationKirWireVersionV1,
+    pub operation: &'static str,
+    pub from_access: &'static str,
+    pub to_access: &'static str,
+    #[serde(flatten)]
+    pub capability: SimulationCapabilityDispositionV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SimulationCapabilityMatrixV1 {
     pub schema: &'static str,
     pub truth_origin: &'static str,
@@ -350,11 +365,13 @@ pub struct SimulationCapabilityMatrixV1 {
     pub performance_prediction: bool,
     pub top_level_rows: Vec<SimulationOperationCapabilityRowV1>,
     pub scalar_rows: Vec<SimulationScalarCapabilityRowV1>,
+    pub pointer_rows: Vec<SimulationPointerCapabilityRowV1>,
 }
 
 pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
     let mut top_level_rows = Vec::with_capacity(TOP_LEVEL_CAPABILITY_ROWS_V1);
     let mut scalar_rows = Vec::with_capacity(SCALAR_CAPABILITY_ROWS_V1);
+    let mut pointer_rows = Vec::with_capacity(POINTER_CAPABILITY_ROWS_V1);
     for profile in SimulationCapabilityProfileV1::ALL {
         for kir_wire_version in SimulationKirWireVersionV1::ALL {
             for operation in SimulationOperationSurfaceV1::ALL {
@@ -367,9 +384,31 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
             }
         }
         append_scalar_rows(&mut scalar_rows, profile);
+        for kir_wire_version in SimulationKirWireVersionV1::ALL {
+            pointer_rows.push(SimulationPointerCapabilityRowV1 {
+                profile,
+                kir_wire_version,
+                operation: "restrict_pointer_access",
+                from_access: "read_write",
+                to_access: "read_only",
+                capability: if kir_wire_version == SimulationKirWireVersionV1::V11 {
+                    SimulationCapabilityDispositionV1::Owned {
+                        owner: SimulationSemanticOwnerV1::TypedMemory,
+                        typed_rejections: &[
+                            SimulationUnsupportedReasonCodeV1::InvalidPointerAccessRestriction,
+                        ],
+                    }
+                } else {
+                    SimulationCapabilityDispositionV1::Unsupported {
+                        reason: SimulationUnsupportedReasonCodeV1::InvalidPointerAccessRestriction,
+                    }
+                },
+            });
+        }
     }
     debug_assert_eq!(top_level_rows.len(), TOP_LEVEL_CAPABILITY_ROWS_V1);
     debug_assert_eq!(scalar_rows.len(), SCALAR_CAPABILITY_ROWS_V1);
+    debug_assert_eq!(pointer_rows.len(), POINTER_CAPABILITY_ROWS_V1);
     SimulationCapabilityMatrixV1 {
         schema: SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1,
         truth_origin: "declared",
@@ -378,6 +417,7 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
         performance_prediction: false,
         top_level_rows,
         scalar_rows,
+        pointer_rows,
     }
 }
 
@@ -650,6 +690,7 @@ const fn scalar_owner(ty: ScalarType) -> SimulationSemanticOwnerV1 {
 
 const fn cast_owner(kind: CastKind) -> SimulationSemanticOwnerV1 {
     match kind {
+        CastKind::RestrictPointerAccess => SimulationSemanticOwnerV1::TypedMemory,
         CastKind::FloatExtend
         | CastKind::FloatTruncate
         | CastKind::IntegerToFloat
@@ -719,6 +760,7 @@ const fn compare_name(operation: ComparePredicate) -> &'static str {
 
 const fn cast_name(operation: CastKind) -> &'static str {
     match operation {
+        CastKind::RestrictPointerAccess => "restrict_pointer_access",
         CastKind::Truncate => "truncate",
         CastKind::ZeroExtend => "zero_extend",
         CastKind::SignExtend => "sign_extend",

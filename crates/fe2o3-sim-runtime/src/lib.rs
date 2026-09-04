@@ -2,13 +2,15 @@
 #![doc = include_str!("../README.md")]
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V5,
-    OperationKind, ScalarType, SemanticAggregateStorageMapV5, SemanticArgumentOwnershipV1,
-    SemanticComponentStorageBindingV2, SemanticKernargSlotV2, SemanticKernelStorageV2,
-    SemanticKirComponentRepresentationV2, SemanticKirStorageRepresentationV1,
-    SemanticStorageBindingV1, SemanticStorageMapV1, SemanticStorageMapV2, SemanticStorageMapV5,
-    SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10,
+    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V6,
+    OperationKind, ScalarType, SemanticAggregateStorageMapV5, SemanticAggregateStorageMapV6,
+    SemanticArgumentOwnershipV1, SemanticComponentStorageBindingV2, SemanticKernargSlotV2,
+    SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
+    SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
+    SemanticStorageMapV2, SemanticStorageMapV5, SemanticStorageMapV6, SemanticStorageProjectionV2,
+    Type, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11,
     VerifiedSimulationBundleV3, VerifiedSimulationBundleV4, VerifiedSimulationBundleV5,
+    VerifiedSimulationBundleV6,
 };
 use fe2o3_kir_sim::{AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -678,10 +680,10 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         if device != DEVICE_HANDLE {
             return Err(rejected_handle("device"));
         }
-        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V5 {
+        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V6 {
             return Err(RuntimeBackendFailureV1::Rejected(
                 SimRuntimeBackendErrorV1::InvalidBundle(
-                    "bundle exceeds the V5 byte limit".to_owned(),
+                    "bundle exceeds the V6 byte limit".to_owned(),
                 ),
             ));
         }
@@ -984,6 +986,7 @@ struct ParsedBundleV1 {
 enum ParsedCanonicalKirV1 {
     V7(VerifiedCanonicalKernelIrV7),
     V10(VerifiedCanonicalKernelIrV10),
+    V11(VerifiedCanonicalKernelIrV11),
 }
 
 fn parse_bundle(
@@ -991,7 +994,51 @@ fn parse_bundle(
     target: VirtualTargetProfileV1,
 ) -> Result<ParsedBundleV1, SimRuntimeBackendErrorV1> {
     let (semantic, storage_kernels, component_kernels, canonical, module) =
-        if VerifiedSimulationBundleV5::has_magic_prefix(image) {
+        if VerifiedSimulationBundleV6::has_magic_prefix(image) {
+            let bundle =
+                VerifiedSimulationBundleV6::from_canonical_bytes(copy_bundle_image_v2(image)?)
+                    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            bundle
+                .revalidate()
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if bundle.target() != target.label() {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "bundle target {} does not match backend target {}",
+                    bundle.target(),
+                    target.label()
+                )));
+            }
+            let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                bundle.semantic_mir(),
+                SemanticMirLimitsV1::default(),
+            )
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            let storage = SemanticStorageMapV6::from_canonical_json_bytes(bundle.storage_map())
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            let component = SemanticAggregateStorageMapV6::from_canonical_json_bytes(
+                bundle.aggregate_storage_map(),
+            )
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if semantic.wire_version().as_u16() != storage.semantic_mir_version()
+                || semantic.target_layout_identity().as_bytes() != storage.target_layout_identity()
+            {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                    "semantic MIR and V6 storage-map target identity differ".to_owned(),
+                ));
+            }
+            let (canonical, module) =
+                VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(
+                    copy_bundle_image_v2(bundle.canonical_kir_v11())?,
+                )
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            (
+                semantic,
+                storage.kernels().to_vec(),
+                Some(component.kernels().to_vec()),
+                ParsedCanonicalKirV1::V11(canonical),
+                module,
+            )
+        } else if VerifiedSimulationBundleV5::has_magic_prefix(image) {
             let bundle =
                 VerifiedSimulationBundleV5::from_canonical_bytes(copy_bundle_image_v2(image)?)
                     .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
@@ -1275,6 +1322,10 @@ fn parse_bundle(
             fe2o3_kir_sim::SimulationLimitsV1::default(),
         ),
         ParsedCanonicalKirV1::V10(canonical) => AdmittedSimulationModuleV1::admit_v10(
+            canonical,
+            fe2o3_kir_sim::SimulationLimitsV1::default(),
+        ),
+        ParsedCanonicalKirV1::V11(canonical) => AdmittedSimulationModuleV1::admit_v11(
             canonical,
             fe2o3_kir_sim::SimulationLimitsV1::default(),
         ),
@@ -4091,16 +4142,29 @@ mod tests {
     use super::*;
     use fe2o3_kernel_ir::SemanticArgumentStorageV2;
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, Function, FunctionId, Module, Operation, Signature, Terminator,
-        ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
+        BasicBlock, BlockId, CastKind, Constant, DebugSourceMapDocumentV2, DebugSourceMapFileV1,
+        DebugSourceMapSpanV1, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
+        MemoryAccess, Module, Operation, PreparedSimulationBundleV6, SemanticAggregateStorageMapV6,
+        SemanticKernelStorageV1, SemanticKernelStorageV2, SemanticStorageMapV6, Signature,
+        SimulationProductionKirIdentityV6, SimulationSourceLineageV1, Terminator, ValueDef,
+        ValueId, VerifiedCanonicalKernelIrV11, WorkgroupMemory, WorkgroupMemoryExtent,
     };
     use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiCastV1, SemanticAbiPointeeInfoV1, SemanticAbiRegisterV1,
-        SemanticAbiRegularAttributesV1, SemanticAbiUniformV1, SemanticAbiValueAttributesV1,
-        SemanticAbiValueV1, SemanticAggregateLayoutV1, SemanticAggregateTypeV1,
-        SemanticBackendScalarV1, SemanticLayoutIdentityV1, SemanticPaddingV1,
-        SemanticPointerTypeV1, SemanticTypeAbiPropertiesV1, SemanticTypeIdentityV1,
-        SemanticTypeLayoutV1, SemanticValidityScalarTypeV1,
+        InertSemanticMirRequestV1, SemanticAbiCastV1, SemanticAbiIdentityV1,
+        SemanticAbiPointeeInfoV1, SemanticAbiRegisterV1, SemanticAbiRegularAttributesV1,
+        SemanticAbiUniformV1, SemanticAbiValueAttributesV1, SemanticAbiValueV1,
+        SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticBasicBlockV1,
+        SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1,
+        SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+        SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+        SemanticItemDefinitionIdentityV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
+        SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1, SemanticLayoutIdentityV1,
+        SemanticLinkSymbolV1, SemanticLocalDeclV1, SemanticLocalIdentityV1,
+        SemanticMonomorphizationIdentityV1, SemanticPaddingV1, SemanticPointerTypeV1,
+        SemanticSourceProvenanceV1, SemanticTargetDataLayoutV1, SemanticTerminatorKindV1,
+        SemanticTerminatorV1, SemanticTypeAbiPropertiesV1, SemanticTypeIdentityV1,
+        SemanticTypeLayoutV1, SemanticTypeShapeV1, SemanticValidityScalarTypeV1,
+        SemanticWorkgroupDimensionsV1,
     };
 
     fn runtime_dynamic_reachability_module(call_helper: bool) -> (Module, FunctionId) {
@@ -4151,6 +4215,210 @@ mod tests {
         (module, entry_id)
     }
 
+    fn runtime_v6_semantic_fixture() -> (Vec<u8>, u16, [u8; 32], [u8; 32]) {
+        let target_layout = [0x71; 32];
+        let abi_identity = [0x72; 32];
+        let unit = SemanticTypeIdV1::from_index(0);
+        let unit_type = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([0x73; 32]),
+            SemanticLayoutIdentityV1::from_sha256([0x74; 32]),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                None,
+                false,
+                None,
+                1,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Unit,
+        );
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(abi_identity),
+            SemanticLayoutIdentityV1::from_sha256(target_layout),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([0x75; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            vec![],
+            SemanticTerminatorV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticTerminatorKindV1::Return,
+            ),
+        )
+        .unwrap();
+        let dimensions = SemanticWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
+        let launch =
+            SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+        let contract = SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([0x76; 32]),
+            SemanticFunctionRoleV1::KernelRoot,
+            SemanticItemDefinitionIdentityV1::from_sha256([0x77; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([0x78; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([0x79; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([0x7a; 32]),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+            vec![SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([0x7b; 32]),
+                unit,
+                SemanticLocalRoleV1::Return,
+                SemanticSourceProvenanceV1::unavailable(),
+            )],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap()
+        .with_kernel_entry(SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(b"bundle_v6_entry".to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256([0x7c; 32]),
+            contract,
+        ));
+        let admitted = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(
+                target_layout,
+            )),
+            vec![unit_type],
+            vec![],
+            vec![],
+            vec![],
+            vec![function],
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
+        (
+            admitted.canonical_encoding().to_vec(),
+            admitted.wire_version().as_u16(),
+            *admitted.semantic_sha256().as_bytes(),
+            abi_identity,
+        )
+    }
+
+    fn runtime_v6_bundle_fixture() -> (VerifiedSimulationBundleV6, [u8; 32]) {
+        let scalar = Type::Scalar(ScalarType::U32);
+        let read_write =
+            Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite);
+        let read_only = Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadOnly);
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(0), scalar.clone()),
+                OperationKind::Constant(Constant::U32(7)),
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(1), read_write),
+                OperationKind::Alloca {
+                    element: scalar.clone(),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 4,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(1),
+                    value: ValueId(0),
+                    access: MemoryAccess::new(AddressSpace::Private, 4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(2), read_only.clone()),
+                OperationKind::Cast {
+                    kind: CastKind::RestrictPointerAccess,
+                    value: ValueId(1),
+                    to: read_only,
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(3), scalar),
+                OperationKind::Load {
+                    pointer: ValueId(2),
+                    access: MemoryAccess::new(AddressSpace::Private, 4),
+                },
+            ),
+        ];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let entry = Function::kernel_entry(
+            "bundle_v6_entry",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        );
+        let mut module = Module::new("sim-runtime-bundle-v6-test");
+        module.functions.push(entry);
+        module.kernels.push(Kernel::new(
+            "bundle_v6_kernel",
+            "bundle_v6_entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        ));
+        let canonical = VerifiedCanonicalKernelIrV11::from_module(module).unwrap();
+        let production_digest = *canonical.identity().digest();
+        let production_length = canonical.identity().canonical_length();
+        let prepared = PreparedSimulationBundleV6::new(
+            SimulationSourceLineageV1::new([0x7d; 32], 201, [0x7e; 32], 202).unwrap(),
+            SimulationProductionKirIdentityV6::new(11, production_digest, production_length)
+                .unwrap(),
+            "gfx942:xnack-",
+            canonical,
+        )
+        .unwrap();
+        let source_map = DebugSourceMapDocumentV2::new(
+            prepared.debug_source_map_binding(),
+            vec![DebugSourceMapFileV1::new([0x7f; 32], 16, "runtime-bundle-v6.rs".into()).unwrap()],
+            vec![],
+            vec![DebugSourceMapSpanV1::new([0x7f; 32], 1, 2, 1, 2).unwrap()],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let (semantic, semantic_version, semantic_digest, abi_identity) =
+            runtime_v6_semantic_fixture();
+        let storage = SemanticStorageMapV6::new(
+            *prepared.subject_identity(),
+            semantic_version,
+            semantic_digest,
+            semantic.len() as u64,
+            [0x71; 32],
+            *prepared.canonical_kir_v11_digest(),
+            prepared.canonical_kir_v11_length(),
+            vec![SemanticKernelStorageV1::new(0, 0, 0, vec![])],
+            vec![],
+        )
+        .unwrap();
+        let aggregate = SemanticAggregateStorageMapV6::new(
+            *prepared.subject_identity(),
+            *prepared.canonical_kir_v11_digest(),
+            prepared.canonical_kir_v11_length(),
+            vec![SemanticKernelStorageV2::new(0, 0, 0, 0, 1, vec![])],
+        )
+        .unwrap();
+        (
+            prepared
+                .finalize(source_map, semantic, storage, aggregate)
+                .unwrap(),
+            abi_identity,
+        )
+    }
+
     #[test]
     fn runtime_dynamic_lds_detection_follows_only_reachable_calls() {
         let (reachable, entry) = runtime_dynamic_reachability_module(true);
@@ -4166,6 +4434,43 @@ mod tests {
             Err(SimRuntimeBackendErrorV1::InvalidBundle(detail))
                 if detail == "kernel entry missing"
         ));
+    }
+
+    #[test]
+    fn bundle_v6_executes_through_the_normal_runtime_lifecycle() {
+        let (bundle, abi_identity) = runtime_v6_bundle_fixture();
+        assert_eq!(bundle.production_kir_identity().version(), 11);
+        let mut backend = SimRuntimeBackendV1::gfx942([0x70; 32]).unwrap();
+        let stream = backend.create_stream_v1(DEVICE_HANDLE).unwrap();
+        let module = backend
+            .load_module_v1(DEVICE_HANDLE, bundle.canonical_bytes())
+            .unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "bundle_v6_kernel", abi_identity)
+            .unwrap();
+        let submission = backend
+            .submit_v1(BackendLaunchV1 {
+                stream,
+                kernel,
+                explicit_kernarg: &[],
+                bindings: &[],
+                dependencies: &[],
+                geometry: fe2o3_runtime::RuntimeLaunchGeometryV1 {
+                    grid: [2, 1, 1],
+                    workgroup: [1, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            backend
+                .wait_v1(submission, Instant::now() + Duration::from_secs(5))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
+        backend.release_submission_v1(submission).unwrap();
+        backend.unload_module_v1(module).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
     }
 
     #[test]

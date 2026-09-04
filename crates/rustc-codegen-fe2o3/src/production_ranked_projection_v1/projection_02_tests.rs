@@ -19,9 +19,10 @@
                 recipe_identities.push(recipe);
 
                 let ProductionRankedSemanticProgramV1 {
-                    semantic_owner,
+                    semantic_ssa_owner,
                     roots,
                 } = program;
+                let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
                 let root = roots.into_vec().into_iter().next().unwrap();
                 let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
                     semantic_owner,
@@ -52,9 +53,10 @@
         let exclusive_recipe = exclusive.roots[0].executable_effect_sources[0].recipe_identity();
         let inclusive = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Inclusive, 65);
         let ProductionRankedSemanticProgramV1 {
-            semantic_owner,
+            semantic_ssa_owner,
             roots,
         } = inclusive;
+        let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources = root
             .executable_effect_sources
@@ -81,9 +83,10 @@
         assert_neutral_mutated_projection_rejected_v1(receipt);
 
         let ProductionRankedSemanticProgramV1 {
-            semantic_owner,
+            semantic_ssa_owner,
             roots,
         } = neutral_scan_ranked_program_v1(SemanticWorkgroupScanKindV1::Exclusive, 255);
+        let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
         let mut root = roots.into_vec().into_iter().next().unwrap();
         root.executable_effect_sources
             .pop()
@@ -103,9 +106,10 @@
         mutate: impl FnOnce(&mut Vec<ProductionRankedExecutableEffectSourceV1>),
     ) -> ProductionRankedSemanticProjectionReceiptV1 {
         let ProductionRankedSemanticProgramV1 {
-            semantic_owner,
+            semantic_ssa_owner,
             roots,
         } = neutral_ranked_program_v1();
+        let semantic_owner = semantic_ssa_owner.into_source_owner().unwrap();
         let mut root = roots
             .into_vec()
             .into_iter()

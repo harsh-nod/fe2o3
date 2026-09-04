@@ -1335,6 +1335,20 @@ mod tests {
     }
 
     #[test]
+    fn v5_rejects_an_embedded_exact_kir_v11_body() {
+        let bundle = bundle();
+        let mut bytes = bundle.canonical_bytes().to_vec();
+        bytes[bundle.kir_range.start + 8..bundle.kir_range.start + 10]
+            .copy_from_slice(&11_u16.to_le_bytes());
+        assert!(matches!(
+            VerifiedSimulationBundleV5::from_canonical_bytes(bytes),
+            Err(SimulationBundleErrorV5::CanonicalKir(
+                crate::VerifiedCanonicalKernelIrErrorV10::NotExactV10 { version: 11 }
+            ))
+        ));
+    }
+
+    #[test]
     fn v5_round_trips_exact_v8_production_as_v10_without_semantic_drift() {
         let bundle = bundle_for_production_version(8);
         let decoded =

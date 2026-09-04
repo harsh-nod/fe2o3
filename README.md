@@ -202,7 +202,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | --- | --- |
 | Rust kernel surface | Typed kernels, device indexing, checked buffer views, bounded scalar/control/memory subsets |
 | Compiler | Source/MIR through typed Pliron and verified KIR; bounded `gfx942` LLVM/HSACO vertical slices |
-| CPU simulation | Deterministic execution of admitted canonical KIR V7 plus exact direct V9/V10 custody, including supported helpers, barriers, workgroup memory, wave f32 collectives, memory intrinsics, atomics, fences, floating point, and seeded schedule exploration |
+| CPU simulation | Deterministic execution of admitted canonical KIR V7 plus exact direct V9/V10/V11 custody, including supported helpers, barriers, workgroup memory, wave f32 collectives, memory intrinsics, pointer-access restriction, atomics, fences, floating point, and seeded schedule exploration |
 | Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control; ROCgdb V4 authenticates hierarchy/relative PC and V5 adds same-stop structured register/scalar-local inspection, while the installed direct-KFD target still cannot produce a physical GPU stop and source/ISA/memory remain typed unavailable |
@@ -220,11 +220,11 @@ milestones are retained in the [project status archive](docs/project-status.md).
   MI300X `gfx942:xnack-` profile. Other AMD targets are not implied.
 - An ordinary external project cannot yet compile and dispatch a general Rust
   kernel through one supported public command.
-- The simulator accepts defined KIR V7/V9/V10 semantic subsets. Legacy bundles
-  and raw CLI inputs carry V7; explicit authority-free Bundle V5 carries an
-  exact production V8/V9 module re-encoded losslessly as V10. Unsupported types
-  and operations fail closed; CPU results are not timing or performance
-  predictions.
+- The simulator accepts defined KIR V7/V9/V10/V11 semantic subsets. Legacy
+  bundles and raw CLI inputs carry V7; authority-free Bundle V5 carries an
+  exact production V8/V9 module re-encoded losslessly as V10, while the current
+  Bundle V6 route carries exact V11. Unsupported types and operations fail
+  closed; CPU results are not timing or performance predictions.
 - CPU logical waves model semantic collectives and visualization partitions,
   not physical GPU wave scheduling or `EXEC` state.
 - Live KFD debugging admits authenticated hierarchy and relative-PC evidence and

@@ -14,11 +14,12 @@ mod schedule;
 mod soft_float;
 
 pub use capability::{
-    SCALAR_CAPABILITY_ROWS_V1, SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
-    SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1, SimulationCapabilityDispositionV1,
-    SimulationCapabilityMatrixV1, SimulationCapabilityProfileV1, SimulationKirWireVersionV1,
-    SimulationOperationCapabilityRowV1, SimulationOperationSurfaceV1,
-    SimulationScalarCapabilityRowV1, SimulationScalarOperationFamilyV1, SimulationSemanticOwnerV1,
+    POINTER_CAPABILITY_ROWS_V1, SCALAR_CAPABILITY_ROWS_V1,
+    SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1, SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1,
+    SimulationCapabilityDispositionV1, SimulationCapabilityMatrixV1, SimulationCapabilityProfileV1,
+    SimulationKirWireVersionV1, SimulationOperationCapabilityRowV1, SimulationOperationSurfaceV1,
+    SimulationPointerCapabilityRowV1, SimulationScalarCapabilityRowV1,
+    SimulationScalarOperationFamilyV1, SimulationSemanticOwnerV1,
     SimulationUnsupportedReasonCodeV1, TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
 };
 pub use debug::{

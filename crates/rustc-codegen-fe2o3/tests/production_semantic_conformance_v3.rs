@@ -2,10 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fe2o3_kernel_ir::ScalarType;
+use fe2o3_kernel_ir::{
+    AccessMode, AddressSpace, CastKind, OperationKind, ScalarType, Type,
+    VerifiedCanonicalKernelIrV11, VerifiedSimulationBundleV6,
+};
 use fe2o3_sim_differential::{
-    ExactBufferExpectationV3, ExactBufferUnavailableV3, ProductionSemanticCaseV3,
-    ProductionSemanticConformanceErrorV3, run_production_semantic_conformance_v3,
+    ExactBufferExpectationV4, ExactBufferUnavailableV4, ProductionSemanticCaseV4,
+    ProductionSemanticConformanceErrorV4, run_production_semantic_conformance_v4,
     semantic_differential_capabilities_v2,
 };
 use serde_json::{Value, json};
@@ -62,6 +65,7 @@ fn export_feature(scratch: &Scratch, feature: &str) -> Output {
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5")
+        .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6")
         .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
         .env_remove("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1")
         .env_remove("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1")
@@ -75,7 +79,7 @@ fn export_feature(scratch: &Scratch, feature: &str) -> Output {
             "--target",
             "gfx942",
             "--bundle-version",
-            "5",
+            "6",
             "--target-dir",
         ])
         .arg(scratch.path.join("fixture-target"))
@@ -88,22 +92,22 @@ fn export_feature(scratch: &Scratch, feature: &str) -> Output {
             "--lib",
         ])
         .output()
-        .expect("run production Bundle V5 exporter")
+        .expect("run production Bundle V6 exporter")
 }
 
 fn require_export(scratch: &Scratch, feature: &str) -> PathBuf {
     let output = export_feature(scratch, feature);
     assert!(
         output.status.success(),
-        "feature {feature} did not export to Bundle V5:\n{}",
+        "feature {feature} did not export to Bundle V6:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).expect("export diagnostic is UTF-8");
     assert!(
-        stderr.contains("exact same-module KIR V10")
+        stderr.contains("exact same-module KIR V11")
             && stderr.contains("compiler_execution=extraction_only_unavailable")
             && stderr.contains("authority false"),
-        "feature {feature} overclaimed or omitted the V5 custody contract:\n{stderr}"
+        "feature {feature} overclaimed or omitted the V6 custody contract:\n{stderr}"
     );
     bundle_path(scratch, feature)
 }
@@ -171,19 +175,19 @@ fn exact_scalar_output_case(
             buffer_json(element_name, &zeroes, element_bytes),
         ]),
     );
-    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(bundle, &request)
-        .expect("strictly admit compiler-produced Bundle V5 and request");
+    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(bundle, &request)
+        .expect("strictly admit compiler-produced Bundle V6 and request");
     let expected = repeated_scalar_bytes(expected, element_bytes);
     let initialized = vec![true; expected.len()];
-    let outputs = [ExactBufferExpectationV3 {
+    let outputs = [ExactBufferExpectationV4 {
         argument_ordinal: 2,
         element,
         bytes: &expected,
         initialized: &initialized,
     }];
-    let report = run_production_semantic_conformance_v3(
+    let report = run_production_semantic_conformance_v4(
         &admitted,
-        ProductionSemanticCaseV3 {
+        ProductionSemanticCaseV4 {
             case_id,
             outputs: &outputs,
         },
@@ -192,8 +196,8 @@ fn exact_scalar_output_case(
     assert_eq!(report.status, "agreement", "case {case_id}");
     assert!(!report.hardware_observed);
     assert!(!report.performance_prediction);
-    assert_eq!(report.bundle_version, 5);
-    assert_eq!(report.kir_version, 10);
+    assert_eq!(report.bundle_version, 6);
+    assert_eq!(report.kir_version, 11);
     assert_eq!(report.expected_bytes, LANES * element_bytes);
 }
 
@@ -305,7 +309,7 @@ const fn integer(
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn ordinary_bundle_v5_integer_widths_and_signedness_match_generated_cpu_cases() {
+fn ordinary_bundle_v6_integer_widths_and_signedness_match_generated_cpu_cases() {
     let scratch = Scratch::new();
     for (profile_index, profile) in INTEGER_PROFILES.iter().copied().enumerate() {
         let bundle = require_export(&scratch, profile.feature);
@@ -404,7 +408,7 @@ const F64_CASES: [(u128, u128, u128); 9] = [
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn ordinary_bundle_v5_float_corner_tables_match_exact_cpu_bits() {
+fn ordinary_bundle_v6_float_corner_tables_match_exact_cpu_bits() {
     let scratch = Scratch::new();
     let profiles = [
         FloatProfile {
@@ -445,7 +449,7 @@ fn ordinary_bundle_v5_float_corner_tables_match_exact_cpu_bits() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn ordinary_bundle_v5_checked_output_bounds_and_hostile_expectations_are_typed() {
+fn ordinary_bundle_v6_checked_output_bounds_and_hostile_expectations_are_typed() {
     let scratch = Scratch::new();
     let bundle = require_export(&scratch, "bounds-output");
     let zeroes = vec![0_u8; LANES * 4];
@@ -458,20 +462,20 @@ fn ordinary_bundle_v5_checked_output_bounds_and_hostile_expectations_are_typed()
             buffer_json("u32", &zeroes, 4),
         ]),
     );
-    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle, &request)
+    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(&bundle, &request)
         .expect("admit checked output bounds fixture");
     let expected = repeated_scalar_bytes(0xa5a5_5a5a, 4);
     let initialized = vec![true; expected.len()];
-    let exact = [ExactBufferExpectationV3 {
+    let exact = [ExactBufferExpectationV4 {
         argument_ordinal: 1,
         element: ScalarType::U32,
         bytes: &expected,
         initialized: &initialized,
     }];
     assert_eq!(
-        run_production_semantic_conformance_v3(
+        run_production_semantic_conformance_v4(
             &admitted,
-            ProductionSemanticCaseV3 {
+            ProductionSemanticCaseV4 {
                 case_id: "bounds-output-exact",
                 outputs: &exact,
             },
@@ -481,13 +485,13 @@ fn ordinary_bundle_v5_checked_output_bounds_and_hostile_expectations_are_typed()
         "agreement"
     );
 
-    let wrong_type = [ExactBufferExpectationV3 {
+    let wrong_type = [ExactBufferExpectationV4 {
         element: ScalarType::I32,
         ..exact[0]
     }];
-    let report = run_production_semantic_conformance_v3(
+    let report = run_production_semantic_conformance_v4(
         &admitted,
-        ProductionSemanticCaseV3 {
+        ProductionSemanticCaseV4 {
             case_id: "bounds-output-wrong-type",
             outputs: &wrong_type,
         },
@@ -496,16 +500,16 @@ fn ordinary_bundle_v5_checked_output_bounds_and_hostile_expectations_are_typed()
     assert_eq!(report.status, "mismatch");
     assert_eq!(
         report.outputs[0].unavailable,
-        Some(ExactBufferUnavailableV3::ScalarTypeMismatch)
+        Some(ExactBufferUnavailableV4::ScalarTypeMismatch)
     );
 
-    let missing = [ExactBufferExpectationV3 {
+    let missing = [ExactBufferExpectationV4 {
         argument_ordinal: 99,
         ..exact[0]
     }];
-    let report = run_production_semantic_conformance_v3(
+    let report = run_production_semantic_conformance_v4(
         &admitted,
-        ProductionSemanticCaseV3 {
+        ProductionSemanticCaseV4 {
             case_id: "bounds-output-missing",
             outputs: &missing,
         },
@@ -513,8 +517,232 @@ fn ordinary_bundle_v5_checked_output_bounds_and_hostile_expectations_are_typed()
     .unwrap();
     assert_eq!(
         report.outputs[0].unavailable,
-        Some(ExactBufferUnavailableV3::MissingArgument)
+        Some(ExactBufferUnavailableV4::MissingArgument)
     );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_rust_nested_control_flow_executes_after_production_ssa_lowering() {
+    let scratch = Scratch::new();
+    let bundle = require_export(&scratch, "ssa-control-flow");
+    let zeroes = vec![0_u8; LANES * 4];
+
+    for (limit, expected_value) in [(0_u32, 0_u32), (1, 3), (5, 3), (6, 0)] {
+        let case_id = format!("ssa-control-flow-{limit}");
+        let request = write_request(
+            &scratch,
+            &case_id,
+            "ssa_control_flow",
+            json!([
+                scalar_json("u32", u128::from(limit), 4),
+                buffer_json("u32", &zeroes, 4),
+            ]),
+        );
+        let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(&bundle, &request)
+            .expect("admit compiler-produced nested-control-flow bundle");
+        let expected = repeated_scalar_bytes(u128::from(expected_value), 4);
+        let initialized = vec![true; expected.len()];
+        let outputs = [ExactBufferExpectationV4 {
+            argument_ordinal: 1,
+            element: ScalarType::U32,
+            bytes: &expected,
+            initialized: &initialized,
+        }];
+        let report = run_production_semantic_conformance_v4(
+            &admitted,
+            ProductionSemanticCaseV4 {
+                case_id: &case_id,
+                outputs: &outputs,
+            },
+        )
+        .expect("execute nested loops and match in compiler-produced KIR");
+        assert_eq!(report.status, "agreement", "case {case_id}");
+        assert_eq!(report.bundle_version, 6);
+        assert_eq!(report.kir_version, 11);
+        assert!(!report.hardware_observed);
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_rust_retained_shared_borrow_reaches_v11_optimizer_and_llvm() {
+    let scratch = Scratch::new();
+    let bundle_path = require_export(&scratch, "retained-shared-borrow");
+    let bundle = VerifiedSimulationBundleV6::from_canonical_bytes(
+        std::fs::read(&bundle_path).expect("read compiler-produced Bundle V6"),
+    )
+    .expect("revalidate compiler-produced Bundle V6");
+    assert_eq!(bundle.production_kir_identity().version(), 11);
+    assert_eq!(
+        bundle.canonical_kir_v11_length(),
+        bundle.production_kir_identity().canonical_length()
+    );
+    assert_eq!(
+        *bundle.canonical_kir_v11_digest(),
+        bundle.production_kir_identity().digest(),
+    );
+    let (canonical_v11, module) = VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(
+        bundle.canonical_kir_v11().to_vec(),
+    )
+    .expect("Bundle V6 owns exact verified canonical KIR V11");
+    assert_eq!(
+        canonical_v11.identity().digest(),
+        bundle.canonical_kir_v11_digest()
+    );
+    assert_eq!(
+        canonical_v11.identity().canonical_length(),
+        bundle.canonical_kir_v11_length(),
+    );
+
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.id.as_str() == "retained_shared_borrow")
+        .expect("retained shared-borrow KIR function");
+    let operations = function
+        .body
+        .as_ref()
+        .expect("defined retained shared-borrow body")
+        .blocks
+        .iter()
+        .flat_map(|block| block.operations.iter())
+        .collect::<Vec<_>>();
+    let slot = operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Alloca {
+                element: Type::Scalar(ScalarType::U32),
+                count: None,
+                address_space: AddressSpace::Private,
+                alignment: 4,
+            } => operation.results.first().map(|result| result.id),
+            _ => None,
+        })
+        .expect("shared-borrow local is retained in one private u32 slot");
+    assert!(operations.iter().any(|operation| {
+        matches!(operation.kind, OperationKind::Store { pointer, .. } if pointer == slot)
+    }));
+    let restricted = operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value,
+                to: Type::Pointer(pointer),
+            } if *value == slot
+                && pointer.pointee.as_ref() == &Type::Scalar(ScalarType::U32)
+                && pointer.address_space == AddressSpace::Private
+                && pointer.access == AccessMode::ReadOnly =>
+            {
+                operation.results.first().map(|result| result.id)
+            }
+            _ => None,
+        })
+        .expect("shared borrow narrows the retained slot to an exact read-only view");
+    assert!(operations.iter().any(|operation| {
+        matches!(operation.kind, OperationKind::Load { pointer, .. } if pointer == slot)
+    }));
+    assert!(!operations.iter().any(|operation| {
+        matches!(operation.kind, OperationKind::Store { pointer, .. } if pointer == restricted)
+    }));
+
+    let zeroes = vec![0_u8; LANES * 4];
+    let request = write_request(
+        &scratch,
+        "retained-shared-borrow",
+        "retained_shared_borrow",
+        json!([
+            scalar_json("u32", 0x8bad_f00d, 4),
+            buffer_json("u32", &zeroes, 4),
+        ]),
+    );
+    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(&bundle_path, &request)
+        .expect("admit compiler-produced retained shared-borrow bundle");
+    let expected = repeated_scalar_bytes(0x8bad_f00d, 4);
+    let initialized = vec![true; expected.len()];
+    let outputs = [ExactBufferExpectationV4 {
+        argument_ordinal: 1,
+        element: ScalarType::U32,
+        bytes: &expected,
+        initialized: &initialized,
+    }];
+    let report = run_production_semantic_conformance_v4(
+        &admitted,
+        ProductionSemanticCaseV4 {
+            case_id: "retained-shared-borrow",
+            outputs: &outputs,
+        },
+    )
+    .expect("execute retained shared-borrow kernel");
+    assert_eq!(report.status, "agreement");
+    assert_eq!(report.bundle_version, 6);
+    assert_eq!(report.kir_version, 11);
+
+    let llvm_path = scratch.path.join("retained-shared-borrow.ll");
+    let binding_path = scratch.path.join("retained-shared-borrow.crate-binding");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_semantic_conformance_fixture",
+        )
+        .env("FE2O3_EXTRACT_CRATE_BINDING_PATH_V1", &binding_path)
+        .env("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1", &llvm_path)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        )
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-semantic-conformance-fixture",
+            "--features",
+            "retained-shared-borrow",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(scratch.path.join("llvm-target"))
+        .arg("--lib")
+        .output()
+        .expect("run retained shared-borrow production gfx942 extraction");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success()
+            && stderr.contains("Kernel IR V11")
+            && stderr.contains("target-KIR optimizer (7 pass(es)")
+            && stderr.contains("-> gfx942:xnack- LLVM")
+            && stderr.contains("artifact/launch authority false"),
+        "retained shared-borrow extraction omitted V11 optimizer custody:\n{stderr}",
+    );
+    let llvm = std::fs::read_to_string(&llvm_path)
+        .expect("production extraction emitted retained shared-borrow LLVM");
+    let alloca_line = llvm
+        .lines()
+        .find(|line| line.contains(" = alloca i32, align 4, addrspace(5)"))
+        .expect("LLVM retains the private u32 slot");
+    let slot_name = alloca_line
+        .split_once(" = alloca")
+        .map(|(name, _)| name.trim())
+        .expect("private alloca has one SSA result");
+    assert!(llvm.lines().any(|line| {
+        line.contains("store i32 ") && line.contains(&format!("ptr addrspace(5) {slot_name}"))
+    }));
+    assert!(llvm.lines().any(|line| {
+        line.contains(" = load i32, ptr addrspace(5) ") && line.contains(slot_name)
+    }));
+    let binding = std::fs::read_to_string(&binding_path).expect("crate binding handoff");
+    assert_eq!(binding.trim().len(), 64);
+    assert!(binding.trim().bytes().all(|byte| byte.is_ascii_hexdigit()));
 }
 
 #[test]
@@ -544,19 +772,19 @@ fn ordinary_producer_boundaries_and_cross_artifact_inputs_fail_closed() {
         json!([scalar_json("u32", 0, 4), buffer_json("u32", &zeroes, 4),]),
     );
     let admitted =
-        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&switch_bundle, &switch_request)
-            .expect("switch Bundle V5 admission retains no execution claim");
+        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(&switch_bundle, &switch_request)
+            .expect("switch Bundle V6 admission retains no execution claim");
     let expected = repeated_scalar_bytes(11, 4);
     let initialized = vec![true; expected.len()];
-    let outputs = [ExactBufferExpectationV3 {
+    let outputs = [ExactBufferExpectationV4 {
         argument_ordinal: 1,
         element: ScalarType::U32,
         bytes: &expected,
         initialized: &initialized,
     }];
-    let report = run_production_semantic_conformance_v3(
+    let report = run_production_semantic_conformance_v4(
         &admitted,
-        ProductionSemanticCaseV3 {
+        ProductionSemanticCaseV4 {
             case_id: "switch-u32-exact",
             outputs: &outputs,
         },
@@ -565,23 +793,23 @@ fn ordinary_producer_boundaries_and_cross_artifact_inputs_fail_closed() {
     assert_eq!(report.status, "agreement");
     assert!(!report.hardware_observed);
     assert!(!report.performance_prediction);
-    assert_eq!(report.bundle_version, 5);
-    assert_eq!(report.kir_version, 10);
+    assert_eq!(report.bundle_version, 6);
+    assert_eq!(report.kir_version, 11);
     assert_eq!(report.expected_bytes, LANES * 4);
 
     let integer_bundle = require_export(&scratch, "integer-u32");
     let cross_artifact =
-        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&integer_bundle, &switch_request)
+        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(&integer_bundle, &switch_request)
             .expect("request syntax admission precedes exact kernel preflight");
     assert!(matches!(
-        run_production_semantic_conformance_v3(
+        run_production_semantic_conformance_v4(
             &cross_artifact,
-            ProductionSemanticCaseV3 {
+            ProductionSemanticCaseV4 {
                 case_id: "cross-artifact-request",
                 outputs: &outputs,
             },
         ),
-        Err(ProductionSemanticConformanceErrorV3::Simulation(_))
+        Err(ProductionSemanticConformanceErrorV4::Simulation(_))
     ));
     let mut corrupted = std::fs::read(&integer_bundle).unwrap();
     let last = corrupted.len() - 1;
@@ -589,9 +817,9 @@ fn ordinary_producer_boundaries_and_cross_artifact_inputs_fail_closed() {
     let corrupted_path = scratch.path.join("corrupted.fe2sim");
     std::fs::write(&corrupted_path, corrupted).unwrap();
     assert!(
-        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&corrupted_path, &switch_request,)
+        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v6(&corrupted_path, &switch_request,)
             .is_err(),
-        "corrupted Bundle V5 bytes must fail strict admission"
+        "corrupted Bundle V6 bytes must fail strict admission"
     );
 
     let legacy = semantic_differential_capabilities_v2();

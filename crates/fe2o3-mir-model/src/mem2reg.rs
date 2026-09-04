@@ -133,8 +133,8 @@ impl std::error::Error for MirMem2RegError {}
 /// Parameters are placed at live iterated-dominance-frontier blocks. Values
 /// defined in dominating blocks remain directly usable, while joins and loop
 /// headers receive explicit edge arguments. Locals with projections,
-/// address-taking, storage markers, call destinations, drops, or non-entry
-/// initialization remain slots.
+/// address-taking, storage markers, call destinations, or drops remain slots;
+/// eligible locals may be initialized in any block.
 pub fn promote_module_to_ssa(
     module: &ValidatedMirExecutableModule,
 ) -> Result<(ValidatedMirExecutableModule, MirMem2RegReport), MirMem2RegError> {
@@ -168,7 +168,7 @@ pub fn promote_module_to_ssa_with_resources(
         }
         let original = function.body.clone();
         let facts = BodyLocalFacts::collect(&original);
-        let promoted = eligible_locals(source, function_index, &original, &facts);
+        let promoted = eligible_locals(source, &original, &facts);
         let control_flow = analyze_mir_control_flow(&original).map_err(|error| {
             MirMem2RegError::new(
                 format!("module.functions[{function_index}].body"),
@@ -630,12 +630,9 @@ impl SsaPlan {
 
 fn eligible_locals(
     module: &MirExecutableModule,
-    function_index: usize,
     body: &MirBody,
     facts: &BodyLocalFacts,
 ) -> Vec<MirLocalId> {
-    let function = &module.functions[function_index];
-    let entry_index = body.entry.0 as usize;
     body.locals
         .iter()
         .enumerate()
@@ -652,13 +649,6 @@ fn eligible_locals(
             if !copy_type || facts.disqualified.contains(&id) || !facts.touched.contains(&id) {
                 return None;
             }
-            if local.kind != MirLocalKind::Argument
-                && (!facts.definitions[entry_index].contains(&id)
-                    || facts.upward_exposed_uses[entry_index].contains(&id))
-            {
-                return None;
-            }
-            debug_assert_eq!(function.body.locals[index].ty, local.ty);
             Some(id)
         })
         .collect()

@@ -199,6 +199,11 @@ fn map_binding(
         match producer.kir_version() {
             ProductionSourceIsaCatalogKirVersionV1::V8 => SourceIsaCharacteristicKirVersionV1::V8,
             ProductionSourceIsaCatalogKirVersionV1::V9 => SourceIsaCharacteristicKirVersionV1::V9,
+            ProductionSourceIsaCatalogKirVersionV1::V11 => {
+                return Err(
+                    ProductionSourceIsaCharacteristicProjectionErrorV1::InvalidProducerEvidence,
+                );
+            }
         },
         *producer.structural_binding_identity(),
         SourceIsaCharacteristicStructuralCountsV1 {

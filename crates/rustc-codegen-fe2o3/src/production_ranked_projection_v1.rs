@@ -73,9 +73,9 @@ use fe2o3_pliron::{
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
     ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticMirErrorV1,
-    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_gfx942_lowering_v1,
+    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticSsaErrorV1,
+    ProductionSemanticSsaOwnerV1, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
@@ -757,7 +757,7 @@ impl ProductionRankedRootProgramV1 {
 /// Move-only ordered roster retaining one exact admitted Rust semantic owner
 /// and every root-specific PLIRON graph that passed mandatory generic checks.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
 }
 
@@ -829,7 +829,7 @@ impl ProductionRankedVerifiedRootCandidateV1 {
 /// ordering, KIR, artifact, publication, load, or launch authority is present.
 #[must_use = "dropping the ranked roster receipt abandons its production lineage"]
 pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>,
     canonical_kernel_order: Box<[usize]>,
     canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
@@ -991,6 +991,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     RosterMetadata(&'static str),
     RosterIdentity,
     SemanticOwner(ProductionSemanticMirErrorV1),
+    SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
@@ -1008,6 +1009,12 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::RosterIdentity => formatter.write_str("ranked roster canonical identity changed"),
             Self::SemanticOwner(error) => {
                 write!(formatter, "ranked roster semantic custody failed: {error}")
+            }
+            Self::SemanticSsa(error) => {
+                write!(
+                    formatter,
+                    "ranked roster semantic SSA custody failed: {error}"
+                )
             }
             Self::SemanticU32Induction(error) => {
                 write!(formatter, "ranked roster induction custody failed: {error}")
@@ -1038,6 +1045,7 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
         match self {
             Self::RosterMetadata(_) | Self::RosterIdentity => None,
             Self::SemanticOwner(error) => Some(error),
+            Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
@@ -1362,15 +1370,19 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     }
 
     pub(crate) fn verify_equivalence(&self) -> Result<(), ProductionRankedVerificationErrorV1> {
+        self.semantic_ssa_owner
+            .verify_replay()
+            .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
+        let semantic_owner = self.semantic_ssa_owner.source_owner();
         let semantic_bindings = self
             .source_order_roots
             .iter()
             .map(ranked_verified_root_semantic_binding_v1)
             .collect::<Vec<_>>();
-        validate_ranked_roster_semantic_bindings_v1(&self.semantic_owner, &semantic_bindings)?;
+        validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
         for root in &self.source_order_roots {
             fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                &self.semantic_owner,
+                semantic_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1379,7 +1391,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             )
             .map_err(ProductionRankedVerificationErrorV1::Custody)?;
             let revalidated = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
-                &self.semantic_owner,
+                semantic_owner,
                 &root.lowering,
                 &root.ranked_ir,
             )
@@ -1404,7 +1416,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                     "changed per-root ranked verification custody",
                 ));
             }
-            validate_ranked_root_induction_custody_v1(&self.semantic_owner, root)?;
+            validate_ranked_root_induction_custody_v1(semantic_owner, root)?;
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
         require_exact_ranked_kernel_roster_identity_v1(
@@ -1425,7 +1437,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     > {
         self.verify_equivalence()?;
         let Self {
-            semantic_owner,
+            semantic_ssa_owner,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1466,8 +1478,8 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 verification,
             });
         }
-        let receipt = fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
-            semantic_owner,
+        let receipt = fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_ssa_projection_roster_candidate(
+            semantic_ssa_owner,
             lowering_roots,
         )
         .map_err(ProductionRankedVerificationErrorV1::Custody)?;
@@ -1497,11 +1509,11 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.semantic_owner.semantic().functions().len()
+        self.semantic_ssa_owner.source_semantic().functions().len()
     }
 
     pub(crate) fn semantic_callable_count(&self) -> usize {
-        self.semantic_owner.semantic().callables().len()
+        self.semantic_ssa_owner.source_semantic().callables().len()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
@@ -1527,19 +1539,23 @@ impl ProductionRankedSemanticProgramV1 {
         ProductionRankedVerificationErrorV1,
     > {
         let Self {
-            semantic_owner,
+            semantic_ssa_owner,
             roots,
         } = self;
+        semantic_ssa_owner
+            .verify_replay()
+            .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
+        let semantic_owner = semantic_ssa_owner.source_owner();
         let semantic_bindings = roots
             .iter()
             .map(ranked_root_program_semantic_binding_v1)
             .collect::<Vec<_>>();
-        validate_ranked_roster_semantic_bindings_v1(&semantic_owner, &semantic_bindings)?;
+        validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
 
         let mut verified_roots = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                &semantic_owner,
+                semantic_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1561,7 +1577,7 @@ impl ProductionRankedSemanticProgramV1 {
                 executable_effect_sources,
             } = root;
             let verification = authenticate_ranked_root_v5(
-                &semantic_owner,
+                semantic_owner,
                 &lowering,
                 &ranked_ir,
                 semantic_u32_induction,
@@ -1585,7 +1601,7 @@ impl ProductionRankedSemanticProgramV1 {
         let (canonical_roster_identity, canonical_kernel_order) =
             derive_ranked_kernel_roster_identity_v1(&records)?;
         let receipt = ProductionRankedSemanticProjectionRosterReceiptV1 {
-            semantic_owner,
+            semantic_ssa_owner,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1597,7 +1613,7 @@ impl ProductionRankedSemanticProgramV1 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
-    SemanticOwner(ProductionSemanticMirErrorV1),
+    SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
@@ -1640,8 +1656,8 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SemanticOwner(error) => {
-                write!(formatter, "exact semantic middle end failed: {error}")
+            Self::SemanticSsa(error) => {
+                write!(formatter, "semantic SSA custody failed: {error}")
             }
             Self::SemanticU32Induction(error) => {
                 write!(
@@ -1760,7 +1776,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
 impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::SemanticOwner(error) => Some(error),
+            Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
             Self::Recipe(error) => Some(error),
@@ -2777,14 +2793,15 @@ fn derive_defined_callable_empty_effect_summaries_v1(
 }
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
-    semantic_owner
-        .verify_equivalence()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
-    let semantic = semantic_owner.semantic();
+    semantic_ssa_owner
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+    let semantic_owner = semantic_ssa_owner.source_owner();
+    let semantic = semantic_ssa_owner.source_semantic();
     let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
         semantic.types(),
         semantic.functions(),
@@ -2846,7 +2863,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             ));
         }
         fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-            &semantic_owner,
+            semantic_owner,
             semantic_root,
             &root.lowering,
             &root.ranked_ir,
@@ -2856,11 +2873,11 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
         roots.push(root);
     }
-    semantic_owner
-        .verify_equivalence()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
+    semantic_ssa_owner
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
     Ok(ProductionRankedSemanticProgramV1 {
-        semantic_owner,
+        semantic_ssa_owner,
         roots: roots.into_boxed_slice(),
     })
 }
@@ -18139,6 +18156,9 @@ enum ProjectedCfgTerminatorV1 {
         first_block: usize,
         second_block: usize,
     },
+    AnalysisMultiSplit {
+        blocks: Vec<usize>,
+    },
     ExactSwitch(ProjectedDeterministicSwitchV1),
     Return,
     Trap,
@@ -18184,28 +18204,60 @@ fn projected_cfg_terminator(
                 {
                     return Ok(ProjectedCfgTerminatorV1::ExactSwitch(projected));
                 }
-                if targets.values().len() == 1 {
-                    return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
-                        first_block: target(targets.values()[0].edge().target())?,
-                        second_block: target(targets.otherwise().target())?,
-                    });
+                let successor_capacity = targets.values().len().checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch successor count overflow",
+                    ),
+                )?;
+                if successor_capacity > MAX_RANKED_BOUNDS_EDGES {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch edge count exceeds the ranked edge limit",
+                    ));
                 }
-                if targets.values().len() == 2
+                let otherwise = target(targets.otherwise().target())?;
+                let elide_fallback = targets.values().len() == 2
                     && targets.values()[0].value() == 0
                     && targets.values()[1].value() == 1
-                    && switch_fallback_is_empty_unreachable_v1(
-                        function,
-                        target(targets.otherwise().target())?,
+                    && switch_fallback_is_empty_unreachable_v1(function, otherwise);
+                let mut successors = Vec::new();
+                successors
+                    .try_reserve_exact(successor_capacity)
+                    .map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "analysis switch successor storage cannot be reserved",
+                        )
+                    })?;
+                let mut seen = HashSet::new();
+                seen.try_reserve(successor_capacity).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch successor set cannot be reserved",
                     )
-                {
-                    return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
-                        first_block: target(targets.values()[0].edge().target())?,
-                        second_block: target(targets.values()[1].edge().target())?,
-                    });
+                })?;
+                for successor in targets.values() {
+                    let successor = target(successor.edge().target())?;
+                    if seen.insert(successor) {
+                        successors.push(successor);
+                    }
                 }
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a general switch whose only extra successor is not one empty unreachable fallback",
-                ));
+                if !elide_fallback && seen.insert(otherwise) {
+                    successors.push(otherwise);
+                }
+                if successors.len() > MAX_RANKED_BOUNDS_BLOCKS {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch successor count exceeds the ranked block limit",
+                    ));
+                }
+                return match successors.as_slice() {
+                    [] => Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch has no successor",
+                    )),
+                    [successor] => Ok(ProjectedCfgTerminatorV1::Branch(*successor)),
+                    [first_block, second_block] => Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
+                        first_block: *first_block,
+                        second_block: *second_block,
+                    }),
+                    _ => Ok(ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: successors }),
+                };
             };
             if targets.values().len() == 1 {
                 let explicit = &targets.values()[0];
@@ -18368,6 +18420,13 @@ fn projected_block_expansion(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "deterministic switch CFG block count overflow",
             ))?;
+    }
+    if let ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks } = terminator {
+        count = count.checked_add(blocks.len().saturating_sub(2)).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "analysis switch CFG block count overflow",
+            ),
+        )?;
     }
     Ok(count)
 }
@@ -18974,6 +19033,18 @@ fn build_ranked_cfg(
                     first_block: ranked_block_id(projected_target(&base_blocks, first_block)?)?,
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
+                ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: targets } => {
+                    append_analysis_multi_split_blocks_with_arguments(
+                        &mut blocks,
+                        current,
+                        operations,
+                        &targets,
+                        &base_blocks,
+                        live,
+                        &live_inductions,
+                    )?;
+                    continue;
+                }
                 ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.is_empty() => {
                     ProductionRankedTerminatorV1::BranchArgs {
                         arguments: arguments_for(switch.otherwise)?,
@@ -19064,6 +19135,15 @@ fn build_ranked_cfg(
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
             )?,
+            ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: targets } => {
+                append_analysis_multi_split_blocks(
+                    &mut blocks,
+                    current,
+                    operations,
+                    &targets,
+                    &base_blocks,
+                )?;
+            }
             ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
                 append_exact_switch_blocks(
                     &mut blocks,
@@ -19356,6 +19436,9 @@ fn reachable_projected_blocks(
                 pending.push(*first_block);
                 pending.push(*second_block);
             }
+            ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks } => {
+                pending.extend(blocks.iter().copied());
+            }
             ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
                 pending.extend(switch.targets.iter().map(|(_, _, target)| *target));
                 pending.push(switch.otherwise);
@@ -19506,6 +19589,119 @@ fn append_exact_switch_blocks(
                 rhs: variant,
                 true_block: ranked_block_id(projected_target(base_blocks, target)?)?,
                 false_block: ranked_block_id(false_block)?,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn append_analysis_multi_split_blocks(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    targets: &[usize],
+    base_blocks: &[Option<usize>],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if targets.len() < 3 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an analysis multi-split has fewer than three successors",
+        ));
+    }
+    let mut first_operations = Some(first_operations);
+    for index in 0..targets.len() - 1 {
+        let block = first_block.checked_add(index).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "analysis switch CFG block count overflow",
+            ),
+        )?;
+        let second_block = if index + 2 == targets.len() {
+            projected_target(base_blocks, targets[index + 1])?
+        } else {
+            block
+                .checked_add(1)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "analysis switch CFG block count overflow",
+                ))?
+        };
+        push_block_at(
+            blocks,
+            block,
+            first_operations.take().unwrap_or_default(),
+            ProductionRankedTerminatorV1::AnalysisSplit {
+                control_dependencies: Vec::new(),
+                first_block: ranked_block_id(projected_target(base_blocks, targets[index])?)?,
+                second_block: ranked_block_id(second_block)?,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_analysis_multi_split_blocks_with_arguments(
+    blocks: &mut Vec<ProductionRankedBlockV1>,
+    first_block: usize,
+    first_operations: Vec<ProductionRankedOperationV1>,
+    targets: &[usize],
+    base_blocks: &[Option<usize>],
+    live: &[usize],
+    live_inductions: &[Vec<usize>],
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if targets.len() < 3 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an analysis multi-split has fewer than three successors",
+        ));
+    }
+    let argument_count = u32::try_from(live.len()).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "live induction argument count does not fit u32",
+        )
+    })?;
+    let mut first_operations = Some(first_operations);
+    for index in 0..targets.len() - 1 {
+        let block = first_block.checked_add(index).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "analysis switch CFG block count overflow",
+            ),
+        )?;
+        let block_id = ranked_block_id(block)?;
+        let first_live = live_inductions.get(targets[index]).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "an analysis switch successor is outside the live induction table",
+            ),
+        )?;
+        let (second_arguments, second_block) = if index + 2 == targets.len() {
+            let second = targets[index + 1];
+            let second_live = live_inductions.get(second).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "an analysis switch successor is outside the live induction table",
+                ),
+            )?;
+            (
+                forward_live_inductions(block_id, live, second_live)?,
+                projected_target(base_blocks, second)?,
+            )
+        } else {
+            (
+                live_induction_block_arguments(block_id, live)?,
+                block
+                    .checked_add(1)
+                    .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch CFG block count overflow",
+                    ))?,
+            )
+        };
+        push_block_at_with_index_arguments(
+            blocks,
+            block,
+            argument_count,
+            first_operations.take().unwrap_or_default(),
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                control_dependencies: Vec::new(),
+                first_arguments: forward_live_inductions(block_id, live, first_live)?,
+                second_arguments,
+                first_block: ranked_block_id(projected_target(base_blocks, targets[index])?)?,
+                second_block: ranked_block_id(second_block)?,
             },
         )?;
     }
@@ -28144,7 +28340,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_binary_switch_keeps_reachable_or_malformed_fallbacks_fail_closed() {
+    fn unresolved_binary_switch_keeps_live_and_unauthenticated_fallbacks() {
         for function in [
             explicit_binary_switch_with_fallback([0, 1], vec![], SemanticTerminatorKindV1::Return),
             explicit_binary_switch_with_fallback(
@@ -28158,13 +28354,136 @@ mod tests {
                 SemanticTerminatorKindV1::Unreachable,
             ),
         ] {
-            assert!(matches!(
-                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[]),
-                Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a general switch whose only extra successor is not one empty unreachable fallback"
-                ))
-            ));
+            assert_eq!(
+                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],)
+                    .unwrap(),
+                ProjectedCfgTerminatorV1::AnalysisMultiSplit {
+                    blocks: vec![1, 2, 3],
+                }
+            );
         }
+    }
+
+    #[test]
+    fn multiway_analysis_split_forwards_live_inductions_through_synthetic_blocks() {
+        let mut blocks = vec![ProductionRankedBlockV1::new(
+            vec![],
+            ProductionRankedTerminatorV1::Return,
+        )];
+        let base_blocks = [Some(1), Some(3), Some(4), Some(5)];
+        let live_inductions = [vec![0, 1], vec![0], vec![1], vec![0, 1]];
+        append_analysis_multi_split_blocks_with_arguments(
+            &mut blocks,
+            1,
+            vec![],
+            &[1, 2, 3],
+            &base_blocks,
+            &[0, 1],
+            &live_inductions,
+        )
+        .unwrap();
+
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(
+            blocks[1].terminator(),
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                first_arguments,
+                second_arguments,
+                first_block,
+                second_block,
+                ..
+            } if first_arguments == &[ProductionRankedValueV1::BlockArgument {
+                block: 1,
+                argument: 0,
+            }]
+                && second_arguments == &[
+                    ProductionRankedValueV1::BlockArgument {
+                        block: 1,
+                        argument: 0,
+                    },
+                    ProductionRankedValueV1::BlockArgument {
+                        block: 1,
+                        argument: 1,
+                    },
+                ]
+                && *first_block == 3
+                && *second_block == 2
+        ));
+        assert!(matches!(
+            blocks[2].terminator(),
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                first_arguments,
+                second_arguments,
+                first_block,
+                second_block,
+                ..
+            } if first_arguments == &[ProductionRankedValueV1::BlockArgument {
+                block: 2,
+                argument: 1,
+            }]
+                && second_arguments == &[
+                    ProductionRankedValueV1::BlockArgument {
+                        block: 2,
+                        argument: 0,
+                    },
+                    ProductionRankedValueV1::BlockArgument {
+                        block: 2,
+                        argument: 1,
+                    },
+                ]
+                && *first_block == 4
+                && *second_block == 5
+        ));
+    }
+
+    #[test]
+    fn multiway_analysis_split_expansion_enforces_the_ranked_block_limit() {
+        let exact_successors = MAX_RANKED_BOUNDS_BLOCKS / 2;
+        let exact = explicit_multi_switch(exact_successors);
+        let (blocks, _, _) = build_ranked_cfg(
+            &projection_types(),
+            &exact,
+            &[],
+            &[const { None }; 2],
+            &vec![None; exact.blocks().len()],
+            &[],
+            vec![],
+            (0..exact.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(blocks.len(), MAX_RANKED_BOUNDS_BLOCKS);
+
+        let oversized = explicit_multi_switch(exact_successors + 1);
+        assert!(matches!(
+            build_ranked_cfg(
+                &projection_types(),
+                &oversized,
+                &[],
+                &[const { None }; 2],
+                &vec![None; oversized.blocks().len()],
+                &[],
+                vec![],
+                (0..oversized.blocks().len())
+                    .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                    .collect(),
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "semantic CFG projection exceeds the ranked block limit"
+            ))
+        ));
+    }
+
+    #[test]
+    fn unresolved_switch_fanout_is_bounded_before_analysis_allocation() {
+        let function = explicit_multi_switch(MAX_RANKED_BOUNDS_BLOCKS + 1);
+        assert!(matches!(
+            projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "analysis switch successor count exceeds the ranked block limit"
+            ))
+        ));
     }
 
     #[test]
@@ -35631,6 +35950,11 @@ mod tests {
             fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
         )
         .unwrap();
+        let owner = ProductionSemanticSsaOwnerV1::try_new(
+            owner,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
         let projected = project_and_verify_ranked_semantic_mir_v1(
             owner,
             &[ranked_root_input("deep_constant_alias", 0xd5, 1)],
@@ -36366,7 +36690,7 @@ mod tests {
     }
 
     #[test]
-    fn body_control_threads_typed_induction_edges() {
+    fn body_control_threads_typed_induction_over_a_duplicate_switch_target() {
         let function = multi_block_induction_function(
             InductionCfgShape::AnalysisSplit,
             SemanticLocalRoleV1::Argument(0),
@@ -36386,13 +36710,15 @@ mod tests {
                 .collect(),
         )
         .unwrap();
-        assert!(blocks.iter().any(|block| matches!(
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::BranchArgs { arguments, target }
+                if arguments.len() == 1 && *target == 4
+        ));
+        assert!(!blocks.iter().any(|block| matches!(
             block.terminator(),
-            ProductionRankedTerminatorV1::AnalysisSplitArgs {
-                first_arguments,
-                second_arguments,
-                ..
-            } if first_arguments.len() == 1 && second_arguments.len() == 1
+            ProductionRankedTerminatorV1::AnalysisSplit { .. }
+                | ProductionRankedTerminatorV1::AnalysisSplitArgs { .. }
         )));
     }
 

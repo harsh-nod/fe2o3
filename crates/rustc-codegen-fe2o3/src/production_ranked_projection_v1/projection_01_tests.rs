@@ -60,7 +60,7 @@
             .next()
             .expect("ranked roster receipt fields");
         for retained in [
-            "semantic_owner: ProductionSemanticMirOwnerV1",
+            "semantic_ssa_owner: ProductionSemanticSsaOwnerV1",
             "source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>",
             "canonical_kernel_order: Box<[usize]>",
             "canonical_roster_identity: ProductionRankedKernelRosterIdentityV1",
@@ -98,7 +98,7 @@
             .next()
             .expect("bounded complete module transition");
         assert!(module.contains("for root in source_order_roots.into_vec()"));
-        assert!(module.contains("from_unvalidated_projection_roster_candidate"));
+        assert!(module.contains("from_unvalidated_ssa_projection_roster_candidate"));
         assert!(module.contains("AuthenticatedRankedVerificationRosterV1"));
         assert!(!module.contains("into_singleton_verified_receipt"));
         assert!(!module.contains("try_lower_after_ranked_checks"));
@@ -840,6 +840,11 @@
         let owner = ProductionSemanticMirOwnerV1::try_new(
             admitted,
             fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let owner = ProductionSemanticSsaOwnerV1::try_new(
+            owner,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .unwrap();
         project_and_verify_ranked_semantic_mir_v1(

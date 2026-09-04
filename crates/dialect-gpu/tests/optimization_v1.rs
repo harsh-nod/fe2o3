@@ -375,6 +375,25 @@ fn pointer_access_is_typed_and_memory_ops_remain_effectful() {
     .into();
     let pointer_block = BasicBlock::new(ctx, None, vec![read_write]);
     let pointer = pointer_block.deref(ctx).get_argument(0);
+    let read_only = PointerType::get(
+        ctx,
+        u32_ty,
+        AddressSpaceAttr::Global,
+        AccessModeAttr::ReadOnly,
+    )
+    .into();
+    let restriction = CastOp::new(ctx, CastKindAttr::RestrictPointerAccess, pointer, read_only);
+    verify_op(&restriction, ctx).expect("read-write to read-only pointer restriction");
+    let restriction_effects =
+        op_cast::<dyn SideEffects>(&restriction).expect("cast side effects interface");
+    assert!(!restriction_effects.has_side_effects(ctx));
+    let widening = CastOp::new(
+        ctx,
+        CastKindAttr::RestrictPointerAccess,
+        restriction.result(ctx),
+        read_write,
+    );
+    assert!(verify_op(&widening, ctx).is_err());
     let value = ConstantOp::new(ctx, integer_attr(ctx, 7));
 
     let load = LoadOp::new(ctx, pointer, 4, true).expect("readable pointer");

@@ -1,0 +1,12 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: PASS
+// CHECK: resources blocks=1 reachable=1 pruned=0 edges=0 events=1 edge-definitions=0 definitions=1
+// CHECK: promoted [v0]
+// CHECK: event 0 use v0=d0
+
+entry b0
+variables v0
+entry-def v0
+limits variables=1 blocks=1 edges=0 events=1 edge-definitions=0
+block b0
+use v0

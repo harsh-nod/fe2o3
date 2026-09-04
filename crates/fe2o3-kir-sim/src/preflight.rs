@@ -1633,18 +1633,27 @@ fn scan_operation(
                 reject!(UnsupportedFeatureV1::UnsupportedScalarOperation);
             }
         }
-        OperationKind::Cast { value: operand, .. } => {
-            if let OperationKind::Cast { kind, to, .. } = &operation.kind
-                && let (Some(Type::Scalar(from)), Type::Scalar(to)) = (value_types.get(operand), to)
-                && !supported_cast(*kind, *from, *to, target)
-            {
+        OperationKind::Cast {
+            kind,
+            value: operand,
+            to,
+        } => match (kind, value_types.get(operand), to) {
+            (CastKind::RestrictPointerAccess, Some(Type::Pointer(from)), Type::Pointer(to))
+                if from.pointee == to.pointee
+                    && from.address_space == to.address_space
+                    && from.access == AccessMode::ReadWrite
+                    && to.access == AccessMode::ReadOnly => {}
+            (kind, Some(Type::Scalar(from)), Type::Scalar(to))
+                if supported_cast(*kind, *from, *to, target) => {}
+            (kind, Some(Type::Scalar(from)), Type::Scalar(to)) => {
                 reject!(UnsupportedFeatureV1::InvalidIntegerCast {
                     from: *from,
                     to: *to,
                     kind: *kind,
                 });
             }
-        }
+            _ => reject!(UnsupportedFeatureV1::UnsupportedScalarOperation),
+        },
         OperationKind::Binary { op, lhs, rhs } => {
             if !matches!(
                 (value_types.get(lhs), value_types.get(rhs)),
@@ -1996,6 +2005,7 @@ pub(crate) fn supported_cast(
         return false;
     };
     match kind {
+        CastKind::RestrictPointerAccess => false,
         CastKind::Truncate => from.is_integer() && to.is_integer() && to_bits < from_bits,
         CastKind::ZeroExtend => {
             (from.is_integer() || from == ScalarType::Bool)
