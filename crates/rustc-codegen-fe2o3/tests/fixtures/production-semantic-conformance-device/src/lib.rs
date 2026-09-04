@@ -123,41 +123,6 @@ pub fn atomic_u32(target: fe2o3_device::DeviceGlobalMutPtr<u32>) {
     let _ = target.fetch_add(1, Ordering::Relaxed);
 }
 
-#[cfg(feature = "volatile-memory")]
-#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn volatile_memory(source: &[u32], mut destination: DisjointSlice<u32>) {
-    let destination_index = thread::index_1d().into_disjoint();
-    let value = fe2o3_device::memory::volatile_load(source, 0);
-    fe2o3_device::memory::volatile_store(&mut destination, &destination_index, value);
-}
-
-#[cfg(feature = "volatile-collectives")]
-#[kernel(
-    typed,
-    launch(
-        required = [64, 1, 1],
-        max = [64, 1, 1],
-        static_shared_memory_bytes = 512
-    )
-)]
-pub fn volatile_collectives(source: &[u32], mut destination: DisjointSlice<u32>) {
-    let value = fe2o3_device::memory::volatile_load(source, 0);
-    let scan = {
-        let mut scope = fe2o3_device::WorkgroupLdsScope::current();
-        let scratch = fe2o3_device::DynamicLds::<u32>::exact_current::<64>(&mut scope);
-        fe2o3_device::WorkgroupCollectives::current().inclusive_scan_sum(scratch, value)
-    };
-    let reduce = {
-        let mut scope = fe2o3_device::WorkgroupLdsScope::current();
-        let scratch = fe2o3_device::DynamicLds::<i32>::exact_current::<64>(&mut scope);
-        fe2o3_device::WorkgroupCollectives::current().reduce_sum_portable(scratch, value as i32)
-    };
-    let _ = reduce;
-    if let Some(destination) = destination.get_mut(thread::index_1d()) {
-        *destination = scan;
-    }
-}
-
 #[cfg(feature = "unsupported-memory")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn unsupported_memory(source: &[u32], mut destination: DisjointSlice<u32>) {

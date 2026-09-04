@@ -100,7 +100,8 @@ fn compiler_authenticated_sqrt_reaches_exact_gfx942_and_gfx950_llvm() {
         );
         assert!(
             stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
-                && stderr.contains(&format!("composed formal/ranked memory -> {target} LLVM"))
+                && stderr.contains("composed formal/ranked memory -> target-KIR optimizer")
+                && stderr.contains(&format!("-> {target} LLVM"))
                 && stderr.contains("artifact/launch authority false"),
             "production sqrt extraction omitted its target-bound receipt for {target}:\n{stderr}",
         );

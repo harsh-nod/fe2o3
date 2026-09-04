@@ -724,7 +724,7 @@ fn live_qualification_archives_exact_runtime_bytes_and_rejects_stale_input() {
         .unwrap();
     let fixture = Fixture::new(false);
     fixture.replace_behavior(
-        "target = args[args.index(\"--\") + 1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)",
+        "os.umask(0o077)\ntarget = args[args.index(\"--\") + 1:]\nraise SystemExit(subprocess.run(target, check=False).returncode)",
     );
     let output_directory = fixture.output("live-capture");
     let runtime = fixture.output("runtime.json");

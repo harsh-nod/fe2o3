@@ -1190,10 +1190,7 @@ for production_step in \
   rocm-production-simulation-bundle-gfx942 \
   rocm-production-simulation-bundle-gfx950 \
   rocm-production-simulation-bundle-v2-source-variables \
-  rocm-production-simulation-bundle-v2-invalid-name \
-  rocm-production-v11-volatile-execution \
-  rocm-production-v11-volatile-bounds-failure \
-  rocm-production-v11-volatile-collective-composition; do
+  rocm-production-simulation-bundle-v2-invalid-name; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
   if [[ " $(step_command "${production_step}") " == *" --features "* ]]; then
@@ -1228,18 +1225,6 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_general_matrix_driver_v1 dynamic_attention_kernel_reaches_gfx942_llvm -- --ignored --exact' \
   "$(step_command rocm-production-general-attention)" \
   'ROCm compile did not run the exact successful dynamic attention compiler test'
-assert_equals \
-  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_semantic_conformance_v3 authenticated_volatile_load_store_execute_with_exact_bounds_semantics -- --ignored --exact' \
-  "$(step_command rocm-production-v11-volatile-execution)" \
-  'ROCm compile did not run the exact V11 volatile execution test'
-assert_equals \
-  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_semantic_conformance_v3 volatile_bounds_failures_skip_memory_access_and_trap -- --ignored --exact' \
-  "$(step_command rocm-production-v11-volatile-bounds-failure)" \
-  'ROCm compile did not run the exact V11 volatile bounds-failure test'
-assert_equals \
-  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_semantic_conformance_v3 v11_full_request_composes_volatile_scan_and_reduce_canonically -- --ignored --exact' \
-  "$(step_command rocm-production-v11-volatile-collective-composition)" \
-  'ROCm compile did not run the exact V11 volatile collective-composition test'
 assert_equals \
   "cargo test --locked -p dialect-amdgcn --test lowering rocm_compiles_the_golden_to_an_amdgpu_code_object -- --ignored --exact" \
   "$(step_command rocm-g1-code-object)" \

@@ -531,6 +531,7 @@ name = "fe2o3-host"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-amdhsa-loader",
  "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
@@ -544,6 +545,7 @@ dependencies = [
  "fe2o3-kfd",
  "fe2o3-runtime",
  "fe2o3-runtime-protocol",
+ "fe2o3-service-host",
  "fe2o3-verifier",
  "libc",
  "reserved-fe2o3-symbols",
@@ -793,8 +795,24 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
+ "libc",
  "sha2 0.11.0",
 ]
+
+[[package]]
+name = "fe2o3-service-host"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdhsa-loader",
+ "fe2o3-aql",
+ "fe2o3-host-api",
+ "fe2o3-kfd",
+ "fe2o3-service-model",
+]
+
+[[package]]
+name = "fe2o3-service-model"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-source-isa-observation"

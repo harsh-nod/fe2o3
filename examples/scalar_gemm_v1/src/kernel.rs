@@ -1,3 +1,8 @@
+//! Scalar dynamic GEMM qualification kernel.
+//!
+//! Each in-range thread owns one C element, derives its row and column, evaluates
+//! the K recurrence in strict order, and stores through a disjoint capability.
+
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
 // The compiler qualification profile authenticates this explicit recurrence and division guard.
@@ -11,7 +16,9 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     launch(required = [256, 1, 1], max = [256, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]
+/// Computes row-major `C = A * B` with one output element per in-range thread.
 pub fn scalar_gemm_v1(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, m: u32, n: u32, k: u32) {
+    // Flattened grid ownership gives each participating thread one output index.
     let index = thread::index_1d();
     let p = index.get();
     let n_index = n as usize;
@@ -20,6 +27,7 @@ pub fn scalar_gemm_v1(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, m: u32, n
         if p < output_extent {
             let row = (p / n_index) as u32;
             let col = (p % n_index) as u32;
+            // Preserve the explicit K recurrence authenticated by the compiler profile.
             let mut accumulator = 0.0_f32;
             let mut t = 0_u32;
             while t < k {
@@ -29,6 +37,7 @@ pub fn scalar_gemm_v1(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, m: u32, n
                 accumulator = accumulator + product;
                 t = t + 1;
             }
+            // DisjointSlice turns the ownership mapping into the store permission.
             if let Some(output) = c.get_mut(index) {
                 *output = accumulator;
             }

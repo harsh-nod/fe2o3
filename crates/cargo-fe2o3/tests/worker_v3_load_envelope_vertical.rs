@@ -120,10 +120,12 @@ fn static_v3_application_fixtures() -> &'static StaticV3ApplicationFixtures {
         if !static_rustflags.is_empty() {
             static_rustflags.push(" ");
         }
-        static_rustflags.push("-C target-feature=+crt-static");
+        static_rustflags.push("-C target-feature=+crt-static -C debuginfo=0");
         let built = Command::new(cargo)
             .current_dir(workspace)
             .env_remove("RUSTFLAGS")
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_PROFILE_DEV_DEBUG", "0")
             .env(
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
                 static_rustflags,
@@ -883,6 +885,27 @@ where
         request: &WorkerV3RosterVerificationRequestV1<'_, R>,
     ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
         self.calls += 1;
+        let envelope = request.load_envelope_evidence_view();
+        let exact_envelope = envelope.exact_canonical_bytes();
+        let exact_envelope_sha256: [u8; 32] = Sha256::digest(exact_envelope).into();
+        assert_eq!(
+            envelope.binding().byte_length(),
+            exact_envelope.len() as u64
+        );
+        assert_eq!(envelope.binding().sha256(), exact_envelope_sha256);
+        assert_eq!(
+            WorkerV3LoadEnvelopeWireV2::decode_canonical(exact_envelope)
+                .unwrap()
+                .encode_canonical()
+                .unwrap(),
+            exact_envelope
+        );
+        assert!(!envelope.grants_authority());
+        assert!(!envelope.grants_verification_authority());
+        assert!(!envelope.grants_publication_authority());
+        assert!(!envelope.grants_currentness_authority());
+        assert!(!envelope.grants_load_authority());
+        assert!(!envelope.grants_launch_authority());
         let mut subject = request.compiler_execution_subject_sha256();
         let mut verification_transcript = [0xc2; 32];
         match self.fault {
@@ -1034,6 +1057,28 @@ where
                 entries,
             )
         })
+    }
+}
+
+#[derive(Default)]
+struct RejectingTestProtectedRosterVerifier {
+    calls: usize,
+}
+
+// SAFETY: this test-only backend never returns protected evidence. Its rejection exercises owner
+// recovery after the complete protected call and host-side currentness revalidation.
+unsafe impl<R> WorkerV3ProtectedRosterVerifierBackendV1<R> for RejectingTestProtectedRosterVerifier
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    type Error = &'static str;
+
+    unsafe fn verify_protected_roster(
+        &mut self,
+        _request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    ) -> Result<WorkerV3ProtectedRosterVerificationEvidenceV1, Self::Error> {
+        self.calls += 1;
+        Err("synthetic protected roster verifier rejection")
     }
 }
 
@@ -1477,6 +1522,35 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
     assert_eq!(report["loader_environment_clear"], true);
     assert_eq!(report["admitted"], true);
     assert_eq!(report["current"], true);
+
+    let recovered =
+        recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+    assert_eq!(recovered.receipt(), fixture.readiness);
+}
+
+#[test]
+fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_roster_handoff() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture
+        .directory
+        .0
+        .join("v3-application-roster-report.json");
+    let completed = v3_application_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-consume-roster")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "strict V3 application roster handoff failed: {}; report: {}",
+        String::from_utf8_lossy(&completed.stderr),
+        fs::read_to_string(&report).unwrap_or_else(|error| format!("unavailable ({error})"))
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], true);
+    assert_eq!(report["current"], true);
+    assert_eq!(report["roster"], true);
 
     let recovered =
         recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
@@ -2175,6 +2249,57 @@ fn protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entri
 }
 
 #[test]
+fn protected_roster_verifier_rejection_retains_exact_owner_for_retry() {
+    let (_directory, recovered) = recovered_synthetic_two_kernel_host_fixture();
+    let admitted =
+        admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(recovered)
+            .unwrap();
+    let admitted_lineage = admitted.lineage_identity();
+    let admitted_publication = admitted.published();
+    let admitted_entry_count = admitted.entrypoints().len();
+    let mut verifier = WorkerV3ProtectedRosterVerifierAdapterV1::new(
+        RejectingTestProtectedRosterVerifier::default(),
+    );
+
+    let failure =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut verifier,
+        )
+        .unwrap_err();
+    let (error, admitted) = failure.into_parts();
+    assert!(matches!(
+        error,
+        WorkerV3RosterVerificationAuthenticationErrorV1::Verifier(
+            "synthetic protected roster verifier rejection"
+        )
+    ));
+    assert_eq!(admitted.lineage_identity(), admitted_lineage);
+    assert_eq!(admitted.published(), admitted_publication);
+    assert_eq!(admitted.entrypoints().len(), admitted_entry_count);
+    admitted.revalidate_currentness().unwrap();
+    assert_eq!(verifier.into_inner().calls, 1);
+
+    let mut retry_verifier =
+        WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
+            fault: ReviewedTestProtectedRosterVerifierFault::None,
+            calls: 0,
+            foreign_finalizer: None,
+        });
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            admitted,
+            &mut retry_verifier,
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        admitted_lineage
+    );
+    assert_eq!(retry_verifier.into_inner().calls, 1);
+}
+
+#[test]
 fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation() {
     let (_primary_directory, primary) = recovered_synthetic_two_kernel_host_fixture();
     let (_foreign_directory, foreign) = recover_published_worker_v3_fixture(
@@ -2206,23 +2331,44 @@ fn protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivatio
     let primary_admission =
         admit_recovered_worker_v3_roster_v1::<WorkerV3SyntheticTwoTransformRoster>(primary)
             .unwrap();
+    let primary_lineage = primary_admission.lineage_identity();
+    let primary_publication = primary_admission.published();
+    let primary_entry_count = primary_admission.entrypoints().len();
     let mut verifier =
         WorkerV3ProtectedRosterVerifierAdapterV1::new(ReviewedTestProtectedRosterVerifier {
             fault: ReviewedTestProtectedRosterVerifierFault::None,
             calls: 0,
             foreign_finalizer: Some(foreign_finalizer),
         });
-    let error = AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
-        primary_admission,
-        &mut verifier,
-    )
-    .unwrap_err();
+    let failure =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            primary_admission,
+            &mut verifier,
+        )
+        .unwrap_err();
+    let (error, primary_admission) = failure.into_parts();
     assert!(matches!(
         error,
         WorkerV3RosterVerificationAuthenticationErrorV1::Decision(
             WorkerV3RosterVerificationDecisionErrorV1::IdentityMismatch("finalizer derivation")
         )
     ));
+    assert_eq!(primary_admission.lineage_identity(), primary_lineage);
+    assert_eq!(primary_admission.published(), primary_publication);
+    assert_eq!(primary_admission.entrypoints().len(), primary_entry_count);
+    primary_admission.revalidate_currentness().unwrap();
+
+    let authenticated =
+        AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
+            primary_admission,
+            &mut verifier,
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.verification().lineage_identity(),
+        primary_lineage
+    );
+    assert_eq!(verifier.into_inner().calls, 2);
 }
 
 #[test]
@@ -2314,17 +2460,19 @@ fn protected_roster_verifier_rejects_common_and_per_entry_substitution() {
                 calls: 0,
                 foreign_finalizer: None,
             });
-        let error =
+        let failure =
             AuthenticatedWorkerV3RosterV1::<WorkerV3SyntheticTwoTransformRoster>::authenticate(
                 admitted,
                 &mut verifier,
             )
             .unwrap_err();
+        let (error, admitted) = failure.into_parts();
         assert!(matches!(
             error,
             WorkerV3RosterVerificationAuthenticationErrorV1::Decision(actual)
                 if actual == expected
         ));
+        admitted.revalidate_currentness().unwrap();
         assert_eq!(verifier.into_inner().calls, 1);
     }
 }

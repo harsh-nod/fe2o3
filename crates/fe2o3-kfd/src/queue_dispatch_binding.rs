@@ -931,7 +931,9 @@ impl DispatchGenerationOwnerV1 {
         debug_assert_eq!(self.next_generation, generation);
         self.next_generation = generation + 1;
         self.phase = DispatchOwnerPhaseV1::InFlight { generation };
-        self.recycled_generation = None;
+        // Phase checks hide the prior exact recycle while this generation is
+        // active. Retain it so a no-effect cancellation can restore the last
+        // reportable publication instead of fabricating generation zero.
     }
 
     fn active(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
@@ -966,6 +968,11 @@ impl DispatchGenerationOwnerV1 {
         self.ensure_prepared()?;
         self.recycled_generation
             .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    }
+
+    fn returning_destroy_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        Ok(self.recycled_generation.unwrap_or(0))
     }
 
     fn poison(&mut self) {
@@ -1070,7 +1077,7 @@ impl ReturnedDispatchDataLeaseV1 {
     }
 }
 
-/// Exact returned C3 set from one completed and recycled dispatch generation.
+/// Exact returned C3 set from a never-published or recycled dispatch owner.
 pub(super) struct ReturnedDispatchDataV1 {
     generation: u64,
     data: Vec<ReturnedDispatchDataLeaseV1>,
@@ -1233,6 +1240,12 @@ impl DispatchResourceOwnerV1 {
 
     pub(super) fn ensure_returnable(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
         self.generation.returned_generation()
+    }
+
+    pub(super) fn ensure_returnable_for_destroy(
+        &self,
+    ) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.generation.returning_destroy_generation()
     }
 
     pub(super) fn read_completed_host_visible(
@@ -1426,6 +1439,23 @@ impl DispatchResourceOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
     ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
         let generation = self.generation.returned_generation()?;
+        self.release_non_data(memory, generation)
+    }
+
+    /// Releases code and kernarg while returning never-published or recycled data.
+    pub(super) fn release_non_data_for_returning_destroy(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.returning_destroy_generation()?;
+        self.release_non_data(memory, generation)
+    }
+
+    fn release_non_data(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+        generation: u64,
+    ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
         if self.data.len() != self.data_premises.len() {
             return Err(Gfx942DispatchBindingErrorV1::InvalidData {
                 index: self.data.len().min(self.data_premises.len()),
@@ -4384,23 +4414,58 @@ mod tests {
         owner.commit_begin(next);
         assert!(owner.returned_generation().is_err());
         owner.cancel(next).unwrap();
-        assert!(owner.returned_generation().is_err());
+        assert_eq!(owner.returned_generation().unwrap(), generation);
     }
 
     #[test]
-    fn data_return_requires_exact_completion_and_recycle() {
+    fn retryable_cancel_preserves_last_recycle_for_returning_destroy() {
         let mut owner = DispatchGenerationOwnerV1::new();
+        let first_generation = owner.next().unwrap();
+        owner.commit_begin(first_generation);
+        owner.complete(first_generation).unwrap();
+        owner.recycle(first_generation).unwrap();
+
+        let retry_generation = owner.next().unwrap();
+        owner.commit_begin(retry_generation);
+        assert_eq!(first_generation, 1);
+        assert_eq!(retry_generation, 2);
         assert!(owner.returned_generation().is_err());
+        assert!(owner.returning_destroy_generation().is_err());
+
+        // `cancel` is reached only for a classified no-effect submission
+        // failure. The latest exact recycle remains the returned report.
+        owner.cancel(retry_generation).unwrap();
+        assert_eq!(owner.returned_generation().unwrap(), first_generation);
+        assert_eq!(
+            owner.returning_destroy_generation().unwrap(),
+            first_generation
+        );
+    }
+
+    #[test]
+    fn returning_destroy_admits_unpublished_or_exactly_recycled_only() {
+        let mut owner = DispatchGenerationOwnerV1::new();
+        let unpublished = owner;
+        assert!(owner.returned_generation().is_err());
+        assert_eq!(owner.returning_destroy_generation().unwrap(), 0);
+        assert_eq!(owner, unpublished);
 
         let generation = owner.next().unwrap();
         owner.commit_begin(generation);
+        let in_flight = owner;
         assert!(owner.returned_generation().is_err());
+        assert!(owner.returning_destroy_generation().is_err());
+        assert_eq!(owner, in_flight);
         owner.complete(generation).unwrap();
+        let completed = owner;
         assert!(owner.returned_generation().is_err());
+        assert!(owner.returning_destroy_generation().is_err());
+        assert_eq!(owner, completed);
         assert!(owner.recycle(generation + 1).is_err());
         assert!(owner.returned_generation().is_err());
         owner.recycle(generation).unwrap();
         assert_eq!(owner.returned_generation().unwrap(), generation);
+        assert_eq!(owner.returning_destroy_generation().unwrap(), generation);
     }
 
     fn readback_premise(

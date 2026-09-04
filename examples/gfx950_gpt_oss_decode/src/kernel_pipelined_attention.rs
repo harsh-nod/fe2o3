@@ -1,4 +1,9 @@
-//! Safe Rust source for the bounded GPT-OSS-120B gfx950 decode megakernel.
+//! Compiler-rejected two-stage BF16 attention-pipeline experiment.
+//!
+//! This file is retained as a documented counterexample, not as a kernel to
+//! copy: the compiler rejects the retained pipeline scalar temporary because it
+//! has multiple definitions. Its phase comments show the intended experiment,
+//! while the tutorial clearly separates it from runnable variants.
 
 #![allow(missing_docs)]
 
@@ -18,6 +23,7 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
+/// Experiments with double-buffered LDS Q/K fragments; currently has no HSACO.
 #[cfg(any(
     not(target_arch = "amdgpu"),
     feature = "kernel-gpt-oss-decode-pipelined-attention"
@@ -43,6 +49,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     mut expert_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
     mut packed_top4: DisjointSlice<u32>,
 ) -> KernelResult {
+    // Validate the entire item contract before any collective or pipeline operation.
     if hidden_f32.len() < crate::PROFILE_ITEMS * HIDDEN_SIZE
         || router_f32.len() < EXPERTS * HIDDEN_SIZE
         || query_bf16.len() < crate::PROFILE_ITEMS * MATRIX_ROWS * HEAD_DIM
@@ -61,6 +68,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // One Wave64 owns an item; all four workgroup waves also address the LDS pipeline.
     let index = thread::index_1d();
     let global_index = index.get();
     let lane_index = global_index % crate::WAVE_SIZE;
@@ -69,6 +77,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let lane = WaveLane::<Wave64>::current();
     let subgroup = Gfx950Subgroup::current();
 
+    // Checked views establish offsets and strides before the experimental phase.
     let Ok(hidden) = StridedReadView2D::from_shared_slice(
         hidden_f32,
         item_index.wrapping_mul(HIDDEN_SIZE),
@@ -95,6 +104,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         depth += 1;
     }
 
+    // Router broadcasts remain uniform and identical to the production kernel.
     let mut best0 = ROUTER_FLOOR;
     let mut best1 = ROUTER_FLOOR;
     let mut best2 = ROUTER_FLOOR;
@@ -229,6 +239,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     }
     let selected = (id0 as usize) & (EXPERTS - 1);
 
+    // Intended design: overlap the next Q/K tile in two LDS stages with current MFMA.
     let Ok(query) = Bf16MfmaAMatrix::row_major(
         query_bf16,
         item_index.wrapping_mul(MATRIX_ROWS * HEAD_DIM),
@@ -363,6 +374,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         token += 1;
     }
 
+    // Expert projection and stores remain controls; the LDS pipeline is the only variable.
     let expert_reduction_base = selected
         .wrapping_mul(MXFP4_BLOCKS)
         .wrapping_mul(EXPERT_K_TILE);
@@ -508,6 +520,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     expert_acc2 += expert3[2] * scale3;
     expert_acc3 += expert3[3] * scale3;
 
+    // Blocked capabilities would keep all output writes disjoint if lowering succeeded.
     let Some(output_block) = index.checked_block::<64, 4>() else {
         return Err(KernelError::OutOfBounds);
     };

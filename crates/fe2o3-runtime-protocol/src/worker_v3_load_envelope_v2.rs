@@ -12,10 +12,14 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV3,
     DurablePublishedHsacoClaimV3, InertCompilerExecutionSubjectV1,
     MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2 as MAX_DURABLE_LOAD_ENVELOPE_BYTES,
-    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1, VerifiedWorkerV3LoadEnvelopeAuthorityV1,
-    WorkerV3LoadEnvelopeBindingV1, WorkerV3LoadReadinessErrorV1, WorkerV3LoadReadinessReceiptV1,
-    WorkerV3LoadReadinessResultV1, publish_worker_v3_load_readiness_v1,
-    reacquire_current_hsaco_publication_lease_v3, recover_worker_v3_load_readiness_for_attempt_v1,
+    MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1, RetainedDurableDirectoryV1,
+    VerifiedWorkerV3LoadEnvelopeAuthorityV1, WorkerV3LoadEnvelopeBindingV1,
+    WorkerV3LoadReadinessErrorV1, WorkerV3LoadReadinessReceiptV1, WorkerV3LoadReadinessResultV1,
+    publish_worker_v3_load_readiness_v1,
+    reacquire_current_hsaco_publication_lease_from_retained_directory_v3,
+    reacquire_current_hsaco_publication_lease_v3,
+    recover_worker_v3_load_readiness_for_attempt_from_retained_directory_v1,
+    recover_worker_v3_load_readiness_for_attempt_v1,
 };
 use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffErrorV3, InertSemanticCompilerModuleHandoffV3,
@@ -100,6 +104,7 @@ pub enum WorkerV3LoadEnvelopeBindingFieldV2 {
     ProductionHandoffSlot,
     CompilerExecutionSubject,
     DurablePublishedClaim,
+    ExactEnvelopeBytes,
 }
 
 /// Construction, canonical codec, persistence, or recovery failure for the V2 envelope.
@@ -543,6 +548,7 @@ impl WorkerV3LoadEnvelopeV2 {
 /// Restart-recovered move-only custody for one exact V2 envelope and current artifact.
 pub struct RecoveredWorkerV3LoadEnvelopeV2 {
     wire: WorkerV3LoadEnvelopeWireV2,
+    exact_canonical_envelope: Vec<u8>,
     current_lease: DurableCurrentLinkPublicationLeaseV1,
     receipt: WorkerV3LoadReadinessReceiptV1,
 }
@@ -552,6 +558,10 @@ impl fmt::Debug for RecoveredWorkerV3LoadEnvelopeV2 {
         formatter
             .debug_struct("RecoveredWorkerV3LoadEnvelopeV2")
             .field("wire", &self.wire)
+            .field(
+                "exact_canonical_envelope_length",
+                &self.exact_canonical_envelope.len(),
+            )
             .field("current_lease", &self.current_lease)
             .field("receipt", &self.receipt)
             .finish()
@@ -571,11 +581,78 @@ impl RecoveredWorkerV3LoadEnvelopeV2 {
         self.receipt
     }
 
+    /// Borrows the exact canonical envelope bytes admitted from durable custody.
+    ///
+    /// This view names the original validated byte string rather than a reserialization of host
+    /// projections. It is lifetime-bound to this move-only recovery owner and grants no authority.
+    pub fn canonical_evidence_view(&self) -> WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        WorkerV3LoadEnvelopeEvidenceViewV2 {
+            exact_canonical_envelope: &self.exact_canonical_envelope,
+            binding: self.receipt.envelope_binding(),
+        }
+    }
+
     pub fn exact_artifact_bytes(&self) -> &[u8] {
         self.current_lease.exact_artifact_bytes()
     }
 
     pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Lifetime-bound exact canonical bytes from one recovered Worker V3 V2 envelope.
+///
+/// The view cannot be cloned and cannot outlive its move-only recovery owner. Its byte binding is
+/// ordinary inert evidence and does not grant compiler, verification, publication, currentness,
+/// load, or launch authority.
+pub struct WorkerV3LoadEnvelopeEvidenceViewV2<'evidence> {
+    exact_canonical_envelope: &'evidence [u8],
+    binding: WorkerV3LoadEnvelopeBindingV1,
+}
+
+impl fmt::Debug for WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3LoadEnvelopeEvidenceViewV2")
+            .field("binding", &self.binding)
+            .field("authority", &"none")
+            .finish()
+    }
+}
+
+impl WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+    /// Returns the exact originally admitted canonical envelope bytes.
+    pub const fn exact_canonical_bytes(&self) -> &[u8] {
+        self.exact_canonical_envelope
+    }
+
+    /// Returns the exact-byte digest and nonzero length validated by durable custody.
+    pub const fn binding(&self) -> WorkerV3LoadEnvelopeBindingV1 {
+        self.binding
+    }
+
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_verification_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_currentness_authority(&self) -> bool {
         false
     }
 
@@ -595,19 +672,59 @@ pub fn recover_worker_v3_load_envelope_v2(
 ) -> Result<RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2> {
     let custody = recover_worker_v3_load_readiness_for_attempt_v1(output_dir, attempt)
         .map_err(WorkerV3LoadEnvelopeErrorV2::LoadReadiness)?;
+    finish_recover_worker_v3_load_envelope_v2(custody, |claim| {
+        reacquire_current_hsaco_publication_lease_v3(output_dir, claim)
+    })
+}
+
+/// Recovers the exact current V2 envelope and publication without resolving an ambient path.
+///
+/// The retained root is revalidated and locked by descriptor for readiness recovery and current
+/// publication reacquisition. The returned owner keeps a close-on-exec duplicate of that exact
+/// root inside its publication lease, so later currentness checks cannot fall back to a path.
+pub fn recover_worker_v3_load_envelope_from_retained_directory_v2(
+    directory: &RetainedDurableDirectoryV1,
+    attempt: BuildAttempt,
+) -> Result<RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2> {
+    let custody =
+        recover_worker_v3_load_readiness_for_attempt_from_retained_directory_v1(directory, attempt)
+            .map_err(WorkerV3LoadEnvelopeErrorV2::LoadReadiness)?;
+    finish_recover_worker_v3_load_envelope_v2(custody, |claim| {
+        reacquire_current_hsaco_publication_lease_from_retained_directory_v3(directory, claim)
+    })
+}
+
+fn finish_recover_worker_v3_load_envelope_v2(
+    custody: WorkerV3LoadReadinessResultV1,
+    reacquire: impl FnOnce(
+        &DurablePublishedHsacoClaimV3,
+    ) -> Result<
+        DurableCurrentLinkPublicationLeaseV1,
+        DurablePublishedClaimReacquisitionErrorV3,
+    >,
+) -> Result<RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2> {
     let expected_claim = custody.published_claim().clone();
     let receipt = custody.receipt();
     let exact_envelope = custody.into_exact_envelope_bytes();
+    let exact_binding =
+        WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(&exact_envelope).map_err(|error| {
+            WorkerV3LoadEnvelopeErrorV2::Replay(WorkerV3LoadEnvelopeErrorV1::LoadReadinessCodec(
+                error,
+            ))
+        })?;
+    if exact_binding != receipt.envelope_binding() {
+        return binding_mismatch(WorkerV3LoadEnvelopeBindingFieldV2::ExactEnvelopeBytes);
+    }
     let wire = WorkerV3LoadEnvelopeWireV2::decode_canonical(&exact_envelope)?;
-    drop(exact_envelope);
     if wire.published_claim() != &expected_claim {
         return binding_mismatch(WorkerV3LoadEnvelopeBindingFieldV2::DurablePublishedClaim);
     }
-    let current_lease = reacquire_current_hsaco_publication_lease_v3(output_dir, &expected_claim)
+    let current_lease = reacquire(&expected_claim)
         .map_err(WorkerV3LoadEnvelopeErrorV2::PublishedClaimReacquisition)?;
     wire.validate_reacquired_publication_lease_v2(&current_lease)?;
     Ok(RecoveredWorkerV3LoadEnvelopeV2 {
         wire,
+        exact_canonical_envelope: exact_envelope,
         current_lease,
         receipt,
     })

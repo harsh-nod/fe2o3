@@ -2,6 +2,10 @@
 
 use std::{collections::BTreeSet, error::Error, fmt, ops::Range};
 
+use dialect_amdgcn::{
+    CanonicalProductionKirToLlvmReplayEvidenceV1, ProductionKirToLlvmReplayEvidenceIdentityV1,
+    ProductionReplayKernelIrIdentityV1, ProductionTargetOptimizationAuditV4,
+};
 use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation, BuildSession};
 use fe2o3_compiler_ffi::MAX_INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_BYTES_V3;
 use fe2o3_hsaco::MAX_HSACO_BYTES;
@@ -301,6 +305,7 @@ impl InertProductionProfilerKirArchiveV1 {
             catalog,
             bridge,
             characteristic,
+            optimization,
         } = structural
         else {
             let StructuralEvidenceAdmissionV1::Unavailable(reason) = structural else {
@@ -316,6 +321,7 @@ impl InertProductionProfilerKirArchiveV1 {
                 catalog,
                 bridge,
                 characteristic,
+                optimization,
             },
         ))
     }
@@ -338,6 +344,46 @@ pub struct AdmittedProductionProfilerKirArchiveV1 {
     catalog: ProductionSourceIsaCatalogV1,
     bridge: ProductionKirV7StructuralBridgeV1,
     characteristic: ProductionSourceIsaCharacteristicCollectionV1,
+    optimization: Option<ProductionProfilerOptimizationEvidenceV1>,
+}
+
+/// Exact production optimizer evidence recovered by replaying an admitted archive.
+///
+/// Legacy compiler receipts do not contain this evidence. Retaining it grants no
+/// compiler authority and does not establish semantic preservation or causation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionProfilerOptimizationEvidenceV1 {
+    replay: ProductionKirToLlvmReplayEvidenceIdentityV1,
+    final_target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    audit: ProductionTargetOptimizationAuditV4,
+}
+
+impl ProductionProfilerOptimizationEvidenceV1 {
+    pub const fn replay_identity(&self) -> ProductionKirToLlvmReplayEvidenceIdentityV1 {
+        self.replay
+    }
+
+    pub const fn final_target_bound_kernel_ir_identity(
+        &self,
+    ) -> ProductionReplayKernelIrIdentityV1 {
+        self.final_target_bound_kernel_ir
+    }
+
+    pub const fn audit(&self) -> &ProductionTargetOptimizationAuditV4 {
+        &self.audit
+    }
+
+    pub const fn establishes_semantic_preservation(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
 }
 
 impl AdmittedProductionProfilerKirArchiveV1 {
@@ -363,6 +409,10 @@ impl AdmittedProductionProfilerKirArchiveV1 {
 
     pub const fn characteristic(&self) -> &ProductionSourceIsaCharacteristicCollectionV1 {
         &self.characteristic
+    }
+
+    pub const fn optimization_v1(&self) -> Option<&ProductionProfilerOptimizationEvidenceV1> {
+        self.optimization.as_ref()
     }
 
     pub const fn authenticates_external_provenance(&self) -> bool {
@@ -420,6 +470,7 @@ enum StructuralEvidenceAdmissionV1 {
         catalog: ProductionSourceIsaCatalogV1,
         bridge: ProductionKirV7StructuralBridgeV1,
         characteristic: ProductionSourceIsaCharacteristicCollectionV1,
+        optimization: Option<ProductionProfilerOptimizationEvidenceV1>,
     },
     Unavailable(ProductionProfilerKirArchiveUnavailableV1),
 }
@@ -427,13 +478,25 @@ enum StructuralEvidenceAdmissionV1 {
 fn derive_structural_evidence(
     finalized: &PreparedFinalizedProtectedWorkerV3HsacoV1,
 ) -> Result<StructuralEvidenceAdmissionV1, ProductionProfilerKirArchiveErrorV1> {
+    let receipts = finalized.outer_handoff().capsule().receipts();
+    let replay = CanonicalProductionKirToLlvmReplayEvidenceV1::decode(
+        receipts.amdgpu_lowering().canonical_preimage(),
+    )
+    .and_then(|evidence| {
+        evidence.validate_against_neutral_kernel_ir(receipts.kernel_ir().canonical_preimage())
+    })
+    .map_err(|_| ProductionProfilerKirArchiveErrorV1::KirToLlvmReplay)?;
+    let optimization = replay
+        .evidence()
+        .target_pliron_optimization_v4()
+        .cloned()
+        .map(|audit| ProductionProfilerOptimizationEvidenceV1 {
+            replay: replay.evidence().identity(),
+            final_target_bound_kernel_ir: replay.evidence().target_bound_kernel_ir_identity(),
+            audit,
+        });
     let extension = ProductionSemanticDebugReceiptExtensionV1::from_canonical_bytes(
-        finalized
-            .outer_handoff()
-            .capsule()
-            .receipts()
-            .semantic_to_llvm()
-            .canonical_preimage(),
+        receipts.semantic_to_llvm().canonical_preimage(),
     )
     .map_err(|_| ProductionProfilerKirArchiveErrorV1::SemanticDebugReceipt)?;
     let fragment = match extension.carrier_v1().availability() {
@@ -492,6 +555,7 @@ fn derive_structural_evidence(
         catalog,
         bridge,
         characteristic,
+        optimization,
     })
 }
 
@@ -852,6 +916,7 @@ pub enum ProductionProfilerKirArchiveErrorV1 {
     SectionOrder,
     CompactReplay,
     FinalizerReplay,
+    KirToLlvmReplay,
     SemanticDebugReceipt,
     CatalogAdmission,
     StructuralBridgeAdmission,

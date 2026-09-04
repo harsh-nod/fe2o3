@@ -263,7 +263,8 @@ fn typed_ocml_imports(module: &Module) -> Vec<&'static str> {
                 | F32MathFunction::Floor
                 | F32MathFunction::Ceil
                 | F32MathFunction::Truncate
-                | F32MathFunction::RoundTiesEven => return None,
+                | F32MathFunction::RoundTiesEven
+                | F32MathFunction::Abs => return None,
             })
         })
         .collect::<Vec<_>>();

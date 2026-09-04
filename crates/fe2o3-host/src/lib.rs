@@ -4,6 +4,8 @@ mod application_descriptor_handoff;
 mod argument_alias;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod artifact_binding;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod authenticated_service_queue;
 #[cfg(target_os = "linux")]
 mod compiler_execution_current_record_audit;
 mod compiler_generated_contract;
@@ -39,9 +41,20 @@ pub mod __hardware_test {
     use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
     use crate::{
-        AllocationProvenance, ArgumentAccess, ArgumentAccessMode, GeneratedSliceArgumentPairV1,
-        ObservedContext,
+        AllocationProvenance, ArgumentAccess, ArgumentAccessMode,
+        CompilerGeneratedKernelExpectationRosterEntryV1,
+        CompilerGeneratedKernelExpectationRosterV1, GeneratedSliceArgumentPairV1, ObservedContext,
     };
+
+    /// Inert one-entry roster for Cargo's strict inherited-handoff integration fixture.
+    pub struct ApplicationHandoffVecAddRosterFixtureV1;
+
+    impl CompilerGeneratedKernelExpectationRosterV1 for ApplicationHandoffVecAddRosterFixtureV1 {
+        const ENTRIES: &'static [CompilerGeneratedKernelExpectationRosterEntryV1] =
+            &[CompilerGeneratedKernelExpectationRosterEntryV1::from_parts(
+                "vecadd", "vecadd", [0xa1; 32], [0xb2; 32],
+            )];
+    }
 
     /// Constructs inert device facts for a descriptor-handoff integration fixture.
     pub fn application_handoff_observed_context_fixture_v1(target: &str) -> ObservedContext {
@@ -92,11 +105,14 @@ pub mod __hardware_test {
 }
 
 #[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub use application_descriptor_handoff::consume_inherited_worker_v3_application_handoff_v1;
-#[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
     ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+};
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use application_descriptor_handoff::{
+    consume_inherited_worker_v3_application_handoff_v1,
+    consume_inherited_worker_v3_application_roster_handoff_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 #[doc(hidden)]
@@ -118,11 +134,30 @@ pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
 };
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use authenticated_service_queue::{
+    AuthenticatedQuarantinedServiceQueueV1, AuthenticatedServiceCompletedQueueSessionV1,
+    AuthenticatedServiceCurrentnessFailureV1, AuthenticatedServicePublishedQueueSessionV1,
+    AuthenticatedServiceQueueBindFailureV1, AuthenticatedServiceQueueCreateFailureV1,
+    AuthenticatedServiceQueueDataUpdateFailureV1, AuthenticatedServiceQueueHostDataUpdateV1,
+    AuthenticatedServiceQueueOperationFailureV1, AuthenticatedServiceQueuePartitionedDataUpdateV1,
+    AuthenticatedServiceQueuePollV1, AuthenticatedServiceQueuePollWithProgressV1,
+    AuthenticatedServiceQueueReleaseFailureV1, AuthenticatedServiceQueueReleaseV1,
+    AuthenticatedServiceQueueRetainedBindFailureV1,
+    AuthenticatedServiceQueueRetainedRolloverFailureV1, AuthenticatedServiceQueueRolloverFailureV1,
+    AuthenticatedServiceQueueRolloverSuccessV1, AuthenticatedServiceQueueSessionV1,
+    AuthenticatedServiceQueueSubmitFailureV1, AuthenticatedServiceQueueUnboundSessionV1,
+    AuthenticatedServiceRecycledQueueSessionV1, AuthenticatedServiceTerminalProgramCustodyV1,
+    AuthenticatedWorkerV3ProgramLookupErrorV1, AuthenticatedWorkerV3ProgramMaterializationErrorV1,
+    AuthenticatedWorkerV3ProgramSetAdmissionErrorV1,
+    AuthenticatedWorkerV3ProgramSetAppendFailureV1,
+    AuthenticatedWorkerV3ProgramSetInitialFailureV1, AuthenticatedWorkerV3ProgramSetV1,
+};
 #[cfg(target_os = "linux")]
 pub use compiler_execution_current_record_audit::{
     InheritedWorkerV3CompilerCurrentRecordAuditorV1,
     WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1, WorkerV3CompilerCurrentRecordAuditErrorV1,
-    WorkerV3CompilerCurrentRecordAuditV1,
+    WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordEvidenceViewV1,
 };
 #[doc(hidden)]
 pub use compiler_generated_contract::{
@@ -132,6 +167,8 @@ pub use compiler_generated_contract::{
     semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
 pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
+#[cfg(target_os = "linux")]
+pub use fe2o3_compiler_execution_client::CompilerExecutionCurrentRecordChallengeV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 pub use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, DeviceBindingError, DeviceSelector, KfdAdapterError,
@@ -230,7 +267,9 @@ pub use worker_v3_verification_admission::{
     WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, WorkerV3ProtectedVerificationEvidenceV1,
     WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
     WorkerV3RefiningProtectedVerifierAdapterV1, WorkerV3RefiningProtectedVerifierErrorV1,
-    WorkerV3RosterEntryErrorV1, WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterEntryErrorV1, WorkerV3RosterLoadEnvelopeEvidenceViewV1,
+    WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3RosterVerificationAuthenticationFailureV1,
     WorkerV3RosterVerificationChallengeIdentityV1, WorkerV3RosterVerificationDecisionErrorV1,
     WorkerV3RosterVerificationDecisionV1, WorkerV3RosterVerificationRequestV1,
     WorkerV3SafetyPropertiesV1, WorkerV3SafetyPropertyV1,

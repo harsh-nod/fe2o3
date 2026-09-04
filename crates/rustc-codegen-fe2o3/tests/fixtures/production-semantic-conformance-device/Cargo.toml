@@ -21,8 +21,6 @@ float-f64 = []
 switch-u32 = []
 bounds-output = []
 atomic-u32 = []
-volatile-memory = []
-volatile-collectives = []
 unsupported-memory = []
 unsupported-i128 = []
 

@@ -1143,7 +1143,11 @@ fn symbolic_subgroup_convergence(
         if tensor_block >= cfg.successors.len() || !cfg.reachable[tensor_block] {
             continue;
         }
-        for controller in 0..cfg.successors.len() {
+        for (controller, region) in control_regions
+            .iter()
+            .enumerate()
+            .take(cfg.successors.len())
+        {
             let kind = cfg.branch_uniformity[controller];
             let mut controls_future_tensor = false;
             for successor in cfg.successors[controller].iter().copied() {
@@ -1159,7 +1163,7 @@ fn symbolic_subgroup_convergence(
             {
                 continue;
             }
-            let Some(region) = &control_regions[controller] else {
+            let Some(region) = region else {
                 continue;
             };
             if !region.contains(tensor_block) && !region.has_cycle {
@@ -1894,10 +1898,7 @@ fn bounded_tensor_reachability(
             }
         }
     }
-    if component_of
-        .iter()
-        .any(|component| *component == usize::MAX)
-    {
+    if component_of.contains(&usize::MAX) {
         return Err(PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete {
             detail: "tensor reachability did not assign every block to an SCC".to_owned(),
         });
@@ -2010,8 +2011,21 @@ fn bounded_tensor_reachability(
     for component in topological.into_iter().rev() {
         for successor in component_successors[component].iter().copied() {
             charge_convergence_work(work, word_count)?;
-            for word in 0..word_count {
-                tensors_by_component[component][word] |= tensors_by_component[successor][word];
+            if component == successor {
+                continue;
+            }
+            let (component_words, successor_words) = if component < successor {
+                let (before_successor, from_successor) =
+                    tensors_by_component.split_at_mut(successor);
+                (&mut before_successor[component], &from_successor[0])
+            } else {
+                let (before_component, from_component) =
+                    tensors_by_component.split_at_mut(component);
+                (&mut from_component[0], &before_component[successor])
+            };
+            for (component_word, successor_word) in component_words.iter_mut().zip(successor_words)
+            {
+                *component_word |= successor_word;
             }
         }
     }

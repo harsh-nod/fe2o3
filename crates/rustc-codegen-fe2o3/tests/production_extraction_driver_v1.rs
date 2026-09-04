@@ -227,6 +227,132 @@ fn safe_scalar_from_bits_reaches_complete_semantic_import() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn rustc_fabs_f32_reaches_exact_llvm_intrinsic() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("fabs-f32.ll");
+    let output = run_llvm_extraction_command(&target, "fabs-f32", &llvm_output);
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "exact rustc fabs::<f32> extraction failed:\n{stderr}"
+    );
+    let llvm = std::fs::read_to_string(&llvm_output).expect("read fabs LLVM observation");
+    assert!(
+        llvm.contains("declare float @llvm.fabs.f32(float)")
+            && llvm.contains("call float @llvm.fabs.f32(float")
+            && llvm.contains("define amdgpu_kernel void @fabs_f32("),
+        "fabs extraction omitted the exact target-neutral/LLVM observation:\n{llvm}",
+    );
+    assert_eq!(llvm.matches("call float @llvm.fabs.f32(float").count(), 1);
+    assert!(!llvm.contains("@llvm.fabs.f64"));
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn exact_core_f32_is_finite_wrapper_reaches_fabs_and_float_compare() {
+    for (profile, target_rustflags) in [
+        (
+            "engineering-route",
+            "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack",
+        ),
+        (
+            "optimized",
+            "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        ),
+    ] {
+        let target = ScratchTarget::new();
+        let llvm_output = target
+            .path()
+            .join(format!("is-finite-fabs-f32-{profile}.ll"));
+        let output = run_llvm_extraction_command_with_rustflags(
+            &target,
+            "is-finite-fabs-f32",
+            &llvm_output,
+            target_rustflags,
+        );
+        let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+        assert!(
+            output.status.success(),
+            "{profile} core f32::is_finite -> f32::abs -> fabs::<f32> extraction failed:\n{stderr}"
+        );
+        let llvm =
+            std::fs::read_to_string(&llvm_output).expect("read is-finite/fabs LLVM observation");
+        assert!(
+            llvm.contains("define amdgpu_kernel void @is_finite_fabs_f32(")
+                && llvm.contains("declare float @llvm.fabs.f32(float)")
+                && llvm.contains("call float @llvm.fabs.f32(float")
+                && llvm.contains("fcmp olt float"),
+            "{profile} is-finite/fabs extraction omitted the exact reviewed chain:\n{llvm}",
+        );
+        assert!(!llvm.contains("@llvm.fabs.f64"));
+        for forbidden in [
+            "cannot authenticate the absence of user-provided unsafe blocks",
+            "unsupported rustc compiler intrinsic",
+            "semantic importer rejected complete semantic MIR",
+            "semantic importer rejected semantic body construction",
+        ] {
+            assert!(
+                !stderr.contains(forbidden),
+                "{profile} core f32::is_finite chain entered forbidden path {forbidden:?}:\n{stderr}",
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn exact_volatile_load_reaches_checked_ordered_llvm_at_engineering_o0() {
+    let target = ScratchTarget::new();
+    let llvm_output = target.path().join("volatile-load-f32.ll");
+    let output = run_llvm_extraction_command_with_rustflags(
+        &target,
+        "volatile-load-f32",
+        &llvm_output,
+        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack",
+    );
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "exact engineering O0 volatile-load extraction failed:\n{stderr}",
+    );
+    let llvm = std::fs::read_to_string(&llvm_output).expect("read volatile-load LLVM observation");
+    let kernel = llvm
+        .find("define amdgpu_kernel void @volatile_load_f32(")
+        .expect("volatile-load kernel definition");
+    let load = llvm
+        .find("load volatile float, ptr addrspace(1)")
+        .expect("exact volatile global load");
+    let guarding_branch = llvm[..load]
+        .rfind("br i1 ")
+        .expect("bounds branch before volatile load");
+    assert!(kernel < guarding_branch && guarding_branch < load);
+    assert_eq!(
+        llvm.matches("load volatile float, ptr addrspace(1)")
+            .count(),
+        1
+    );
+    assert_eq!(llvm.matches("declare void @llvm.trap()").count(), 1);
+    assert_eq!(llvm.matches("call void @llvm.trap()").count(), 1);
+    assert!(
+        llvm[load..].contains("store float"),
+        "volatile read was not retained before its observable result store:\n{llvm}",
+    );
+    for forbidden in [
+        "MemoryVolatileStore",
+        "MemoryCopyNonOverlapping",
+        "MemoryCopyOneNonOverlapping",
+        "semantic importer rejected complete semantic MIR",
+        "semantic importer rejected semantic body construction",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "volatile load entered forbidden path {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn core_atomic_rmw_set_reaches_complete_semantic_import() {
     let target = ScratchTarget::new();
     let output = run_extraction_command(&target, Some("atomic-rmw"), true);
@@ -340,7 +466,8 @@ fn assert_multi_root_extraction(
     );
     assert!(
         stderr.contains(&expected_kir_custody)
-            && stderr.contains("composed formal/ranked memory -> gfx942:xnack- LLVM")
+            && stderr.contains("composed formal/ranked memory -> target-KIR optimizer")
+            && stderr.contains("-> gfx942:xnack- LLVM")
             && stderr.contains("artifact/launch authority false"),
         "{features} extraction omitted its successful lowering receipt:\n{stderr}",
     );
@@ -645,6 +772,59 @@ fn run_extraction_command(
         .arg(&target.path)
         .output()
         .expect("run AMD extraction fixture")
+}
+
+fn run_llvm_extraction_command(
+    target: &ScratchTarget,
+    feature: &str,
+    llvm_output: &Path,
+) -> std::process::Output {
+    run_llvm_extraction_command_with_rustflags(
+        target,
+        feature,
+        llvm_output,
+        "-Zalways-encode-mir -Copt-level=3 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+    )
+}
+
+fn run_llvm_extraction_command_with_rustflags(
+    target: &ScratchTarget,
+    feature: &str,
+    llvm_output: &Path,
+    target_rustflags: &str,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace())
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_extraction_fixture",
+        )
+        .env("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1", llvm_output)
+        .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "55".repeat(32))
+        .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", target_rustflags)
+        .args([
+            "check",
+            "--locked",
+            "-Zbuild-std=core",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            feature,
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path())
+        .output()
+        .expect("run AMD LLVM extraction fixture")
 }
 
 fn identity_inventory_sha256(stderr: &str) -> &str {

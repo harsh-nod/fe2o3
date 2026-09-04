@@ -49,7 +49,39 @@ use crate::rustc_semantic_adapter_v1::{
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
 #[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v2";
+#[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V3: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v3";
+const PREFLIGHT_PLAN_DOMAIN_V4: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v4";
+const PREFLIGHT_PLAN_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5";
+const PREFLIGHT_TYPES_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/types";
+const PREFLIGHT_SOURCE_FILES_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/source-files";
+const PREFLIGHT_FUNCTIONS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/functions";
+const PREFLIGHT_FUNCTION_ABIS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/function-abis";
+const PREFLIGHT_TERMINALS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/terminals";
+const PREFLIGHT_BODY_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/body";
+const PREFLIGHT_ROOTS_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/roots";
+const PREFLIGHT_EDGES_DOMAIN_V5: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v5/edges";
+const PREFLIGHT_DIRECT_CALLS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/direct-calls";
+const PREFLIGHT_TERMINAL_EXPANSIONS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/terminal-expansions";
+const PREFLIGHT_NORMALIZED_INTRINSICS_DOMAIN_V5: &[u8] =
+    b"fe2o3/semantic-mir/rustc-preflight-plan/v5/normalized-intrinsics";
+const PREFLIGHT_SECTION_TYPES_V5: u8 = 0;
+const PREFLIGHT_SECTION_SOURCE_FILES_V5: u8 = 1;
+const PREFLIGHT_SECTION_FUNCTIONS_V5: u8 = 2;
+const PREFLIGHT_SECTION_FUNCTION_ABIS_V5: u8 = 3;
+const PREFLIGHT_SECTION_TERMINALS_V5: u8 = 4;
+const PREFLIGHT_SECTION_BODIES_V5: u8 = 5;
+const PREFLIGHT_SECTION_ROOTS_V5: u8 = 6;
+const PREFLIGHT_SECTION_EDGES_V5: u8 = 7;
+const PREFLIGHT_SECTION_DIRECT_CALLS_V5: u8 = 8;
+const PREFLIGHT_SECTION_TERMINAL_EXPANSIONS_V5: u8 = 9;
+const PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5: u8 = 10;
 const COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/compiler-intrinsic-definition/v1";
 const MAX_DIAGNOSTIC_COMPONENT_CHARS_V1: usize = 512;
@@ -61,7 +93,9 @@ enum TerminalIdentitySchemaV1 {
     IndependentV1,
     #[cfg(test)]
     CombinedV2,
+    #[cfg_attr(not(test), allow(dead_code))]
     CombinedV3,
+    CombinedV4,
 }
 
 #[derive(Clone, Debug)]
@@ -462,6 +496,11 @@ pub(crate) enum ProductionSemanticPreflightErrorV1 {
     AccountingDomain {
         resource: SemanticMirResourceV1,
     },
+    CommitmentBoundExceeded {
+        scope: &'static str,
+        actual: u64,
+        maximum: u64,
+    },
     TypeIdentityCollision,
     IdentityTableMismatch,
     TypeLayout {
@@ -495,6 +534,14 @@ impl fmt::Display for ProductionSemanticPreflightErrorV1 {
             Self::AccountingDomain { resource } => write!(
                 formatter,
                 "raw rustc MIR preflight attempted to charge non-raw resource {resource:?}",
+            ),
+            Self::CommitmentBoundExceeded {
+                scope,
+                actual,
+                maximum,
+            } => write!(
+                formatter,
+                "raw rustc MIR preflight {scope} commitment uses {actual} canonical bytes; maximum is {maximum}",
             ),
             Self::TypeIdentityCollision => formatter.write_str(
                 "raw rustc MIR preflight derived one type identity for distinct normalized rustc types",
@@ -729,6 +776,30 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                         None => {
                             match crate::production_rustc_intrinsic_v1::classify(tcx, resolved) {
                                 Ok(Some(classification)) => {
+                                    if classification.operation
+                                        == ProductionRustcIntrinsicOperationV1::FabsF32
+                                    {
+                                        if args.len() != 1 {
+                                            remember_rejection(
+                                                &mut first_rejection,
+                                                "fabs intrinsic with unexpected call arity",
+                                                site,
+                                            );
+                                            continue;
+                                        }
+                                        terminal_expansions.push(TerminalExpansionRecipeV1 {
+                                            caller: function_id,
+                                            block: block.index() as u32,
+                                            expansion: ProductionTerminalExpansionV1::RustcFabsF32,
+                                            arguments: 1,
+                                            instance: resolved,
+                                            identities: canonical_function_identities_v1(
+                                                tcx, resolved,
+                                            ),
+                                            terminal: u32::MAX,
+                                        });
+                                        continue;
+                                    }
                                     if args.len() != 2 {
                                         remember_rejection(
                                             &mut first_rejection,
@@ -973,7 +1044,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         &normalized_intrinsics,
         counts,
         tcx,
-    );
+    )?;
     Ok(ProductionSemanticPreflightPlanV1 {
         types,
         functions,
@@ -2825,6 +2896,233 @@ fn bounded_diagnostic_component_v1(value: &str) -> String {
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreflightChildCommitmentV5 {
+    field_count: u64,
+    payload_framed_bytes: u64,
+    sha256: [u8; 32],
+}
+
+struct PreflightChildCommitmentBuilderV5 {
+    digest: SemanticIdentityDigestV1,
+    scope: &'static str,
+    field_count: u64,
+    payload_framed_bytes: u64,
+}
+
+impl PreflightChildCommitmentBuilderV5 {
+    fn section(domain: &'static [u8], section: u8, scope: &'static str) -> Self {
+        let mut digest = SemanticIdentityDigestV1::new(domain);
+        digest.field(&[section]);
+        Self {
+            digest,
+            scope,
+            field_count: 0,
+            payload_framed_bytes: 0,
+        }
+    }
+
+    fn body(ordinal: u64, function: SemanticFunctionIdV1) -> Self {
+        let mut digest = SemanticIdentityDigestV1::new(PREFLIGHT_BODY_DOMAIN_V5);
+        digest.field(&[PREFLIGHT_SECTION_BODIES_V5]);
+        digest.field(&ordinal.to_le_bytes());
+        digest.field(&function.index().to_le_bytes());
+        Self {
+            digest,
+            scope: "body child",
+            field_count: 0,
+            payload_framed_bytes: 0,
+        }
+    }
+
+    fn field(&mut self, field: &[u8]) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        let field_len = u64::try_from(field.len()).map_err(|_| {
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+            }
+        })?;
+        let framed = 8_u64.checked_add(field_len).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+            },
+        )?;
+        let next_bytes = self.payload_framed_bytes.checked_add(framed).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+            },
+        )?;
+        if next_bytes > fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1 {
+            return Err(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: self.scope,
+                    actual: next_bytes,
+                    maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_CANONICAL_BYTES_V1,
+                },
+            );
+        }
+        self.field_count = self.field_count.checked_add(1).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: self.scope,
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+            },
+        )?;
+        self.payload_framed_bytes = next_bytes;
+        self.digest.field(field);
+        Ok(())
+    }
+
+    fn finish(self) -> PreflightChildCommitmentV5 {
+        PreflightChildCommitmentV5 {
+            field_count: self.field_count,
+            payload_framed_bytes: self.payload_framed_bytes,
+            sha256: self.digest.finish(),
+        }
+    }
+}
+
+struct BoundedPreflightTranscriptV5 {
+    digest: SemanticIdentityDigestV1,
+    framed_bytes: u64,
+}
+
+impl BoundedPreflightTranscriptV5 {
+    fn new() -> Self {
+        Self {
+            digest: SemanticIdentityDigestV1::new_with_canonical_transcript(
+                PREFLIGHT_PLAN_DOMAIN_V5,
+            ),
+            framed_bytes: 8 + PREFLIGHT_PLAN_DOMAIN_V5.len() as u64,
+        }
+    }
+
+    fn field(&mut self, field: &[u8]) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        let maximum = fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 as u64;
+        let field_len = u64::try_from(field.len()).map_err(|_| {
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: "V5 parent transcript",
+                actual: u64::MAX,
+                maximum,
+            }
+        })?;
+        let actual = self
+            .framed_bytes
+            .checked_add(8)
+            .and_then(|bytes| bytes.checked_add(field_len))
+            .ok_or(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "V5 parent transcript",
+                    actual: u64::MAX,
+                    maximum,
+                },
+            )?;
+        if actual > maximum {
+            return Err(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "V5 parent transcript",
+                    actual,
+                    maximum,
+                },
+            );
+        }
+        self.framed_bytes = actual;
+        self.digest.field(field);
+        Ok(())
+    }
+
+    fn section(
+        &mut self,
+        section: u8,
+        item_count: usize,
+        commitment: PreflightChildCommitmentV5,
+    ) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        self.field(&[section])?;
+        self.field(&usize_to_u64_v5(item_count).to_le_bytes())?;
+        self.field(&commitment.field_count.to_le_bytes())?;
+        self.field(&commitment.payload_framed_bytes.to_le_bytes())?;
+        self.field(&commitment.sha256)
+    }
+
+    fn body(
+        &mut self,
+        ordinal: u64,
+        body: &RetainedSemanticBodyProducerV1,
+        commitment: PreflightChildCommitmentV5,
+    ) -> Result<(), ProductionSemanticPreflightErrorV1> {
+        let statements = body
+            .blocks
+            .iter()
+            .try_fold(0_usize, |count, block| {
+                count.checked_add(block.statements.len())
+            })
+            .ok_or(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "body child counts",
+                    actual: u64::MAX,
+                    maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+                },
+            )?;
+        let block_source_producers = body.blocks.len().checked_mul(2).ok_or(
+            ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                scope: "body child counts",
+                actual: u64::MAX,
+                maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+            },
+        )?;
+        let source_producers = 1_usize
+            .checked_add(body.locals.len())
+            .and_then(|count| count.checked_add(block_source_producers))
+            .and_then(|count| count.checked_add(statements))
+            .ok_or(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "body child counts",
+                    actual: u64::MAX,
+                    maximum: fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1,
+                },
+            )?;
+        self.field(&[PREFLIGHT_SECTION_BODIES_V5])?;
+        self.field(&ordinal.to_le_bytes())?;
+        self.field(&body.function.index().to_le_bytes())?;
+        for count in [
+            body.locals.len(),
+            body.raw_to_semantic_locals.len(),
+            body.blocks.len(),
+            body.raw_to_semantic_blocks.len(),
+            statements,
+            source_producers,
+        ] {
+            self.field(&usize_to_u64_v5(count).to_le_bytes())?;
+        }
+        self.field(&commitment.field_count.to_le_bytes())?;
+        self.field(&commitment.payload_framed_bytes.to_le_bytes())?;
+        self.field(&commitment.sha256)
+    }
+
+    fn finish(self) -> Result<([u8; 32], Box<[u8]>), ProductionSemanticPreflightErrorV1> {
+        let (sha256, transcript) = self.digest.finish_with_canonical_transcript();
+        if transcript.len() as u64 != self.framed_bytes {
+            return Err(
+                ProductionSemanticPreflightErrorV1::CommitmentBoundExceeded {
+                    scope: "V5 parent transcript accounting",
+                    actual: transcript.len() as u64,
+                    maximum: self.framed_bytes,
+                },
+            );
+        }
+        Ok((sha256, transcript))
+    }
+}
+
+fn usize_to_u64_v5(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn preflight_plan_identity_and_transcript_v1<'tcx>(
     target: SemanticTargetDataLayoutV1,
@@ -2842,11 +3140,13 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     normalized_intrinsics: &[NormalizedRustcIntrinsicRecipeV1<'tcx>],
     counts: RawMirPreflightCountsV1,
     tcx: TyCtxt<'tcx>,
-) -> ([u8; 32], Box<[u8]>) {
-    let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(PREFLIGHT_PLAN_DOMAIN_V3);
-    digest.field(target.identity().as_bytes());
-    digest.field(&identity_inventory_sha256);
+) -> Result<([u8; 32], Box<[u8]>), ProductionSemanticPreflightErrorV1> {
+    let mut digest = BoundedPreflightTranscriptV5::new();
+    // V5 is the parent domain. This separate field binds the exact flat-stream
+    // lineage whose payload fields are committed by the V5 children below.
+    digest.field(PREFLIGHT_PLAN_DOMAIN_V4)?;
+    digest.field(target.identity().as_bytes())?;
+    digest.field(&identity_inventory_sha256)?;
     for cardinality in [
         types.len(),
         source_files.len(),
@@ -2861,127 +3161,229 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         terminal_expansions.len(),
         normalized_intrinsics.len(),
     ] {
-        digest.field(&u64::try_from(cardinality).unwrap_or(u64::MAX).to_le_bytes());
+        digest.field(&usize_to_u64_v5(cardinality).to_le_bytes())?;
     }
     for count in counts.digest_fields() {
-        digest.field(&count.to_le_bytes());
+        digest.field(&count.to_le_bytes())?;
     }
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_TYPES_DOMAIN_V5,
+        PREFLIGHT_SECTION_TYPES_V5,
+        "types child",
+    );
     for ty in types {
-        digest.field(ty.identity.as_bytes());
-        digest.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes());
-        digest.field(&ty.rustc_layout_sha256);
-        digest.field(&rustc_type_layout_sha256_v1(tcx, ty.layout));
-        digest.field(ty.semantic_layout_identity.as_bytes());
+        section.field(ty.identity.as_bytes())?;
+        section.field(rustc_type_identity_v1(tcx, ty.ty).as_bytes())?;
+        section.field(&ty.rustc_layout_sha256)?;
+        section.field(&rustc_type_layout_sha256_v1(tcx, ty.layout))?;
+        section.field(ty.semantic_layout_identity.as_bytes())?;
     }
+    digest.section(PREFLIGHT_SECTION_TYPES_V5, types.len(), section.finish())?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_SOURCE_FILES_DOMAIN_V5,
+        PREFLIGHT_SECTION_SOURCE_FILES_V5,
+        "source-files child",
+    );
     for source_file in source_files {
-        digest.field(source_file.as_bytes());
+        section.field(source_file.as_bytes())?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_SOURCE_FILES_V5,
+        source_files.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_FUNCTIONS_DOMAIN_V5,
+        PREFLIGHT_SECTION_FUNCTIONS_V5,
+        "functions child",
+    );
     for function in functions {
-        digest.field(function.identities.function().as_bytes());
-        digest.field(&rustc_mir_body_sha256_v1(tcx, function.instance));
-        digest.field(&[function_role_tag_v1(function.role)]);
+        section.field(function.identities.function().as_bytes())?;
+        section.field(&rustc_mir_body_sha256_v1(tcx, function.instance))?;
+        section.field(&[function_role_tag_v1(function.role)])?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_FUNCTIONS_V5,
+        functions.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_FUNCTION_ABIS_DOMAIN_V5,
+        PREFLIGHT_SECTION_FUNCTION_ABIS_V5,
+        "function-ABIs child",
+    );
     for abi in function_abis {
-        digest.field(&abi.function.index().to_le_bytes());
-        digest.field(abi.identity.as_bytes());
-        digest.field(abi.layout_identity.as_bytes());
-        digest.field(&abi.rustc_source_signature_sha256);
-        digest.field(&abi.rustc_fn_abi_sha256);
-        digest.field(
-            &u64::try_from(abi.source_inputs.len())
-                .unwrap_or(u64::MAX)
-                .to_le_bytes(),
-        );
+        section.field(&abi.function.index().to_le_bytes())?;
+        section.field(abi.identity.as_bytes())?;
+        section.field(abi.layout_identity.as_bytes())?;
+        section.field(&abi.rustc_source_signature_sha256)?;
+        section.field(&abi.rustc_fn_abi_sha256)?;
+        section.field(&usize_to_u64_v5(abi.source_inputs.len()).to_le_bytes())?;
         for input in &abi.source_inputs {
-            digest.field(rustc_type_identity_v1(tcx, *input).as_bytes());
+            section.field(rustc_type_identity_v1(tcx, *input).as_bytes())?;
         }
-        digest.field(rustc_type_identity_v1(tcx, abi.source_output).as_bytes());
+        section.field(rustc_type_identity_v1(tcx, abi.source_output).as_bytes())?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_FUNCTION_ABIS_V5,
+        function_abis.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_TERMINALS_DOMAIN_V5,
+        PREFLIGHT_SECTION_TERMINALS_V5,
+        "terminals child",
+    );
     for terminal in terminals {
-        digest.field(terminal.identities.function().as_bytes());
-        digest.field(terminal.identities.item_definition().as_bytes());
-        digest.field(terminal.identities.monomorphization().as_bytes());
-        digest.field(terminal.identities.generic_type_arguments().as_bytes());
-        digest.field(terminal.identities.const_generic_arguments().as_bytes());
-        digest.field(&[terminal_expansion_tag_for_schema_v1(
+        section.field(terminal.identities.function().as_bytes())?;
+        section.field(terminal.identities.item_definition().as_bytes())?;
+        section.field(terminal.identities.monomorphization().as_bytes())?;
+        section.field(terminal.identities.generic_type_arguments().as_bytes())?;
+        section.field(terminal.identities.const_generic_arguments().as_bytes())?;
+        section.field(&[terminal_expansion_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV3,
-        )]);
-        digest.field(&terminal.abi.rustc_source_signature_sha256);
-        digest.field(&terminal.abi.rustc_fn_abi_sha256);
-        digest_source_producer_v1(&mut digest, terminal.source);
+            TerminalIdentitySchemaV1::CombinedV4,
+        )])?;
+        section.field(&terminal.abi.rustc_source_signature_sha256)?;
+        section.field(&terminal.abi.rustc_fn_abi_sha256)?;
+        digest_source_producer_v1(&mut section, terminal.source)?;
     }
-    for body in bodies {
-        digest.field(&body.function.index().to_le_bytes());
-        digest_source_producer_v1(&mut digest, body.source);
+    digest.section(
+        PREFLIGHT_SECTION_TERMINALS_V5,
+        terminals.len(),
+        section.finish(),
+    )?;
+
+    digest.field(&[PREFLIGHT_SECTION_BODIES_V5])?;
+    digest.field(&usize_to_u64_v5(bodies.len()).to_le_bytes())?;
+    for (body_ordinal, body) in bodies.iter().enumerate() {
+        let body_ordinal = usize_to_u64_v5(body_ordinal);
+        let mut child = PreflightChildCommitmentBuilderV5::body(body_ordinal, body.function);
+        child.field(&body.function.index().to_le_bytes())?;
+        digest_source_producer_v1(&mut child, body.source)?;
         for local in &body.locals {
-            digest.field(local.identity.as_bytes());
-            digest.field(&local.rustc_local.to_le_bytes());
-            digest.field(&local.ty.index().to_le_bytes());
-            digest_source_producer_v1(&mut digest, local.source);
+            child.field(local.identity.as_bytes())?;
+            child.field(&local.rustc_local.to_le_bytes())?;
+            child.field(&local.ty.index().to_le_bytes())?;
+            digest_source_producer_v1(&mut child, local.source)?;
         }
         for local in &body.raw_to_semantic_locals {
-            digest.field(&local.index().to_le_bytes());
+            child.field(&local.index().to_le_bytes())?;
         }
-        digest.field(&body.entry.index().to_le_bytes());
+        child.field(&body.entry.index().to_le_bytes())?;
         for block in &body.blocks {
-            digest.field(block.identity.as_bytes());
-            digest.field(&block.rustc_block.to_le_bytes());
-            digest_source_producer_v1(&mut digest, block.source);
+            child.field(block.identity.as_bytes())?;
+            child.field(&block.rustc_block.to_le_bytes())?;
+            digest_source_producer_v1(&mut child, block.source)?;
             for statement in &block.statements {
-                digest_source_producer_v1(&mut digest, *statement);
+                digest_source_producer_v1(&mut child, *statement)?;
             }
-            digest_source_producer_v1(&mut digest, block.terminator);
+            digest_source_producer_v1(&mut child, block.terminator)?;
         }
         for block in &body.raw_to_semantic_blocks {
-            digest.field(&block.index().to_le_bytes());
+            child.field(&block.index().to_le_bytes())?;
         }
+        digest.body(body_ordinal, body, child.finish())?;
     }
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_ROOTS_DOMAIN_V5,
+        PREFLIGHT_SECTION_ROOTS_V5,
+        "roots child",
+    );
     for root in roots {
-        digest.field(&root.index().to_le_bytes());
+        section.field(&root.index().to_le_bytes())?;
     }
+    digest.section(PREFLIGHT_SECTION_ROOTS_V5, roots.len(), section.finish())?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_EDGES_DOMAIN_V5,
+        PREFLIGHT_SECTION_EDGES_V5,
+        "edges child",
+    );
     for edge in edges {
-        digest.field(&edge.caller.index().to_le_bytes());
-        digest.field(&edge.callee.index().to_le_bytes());
+        section.field(&edge.caller.index().to_le_bytes())?;
+        section.field(&edge.callee.index().to_le_bytes())?;
     }
+    digest.section(PREFLIGHT_SECTION_EDGES_V5, edges.len(), section.finish())?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_DIRECT_CALLS_DOMAIN_V5,
+        PREFLIGHT_SECTION_DIRECT_CALLS_V5,
+        "direct-calls child",
+    );
     for call in direct_calls {
-        digest.field(&call.caller.index().to_le_bytes());
-        digest.field(&call.block.to_le_bytes());
-        digest.field(&call.callee.index().to_le_bytes());
+        section.field(&call.caller.index().to_le_bytes())?;
+        section.field(&call.block.to_le_bytes())?;
+        section.field(&call.callee.index().to_le_bytes())?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_DIRECT_CALLS_V5,
+        direct_calls.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_TERMINAL_EXPANSIONS_DOMAIN_V5,
+        PREFLIGHT_SECTION_TERMINAL_EXPANSIONS_V5,
+        "terminal-expansions child",
+    );
     for recipe in terminal_expansions {
-        digest.field(&recipe.caller.index().to_le_bytes());
-        digest.field(&recipe.block.to_le_bytes());
-        digest.field(&[terminal_expansion_tag_for_schema_v1(
+        section.field(&recipe.caller.index().to_le_bytes())?;
+        section.field(&recipe.block.to_le_bytes())?;
+        section.field(&[terminal_expansion_tag_for_schema_v1(
             recipe.expansion,
-            TerminalIdentitySchemaV1::CombinedV3,
-        )]);
-        digest.field(&recipe.arguments.to_le_bytes());
-        digest.field(recipe.identities.function().as_bytes());
-        digest.field(recipe.identities.item_definition().as_bytes());
-        digest.field(recipe.identities.monomorphization().as_bytes());
-        digest.field(recipe.identities.generic_type_arguments().as_bytes());
-        digest.field(recipe.identities.const_generic_arguments().as_bytes());
-        digest.field(&recipe.terminal.to_le_bytes());
-        digest.field(&terminal_definition_sha256_v1(tcx, recipe));
+            TerminalIdentitySchemaV1::CombinedV4,
+        )])?;
+        section.field(&recipe.arguments.to_le_bytes())?;
+        section.field(recipe.identities.function().as_bytes())?;
+        section.field(recipe.identities.item_definition().as_bytes())?;
+        section.field(recipe.identities.monomorphization().as_bytes())?;
+        section.field(recipe.identities.generic_type_arguments().as_bytes())?;
+        section.field(recipe.identities.const_generic_arguments().as_bytes())?;
+        section.field(&recipe.terminal.to_le_bytes())?;
+        section.field(&terminal_definition_sha256_v1(tcx, recipe))?;
     }
+    digest.section(
+        PREFLIGHT_SECTION_TERMINAL_EXPANSIONS_V5,
+        terminal_expansions.len(),
+        section.finish(),
+    )?;
+
+    let mut section = PreflightChildCommitmentBuilderV5::section(
+        PREFLIGHT_NORMALIZED_INTRINSICS_DOMAIN_V5,
+        PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5,
+        "normalized-intrinsics child",
+    );
     for recipe in normalized_intrinsics {
-        digest.field(&recipe.caller.index().to_le_bytes());
-        digest.field(&recipe.block.to_le_bytes());
-        digest.field(&[recipe.operation.operation_tag()]);
-        let (operation, access) = recipe.operation.atomic_rmw();
-        digest.field(&[atomic_rmw_operation_tag_v1(operation)]);
-        digest.field(&[atomic_ordering_tag_v1(access.ordering())]);
-        digest.field(&[atomic_scope_tag_v1(access.scope())]);
-        digest.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes());
-        digest.field(recipe.identities.function().as_bytes());
-        digest.field(recipe.identities.item_definition().as_bytes());
-        digest.field(recipe.identities.monomorphization().as_bytes());
-        digest.field(recipe.identities.generic_type_arguments().as_bytes());
-        digest.field(recipe.identities.const_generic_arguments().as_bytes());
-        digest.field(&normalized_intrinsic_definition_sha256_v1(tcx, recipe));
+        section.field(&recipe.caller.index().to_le_bytes())?;
+        section.field(&recipe.block.to_le_bytes())?;
+        section.field(&[recipe.operation.operation_tag()])?;
+        let (operation, access) = recipe
+            .operation
+            .atomic_rmw()
+            .expect("preflight retains only normalized atomic intrinsics");
+        section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
+        section.field(&[atomic_ordering_tag_v1(access.ordering())])?;
+        section.field(&[atomic_scope_tag_v1(access.scope())])?;
+        section.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes())?;
+        section.field(recipe.identities.function().as_bytes())?;
+        section.field(recipe.identities.item_definition().as_bytes())?;
+        section.field(recipe.identities.monomorphization().as_bytes())?;
+        section.field(recipe.identities.generic_type_arguments().as_bytes())?;
+        section.field(recipe.identities.const_generic_arguments().as_bytes())?;
+        section.field(&normalized_intrinsic_definition_sha256_v1(tcx, recipe))?;
     }
-    digest.finish_with_canonical_transcript()
+    digest.section(
+        PREFLIGHT_SECTION_NORMALIZED_INTRINSICS_V5,
+        normalized_intrinsics.len(),
+        section.finish(),
+    )?;
+    digest.finish()
 }
 
 const fn atomic_rmw_operation_tag_v1(
@@ -3052,33 +3454,32 @@ fn source_provenance_producer_count_v1(bodies: &[RetainedSemanticBodyProducerV1]
 }
 
 fn digest_source_producer_v1(
-    digest: &mut SemanticIdentityDigestV1,
+    digest: &mut PreflightChildCommitmentBuilderV5,
     source: RetainedSemanticSourceProducerV1,
-) {
-    digest.field(&source.expansion_chain_sha256);
-    digest_source_origin_v1(digest, source.provenance.expansion());
-    digest_source_origin_v1(digest, source.provenance.call_site());
+) -> Result<(), ProductionSemanticPreflightErrorV1> {
+    digest.field(&source.expansion_chain_sha256)?;
+    digest_source_origin_v1(digest, source.provenance.expansion())?;
+    digest_source_origin_v1(digest, source.provenance.call_site())
 }
 
 fn digest_source_origin_v1(
-    digest: &mut SemanticIdentityDigestV1,
+    digest: &mut PreflightChildCommitmentBuilderV5,
     origin: Option<SemanticSourceOriginV1>,
-) {
+) -> Result<(), ProductionSemanticPreflightErrorV1> {
     let Some(origin) = origin else {
-        digest.field(&[0]);
-        return;
+        return digest.field(&[0]);
     };
-    digest.field(&[1]);
-    digest.field(origin.file().as_bytes());
+    digest.field(&[1])?;
+    digest.field(origin.file().as_bytes())?;
     let (byte_start, byte_end) = origin.byte_range();
-    digest.field(&byte_start.to_le_bytes());
-    digest.field(&byte_end.to_le_bytes());
+    digest.field(&byte_start.to_le_bytes())?;
+    digest.field(&byte_end.to_le_bytes())?;
     let (line_start, column_start) = origin.start_coordinate();
-    digest.field(&line_start.to_le_bytes());
-    digest.field(&column_start.to_le_bytes());
+    digest.field(&line_start.to_le_bytes())?;
+    digest.field(&column_start.to_le_bytes())?;
     let (line_end, column_end) = origin.end_coordinate();
-    digest.field(&line_end.to_le_bytes());
-    digest.field(&column_end.to_le_bytes());
+    digest.field(&line_end.to_le_bytes())?;
+    digest.field(&column_end.to_le_bytes())
 }
 
 const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {
@@ -3189,22 +3590,26 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
-            TerminalIdentitySchemaV1::CombinedV3 => 111,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 111,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
-            TerminalIdentitySchemaV1::CombinedV3 => 112,
+            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
+        ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 113,
             TerminalIdentitySchemaV1::CombinedV3 => 113,
+            TerminalIdentitySchemaV1::CombinedV4 => 116,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
+            TerminalIdentitySchemaV1::CombinedV4 => 117,
         },
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
@@ -3212,7 +3617,7 @@ const fn terminal_expansion_tag_for_schema_v1(
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
-                TerminalIdentitySchemaV1::CombinedV3 => 100,
+                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -3228,8 +3633,6 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
-        ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
-        ProductionTerminalExpansionV1::MemoryVolatileStore => 116,
     }
 }
 
@@ -3249,370 +3652,11 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
         Function::Ln => 10,
         Function::Log2 => 11,
         Function::Log10 => 12,
+        Function::Abs => 77,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn disabled_debug_capture_never_inspects_v2_metadata() {
-        let called = Cell::new(false);
-        let result: Result<Option<()>, ()> =
-            with_debug_source_capture_v2(DebugSourceCaptureRequestV2::Disabled, || {
-                called.set(true);
-                Err(())
-            });
-        assert_eq!(result, Ok(None));
-        assert!(!called.get());
-
-        let result =
-            with_debug_source_capture_v2(DebugSourceCaptureRequestV2::SourceVariables, || {
-                called.set(true);
-                Ok::<_, ()>(())
-            });
-        assert_eq!(result, Ok(Some(())));
-        assert!(called.get());
-    }
-
-    #[test]
-    fn v2_debug_names_are_exact_or_rejected() {
-        let maximum = fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2;
-        let exact = "x".repeat(maximum);
-        assert_eq!(exact_debug_variable_name_v2(&exact), Some(exact.clone()));
-        assert_eq!(exact_debug_variable_name_v2(""), None);
-        assert_eq!(exact_debug_variable_name_v2("line\nbreak"), None);
-        assert_eq!(exact_debug_variable_name_v2(&"x".repeat(maximum + 1)), None);
-    }
-
-    #[test]
-    fn optional_debug_count_allocation_and_name_failures_are_typed_gaps() {
-        let mut budget = OptionalDebugCaptureBudgetV2::default();
-        budget
-            .charge_variables(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2)
-            .unwrap();
-        let count_error = PendingRejectionV1::Fatal(budget.charge_variables(1).unwrap_err());
-        assert_eq!(
-            classify_optional_debug_rejection_v2(&count_error),
-            Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit)
-        );
-        let mut scope_budget = OptionalDebugCaptureBudgetV2::default();
-        scope_budget
-            .charge_scopes(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2)
-            .unwrap();
-        assert!(scope_budget.charge_scopes(1).is_err());
-
-        let allocation_error =
-            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
-        assert_eq!(
-            classify_optional_debug_rejection_v2(&allocation_error),
-            Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit)
-        );
-
-        let site = RejectionSiteV1 {
-            function: SemanticFunctionIdV1::from_index(0),
-            block: None,
-            statement: None,
-            local: None,
-            span: rustc_span::DUMMY_SP,
-        };
-        let name_error = exact_debug_variable_name_or_rejection_v2(
-            &"x".repeat(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2 + 1),
-            site,
-        )
-        .unwrap_err();
-        assert_eq!(
-            classify_optional_debug_rejection_v2(&name_error),
-            Some(
-                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable
-            )
-        );
-    }
-
-    #[test]
-    fn every_debug_only_failure_leaves_the_ordinary_artifact_path_unchanged() {
-        let ordinary_artifact = [0x5a; 32];
-        let mut budget = OptionalDebugCaptureBudgetV2::default();
-        budget
-            .charge_variables(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2)
-            .unwrap();
-        let over_limit = PendingRejectionV1::Fatal(budget.charge_variables(1).unwrap_err());
-        let allocation =
-            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
-        let site = RejectionSiteV1 {
-            function: SemanticFunctionIdV1::from_index(0),
-            block: None,
-            statement: None,
-            local: None,
-            span: rustc_span::DUMMY_SP,
-        };
-        let overlong_name = exact_debug_variable_name_or_rejection_v2(
-            &"x".repeat(fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2 + 1),
-            site,
-        )
-        .unwrap_err();
-
-        for (error, expected) in [
-            (
-                over_limit,
-                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit,
-            ),
-            (
-                allocation,
-                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit,
-            ),
-            (
-                overlong_name,
-                fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::SourceObservationUnrepresentable,
-            ),
-        ] {
-            let observed = match observe_optional_debug_capture_v2::<()>(|| Err(error)) {
-                Ok(observed) => observed,
-                Err(_) => panic!("debug-only rejection escaped the observational boundary"),
-            };
-            assert_eq!(observed.unwrap_err(), expected);
-            assert_eq!(ordinary_artifact, [0x5a; 32]);
-        }
-
-        let structural =
-            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::TypeIdentityCollision);
-        assert!(observe_optional_debug_capture_v2::<()>(|| Err(structural)).is_err());
-        assert_eq!(ordinary_artifact, [0x5a; 32]);
-    }
-
-    #[test]
-    fn optional_debug_fallback_never_hides_structural_preflight_failures() {
-        let structural =
-            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::TypeIdentityCollision);
-        assert_eq!(classify_optional_debug_rejection_v2(&structural), None);
-    }
-
-    #[test]
-    fn raw_count_budget_rejects_overflow_before_record_construction() {
-        let limits = SemanticMirLimitsV1::default()
-            .with_limit(SemanticMirResourceV1::Statements, 2)
-            .unwrap();
-        let mut counts = RawMirPreflightCountsV1::default();
-        counts
-            .charge(SemanticMirResourceV1::Statements, 2, limits)
-            .unwrap();
-        assert!(matches!(
-            counts.charge(SemanticMirResourceV1::Statements, 1, limits),
-            Err(ProductionSemanticPreflightErrorV1::LimitExceeded {
-                resource: SemanticMirResourceV1::Statements,
-                actual: 3,
-                maximum: 2,
-            })
-        ));
-    }
-
-    #[test]
-    fn deterministic_call_path_uses_sorted_roots_and_edges() {
-        let id = SemanticFunctionIdV1::from_index;
-        let edges = BTreeSet::from([
-            CallEdgeV1 {
-                caller: id(2),
-                callee: id(3),
-            },
-            CallEdgeV1 {
-                caller: id(0),
-                callee: id(2),
-            },
-            CallEdgeV1 {
-                caller: id(1),
-                callee: id(3),
-            },
-        ]);
-        assert_eq!(call_path_v1(&[id(0), id(1)], &edges, id(3)), [id(1), id(3)]);
-        assert_eq!(call_path_v1(&[id(0)], &edges, id(3)), [id(0), id(2), id(3)]);
-        assert_eq!(call_path_v1(&[id(0)], &edges, id(9)), [id(9)]);
-        assert_eq!(
-            first_unreachable_function_v1(&[id(0)], &edges, 4),
-            Some(id(1))
-        );
-        assert_eq!(
-            first_unreachable_function_v1(&[id(0), id(1)], &edges, 4),
-            None,
-        );
-    }
-
-    #[test]
-    fn terminal_recipe_tags_are_closed_and_distinct() {
-        let tags = [
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndexGet),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::DisjointSliceGetMut),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Trap),
-        ];
-        assert_eq!(tags, [0, 1, 2, 86]);
-        assert_eq!(
-            [
-                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
-                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
-                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
-                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
-            ]
-            .map(|expansion| terminal_expansion_tag_for_schema_v1(
-                expansion,
-                TerminalIdentitySchemaV1::CombinedV3,
-            )),
-            [111, 112, 113, 114],
-        );
-
-        let gfx950 = [
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero),
-            terminal_expansion_tag_v1(
-                ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues,
-            ),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate),
-        ];
-        assert_eq!(gfx950, [61, 62, 63, 64, 65, 66, 67, 68]);
-
-        let gfx950_fp4 = [
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero),
-            terminal_expansion_tag_v1(
-                ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues,
-            ),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate),
-        ];
-        assert_eq!(gfx950_fp4, [69, 70, 71, 72, 73, 74, 75]);
-        assert_eq!(
-            terminal_expansion_tag_v1(
-                ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate,
-            ),
-            87,
-        );
-
-        let gfx950_collectives_and_lds_transpose = [
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposePublish),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4),
-            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8),
-        ];
-        assert_eq!(
-            gfx950_collectives_and_lds_transpose,
-            [76, 77, 78, 79, 80, 81, 82, 83, 84, 85]
-        );
-        assert_eq!(
-            [
-                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits,
-                )),
-                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits,
-                )),
-                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven,
-                )),
-                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
-                )),
-            ],
-            [91, 92, 93, 94]
-        );
-        let pipeline = [
-            ProductionTerminalExpansionV1::WorkgroupPipelineCurrent,
-            ProductionTerminalExpansionV1::WorkgroupPipelineStage,
-            ProductionTerminalExpansionV1::WorkgroupPipelineWrite,
-            ProductionTerminalExpansionV1::WorkgroupPipelineCommit,
-            ProductionTerminalExpansionV1::WorkgroupPipelineWait,
-            ProductionTerminalExpansionV1::WorkgroupPipelineConsume,
-            ProductionTerminalExpansionV1::WorkgroupPipelineRead,
-            ProductionTerminalExpansionV1::WorkgroupPipelineDiscard,
-            ProductionTerminalExpansionV1::WorkgroupPipelineRelease,
-        ];
-        assert_eq!(
-            pipeline.map(terminal_expansion_tag_v1),
-            [91, 92, 93, 94, 95, 96, 97, 98, 99]
-        );
-
-        let combined_schema = TerminalIdentitySchemaV1::CombinedV3;
-        assert_eq!(combined_schema, TerminalIdentitySchemaV1::CombinedV3);
-        assert_ne!(PREFLIGHT_PLAN_DOMAIN_V1, PREFLIGHT_PLAN_DOMAIN_V2);
-        assert_ne!(PREFLIGHT_PLAN_DOMAIN_V2, PREFLIGHT_PLAN_DOMAIN_V3);
-        assert_eq!(
-            pipeline.map(|expansion| {
-                terminal_expansion_tag_for_schema_v1(expansion, combined_schema)
-            }),
-            [91, 92, 93, 94, 95, 96, 97, 98, 99]
-        );
-        assert_eq!(
-            [
-                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits,
-                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits,
-                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven,
-                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
-            ]
-            .map(|conversion| terminal_expansion_tag_for_schema_v1(
-                ProductionTerminalExpansionV1::Bf16Conversion(conversion),
-                combined_schema,
-            )),
-            [100, 101, 102, 103]
-        );
-        assert_eq!(
-            [
-                ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits,
-                ),
-                ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits,
-                ),
-                ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven,
-                ),
-                ProductionTerminalExpansionV1::Bf16Conversion(
-                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
-                ),
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen,
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite,
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint,
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteExclusive,
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock,
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d,
-                ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d,
-                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
-                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
-                ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
-                ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
-            ]
-            .map(|expansion| terminal_expansion_tag_for_schema_v1(expansion, combined_schema)),
-            [
-                100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
-            ]
-        );
-        assert_eq!(
-            [
-                ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent,
-                ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum,
-            ]
-            .map(|expansion| terminal_expansion_tag_for_schema_v1(
-                expansion,
-                TerminalIdentitySchemaV1::CombinedV2,
-            )),
-            [104, 105],
-        );
-    }
-
-    #[test]
-    fn diagnostics_are_bounded_by_unicode_scalar_count() {
-        let bounded = bounded_diagnostic_component_v1(&"x".repeat(1_024));
-        assert_eq!(bounded.len(), MAX_DIAGNOSTIC_COMPONENT_CHARS_V1);
-    }
+    include!("rustc_semantic_plan_v1/tests.rs");
 }

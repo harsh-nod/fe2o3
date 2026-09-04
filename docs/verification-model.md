@@ -62,15 +62,29 @@ This has three deliberately separate meanings:
    final-machine refinement, dynamic launch preconditions, runtime behavior, or
    hardware correctness.
 
-The host now has a typed, sealed join that can present those owners plus exact
+`fe2o3-host` exposes the exact canonical V3 verification and signed attestation
+retained from the inherited FD195 endpoint only through a lifetime-bound,
+non-clone view of an already admitted audit or compiler-execution lane. Both
+typed identities and the expected verification challenge are derived from
+those same retained records. An external protected verifier can consume a
+typed caller-owned challenge in the one-use FD195 audit, retain the original
+expected bytes under its own replay policy, and compare them with the view. The
+view lets it decode and authenticate the full records instead of trusting an
+identity echo, but it neither transfers the host's one-use
+currentness custody nor supplies signing keys, protected deployment trust,
+replay exclusion, verification authority, load authority, or launch authority.
+
+The host also has a typed, sealed join that can present those owners plus exact
 final LLVM, selected ISA, HSACO, currentness, physical-entry, and publication
 coordinates to a separately reviewed unsafe proof backend. It alone can seal
 that backend's owned proof artifacts into the opaque Worker V3 receipt. This is
-an evidence transport and consumption boundary, not a semantic proof. Until a
-reviewed protected verifier and concrete issue #214 proof backend/artifact are
-supplied, ordinary generated applications fail closed. Synthetic integration
-tests demonstrate composition and hostile rejection only and never upgrade
-this assurance boundary.
+an evidence transport and consumption boundary, not a semantic proof.
+
+Until a reviewed protected verifier and concrete issue #214 proof
+backend/artifact consume those owners together with the missing machine and
+launch evidence, ordinary generated applications fail closed. Synthetic
+integration tests demonstrate composition and hostile rejection only and never
+upgrade this assurance boundary.
 
 ## Abstract Execution Model
 

@@ -3163,6 +3163,15 @@ fn production_semantic_anchors_admit_real_worker_gfx942_and_gfx950() {
             admitted.characteristic().structural_bridge_identity(),
             admitted.bridge().identity()
         );
+        let optimization = admitted
+            .optimization_v1()
+            .expect("current production replay retains the optimizer audit");
+        assert_eq!(optimization.audit().optimizer_policy_version(), 2);
+        assert_eq!(optimization.audit().report().passes().len(), 7);
+        assert!(optimization.audit().changed());
+        assert!(!optimization.establishes_semantic_preservation());
+        assert!(!optimization.grants_compiler_authority());
+        assert!(!optimization.grants_runtime_authority());
         assert!(!admitted.authenticates_external_provenance());
         assert!(!admitted.grants_compiler_authority());
         assert!(!admitted.grants_publication_authority());

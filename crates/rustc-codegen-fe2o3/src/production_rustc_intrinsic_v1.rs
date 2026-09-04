@@ -9,7 +9,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use rustc_abi::ExternAbi;
 use rustc_hir::{Mutability, Safety};
 use rustc_middle::ty::{
-    self, ConstKind, Instance, InstanceKind, IntTy, Ty, TyCtxt, TyKind, UintTy,
+    self, ConstKind, FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, TyKind, UintTy,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,18 +30,23 @@ pub(crate) enum ProductionRustcIntrinsicOperationV1 {
         operation: SemanticAtomicRmwOpV1,
         access: SemanticAtomicAccessV1,
     },
+    FabsF32,
 }
 
 impl ProductionRustcIntrinsicOperationV1 {
     pub(crate) const fn operation_tag(self) -> u8 {
         match self {
             Self::AtomicRmw { .. } => 0,
+            Self::FabsF32 => 1,
         }
     }
 
-    pub(crate) const fn atomic_rmw(self) -> (SemanticAtomicRmwOpV1, SemanticAtomicAccessV1) {
+    pub(crate) const fn atomic_rmw(
+        self,
+    ) -> Option<(SemanticAtomicRmwOpV1, SemanticAtomicAccessV1)> {
         match self {
-            Self::AtomicRmw { operation, access } => (operation, access),
+            Self::AtomicRmw { operation, access } => Some((operation, access)),
+            Self::FabsF32 => None,
         }
     }
 }
@@ -61,6 +66,12 @@ pub(crate) enum ProductionRustcIntrinsicErrorV1 {
     ValueTypeArgument,
     MismatchedValueType,
     UnsupportedIntegerType,
+    FabsGenericArity,
+    FabsElementTypeArgument,
+    FabsUnsupportedWidth,
+    FabsCallArity,
+    FabsInputType,
+    FabsResultType,
     OrderingArgument,
     UnsupportedOrdering,
 }
@@ -77,6 +88,12 @@ impl fmt::Display for ProductionRustcIntrinsicErrorV1 {
             Self::UnsupportedIntegerType => {
                 "atomic intrinsic outside the supported i32/u32/i64/u64 integer subset"
             }
+            Self::FabsGenericArity => "fabs intrinsic with unexpected generic arity",
+            Self::FabsElementTypeArgument => "fabs intrinsic without a float type argument",
+            Self::FabsUnsupportedWidth => "fabs intrinsic outside the supported f32 width",
+            Self::FabsCallArity => "fabs intrinsic with unexpected call arity",
+            Self::FabsInputType => "fabs intrinsic whose input is not its f32 type argument",
+            Self::FabsResultType => "fabs intrinsic whose result is not its f32 type argument",
             Self::OrderingArgument => "atomic intrinsic without a concrete ordering argument",
             Self::UnsupportedOrdering => "atomic intrinsic with an unsupported ordering value",
         })
@@ -99,6 +116,32 @@ pub(crate) fn classify<'tcx>(
     let intrinsic = tcx
         .intrinsic(def_id)
         .ok_or(ProductionRustcIntrinsicErrorV1::MissingMetadata)?;
+    if is_fabs_intrinsic_name_v1(intrinsic.name.as_str()) {
+        let arguments = instance.args.as_slice();
+        let [element_argument] = arguments else {
+            return Err(ProductionRustcIntrinsicErrorV1::FabsGenericArity);
+        };
+        let element_type = element_argument
+            .as_type()
+            .ok_or(ProductionRustcIntrinsicErrorV1::FabsElementTypeArgument)?;
+        let signature = tcx.instantiate_bound_regions_with_erased(
+            tcx.fn_sig(instance.def_id())
+                .instantiate(tcx, instance.args),
+        );
+        validate_fabs_contract_v1(
+            scalar_float_width_v1(element_type),
+            signature.inputs().len(),
+            signature
+                .inputs()
+                .first()
+                .is_some_and(|input| *input == element_type),
+            signature.output() == element_type,
+        )?;
+        return Ok(Some(ProductionRustcIntrinsicClassificationV1 {
+            operation: ProductionRustcIntrinsicOperationV1::FabsF32,
+            element_type,
+        }));
+    }
     let rule = atomic_rmw_intrinsic_rule_v1(intrinsic.name.as_str())
         .ok_or(ProductionRustcIntrinsicErrorV1::UnsupportedIntrinsic)?;
 
@@ -138,6 +181,52 @@ pub(crate) fn classify<'tcx>(
         },
         element_type,
     }))
+}
+
+fn is_fabs_intrinsic_name_v1(name: &str) -> bool {
+    name == "fabs"
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScalarFloatWidthV1 {
+    F32,
+    Other,
+    NotFloat,
+}
+
+fn scalar_float_width_v1(ty: Ty<'_>) -> ScalarFloatWidthV1 {
+    match ty.kind() {
+        TyKind::Float(FloatTy::F32) => ScalarFloatWidthV1::F32,
+        TyKind::Float(_) => ScalarFloatWidthV1::Other,
+        _ => ScalarFloatWidthV1::NotFloat,
+    }
+}
+
+fn validate_fabs_contract_v1(
+    width: ScalarFloatWidthV1,
+    input_count: usize,
+    input_matches_element: bool,
+    output_matches_element: bool,
+) -> Result<(), ProductionRustcIntrinsicErrorV1> {
+    match width {
+        ScalarFloatWidthV1::F32 => {}
+        ScalarFloatWidthV1::Other => {
+            return Err(ProductionRustcIntrinsicErrorV1::FabsUnsupportedWidth);
+        }
+        ScalarFloatWidthV1::NotFloat => {
+            return Err(ProductionRustcIntrinsicErrorV1::FabsElementTypeArgument);
+        }
+    }
+    if input_count != 1 {
+        return Err(ProductionRustcIntrinsicErrorV1::FabsCallArity);
+    }
+    if !input_matches_element {
+        return Err(ProductionRustcIntrinsicErrorV1::FabsInputType);
+    }
+    if !output_matches_element {
+        return Err(ProductionRustcIntrinsicErrorV1::FabsResultType);
+    }
+    Ok(())
 }
 
 fn atomic_rmw_intrinsic_rule_v1(name: &str) -> Option<AtomicRmwIntrinsicRuleV1> {
@@ -763,7 +852,7 @@ mod tests {
                     SemanticAtomicScopeV1::System,
                 ),
             };
-            let (rmw, access) = operation.atomic_rmw();
+            let (rmw, access) = operation.atomic_rmw().expect("atomic operation");
             assert_eq!(rmw, rule.operation);
             assert_eq!(access.ordering(), SemanticAtomicOrderingV1::Relaxed);
             assert_eq!(access.scope(), SemanticAtomicScopeV1::System);
@@ -815,5 +904,51 @@ mod tests {
             reviewed_core_atomic_wrapper_shape_v1("core::sync::atomic::atomic_nand"),
             None
         );
+    }
+
+    #[test]
+    fn fabs_f32_contract_is_exact_and_closed() {
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::F32, 1, true, true),
+            Ok(())
+        );
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::F32, 0, true, true),
+            Err(ProductionRustcIntrinsicErrorV1::FabsCallArity)
+        );
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::F32, 2, true, true),
+            Err(ProductionRustcIntrinsicErrorV1::FabsCallArity)
+        );
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::Other, 1, true, true),
+            Err(ProductionRustcIntrinsicErrorV1::FabsUnsupportedWidth)
+        );
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::NotFloat, 1, true, true),
+            Err(ProductionRustcIntrinsicErrorV1::FabsElementTypeArgument)
+        );
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::F32, 1, false, true),
+            Err(ProductionRustcIntrinsicErrorV1::FabsInputType)
+        );
+        assert_eq!(
+            validate_fabs_contract_v1(ScalarFloatWidthV1::F32, 1, true, false),
+            Err(ProductionRustcIntrinsicErrorV1::FabsResultType)
+        );
+        assert_eq!(
+            ProductionRustcIntrinsicOperationV1::FabsF32.atomic_rmw(),
+            None
+        );
+        assert_eq!(
+            ProductionRustcIntrinsicOperationV1::FabsF32.operation_tag(),
+            1
+        );
+        assert_eq!(atomic_rmw_intrinsic_rule_v1("fabs"), None);
+        assert_eq!(atomic_rmw_intrinsic_rule_v1("fabsf"), None);
+        assert!(is_fabs_intrinsic_name_v1("fabs"));
+        for unknown in ["", "fabsf", "fabsf32", "llvm.fabs.f32", "sqrt"] {
+            assert!(!is_fabs_intrinsic_name_v1(unknown));
+        }
     }
 }

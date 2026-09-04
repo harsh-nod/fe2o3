@@ -429,6 +429,66 @@ fn run_call(name: &str, operands: &[ScalarBitsV1]) -> u128 {
 }
 
 #[test]
+fn fabs_f32_clears_only_the_sign_bit_for_ieee_values() {
+    const FABS_F32: &str = "__fe2o3_ir_float_v1_fabs_f32";
+    for (input, expected) in [
+        (0x0000_0000, 0x0000_0000),
+        (0x8000_0000, 0x0000_0000),
+        (0x3fc0_0000, 0x3fc0_0000),
+        (0xbfc0_0000, 0x3fc0_0000),
+        (0x7f80_0000, 0x7f80_0000),
+        (0xff80_0000, 0x7f80_0000),
+        (0x7fc0_0042, 0x7fc0_0042),
+        (0xffc0_0042, 0x7fc0_0042),
+    ] {
+        assert_eq!(
+            run_call(FABS_F32, &[value(ScalarType::F32, input)]),
+            expected,
+            "input bits {input:#010x}"
+        );
+    }
+}
+
+#[test]
+fn fabs_f32_rejects_wrong_operand_arity_and_type_before_execution() {
+    const FABS_F32: &str = "__fe2o3_ir_float_v1_fabs_f32";
+    let module = admitted(call_module(FABS_F32));
+    let output =
+        SimulationArgumentV1::Buffer(buffer(AccessMode::ReadWrite, &[value(ScalarType::F32, 0)]));
+
+    let missing =
+        SimulationRequestV1::new("float_call", [1, 1, 1], [1, 1, 1], vec![output.clone()]);
+    assert_eq!(
+        module
+            .preflight(&missing, TARGET, SimulationLimitsV1::default())
+            .unwrap_err(),
+        SimulationPreflightErrorV1::ArgumentCount {
+            expected: 2,
+            actual: 1,
+        }
+    );
+
+    let wrong_type = SimulationRequestV1::new(
+        "float_call",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            output,
+            SimulationArgumentV1::Scalar(value(ScalarType::U32, 0xbf80_0000)),
+        ],
+    );
+    assert_eq!(
+        module
+            .preflight(&wrong_type, TARGET, SimulationLimitsV1::default())
+            .unwrap_err(),
+        SimulationPreflightErrorV1::ArgumentType {
+            argument: 1,
+            expected: Type::Scalar(ScalarType::F32),
+        }
+    );
+}
+
+#[test]
 fn every_supported_canonical_float_operation_executes_as_one_scalar_operation() {
     for (name, input_ty, input, expected) in [
         (

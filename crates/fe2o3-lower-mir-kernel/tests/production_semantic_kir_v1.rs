@@ -15,7 +15,8 @@ use fe2o3_lower_mir_kernel::{
     ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
     ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
-    SemanticKirSyntheticOperationRuleV1, validate_borrowed_ranked_semantic_projection_candidate_v1,
+    SemanticKirParameterProjectionV1, SemanticKirSyntheticOperationRuleV1,
+    validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
@@ -54,6 +55,14 @@ fn unit_type() -> SemanticTypeDeclV1 {
 fn scalar_type(tag: u8, scalar: SemanticScalarTypeV1) -> SemanticTypeDeclV1 {
     let (size, primitive, maximum) = match scalar {
         SemanticScalarTypeV1::Bool => (1, SemanticBackendPrimitiveV1::integer(false, 8, 1), 1_u128),
+        SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 16,
+        } => (
+            2,
+            SemanticBackendPrimitiveV1::integer(false, 16, 2),
+            u16::MAX.into(),
+        ),
         SemanticScalarTypeV1::Integer {
             signed: false,
             bits: 32,
@@ -2331,6 +2340,277 @@ enum DefinedHelperFixtureV1 {
     MismatchedArgument,
 }
 
+#[derive(Clone, Copy)]
+enum TransparentHelperCarrierFixtureV1 {
+    Exact,
+    LooseStorageOnly,
+    WrongOwnership,
+}
+
+const TRANSPARENT_HELPER_U16_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
+const TRANSPARENT_HELPER_BOOL_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
+const TRANSPARENT_HELPER_CARRIER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
+
+fn transparent_helper_u16_backend_v1(valid_end: u128) -> SemanticBackendReprV1 {
+    SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 16, 2),
+        SemanticScalarValidityRangeV1::new(0, valid_end),
+    ))
+}
+
+fn transparent_helper_bool_abi_value_v1() -> SemanticAbiValueV1 {
+    SemanticAbiValueV1::new(
+        TRANSPARENT_HELPER_BOOL_TYPE,
+        SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                SemanticAbiExtensionV1::ZeroExtend,
+                0,
+                None,
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+fn transparent_helper_carrier_types_v1(
+    mode: TransparentHelperCarrierFixtureV1,
+) -> Vec<SemanticTypeDeclV1> {
+    let properties =
+        SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true);
+    let field = scalar_type(
+        230,
+        SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 16,
+        },
+    )
+    .with_rustc_abi_properties(properties);
+    let carrier_valid_end = if matches!(mode, TransparentHelperCarrierFixtureV1::LooseStorageOnly) {
+        u128::from(u16::MAX) - 1
+    } else {
+        u16::MAX.into()
+    };
+    let carrier = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(233)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(233)),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            2,
+            2,
+            SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap(),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            transparent_helper_u16_backend_v1(carrier_valid_end),
+            None,
+            false,
+            None,
+            2,
+            0,
+            SemanticTypeLayoutDetailsV1::Aggregate(
+                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            ),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(
+            SemanticAggregateTypeV1::new(vec![TRANSPARENT_HELPER_U16_TYPE]).unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(properties);
+    vec![
+        unit_type(),
+        field,
+        scalar_type(232, SemanticScalarTypeV1::Bool),
+        carrier,
+    ]
+}
+
+fn transparent_helper_carrier_owner_v1(
+    mode: TransparentHelperCarrierFixtureV1,
+) -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let edge = |target| {
+        SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticBlockIdV1::from_index(target),
+        )
+    };
+    let aggregate = SemanticStatementV1::new(
+        source,
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            local_place(1, TRANSPARENT_HELPER_CARRIER_TYPE),
+            SemanticRvalueV1::new(
+                TRANSPARENT_HELPER_CARRIER_TYPE,
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::Aggregate,
+                        vec![scalar_constant(TRANSPARENT_HELPER_U16_TYPE, 0x7f80, 2)],
+                    )
+                    .unwrap(),
+                ),
+            ),
+        )),
+    );
+    let call = SemanticDirectCallV1::new_callable(
+        SemanticCallableIdV1::from_index(1),
+        vec![SemanticOperandV1::Copy(local_place(
+            1,
+            TRANSPARENT_HELPER_CARRIER_TYPE,
+        ))],
+        Some(SemanticCallDestinationV1::new(
+            local_place(2, TRANSPARENT_HELPER_BOOL_TYPE),
+            edge(1),
+        )),
+        SemanticUnwindActionV1::Unreachable,
+    )
+    .unwrap();
+    let root_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(233)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let root = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(234)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(235)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(236)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(237)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(238)),
+        source,
+        root_abi,
+        vec![
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(239)),
+                unit,
+                SemanticLocalRoleV1::Return,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(240)),
+                TRANSPARENT_HELPER_CARRIER_TYPE,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(241)),
+                TRANSPARENT_HELPER_BOOL_TYPE,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![
+            block(242, vec![aggregate], SemanticTerminatorKindV1::Call(call)),
+            block(243, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"transparent_helper_carrier_v1".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(244)),
+        SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+    ));
+
+    let helper_ownership = if matches!(mode, TransparentHelperCarrierFixtureV1::WrongOwnership) {
+        SemanticSourceArgumentOwnershipV1::SharedBorrow
+    } else {
+        SemanticSourceArgumentOwnershipV1::ByValue
+    };
+    let helper_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(245)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::Rust,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(
+            TRANSPARENT_HELPER_CARRIER_TYPE,
+        ))],
+        transparent_helper_bool_abi_value_v1(),
+    )
+    .unwrap()
+    .with_source_argument_ownership(vec![helper_ownership])
+    .unwrap();
+    let carrier_field = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(1),
+        vec![
+            SemanticProjectionV1::new(
+                SemanticProjectionKindV1::Field(0),
+                TRANSPARENT_HELPER_U16_TYPE,
+            )
+            .unwrap(),
+        ],
+        TRANSPARENT_HELPER_U16_TYPE,
+    )
+    .unwrap();
+    let result = SemanticStatementV1::new(
+        source,
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            local_place(0, TRANSPARENT_HELPER_BOOL_TYPE),
+            SemanticRvalueV1::new(
+                TRANSPARENT_HELPER_BOOL_TYPE,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::NotEqual,
+                    left: SemanticOperandV1::Copy(carrier_field),
+                    right: scalar_constant(TRANSPARENT_HELPER_U16_TYPE, 0x7f80, 2),
+                },
+            ),
+        )),
+    );
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(246)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(247)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(248)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(249)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(250)),
+        source,
+        helper_abi,
+        vec![
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(251)),
+                TRANSPARENT_HELPER_BOOL_TYPE,
+                SemanticLocalRoleV1::Return,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(252)),
+                TRANSPARENT_HELPER_CARRIER_TYPE,
+                SemanticLocalRoleV1::Argument(0),
+                source,
+            ),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![block(253, vec![result], SemanticTerminatorKindV1::Return)],
+    )
+    .unwrap();
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        transparent_helper_carrier_types_v1(mode),
+        vec![],
+        vec![],
+        vec![],
+        vec![root, helper],
+        vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
 fn defined_helper_request_v1(mode: DefinedHelperFixtureV1) -> InertSemanticMirRequestV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u64_ty = SemanticTypeIdV1::from_index(1);
@@ -2698,6 +2978,110 @@ fn reachable_defined_scalar_helper_survives_kir_effects_and_exact_llvm() {
     let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
     assert!(llvm.contains(&format!("define internal i64 @{helper_id}(i64 %arg0)")));
     assert!(llvm.contains(&format!("call i64 @{helper_id}(i64 %arg0)")));
+}
+
+#[test]
+fn exact_transparent_scalar_carrier_helper_uses_one_physical_u16_parameter() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::Exact),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+
+    let helper_function = SemanticFunctionIdV1::from_index(1);
+    let helper_mapping = lowered
+        .correspondence()
+        .lowered_functions()
+        .iter()
+        .find(|mapping| mapping.semantic_function() == helper_function)
+        .unwrap();
+    let helper_id = helper_mapping.kernel_ir_function();
+    let helper = lowered.module().function(helper_id).unwrap();
+    assert_eq!(helper.role, FunctionRole::InternalHelper);
+    assert_eq!(helper.signature.parameters, [Type::Scalar(ScalarType::U16)]);
+    assert_eq!(helper.signature.results, [Type::Scalar(ScalarType::Bool)]);
+
+    let entry = &lowered.module().functions[0];
+    let call = entry.body.as_ref().unwrap().blocks[0]
+        .operations
+        .iter()
+        .find(|operation| matches!(operation.kind, OperationKind::Call { .. }))
+        .unwrap();
+    assert!(matches!(
+        &call.kind,
+        OperationKind::Call { callee, arguments }
+            if callee == helper_id && arguments.len() == 1
+    ));
+    assert_eq!(call.results.len(), 1);
+    assert_eq!(call.results[0].ty, Type::Scalar(ScalarType::Bool));
+
+    let component = lowered
+        .correspondence()
+        .parameter_component_bindings()
+        .iter()
+        .find(|binding| binding.semantic_function() == helper_function)
+        .unwrap();
+    assert_eq!(component.semantic_local(), SemanticLocalIdV1::from_index(1));
+    assert_eq!(
+        component.semantic_component_type(),
+        TRANSPARENT_HELPER_U16_TYPE
+    );
+    assert_eq!(
+        component.projection(),
+        [SemanticKirParameterProjectionV1::Field(0)]
+    );
+    assert_eq!(
+        component.kernel_ir_value(),
+        helper.body.as_ref().unwrap().parameters[0]
+    );
+    assert!(
+        lowered
+            .correspondence()
+            .parameter_bindings()
+            .iter()
+            .all(|binding| binding.semantic_function() != helper_function)
+    );
+}
+
+#[test]
+fn transparent_helper_carrier_rejects_loose_layout_and_wrong_ownership() {
+    let loose_types =
+        transparent_helper_carrier_types_v1(TransparentHelperCarrierFixtureV1::LooseStorageOnly);
+    assert_eq!(
+        exact_transparent_scalar_carrier_field_v1(&loose_types, TRANSPARENT_HELPER_CARRIER_TYPE,),
+        None
+    );
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            transparent_helper_carrier_owner_v1(
+                TransparentHelperCarrierFixtureV1::LooseStorageOnly,
+            ),
+            ProductionSemanticKirLimitsV1::default(),
+        ),
+        Err(ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
+            semantic_type: 3,
+            ..
+        })
+    ));
+
+    let exact_types =
+        transparent_helper_carrier_types_v1(TransparentHelperCarrierFixtureV1::WrongOwnership);
+    assert_eq!(
+        exact_transparent_scalar_carrier_field_v1(&exact_types, TRANSPARENT_HELPER_CARRIER_TYPE,),
+        Some(TRANSPARENT_HELPER_U16_TYPE)
+    );
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            transparent_helper_carrier_owner_v1(TransparentHelperCarrierFixtureV1::WrongOwnership,),
+            ProductionSemanticKirLimitsV1::default(),
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            function: 1,
+            detail: "helper scalar carrier lacks an exact by-value source ABI",
+            ..
+        })
+    ));
 }
 
 #[test]

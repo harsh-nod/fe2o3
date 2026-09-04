@@ -1,4 +1,8 @@
 //! Attributed source profiles with compiler-derived registration identity.
+//!
+//! This profile highlights the synchronization contract: validate the exact
+//! launch, acquire one LDS scope, execute the collective uniformly, and let only
+//! the grid leader publish through an exclusive capability.
 
 #![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
 
@@ -28,6 +32,7 @@ pub fn lds_publish_read_reduce_i32_v1(
     values: &[i32],
     mut output: DisjointSlice<i32, GridExclusive>,
 ) {
+    // The exact launch check is uniform and occurs before LDS barriers.
     let lane = thread::thread_idx_x();
     let launch_extent = thread::launch_extent_1d();
     if values.len() != 64
@@ -45,12 +50,14 @@ pub fn lds_publish_read_reduce_i32_v1(
         fe2o3_device::trap();
     }
 
+    // One scope owns the scratch lifetime across publish, reduction, and final reuse barrier.
     let mut lds_scope = WorkgroupLdsScope::current();
     let lds = DynamicLds::<i32>::exact_current::<64>(&mut lds_scope);
     let context = WorkgroupCollectives::current();
     let value = values[lane as usize];
     let sum = context.reduce_sum_portable(lds, value);
 
+    // Only lane zero can acquire GridLeader and publish the workgroup result.
     if lane == 0 {
         let Some(leader) = thread::grid_leader() else {
             fe2o3_device::trap();

@@ -1,0 +1,27 @@
+[package]
+name = "fe2o3-worker-v3-verification-service"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Authority-free protected session boundary for Worker V3 verification."
+publish = false
+
+[dependencies]
+fe2o3-worker-v3-verification-protocol.workspace = true
+rustix = { workspace = true, features = ["event"] }
+sha2.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-external-anchor-protocol.workspace = true
+fe2o3-worker-v3-verification-client.workspace = true
+
+[lib]
+name = "fe2o3_worker_v3_verification_service"
+
+[lints.rust]
+unsafe_code = "forbid"

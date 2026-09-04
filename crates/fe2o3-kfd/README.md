@@ -518,11 +518,13 @@ nonzero dispatch generation advances from prepared to in-flight to completed to
 recycled in lockstep with C4. Ordinary pre-publication ring occupancy can cancel
 the inert binding. Any generation divergence, currentness loss, publication or
 observation ambiguity, timeout, fault, partial recycle, or teardown ambiguity
-poisons the session and requires process teardown. Explicit release occurs only
-after every signal was recycled. A recycled-only detach releases code and
-kernarg while keeping the same native queue, ring, completion arena, event,
-runtime, and doorbell alive. Its exact detached-lease ledger must be consumed by
-a later `bind_fixed_dispatch` or explicit release. The later batch may have a
+poisons the session and requires process teardown. A never-published prepared
+batch may be destroyed and returned with generation zero; after publication,
+explicit returning release requires every signal to be recycled. A
+recycled-only detach releases code and kernarg while keeping the same native
+queue, ring, completion arena, event, runtime, and doorbell alive. Its exact
+detached-lease ledger must be consumed by a later `bind_fixed_dispatch` or
+explicit release. The later batch may have a
 different program count, packet count, geometry, scalar bytes, and dispatch-data
 set. Live memory mutations run only while the authoritative memory model is
 restored to the shared session; the queue engine reclaims it before any later
@@ -578,14 +580,16 @@ no constructor for that token, so neither public data, an internal descriptor,
 nor a boolean can mint initialized memory.
 
 This remains a prerequisite content-authentication state machine, not the
-device-copy implementation described below. The queue can return its real
-mapped C3 set only after exact C4 recycle and confirmed destruction, but that
-return path is deliberately not connected to the content state machine. The R7
-SDMA engine moves bytes and observes its own completion generation; it does not
-authenticate source semantics or construct the opaque C6 initialized-content
-token. A later composition must join exact content identity with exact copy
-publication and completion. The independent public-VRAM CPU initialization path
-also does not authenticate a device copy.
+device-copy implementation described below. The queue can return a
+never-published mapped C3 set with generation zero, or a published set only
+after exact C4 recycle and confirmed destruction. That return path is
+deliberately not connected to the content state machine. The R7 SDMA engine
+moves bytes and observes its own completion generation; it does not authenticate
+source semantics or construct the opaque C6 initialized-content token. A later
+composition must join exact content identity with exact copy publication and
+completion. The independent public-VRAM CPU initialization path also does not
+authenticate a device copy. Neither path supplies a public read-dispatch premise
+or hardware evidence.
 
 ### R7 gfx942 SDMA and pooled buffers
 
@@ -744,7 +748,6 @@ launch authority. KFD atomics and collectives remain code-object behavior
 rather than standalone ioctls. Worker V3 remains responsible for exact
 semantic and launch authority; concrete device, queue, publication, and
 completion custody remains with the native owner.
-
 Before event or queue creation, the composition takes a crate-global linear
 owner and executes exact KFD RUNTIME_ENABLE mode 1 with zero debugger address,
 capabilities, and TTMP-save. Success is required while the process has no user

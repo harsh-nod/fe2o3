@@ -8,6 +8,7 @@ use fe2o3_kfd_uapi::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::queue::GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1;
 use crate::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, DEVICE_ADMISSION_PROFILE_SHA256_V1,
     DeviceBindingObservation, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
@@ -15,7 +16,6 @@ use crate::{
 };
 
 const EXPECTED_CWSR_SHADOW_PAGES: u8 = 24;
-const EXPECTED_RELEASED_QUEUE_RESOURCES: u8 = 4;
 const ZERO_SCOPE: [u8; 32] = [0; 32];
 
 /// Canonical claim boundary for direct-KFD semantic observations.
@@ -23,23 +23,23 @@ const ZERO_SCOPE: [u8; 32] = [0; 32];
 /// Its digest identifies this schema. It does not authenticate KFD, the
 /// kernel, firmware, hardware, or any dispatch.
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-direct-kfd-semantic-observation-r8-v1\n",
+    "profile=fe2o3-direct-kfd-semantic-observation-r11-v1\n",
     "source.device_admission_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "source.queue_session_sha256=2df22ab1f0bf49e270d4dc332e490a9ce760bec04fccc0676658dd455ec4e47a\n",
+    "source.queue_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
     "input=detached-device-binding-optional,detached-live-queue,detached-destroyed-queue-optional\n",
     "bounds=fixed-size,no-input-read,no-variable-allocation,no-device-enumeration\n",
     "identity=sha256-domain-separated-canonical-little-endian,caller-supplied-nonzero-scope,opaque-correlation-not-authentication-or-secrecy\n",
     "redaction=no-raw-queue-id,event-id,doorbell-offset,gpu-id,unique-id,pci-location,aperture,address,fd,handle-or-pointer-in-report\n",
     "observed=optional-device-binding,queue-lifecycle,ring-bytes,doorbell-slice-bytes,cwsr-shadow-page-count\n",
     "unavailable=queue-exception,dispatch-submission,dispatch-completion,dispatch-timing,kir,workgroup,wave,lane,memory-access,register-value\n",
-    "destroy=confirmed-kfd-queue-event-runtime-and-resource-teardown,not-dispatch-completion-or-kernel-success\n",
+    "destroy=confirmed-kfd-queue-event-runtime-and-exact-ring-control-eop-context-save-completion-signal-arena-teardown,not-dispatch-completion-or-kernel-success\n",
     "trace=no-semantic-trace-v1-emission-without-authenticated-dispatch-and-completion\n",
     "authority=inert-read-only-report,no-fd,address,handle,queue,event,mmio,launch,wait-or-completion-authority\n",
 );
 
 /// SHA-256 of [`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1`].
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_SHA256_V1: &str =
-    "eb6b4f8296c18d91d2bd8beab160aed7be5ddd6b5589581529f5fb7640eb67e5";
+    "d11b43e78eeb0f681e77163bf90a702cbc8cd4a00da8cebd833bc3ccacc9f961";
 
 /// A caller-controlled correlation scope for one observation domain.
 ///
@@ -373,7 +373,7 @@ pub fn observe_kfd_destroyed_queue_v1(
     if live.lifecycle != KfdQueueLifecycleV1::Live {
         return Err(KfdSemanticObservationErrorV1::UnexpectedLifecycle);
     }
-    if destroyed.released_resources() != EXPECTED_RELEASED_QUEUE_RESOURCES {
+    if destroyed.released_resources() != GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1 {
         return Err(KfdSemanticObservationErrorV1::InvalidDetachedObservation(
             "destroyed queue resource count",
         ));
@@ -838,16 +838,13 @@ mod tests {
         let destroyed = observe_kfd_destroyed_queue_v1(
             &scope,
             live,
-            ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(
-                RAW_QUEUE_ID,
-                EXPECTED_RELEASED_QUEUE_RESOURCES,
-            ),
+            ComputeAqlQueueDestroyedV1::from_producer_for_semantic_observation_tests(RAW_QUEUE_ID),
         )
         .expect("matching destroy evidence");
         assert_eq!(
             destroyed.lifecycle(),
             KfdQueueLifecycleV1::Destroyed {
-                released_resources: 4
+                released_resources: GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1
             }
         );
         assert_ne!(live_evidence, destroyed.evidence_identity());
@@ -863,9 +860,8 @@ mod tests {
     #[test]
     fn hostile_destroy_evidence_and_replay_fail_closed() {
         let observation_scope = scope(0x61);
-        let mismatch = ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(
+        let mismatch = ComputeAqlQueueDestroyedV1::from_producer_for_semantic_observation_tests(
             RAW_QUEUE_ID + 1,
-            4,
         );
         assert_eq!(
             observe_kfd_destroyed_queue_v1(
@@ -875,29 +871,32 @@ mod tests {
             ),
             Err(KfdSemanticObservationErrorV1::QueueIdentityMismatch)
         );
-        let malformed =
-            ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(RAW_QUEUE_ID, 3);
-        assert!(matches!(
-            observe_kfd_destroyed_queue_v1(
-                &observation_scope,
-                report(&observation_scope),
-                malformed,
-            ),
-            Err(KfdSemanticObservationErrorV1::InvalidDetachedObservation(_))
-        ));
+        for malformed_count in [4, 6] {
+            let malformed = ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(
+                RAW_QUEUE_ID,
+                malformed_count,
+            );
+            assert!(matches!(
+                observe_kfd_destroyed_queue_v1(
+                    &observation_scope,
+                    report(&observation_scope),
+                    malformed,
+                ),
+                Err(KfdSemanticObservationErrorV1::InvalidDetachedObservation(_))
+            ));
+        }
         let destroyed = observe_kfd_destroyed_queue_v1(
             &observation_scope,
             report(&observation_scope),
-            ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(RAW_QUEUE_ID, 4),
+            ComputeAqlQueueDestroyedV1::from_producer_for_semantic_observation_tests(RAW_QUEUE_ID),
         )
         .expect("first transition");
         assert_eq!(
             observe_kfd_destroyed_queue_v1(
                 &observation_scope,
                 destroyed,
-                ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(
+                ComputeAqlQueueDestroyedV1::from_producer_for_semantic_observation_tests(
                     RAW_QUEUE_ID,
-                    4,
                 ),
             ),
             Err(KfdSemanticObservationErrorV1::UnexpectedLifecycle)
@@ -906,9 +905,8 @@ mod tests {
             observe_kfd_destroyed_queue_v1(
                 &scope(0x62),
                 report(&observation_scope),
-                ComputeAqlQueueDestroyedV1::from_parts_for_semantic_observation_tests(
+                ComputeAqlQueueDestroyedV1::from_producer_for_semantic_observation_tests(
                     RAW_QUEUE_ID,
-                    4,
                 ),
             ),
             Err(KfdSemanticObservationErrorV1::QueueIdentityMismatch)

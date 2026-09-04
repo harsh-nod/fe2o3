@@ -23,6 +23,8 @@ readonly LOG_DIR
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE="worker-v3-envelope-integration-test-only"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
+readonly HYGIENE_DELTA_POLICY="${REPO_ROOT}/scripts/hygiene_delta_policy.py"
+readonly HYGIENE_DELTA_POLICY_TESTS="${REPO_ROOT}/scripts/tests/hygiene_delta_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
 readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
@@ -151,6 +153,7 @@ Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core    Run generic validation except codegen integration shards
   workspace-policy  Validate workspace ownership and dependency directions
+  hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
   runtime-policy  Validate the pure-Rust runtime dependency and ELF auditor
   runtime-identity-oracle  Measure MI300X identity against isolated rocminfo; explicit opt-in
@@ -785,6 +788,15 @@ run_workspace_dependency_policy() {
     python3 "${PLIRON_DEPENDENCY_POLICY_CHECKER}"
 }
 
+run_hygiene_delta_policy() {
+  local base_sha="$1"
+  local head_sha="$2"
+  run_step hygiene-delta-policy-tests \
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${HYGIENE_DELTA_POLICY_TESTS}"
+  run_step hygiene-delta-policy \
+    python3 "${HYGIENE_DELTA_POLICY}" --base "${base_sha}" --head "${head_sha}"
+}
+
 run_standalone_lockfiles() {
   if ((STANDALONE_LOCKFILES_CHECKED)); then
     return 0
@@ -1317,24 +1329,6 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1 -- \
         --ignored --exact
-  run_step rocm-production-v11-volatile-execution \
-    env "${loader_environment_removals[@]}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-        --test production_semantic_conformance_v3 \
-        authenticated_volatile_load_store_execute_with_exact_bounds_semantics -- \
-        --ignored --exact
-  run_step rocm-production-v11-volatile-bounds-failure \
-    env "${loader_environment_removals[@]}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-        --test production_semantic_conformance_v3 \
-        volatile_bounds_failures_skip_memory_access_and_trap -- \
-        --ignored --exact
-  run_step rocm-production-v11-volatile-collective-composition \
-    env "${loader_environment_removals[@]}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-        --test production_semantic_conformance_v3 \
-        v11_full_request_composes_volatile_scan_and_reduce_canonically -- \
-        --ignored --exact
   run_step rocm-production-scan-bundle-v5-cpu \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
@@ -1433,6 +1427,13 @@ main() {
     generic) run_generic ;;
     generic-core) run_generic_core ;;
     workspace-policy) run_workspace_dependency_policy ;;
+    hygiene-delta)
+      if (($# != 3)); then
+        printf '%s\n' 'hygiene-delta requires exactly base and head commit refs' >&2
+        return 2
+      fi
+      run_hygiene_delta_policy "$2" "$3"
+      ;;
     standalone-locks) run_standalone_lockfiles ;;
     runtime-policy) run_runtime_pure_rust_policy ;;
     runtime-identity-oracle) run_runtime_identity_oracle ;;

@@ -64,6 +64,7 @@ pub use device_content::{
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942RepeatedByteContentV1,
 };
 
+pub(crate) use live::GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1;
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
     ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
@@ -97,8 +98,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r22-v1\n",
-    "compute_session_sha256=2df22ab1f0bf49e270d4dc332e490a9ce760bec04fccc0676658dd455ec4e47a\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r24-v1\n",
+    "compute_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -111,7 +112,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
     "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion\n",
     "barrier-probe=three-consuming-fresh-queue-entries,gfx942-production-executable-one-span-or-plain-executable-one-span-or-selected-gpu-userptr-final-rocr-derived-flags-one-span-ring-with-no-full-rocr-order-parity,typed-poll-bound-before-device-consumption,zero-dependency-system-scope-packet,isolated-one-signal-lease,no-code-kernarg-or-dispatch-generation,success-after-completion-reset-and-confirmed-destroy-release-only,every-error-at-or-after-userptr-control-registration-entry-permanently-poisons-process-global-runtime-gate-and-is-terminal,execution-failure-opaque-quarantine-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,terminal-teardown-or-panic-retains-permanent-gate-poison-recovers-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
-    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,real-resource-retention-through-recycle,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-only-after-exact-recycle\n",
+    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,real-resource-retention-through-recycle,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-after-never-published-prepared-or-exact-recycle\n",
     "dispatch-generation=rebind-is-seeded-from-exact-detached-predecessor-and-strictly-advances-before-publication\n",
     "missing=kernel-dispatch-hardware-completion-and-exception-refinement,live-kernel-batch-evidence,kernel-memory-effect-refinement,kernel-numerical-correctness,machine-proof\n",
     "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
@@ -120,7 +121,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "6fffa5f63613e654e22cc0ef473f3fcd8035f79bd3f99c6555f649b420f2a6ee";
+    "a8673e9cb2943f320401032bb7bb4b48c611051c267a62ea20e0219631ac75b5";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1388,7 +1388,10 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         let address = SemanticPlaceV1::new(address_base.local(), projections, element_type)?;
         let destination = self.construct_place(*destination, block, None)?;
         let value = self.construct_operand(&args[1].node, block, None)?;
-        let (operation, access) = recipe.operation.atomic_rmw();
+        let (operation, access) = recipe
+            .operation
+            .atomic_rmw()
+            .ok_or_else(|| table("normalized atomic intrinsic operation"))?;
 
         self.consumed_normalized_intrinsics[index] = true;
         Ok((
@@ -1644,17 +1647,39 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         let index = usize::try_from(raw_block).map_err(|_| table("call binding table"))?;
         let classified =
             crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id());
-        if let Some(rule) = classified {
-            let crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Expand(
-                expansion,
-            ) = rule
-            else {
+        let expansion = match classified {
+            Some(
+                crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Expand(
+                    expansion,
+                ),
+            ) => Some(expansion),
+            Some(
+                crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Reject(_),
+            ) => {
                 return Err(unsupported(
                     "reviewed terminal without a production expansion",
                     Some(raw_block),
                     None,
                 ));
-            };
+            }
+            None => match crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved) {
+                Ok(Some(classification))
+                    if classification.operation == ProductionRustcIntrinsicOperationV1::FabsF32 =>
+                {
+                    Some(ProductionTerminalExpansionV1::RustcFabsF32)
+                }
+                Ok(Some(_)) => return Err(table("normalized intrinsic call binding")),
+                Ok(None) => None,
+                Err(error) => {
+                    return Err(unsupported(
+                        format!("unsupported rustc compiler intrinsic: {error}"),
+                        Some(raw_block),
+                        None,
+                    ));
+                }
+            },
+        };
+        if let Some(expansion) = expansion {
             let recipe = self
                 .terminal_expansions_by_raw
                 .get(index)
@@ -2088,19 +2113,20 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
         | ProductionTerminalExpansionV1::Bf16Conversion(_)
         | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
+        | ProductionTerminalExpansionV1::RustcFabsF32
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceLen
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::WorkgroupPipelineStage
         | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
         | ProductionTerminalExpansionV1::WorkgroupPipelineWait
         | ProductionTerminalExpansionV1::WorkgroupPipelineConsume
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
-        ProductionTerminalExpansionV1::MemoryVolatileLoad => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
@@ -2108,7 +2134,6 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => Some(3),
-        ProductionTerminalExpansionV1::MemoryVolatileStore => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate

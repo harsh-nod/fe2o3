@@ -195,6 +195,12 @@ impl RecoveredWorkerV3ArtifactStateV1 {
         self.envelope.wire().replay()
     }
 
+    fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.envelope.canonical_evidence_view()
+    }
+
     fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.inspection.hsaco().target()
     }
@@ -266,6 +272,16 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
         let current = self.artifact.acquire_retained_currentness_token()?;
         drop(current);
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn retain_application_descriptors(
+        mut self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        debug_assert!(self.artifact.application_descriptors.is_none());
+        self.artifact.application_descriptors = Some(descriptors);
+        self
     }
 
     pub fn published(&self) -> PublishedLinkArtifactV1 {
@@ -359,6 +375,12 @@ impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
         &self,
     ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
         self.artifact.finalizer_replay()
+    }
+
+    pub(crate) fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.artifact.load_envelope_evidence_view()
     }
 
     /// Exact descriptor-source association was independently checked during construction.

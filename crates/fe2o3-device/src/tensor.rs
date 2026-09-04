@@ -71,6 +71,12 @@ pub enum MfmaLdsXor4 {}
 #[rustc_diagnostic_item = "fe2o3_device_mfma_accumulator_row_major_distribution_v1"]
 pub enum MfmaAccumulatorRowMajor {}
 
+type Bf16MfmaFragmentContractV1<'wave, Role, Profile, Distribution, Width> =
+    fn(&'wave WaveLane<Width>, Role, Profile, Distribution) -> &'wave WaveLane<Width>;
+
+type F32AccumulatorFragmentContractV1<'wave, Profile, Distribution, Width> =
+    fn(&'wave WaveLane<Width>, Profile, Distribution) -> &'wave WaveLane<Width>;
+
 /// A role-, profile-, distribution-, and wave-associated four-value BF16 fragment.
 ///
 /// The payload and constructors are private. Safe code obtains a fragment only
@@ -82,9 +88,7 @@ pub enum MfmaAccumulatorRowMajor {}
 #[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_fragment_v1"]
 pub struct Bf16MfmaFragment<'wave, Role, Profile, Distribution, Width: WaveWidth> {
     values: [Bf16; 4],
-    _contract: PhantomData<
-        fn(&'wave WaveLane<Width>, Role, Profile, Distribution) -> &'wave WaveLane<Width>,
-    >,
+    _contract: PhantomData<Bf16MfmaFragmentContractV1<'wave, Role, Profile, Distribution, Width>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -122,8 +126,7 @@ pub struct F32AccumulatorFragment<
     Width: WaveWidth = Wave64,
 > {
     values: [f32; 4],
-    _contract:
-        PhantomData<fn(&'wave WaveLane<Width>, Profile, Distribution) -> &'wave WaveLane<Width>>,
+    _contract: PhantomData<F32AccumulatorFragmentContractV1<'wave, Profile, Distribution, Width>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 

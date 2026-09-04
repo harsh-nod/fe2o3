@@ -338,6 +338,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_v1(
 /// recomputes total-output and exact semantic-contract reconciliation over the
 /// borrowed live graph before executing Verus. The returned policy must remain
 /// under compiler custody alongside the aggregate report.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     ranked: &ProductionRankedKernelLoweringInputV1,

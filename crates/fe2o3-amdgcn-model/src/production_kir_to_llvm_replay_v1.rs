@@ -58,6 +58,13 @@ pub enum ProductionReplayKernelIrVersionV1 {
 }
 
 impl ProductionReplayKernelIrVersionV1 {
+    pub const fn wire_version(self) -> u16 {
+        match self {
+            Self::V8 => 8,
+            Self::V9 => 9,
+        }
+    }
+
     const fn tag(self) -> u8 {
         match self {
             Self::V8 => KIR_V8_TAG_V1,
@@ -128,6 +135,20 @@ pub enum ProductionPlironOptimizationPassV4 {
     SelectSameValueCanonicalization,
     DeadCodeElimination,
     LocalPureCommonSubexpressionElimination,
+}
+
+impl ProductionPlironOptimizationPassV4 {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::SparseConditionalConstantPropagation => "sparse-conditional-constant-propagation",
+            Self::SimplifyControlFlow => "simplify-control-flow",
+            Self::SelectSameValueCanonicalization => "select-same-value-canonicalization",
+            Self::DeadCodeElimination => "dead-code-elimination",
+            Self::LocalPureCommonSubexpressionElimination => {
+                "local-pure-common-subexpression-elimination"
+            }
+        }
+    }
 }
 
 /// Frozen resource limits recorded by Pliron-backed production replay V4.

@@ -1,4 +1,7 @@
 //! Safe Rust MFMA expert projection for one dynamically selected route group.
+//!
+//! Review it as extent validation, wave/tile ownership, checked route and matrix
+//! views, a uniform K reduction, then a gated epilogue with disjoint tiled stores.
 
 #![allow(missing_docs)]
 
@@ -45,6 +48,7 @@ pub fn moe_grouped_expert_general_v1(
     expert: u32,
     expert_count: u32,
 ) -> KernelResult {
+    // Prove all dynamic extents and selected-expert offsets before MFMA.
     let token_extent = matrix_extent(rows_padded, reduction, token_stride);
     let weight_extent = if expert_count == 0 || reduction == 0 || output_columns == 0 {
         0
@@ -74,6 +78,7 @@ pub fn moe_grouped_expert_general_v1(
     {
         return Err(KernelError::InvalidArgument);
     }
+    // Checked views separate route metadata from the quantized matrix operands.
     let gates = StridedReadView2D::from_shared_slice(route_gates, 0, rows_padded as usize, 1, 1)?;
     let biases = StridedReadView2D::from_shared_slice(
         expert_bias,
@@ -83,6 +88,7 @@ pub fn moe_grouped_expert_general_v1(
         bias_stride as usize,
     )?;
 
+    // One Wave64 owns one 16x16 routed-output tile.
     let thread_index = thread::index_1d();
     let raw = thread_index.get();
     let lane = raw % 64;
@@ -112,6 +118,7 @@ pub fn moe_grouped_expert_general_v1(
     )?;
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
+    // All lanes traverse the same K phases and retain accumulation in FP32.
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let mut phase = 0_usize;
     while phase < reduction as usize {
@@ -121,6 +128,7 @@ pub fn moe_grouped_expert_general_v1(
         phase += 16;
     }
 
+    // Fuse route gating and expert bias before capability-checked edge stores.
     let values = accumulator.into_values();
     let row_base = tile_row * 16 + (lane / 16) * 4;
     let bias = biases.load_or(0, output_column, 0.0);

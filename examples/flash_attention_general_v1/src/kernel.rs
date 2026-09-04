@@ -1,4 +1,8 @@
 //! Safe Rust, memory-bounded attention with double-buffered workgroup staging.
+//!
+//! The kernel follows five visible phases: validate shape/stride extents, map a
+//! wave to a query tile, construct checked views, advance the uniform MFMA and
+//! online-softmax pipeline, then store through a tiled disjoint capability.
 
 #![allow(missing_docs)]
 
@@ -60,6 +64,7 @@ pub fn flash_attention_general_v1(
     output_rows: u32,
     scale: f32,
 ) -> KernelResult {
+    // Prove every dynamic extent before constructing views or entering barriers.
     let expected_output_rows = batch_heads
         .checked_mul(query_rows_padded)
         .ok_or(KernelError::InvalidArgument)?;
@@ -113,6 +118,7 @@ pub fn flash_attention_general_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // One Wave64 owns one 16-row query tile; Wave16 quarters own four rows each.
     let thread_index = thread::index_1d();
     let raw = thread_index.get();
     let lane = raw % 64;
@@ -134,6 +140,7 @@ pub fn flash_attention_general_v1(
     let output_tile = thread_index
         .checked_tiled_2d::<64, 16, 16, 4>()
         .ok_or(KernelError::OutOfBounds)?;
+    // Checked views name each logical layout and keep stride arithmetic out of the loop.
     let mask = StridedReadView2D::from_shared_slice(
         additive_mask,
         head_row_base * mask_stride as usize,
@@ -167,6 +174,7 @@ pub fn flash_attention_general_v1(
     let subgroup = Subgroup::current();
     let math = Math::current();
 
+    // Keep the online-softmax maximum, denominator, and numerator in FP32.
     let mut maximum0 = f32::NEG_INFINITY;
     let mut maximum1 = f32::NEG_INFINITY;
     let mut maximum2 = f32::NEG_INFINITY;
@@ -189,6 +197,7 @@ pub fn flash_attention_general_v1(
     while key_base < keys_padded as usize {
         let key_column = key_base + lane_column;
         let mut scores = F32AccumulatorFragment::zero(&wave_lane);
+        // Double-buffer Q/K fragments so staging of phase n+1 overlaps MFMA for phase n.
         let phase_count = (depth as usize + 15) / 16;
         let lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, 0);
         let rhs = k_matrix.load_k16n16(&wave_lane, 0, key_base);
@@ -338,6 +347,7 @@ pub fn flash_attention_general_v1(
         key_base += 16;
     }
 
+    // Tiled ownership suppresses padded rows/columns and makes valid stores disjoint.
     if let Some(element) = output.get_tiled_2d_mut(
         &output_tile,
         0,

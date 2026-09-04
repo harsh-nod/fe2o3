@@ -36,6 +36,7 @@ pub const F32_SCALAR_OPERATION_ROSTER_V1: &[F32ScalarOperationV1] = &[
     F32ScalarOperationV1::Math(F32MathFunction::Ceil),
     F32ScalarOperationV1::Math(F32MathFunction::Truncate),
     F32ScalarOperationV1::Math(F32MathFunction::RoundTiesEven),
+    F32ScalarOperationV1::Math(F32MathFunction::Abs),
 ];
 
 impl F32ScalarOperationV1 {
@@ -79,6 +80,7 @@ impl F32ScalarOperationV1 {
             Self::Math(F32MathFunction::Ceil) => "ceil",
             Self::Math(F32MathFunction::Truncate) => "truncate",
             Self::Math(F32MathFunction::RoundTiesEven) => "round_ties_even",
+            Self::Math(F32MathFunction::Abs) => "abs",
             Self::Math(F32MathFunction::Sin) => "sin",
             Self::Math(F32MathFunction::Cos) => "cos",
             Self::Math(F32MathFunction::Exp) => "exp",
@@ -100,7 +102,7 @@ mod tests {
 
     #[test]
     fn admitted_roster_is_unique_and_names_every_operation() {
-        assert_eq!(F32_SCALAR_OPERATION_ROSTER_V1.len(), 17);
+        assert_eq!(F32_SCALAR_OPERATION_ROSTER_V1.len(), 18);
         for (index, operation) in F32_SCALAR_OPERATION_ROSTER_V1.iter().enumerate() {
             assert!(
                 !F32_SCALAR_OPERATION_ROSTER_V1[..index].contains(operation),

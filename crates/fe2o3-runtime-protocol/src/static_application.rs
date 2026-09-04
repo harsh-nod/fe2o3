@@ -190,7 +190,9 @@ pub fn sealed_static_application_identity_v1(
     Ok(digest.finalize().into())
 }
 
-fn validate_sealed_static_elf_v1(bytes: &[u8]) -> Result<(), SealedStaticApplicationErrorV1> {
+pub(crate) fn validate_sealed_static_elf_v1(
+    bytes: &[u8],
+) -> Result<(), SealedStaticApplicationErrorV1> {
     let header = bytes
         .get(..ELF_HEADER_BYTES)
         .ok_or(SealedStaticApplicationErrorV1::InvalidElf)?;

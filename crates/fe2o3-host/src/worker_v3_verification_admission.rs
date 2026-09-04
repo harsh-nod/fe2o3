@@ -7,6 +7,7 @@ use std::{
 
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1, PublishedLinkArtifactV1,
+    WorkerV3LoadEnvelopeBindingV1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{
@@ -26,7 +27,9 @@ use fe2o3_verifier::{
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
-use crate::compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1;
+use crate::compiler_execution_current_record_audit::{
+    WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordEvidenceViewV1,
+};
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
     CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
@@ -1419,6 +1422,7 @@ pub struct WorkerV3CompilerExecutionVerificationV1 {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum WorkerV3CompilerExecutionEvidenceV1 {
     #[cfg(target_os = "linux")]
     CurrentRecord(Box<WorkerV3CompilerCurrentRecordAuditV1>),
@@ -1710,6 +1714,28 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         self.current_record_attestation_sha256
     }
 
+    /// Borrows the complete canonical FD195 current-record records retained by this lane.
+    ///
+    /// Only a lane built from admitted signed current-record evidence returns a view. Synthetic test
+    /// support fails closed with `None`. The view cannot outlive this move-only owner and grants no
+    /// verification, load, or launch authority; a protected verifier must independently decode and
+    /// authenticate the exact records under its own policy and replay controls.
+    #[cfg(target_os = "linux")]
+    pub const fn current_record_evidence_view(
+        &self,
+    ) -> Option<WorkerV3CompilerCurrentRecordEvidenceViewV1<'_>> {
+        match &self._evidence {
+            WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence) => {
+                Some(evidence.canonical_evidence_view())
+            }
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3CompilerExecutionEvidenceV1::Synthetic
+            | WorkerV3CompilerExecutionEvidenceV1::SyntheticAuthenticatedRefiningAdapterTest => {
+                None
+            }
+        }
+    }
+
     pub const fn protected_policy_verification_sha256(&self) -> [u8; 32] {
         self.protected_policy_verification_sha256
     }
@@ -1748,6 +1774,14 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         {
             false
         }
+    }
+
+    /// Reports whether this lane proves protected current-record service custody.
+    ///
+    /// Signed canonical evidence alone cannot establish measured service deployment or protected
+    /// key custody. The reviewed unsafe backend must join those properties separately.
+    pub const fn authenticates_protected_current_record(&self) -> bool {
+        false
     }
 
     pub const fn grants_verification_authority(&self) -> bool {
@@ -1819,6 +1853,7 @@ impl WorkerV3VerifierAuthorityEvidenceV1 {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum WorkerV3ProofInputEvidenceV1 {
     Validated(Box<ValidatedCompilerProofInputsV4>),
     #[cfg(feature = "worker-v3-verifier-test-support")]
@@ -1838,7 +1873,7 @@ impl WorkerV3VerificationDecisionV1 {
         reason = "reserved for the crate-owned production verifier; synthetic builds enter through the explicitly gated constructor"
     )]
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub(crate) fn new(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -2349,6 +2384,60 @@ impl WorkerV3RosterVerificationChallengeIdentityV1 {
     }
 }
 
+/// Exact canonical Worker V3 V2 load-envelope bytes borrowed by a roster verifier.
+///
+/// The bytes are the original string admitted from durable custody, not a reserialization of host
+/// projections. This view cannot be cloned and cannot outlive or transfer custody from the
+/// aggregate request and its recovered owner. It grants no compiler, verification, publication,
+/// currentness, load, or launch authority.
+///
+/// ```compile_fail
+/// use fe2o3_host::WorkerV3RosterLoadEnvelopeEvidenceViewV1;
+/// fn duplicate(view: WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_>) {
+///     let _second = view.clone();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct WorkerV3RosterLoadEnvelopeEvidenceViewV1<'evidence> {
+    evidence: fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'evidence>,
+}
+
+impl WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_> {
+    /// Returns the exact originally admitted canonical V2 envelope bytes.
+    pub const fn exact_canonical_bytes(&self) -> &[u8] {
+        self.evidence.exact_canonical_bytes()
+    }
+
+    /// Returns the exact-byte digest and nonzero length admitted by durable custody.
+    pub const fn binding(&self) -> WorkerV3LoadEnvelopeBindingV1 {
+        self.evidence.binding()
+    }
+
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_verification_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_currentness_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Borrowed aggregate request presented once for one complete recovered artifact.
 ///
 /// V4 compiler proof inputs are common capsule evidence. They do not independently establish a
@@ -2375,6 +2464,13 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> WorkerV3RosterVerificationRe
 
     pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.admission.lineage_identity()
+    }
+
+    /// Borrows the exact canonical V2 envelope originally admitted for this aggregate request.
+    pub fn load_envelope_evidence_view(&self) -> WorkerV3RosterLoadEnvelopeEvidenceViewV1<'_> {
+        WorkerV3RosterLoadEnvelopeEvidenceViewV1 {
+            evidence: self.admission.load_envelope_evidence_view(),
+        }
     }
 
     /// Returns the derivation independently reconstructed by host roster admission.
@@ -2765,6 +2861,7 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum WorkerV3RosterProofInputEvidenceV1 {
     Validated(Box<ValidatedCompilerMultiRootProofInputsV1>),
     #[cfg(feature = "worker-v3-verifier-test-support")]
@@ -2954,6 +3051,53 @@ impl WorkerV3RosterVerificationDecisionV1 {
     }
 }
 
+/// Protected roster authentication rejection retaining the exact recovered owner.
+///
+/// The recovered roster remains inert and grants no verification, load, or launch authority. Any
+/// currentness token or rejected verifier evidence created by the failed attempt is discarded
+/// before this value is returned.
+#[must_use = "a rejected recovered roster owner must remain classified"]
+pub struct WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
+    error: Box<WorkerV3RosterVerificationAuthenticationErrorV1<E>>,
+    admission: Box<RecoveredWorkerV3PinnedRosterV1<R>>,
+}
+
+impl<R, E> WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
+    fn new(
+        error: WorkerV3RosterVerificationAuthenticationErrorV1<E>,
+        admission: RecoveredWorkerV3PinnedRosterV1<R>,
+    ) -> Self {
+        Self {
+            error: Box::new(error),
+            admission: Box::new(admission),
+        }
+    }
+
+    /// Returns the exact authentication error without discarding recovered custody.
+    pub const fn error(&self) -> &WorkerV3RosterVerificationAuthenticationErrorV1<E> {
+        &self.error
+    }
+
+    /// Returns the authentication error and exact recovered roster owner.
+    pub fn into_parts(
+        self,
+    ) -> (
+        WorkerV3RosterVerificationAuthenticationErrorV1<E>,
+        RecoveredWorkerV3PinnedRosterV1<R>,
+    ) {
+        (*self.error, *self.admission)
+    }
+}
+
+impl<R, E: fmt::Debug> fmt::Debug for WorkerV3RosterVerificationAuthenticationFailureV1<R, E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3RosterVerificationAuthenticationFailureV1")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Move-only authenticated custody for one complete recovered roster.
 ///
 /// The owner retains the sole recovered artifact, one current-publication token, one aggregate
@@ -2978,39 +3122,39 @@ impl<R> fmt::Debug for AuthenticatedWorkerV3RosterV1<R> {
 }
 
 impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV1<R> {
+    /// Authenticates one complete recovered roster while retaining it on every rejection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact inert recovered roster with the typed authentication error when current
+    /// publication acquisition, request preparation, protected verification, post-verification
+    /// currentness, or decision validation rejects.
     pub fn authenticate<B>(
         admission: RecoveredWorkerV3PinnedRosterV1<R>,
         verifier: &mut WorkerV3ProtectedRosterVerifierAdapterV1<B>,
-    ) -> Result<Self, WorkerV3RosterVerificationAuthenticationErrorV1<B::Error>>
+    ) -> Result<Self, WorkerV3RosterVerificationAuthenticationFailureV1<R, B::Error>>
     where
         B: WorkerV3ProtectedRosterVerifierBackendV1<R>,
     {
-        let current = admission
-            .acquire_retained_currentness_token()
-            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
-        let request =
-            prepare_roster_request::<R>(&admission, &current).map_err(|error| {
-                match error {
-            WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field } => {
-                WorkerV3RosterVerificationAuthenticationErrorV1::Marker { ordinal, field }
+        let current = match admission.acquire_retained_currentness_token() {
+            Ok(current) => current,
+            Err(error) => {
+                return Err(WorkerV3RosterVerificationAuthenticationFailureV1::new(
+                    WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication(error),
+                    admission,
+                ));
             }
-            WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
-                ordinal,
-            } => WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile {
-                ordinal,
-            },
-        }
-            })?;
-        // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all
-        // protected aggregate obligations and the result is fully revalidated below.
-        let verification = unsafe { verifier.verify(&request) };
-        admission
-            .revalidate_retained_currentness_token(&current)
-            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
-        let verification =
-            verification.map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Verifier)?;
-        validate_roster_decision::<R>(&request, &verification)
-            .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Decision)?;
+        };
+        let verification = match authenticate_roster_attempt::<R, B>(&admission, &current, verifier)
+        {
+            Ok(verification) => verification,
+            Err(error) => {
+                drop(current);
+                return Err(WorkerV3RosterVerificationAuthenticationFailureV1::new(
+                    error, admission,
+                ));
+            }
+        };
         Ok(Self {
             admission,
             current,
@@ -3021,6 +3165,31 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
 
     pub const fn verification(&self) -> &WorkerV3RosterVerificationDecisionV1 {
         &self.verification
+    }
+
+    /// Returns the exact compiler module content identity retained by the protected finalizer.
+    pub const fn compiler_module_identity(&self) -> fe2o3_hsaco_finalize::ContentIdentityV1 {
+        self.verification
+            .finalizer_derivation()
+            .compiler_module_identity()
+    }
+
+    /// Returns the exact nested V2 compiler handoff identity retained by roster admission.
+    pub const fn compiler_handoff_identity(
+        &self,
+    ) -> fe2o3_compiler_ffi::CompilerModuleHandoffIdentityV2 {
+        self.admission.outer_handoff().module_handoff().identity()
+    }
+
+    /// Returns the exact compiler symbol-manifest identity retained by roster admission.
+    pub const fn compiler_symbol_manifest_identity(
+        &self,
+    ) -> fe2o3_compiler_ffi::CompilerModuleSymbolManifestIdentityV1 {
+        self.admission
+            .outer_handoff()
+            .module_handoff()
+            .symbol_manifest()
+            .identity()
     }
 
     pub fn entry_count(&self) -> usize {
@@ -3068,6 +3237,14 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1> AuthenticatedWorkerV3RosterV
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         self.admission
             .revalidate_retained_currentness_token(&self.current)
+    }
+
+    pub(crate) fn exact_current_hsaco_bytes(&self) -> &[u8] {
+        self.current.exact_artifact_bytes()
+    }
+
+    pub(crate) const fn admitted_roster(&self) -> &RecoveredWorkerV3PinnedRosterV1<R> {
+        &self.admission
     }
 
     pub const fn authenticates_verification_authority(&self) -> bool {
@@ -3781,6 +3958,41 @@ fn validate_roster_decision_target_lineage<R: CompilerGeneratedKernelExpectation
         }
     }
     Ok(())
+}
+
+fn authenticate_roster_attempt<R, B>(
+    admission: &RecoveredWorkerV3PinnedRosterV1<R>,
+    current: &DurableCurrentLinkPublicationTokenV1,
+    verifier: &mut WorkerV3ProtectedRosterVerifierAdapterV1<B>,
+) -> Result<
+    WorkerV3RosterVerificationDecisionV1,
+    WorkerV3RosterVerificationAuthenticationErrorV1<B::Error>,
+>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+    B: WorkerV3ProtectedRosterVerifierBackendV1<R>,
+{
+    let request = prepare_roster_request::<R>(admission, current).map_err(|error| match error {
+        WorkerV3RosterVerificationRequestPreparationErrorV1::Marker { ordinal, field } => {
+            WorkerV3RosterVerificationAuthenticationErrorV1::Marker { ordinal, field }
+        }
+        WorkerV3RosterVerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile {
+            ordinal,
+        } => {
+            WorkerV3RosterVerificationAuthenticationErrorV1::UnsupportedGeneratedProfile { ordinal }
+        }
+    })?;
+    // SAFETY: callers cannot bypass the crate-owned adapter. The unsafe backend owns all protected
+    // aggregate obligations and the result is fully revalidated below.
+    let verification = unsafe { verifier.verify(&request) };
+    admission
+        .revalidate_retained_currentness_token(current)
+        .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::CurrentPublication)?;
+    let verification =
+        verification.map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Verifier)?;
+    validate_roster_decision::<R>(&request, &verification)
+        .map_err(WorkerV3RosterVerificationAuthenticationErrorV1::Decision)?;
+    Ok(verification)
 }
 
 enum WorkerV3RosterVerificationRequestPreparationErrorV1 {
@@ -4881,5 +5093,25 @@ mod tests {
                 }
             )
         );
+    }
+
+    #[cfg(all(target_os = "linux", feature = "worker-v3-verifier-test-support"))]
+    #[test]
+    fn synthetic_compiler_evidence_exposes_no_current_record_view() {
+        let synthetic = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
+            [1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [8; 32], [9; 32], 1,
+            [10; 32], [11; 32], [12; 32], [13; 32], [14; 32], [15; 32], [16; 32],
+        );
+        assert!(synthetic.current_record_evidence_view().is_none());
+
+        // SAFETY: this test keeps the synthetic evidence inside the test-only adapter seam.
+        let synthetic_refining = unsafe {
+            WorkerV3CompilerExecutionVerificationV1::synthetic_authenticated_refining_adapter_test_only(
+                [1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32], [8; 32],
+                [9; 32], 1, [10; 32], [11; 32], [12; 32], [13; 32], [14; 32], [15; 32],
+                [16; 32],
+            )
+        };
+        assert!(synthetic_refining.current_record_evidence_view().is_none());
     }
 }

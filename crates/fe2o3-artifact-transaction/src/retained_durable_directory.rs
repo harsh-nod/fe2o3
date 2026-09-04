@@ -10,7 +10,7 @@
 //! authenticate record meaning, prevent rollback by a process that can mutate the directory,
 //! coordinate multiple writers, or grant publication, execution, runtime, or GPU authority.
 
-use crate::{EmitError, PinnedOutput};
+use crate::{EmitError, OutputIdentityRevalidationV1, PinnedOutput};
 use rustix::fd::OwnedFd;
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, RenameFlags, fstat, fsync, openat, renameat, renameat_with,
@@ -235,6 +235,9 @@ impl RetainedDurableDirectoryV1 {
                 device: stat.st_dev,
                 inode: stat.st_ino,
                 path_guard: None,
+                identity_revalidation: OutputIdentityRevalidationV1::RetainedServiceDescriptor {
+                    service_uid,
+                },
             },
             service_uid,
         })
@@ -243,6 +246,11 @@ impl RetainedDurableDirectoryV1 {
     /// Returns the fixed non-authority marker.
     pub const fn authority(&self) -> &'static str {
         "none"
+    }
+
+    pub(crate) fn pinned_output(&self) -> Result<&PinnedOutput, EmitError> {
+        self.output.verify_path_identity()?;
+        Ok(&self.output)
     }
 
     /// Tests whether another retained descriptor names this exact durability root.

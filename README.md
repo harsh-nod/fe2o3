@@ -166,6 +166,24 @@ for the component commands, exact-KIR fixture, debugger, and cleanup behavior.
 
 ## GPU evaluation status
 
+For compiler engineering only, `cargo fe2o3 engineering hsaco` can extract one
+explicitly selected device crate and run its inert handoff twice through an
+exactly measured native worker. It writes only a fresh
+`fe2o3-engineering-v1/<content-id>/` observation with `"authority":"none"`.
+This command does not contact the production compiler-execution supervisor and
+its output cannot be adopted as a production generation, publication, load, or
+launch owner. Non-path dependencies require an explicit `cargo vendor` tree;
+the command measures, retains, and revalidates that tree while Cargo runs with
+a fresh home, frozen resolution, no ambient configuration, and no network.
+Host build scripts and proc macros are linked through separately declared,
+SHA-256-bound clang, lld, and lld argv proxy executable images. The proxy invokes
+the sealed lld descriptor directly with GNU linker identity; these sealed
+descriptors replace ambient `PATH` lookup and their identities are recorded in
+the observation.
+Run `cargo fe2o3 engineering hsaco --help` for the explicit compiler, host
+linker, provider, target, COV, resource-bound, vendor-source, and Cargo-selection
+arguments.
+
 There is currently no supported copy-and-paste source-to-GPU quick start.
 `cargo fe2o3 build` enters the production compiler transaction, but ordinary
 example applications still lack the production Worker V3 verifier deployment
@@ -190,7 +208,7 @@ a future GPU-ready preview, not a claim made by this source/simulator preview.
 | Virtual runtime | Bounded model-only allocation, copy, queue, dependency, dispatch, completion, and ambiguous-failure lifetimes over admitted KIR; generated-host and multi-device integration remain incomplete |
 | CPU debugger | Work-item, logical wave, workgroup, operation, stack, SSA, allocation-relative memory, break/watch, reverse replay, and structured diagnosis over retained simulator evidence |
 | Live debugger | Bounded direct-KFD observation/control; ROCgdb V4 authenticates hierarchy/relative PC and V5 adds same-stop structured register/scalar-local inspection, while the installed direct-KFD target still cannot produce a physical GPU stop and source/ISA/memory remain typed unavailable |
-| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, opt-in direct-KFD runtime lifecycle, host-staging, queue/stream membership, completion and evidence-cited lifecycle causality queries, and a bounded paired rocprof-wrapper host-wall comparison; protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, device-copy/dependency producers, cross-run site comparison, capture-overhead qualification, and direct-KFD cross-collector correlation remain incomplete |
+| Profiling | Bounded rocprofv3 dispatch/counter/PC import, exact PC-to-sparse-source/IR/ISA queries over artifact-bound characteristic evidence, authority-free admission/query of external ROCprofiler SDK 7.2.4 decoded ATT callbacks, exact supplied decoded-ATT-PC/HSACO/Characteristic correlation, complete same-domain structural comparison, replayed production optimizer decisions, and deterministic evidence-linked regression hypotheses with contradictions and next measurements; opt-in direct-KFD runtime lifecycle, host-staging, queue/stream membership, completion and evidence-cited lifecycle causality queries, and a bounded paired rocprof-wrapper host-wall comparison are also implemented. Protected real-GPU PC/ATT capture, authenticated decoder custody, raw ATT decoding, device-copy/dependency producers, observed schedule execution, causal acceptance, capture-overhead qualification, and direct-KFD cross-collector correlation remain incomplete |
 | Runtime | Pure-Rust KFD/AQL foundations and bounded MI300X execution diagnostics; public application authorization is incomplete |
 | Verification | Verus contracts and evidence-bearing compiler/runtime boundaries for bounded slices; not an end-to-end proof of general kernels |
 
@@ -283,6 +301,10 @@ cargo fmt --all -- --check
 bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
+BASE_SHA="$(git merge-base origin/main HEAD)"
+HEAD_SHA="$(git rev-parse HEAD)"
+bash scripts/ci-local.sh workspace-policy
+bash scripts/ci-local.sh hygiene-delta "${BASE_SHA}" "${HEAD_SHA}"
 ```
 
 Compiler, runtime, proof, and trust-policy changes must also run their

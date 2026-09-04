@@ -9,9 +9,7 @@ use core::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::static_application::{
-    SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
-};
+use crate::static_application::{SealedStaticApplicationErrorV1, validate_sealed_static_elf_v1};
 
 const FRAME_HEADER_BYTES_V1: usize = 8 + 2 + 2 + 4 + 4;
 const FRAME_CHECKSUM_BYTES_V1: usize = 32;
@@ -235,7 +233,7 @@ impl WorkerV3ApplicationIdentityV1 {
     pub fn from_sealed_static_elf_v1(
         executable: &[u8],
     ) -> Result<Self, WorkerV3ApplicationHandoffProtocolErrorV1> {
-        sealed_static_application_identity_v1(executable)
+        validate_sealed_static_elf_v1(executable)
             .map_err(WorkerV3ApplicationHandoffProtocolErrorV1::ApplicationImage)?;
         let byte_len = u64::try_from(executable.len()).map_err(|_| {
             WorkerV3ApplicationHandoffProtocolErrorV1::LengthOverflow {

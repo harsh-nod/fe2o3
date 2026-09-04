@@ -28,11 +28,11 @@ use fe2o3_kernel_ir::{
     verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiExtensionV1, SemanticAbiPassModeV1,
-    SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1, SemanticAbiRegisterKindV1,
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicOrderingV1,
-    SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1, SemanticAxisV1,
-    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
+    AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
+    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
+    SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
+    SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
+    SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
     SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
     SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
@@ -48,8 +48,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
     SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
     SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
-    SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
-    semantic_scalar_enum_variant_v1,
+    SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
+    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -152,7 +152,7 @@ pub struct SemanticKirParameterBindingV1 {
     kernel_ir_value: ValueId,
 }
 
-/// One exact source projection used to scalarize a by-value kernel argument.
+/// One exact source projection used to scalarize a by-value function argument.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticKirParameterProjectionV1 {
     /// A tuple or nominal aggregate field.
@@ -161,8 +161,8 @@ pub enum SemanticKirParameterProjectionV1 {
     ArrayIndex(u32),
 }
 
-/// Exact one-to-many correspondence from a by-value source argument to one
-/// canonical KIR function parameter.
+/// Exact one-to-many correspondence from a by-value source argument to
+/// canonical KIR function parameters.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticKirParameterComponentBindingV1 {
     correspondence_owner: SemanticFunctionIdV1,
@@ -5452,6 +5452,7 @@ fn replay_neutral_workgroup_recipe_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_generated_executable_effect_relations_v1(
     semantic: Option<&AdmittedInertSemanticMirV1>,
     correspondence_owner: SemanticFunctionIdV1,
@@ -5655,6 +5656,7 @@ fn validate_mir_pliron_translation_v1(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_translation_with_semantic_v1(
     semantic: Option<&AdmittedInertSemanticMirV1>,
     module: &Module,
@@ -6045,10 +6047,10 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     })
 }
 
-fn ranked_source_for_semantic_effect_v1<'index>(
-    ranked: &'index RankedCorrelationIndexV1,
+fn ranked_source_for_semantic_effect_v1(
+    ranked: &RankedCorrelationIndexV1,
     site: SemanticAccessSiteV1,
-) -> Option<(SemanticAccessSiteV1, &'index IndexedRankedAccessSourceV1)> {
+) -> Option<(SemanticAccessSiteV1, &IndexedRankedAccessSourceV1)> {
     if let Some(source) = ranked.sources_by_site.get(&site) {
         return Some((site, source));
     }
@@ -6820,7 +6822,6 @@ fn guarded_accesses_have_structural_bounds_result(
             if matches!(
                 &operation.kind,
                 OperationKind::GuardedLoad { access, .. }
-                    | OperationKind::GuardedStore { access, .. }
                     if access.address_space != AddressSpace::Private
             ) {
                 let location = FunctionOperationLocation::new(block.id, ordinal);
@@ -8536,6 +8537,7 @@ fn resolve_semantic_header_copy_alias_v1(
     None
 }
 
+#[allow(clippy::type_complexity)]
 fn semantic_cfg_graph_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<bool>), ProductionSemanticKirErrorV1> {
@@ -9035,8 +9037,7 @@ fn semantic_requires_runtime_assert_failure(
             SemanticTerminatorKindV1::Call(call) => matches!(
                 callables.get(call.callee().index() as usize),
                 Some(SemanticCallableDeclV1::CompilerIntrinsic {
-                    operation: SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
-                        | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. },
+                    operation: SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { .. },
                     ..
                 })
             ),
@@ -9056,6 +9057,13 @@ struct LoweredFunctionPlanV1 {
     parameter_local_bindings: Vec<PlannedParameterLocalBindingV1>,
     parameter_component_bindings: Vec<SemanticKirParameterComponentBindingV1>,
     ignored_parameter_bindings: Vec<SemanticKirIgnoredParameterBindingV1>,
+    result_types: Vec<Type>,
+}
+
+#[derive(Clone)]
+struct LoweredFunctionSignatureV1 {
+    parameter_semantic_types: Vec<SemanticTypeIdV1>,
+    parameter_types: Vec<Type>,
     result_types: Vec<Type>,
 }
 
@@ -9100,7 +9108,7 @@ impl ReachableClosureBlockBudgetV1 {
     }
 
     fn charge(&mut self, blocks: usize) -> Result<(), ProductionSemanticKirErrorV1> {
-        let actual = self.consumed.checked_add(blocks).unwrap_or(usize::MAX);
+        let actual = self.consumed.saturating_add(blocks);
         if actual > self.limit {
             return Err(ProductionSemanticKirErrorV1::ResourceLimit {
                 resource: ProductionSemanticKirResourceV1::Blocks,
@@ -9334,58 +9342,96 @@ fn direct_scalar_helper_plan_v1(
             "helper does not have an exact non-unwinding direct scalar ABI",
         ));
     }
-    let parameter_types = parameters
-        .iter()
-        .zip(abi.adjusted_arguments())
-        .zip(abi.source_input_types())
-        .map(|(((_, _, local_ty), argument), source_ty)| {
-            if local_ty != source_ty
-                || argument.ty() != *source_ty
-                || argument.value().adjusted().is_some()
-                || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
-            {
-                return Err(unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "helper parameter is not an exact direct scalar",
-                ));
-            }
-            lower_scalar_type(types, *source_ty)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let parameter_values = parameters
-        .iter()
-        .map(|(_, local, _)| {
-            u32::try_from(*local).map(ValueId).map_err(|_| {
-                unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "helper local identity exceeds Kernel IR",
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut parameter_types = Vec::with_capacity(parameters.len());
+    let mut parameter_values = Vec::with_capacity(parameters.len());
     let mut parameter_local_bindings = Vec::new();
     parameter_local_bindings
         .try_reserve_exact(parameters.len())
         .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
             resource: ProductionSemanticKirResourceV1::DebugBindings,
         })?;
-    parameter_local_bindings.extend(
-        parameters
-            .iter()
-            .zip(parameter_values.iter().copied())
-            .zip(parameter_types.iter().cloned())
-            .map(
-                |(((_, local, _), value), ty)| PlannedParameterLocalBindingV1::Direct {
+    let mut parameter_component_bindings = Vec::new();
+    parameter_component_bindings
+        .try_reserve_exact(parameters.len())
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+            resource: ProductionSemanticKirResourceV1::DebugBindings,
+        })?;
+    for (((source_argument, local, local_ty), argument), source_ty) in parameters
+        .iter()
+        .zip(abi.adjusted_arguments())
+        .zip(abi.source_input_types())
+    {
+        if local_ty != source_ty
+            || argument.ty() != *source_ty
+            || argument.value().adjusted().is_some()
+            || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+        {
+            return Err(unsupported(
+                function_id.index(),
+                None,
+                None,
+                "helper parameter is not an exact direct scalar or scalar carrier",
+            ));
+        }
+        let value = u32::try_from(*local).map(ValueId).map_err(|_| {
+            unsupported(
+                function_id.index(),
+                None,
+                None,
+                "helper local identity exceeds Kernel IR",
+            )
+        })?;
+        let (parameter_ty, local_binding) = match lower_scalar_type(types, *source_ty) {
+            Ok(parameter_ty) => (
+                parameter_ty.clone(),
+                PlannedParameterLocalBindingV1::Direct {
                     local: *local,
                     value,
-                    ty,
+                    ty: parameter_ty,
                 },
             ),
-    );
+            Err(scalar_error) => {
+                let Some(field) = exact_transparent_scalar_carrier_field_v1(types, *source_ty)
+                else {
+                    return Err(scalar_error);
+                };
+                if argument.role() != SemanticAbiArgumentRoleV1::Source
+                    || argument.value().pointee_override().is_some()
+                    || abi
+                        .source_argument_ownership()
+                        .get(*source_argument as usize)
+                        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+                {
+                    return Err(unsupported(
+                        function_id.index(),
+                        None,
+                        None,
+                        "helper scalar carrier lacks an exact by-value source ABI",
+                    ));
+                }
+                let parameter_ty = lower_scalar_type(types, field)?;
+                parameter_component_bindings.push(SemanticKirParameterComponentBindingV1 {
+                    correspondence_owner,
+                    semantic_function: function_id,
+                    semantic_local: SemanticLocalIdV1::from_index(*local as u32),
+                    semantic_component_type: field,
+                    projection: vec![SemanticKirParameterProjectionV1::Field(0)].into_boxed_slice(),
+                    kernel_ir_value: value,
+                });
+                (
+                    parameter_ty.clone(),
+                    PlannedParameterLocalBindingV1::Flattened {
+                        local: *local,
+                        semantic_type: *source_ty,
+                        values: vec![ValueDef::new(value, parameter_ty)],
+                    },
+                )
+            }
+        };
+        parameter_types.push(parameter_ty);
+        parameter_values.push(value);
+        parameter_local_bindings.push(local_binding);
+    }
 
     let return_locals = function
         .locals()
@@ -9442,7 +9488,7 @@ fn direct_scalar_helper_plan_v1(
         parameter_types,
         parameter_values,
         parameter_local_bindings,
-        parameter_component_bindings: Vec::new(),
+        parameter_component_bindings,
         ignored_parameter_bindings: Vec::new(),
         result_types,
     })
@@ -9464,7 +9510,7 @@ fn lower_one_semantic_function_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
     defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
-    defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+    defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,
     launch_rank: u8,
@@ -10426,7 +10472,15 @@ fn lower_single_root_module(
         .map(|plan| {
             (
                 plan.semantic_function,
-                (plan.parameter_types.clone(), plan.result_types.clone()),
+                LoweredFunctionSignatureV1 {
+                    parameter_semantic_types: plan
+                        .parameter_declarations
+                        .iter()
+                        .map(|(_, _, ty)| *ty)
+                        .collect(),
+                    parameter_types: plan.parameter_types.clone(),
+                    result_types: plan.result_types.clone(),
+                },
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -12699,7 +12753,7 @@ struct SemanticFunctionLoweringV1<'a> {
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
     defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
-    defined_function_signatures: BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+    defined_function_signatures: BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     result_types: Vec<Type>,
     locals: Vec<Option<SemanticValueBindingV1>>,
     option_dominance: SemanticOptionDominanceV1,
@@ -12778,7 +12832,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         correspondence_owner: SemanticFunctionIdV1,
         semantic_function: SemanticFunctionIdV1,
         defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
-        defined_function_signatures: BTreeMap<SemanticFunctionIdV1, (Vec<Type>, Vec<Type>)>,
+        defined_function_signatures: BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
         result_types: Vec<Type>,
         parameters: SemanticParameterBindingsV1<'_>,
         assert_failure_block: Option<BlockId>,
@@ -15402,24 +15456,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "compiler intrinsic call has no destination",
             )
         })?;
-        let mut runtime_condition = None;
+        let mut runtime_guard = None;
         let binding = match operation {
-            SemanticCompilerIntrinsicOperationV1::VolatileLoad { element, .. } => {
-                let (binding, condition) =
-                    self.lower_volatile_load(block, call, operations, *element)?;
-                runtime_condition = Some(condition);
-                binding
-            }
-            SemanticCompilerIntrinsicOperationV1::VolatileStore {
-                element,
-                index_space,
-                ..
-            } => {
-                let (binding, condition) =
-                    self.lower_volatile_store(block, call, operations, *element, *index_space)?;
-                runtime_condition = Some(condition);
-                binding
-            }
             SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
                 dynamic_lds,
                 element_storage,
@@ -17347,8 +17385,157 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::Unit
             }
-            SemanticCompilerIntrinsicOperationV1::WaveBarrier
-            | SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+            SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+                self.require_call_argument_count(block, call, 1)?;
+                if semantic_operand_type(&call.arguments()[0]) != destination.place().ty() {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "fabs input and destination types changed",
+                    ));
+                }
+                let (argument, ty) = self
+                    .lower_operand(block, None, &call.arguments()[0], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                if ty != Type::Scalar(ScalarType::F32) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "fabs input is not f32",
+                    ));
+                }
+                self.emit_float_operation(
+                    operations,
+                    FloatOperation::F32Math {
+                        function: F32MathFunction::Abs,
+                        implementation: F32MathFunction::Abs.required_implementation(),
+                        arguments: vec![argument],
+                    },
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
+                self.require_call_argument_count(block, call, 2)?;
+                if !semantic_volatile_load_contract_v1(
+                    self.types,
+                    semantic_operand_type(&call.arguments()[0]),
+                    semantic_operand_type(&call.arguments()[1]),
+                    *element,
+                ) || destination.place().ty() != *element
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load semantic slice, index, or result contract changed",
+                    ));
+                }
+                let (slice, slice_ty) = self
+                    .lower_operand(block, None, &call.arguments()[0], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let Type::Slice(slice_contract) = slice_ty else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load source is not a lowered slice",
+                    ));
+                };
+                if slice_contract.address_space != AddressSpace::Global
+                    || slice_contract.access != AccessMode::ReadOnly
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load source does not retain immutable global-slice access",
+                    ));
+                }
+                let element_ty = lower_scalar_type(self.types, *element)?;
+                if *slice_contract.element != element_ty || destination.place().ty() != *element {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load source or destination element type changed",
+                    ));
+                }
+                let index = self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let index = self
+                    .coerce_index(block, operations, index)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                    .0;
+                let length = self.emit_id(
+                    operations,
+                    Type::INDEX,
+                    OperationKind::SliceLength { slice },
+                )?;
+                let present =
+                    self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+                let zero_index = self.emit_index_constant(operations, 0)?;
+                let safe_index = self.emit_select_index(operations, present, index, zero_index)?;
+                let pointer_ty = Type::pointer(
+                    element_ty.clone(),
+                    slice_contract.address_space,
+                    slice_contract.access,
+                );
+                let base = self.emit_id(
+                    operations,
+                    pointer_ty.clone(),
+                    OperationKind::SliceData { slice },
+                )?;
+                let pointer = self.emit_id(
+                    operations,
+                    pointer_ty,
+                    OperationKind::GetElementPointer {
+                        base,
+                        offset: safe_index,
+                    },
+                )?;
+                let fallback = volatile_load_zero_constant_v1(&element_ty).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load element has no supported scalar fallback",
+                    )
+                })?;
+                let fallback = self.emit_id(
+                    operations,
+                    element_ty.clone(),
+                    OperationKind::Constant(fallback),
+                )?;
+                let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "volatile load element has no supported scalar alignment",
+                    )
+                })?;
+                let mut access = MemoryAccess::new(slice_contract.address_space, alignment);
+                access.volatile = true;
+                let value = self.emit_id(
+                    operations,
+                    element_ty.clone(),
+                    OperationKind::GuardedLoad {
+                        pointer,
+                        predicate: present,
+                        fallback,
+                        access,
+                    },
+                )?;
+                runtime_guard = Some(present);
+                SemanticValueBindingV1::Value {
+                    id: value,
+                    ty: element_ty,
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::WaveBarrier => {
                 return Err(unsupported(
                     0,
                     Some(block.index()),
@@ -17370,13 +17557,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         self.bind_destination(block, None, destination.place(), binding)?;
         let target = BlockId(destination.edge().target().index());
         let arguments = self.edge_arguments(block, destination.edge().target(), operations)?;
-        if let Some(condition) = runtime_condition {
+        if let Some(condition) = runtime_guard {
             let failure = self.assert_failure_block.ok_or_else(|| {
                 unsupported(
                     0,
                     Some(block.index()),
                     None,
-                    "volatile memory terminal has no runtime failure block",
+                    "volatile load has no retained bounds-failure trap block",
                 )
             })?;
             Ok(Terminator::ConditionalBranch {
@@ -17384,7 +17571,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 then_target: target,
                 then_arguments: arguments,
                 else_target: failure,
-                else_arguments: vec![],
+                else_arguments: Vec::new(),
             })
         } else {
             Ok(Terminator::Branch { target, arguments })
@@ -17418,7 +17605,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call target is outside the lowered helper closure",
                 )
             })?;
-        let (parameter_types, result_types) = self
+        let signature = self
             .defined_function_signatures
             .get(&callee)
             .cloned()
@@ -17430,7 +17617,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call target has no exact KIR signature",
                 )
             })?;
-        if call.arguments().len() != parameter_types.len() || result_types.len() > 1 {
+        if call.arguments().len() != signature.parameter_types.len()
+            || signature.parameter_semantic_types.len() != signature.parameter_types.len()
+            || signature.result_types.len() > 1
+        {
             return Err(unsupported(
                 self.semantic_function.index(),
                 Some(block.index()),
@@ -17439,18 +17629,52 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         }
         let mut arguments = Vec::with_capacity(call.arguments().len());
-        for (argument, expected) in call.arguments().iter().zip(&parameter_types) {
-            let (value, actual) = self
-                .lower_operand(block, None, argument, operations)?
-                .value()
-                .map_err(|detail| {
-                    unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        detail,
-                    )
-                })?;
+        for ((argument, expected_semantic), expected) in call
+            .arguments()
+            .iter()
+            .zip(&signature.parameter_semantic_types)
+            .zip(&signature.parameter_types)
+        {
+            if semantic_operand_type(argument) != *expected_semantic {
+                return Err(unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "defined call source argument type changed",
+                ));
+            }
+            let binding = self.lower_operand(block, None, argument, operations)?;
+            let (value, actual) =
+                if exact_transparent_scalar_carrier_field_v1(self.types, *expected_semantic)
+                    .is_some()
+                {
+                    let values = binding.values().map_err(|detail| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            detail,
+                        )
+                    })?;
+                    let [(value, actual)] = values.as_slice() else {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            "defined call scalar carrier does not have one physical component",
+                        ));
+                    };
+                    (*value, actual.clone())
+                } else {
+                    binding.value().map_err(|detail| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            detail,
+                        )
+                    })?
+                };
             if &actual != expected {
                 return Err(unsupported(
                     self.semantic_function.index(),
@@ -17469,7 +17693,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "returning defined call has no continuation destination",
             )
         })?;
-        let binding = match result_types.as_slice() {
+        let binding = match signature.result_types.as_slice() {
             [] => {
                 self.push_operation(operations, || {
                     Operation::new(
@@ -17497,223 +17721,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             target: BlockId(destination.edge().target().index()),
             arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
         })
-    }
-
-    fn lower_volatile_load(
-        &mut self,
-        block: SemanticBlockIdV1,
-        call: &SemanticDirectCallV1,
-        operations: &mut Vec<Operation>,
-        element: SemanticTypeIdV1,
-    ) -> Result<(SemanticValueBindingV1, ValueId), ProductionSemanticKirErrorV1> {
-        self.require_call_argument_count(block, call, 2)?;
-        let (slice, slice_ty) = self
-            .lower_operand(block, None, &call.arguments()[0], operations)?
-            .value()
-            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-        let Type::Slice(slice_type) = slice_ty else {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-load source is not a lowered slice",
-            ));
-        };
-        let element_ty = lower_scalar_type(self.types, element)?;
-        if slice_type.address_space != AddressSpace::Global
-            || slice_type.access != AccessMode::ReadOnly
-            || *slice_type.element != element_ty
-        {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-load source is not an exact read-only global scalar slice",
-            ));
-        }
-        let index = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-        let index = self
-            .coerce_index(block, operations, index)?
-            .value()
-            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
-            .0;
-        let length = self.emit_id(
-            operations,
-            Type::INDEX,
-            OperationKind::SliceLength { slice },
-        )?;
-        let present = self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
-        let zero_index = self.emit_index_constant(operations, 0)?;
-        let guarded_index = self.emit_select_index(operations, present, index, zero_index)?;
-        let pointer_ty = Type::pointer(
-            element_ty.clone(),
-            slice_type.address_space,
-            slice_type.access,
-        );
-        let base = self.emit_id(
-            operations,
-            pointer_ty.clone(),
-            OperationKind::SliceData { slice },
-        )?;
-        let pointer = self.emit_id(
-            operations,
-            pointer_ty,
-            OperationKind::GetElementPointer {
-                base,
-                offset: guarded_index,
-            },
-        )?;
-        let fallback = self.emit_id(
-            operations,
-            element_ty.clone(),
-            OperationKind::Constant(volatile_zero_constant_v1(&element_ty).ok_or_else(|| {
-                unsupported(
-                    0,
-                    Some(block.index()),
-                    None,
-                    "volatile-load scalar has no exact zero fallback",
-                )
-            })?),
-        )?;
-        let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
-            unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-load scalar has no exact alignment",
-            )
-        })?;
-        let mut access = MemoryAccess::new(AddressSpace::Global, alignment);
-        access.volatile = true;
-        let binding = self.emit(
-            operations,
-            element_ty,
-            OperationKind::GuardedLoad {
-                pointer,
-                predicate: present,
-                fallback,
-                access,
-            },
-        )?;
-        Ok((binding, present))
-    }
-
-    fn lower_volatile_store(
-        &mut self,
-        block: SemanticBlockIdV1,
-        call: &SemanticDirectCallV1,
-        operations: &mut Vec<Operation>,
-        element: SemanticTypeIdV1,
-        index_space: SemanticDisjointIndexSpaceV1,
-    ) -> Result<(SemanticValueBindingV1, ValueId), ProductionSemanticKirErrorV1> {
-        self.require_call_argument_count(block, call, 3)?;
-        let (slice, slice_ty) = self
-            .lower_operand(block, None, &call.arguments()[0], operations)?
-            .value()
-            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-        let Type::Slice(slice_type) = slice_ty else {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-store destination is not a lowered slice",
-            ));
-        };
-        let element_ty = lower_scalar_type(self.types, element)?;
-        if slice_type.address_space != AddressSpace::Global
-            || slice_type.access != AccessMode::ReadWrite
-            || *slice_type.element != element_ty
-        {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-store destination is not an exact read-write global scalar slice",
-            ));
-        }
-        let witness = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-        let SemanticValueBindingV1::IndexWitness {
-            id: index,
-            index_space: actual_space,
-            disjoint: true,
-            availability: None,
-        } = witness
-        else {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-store lacks exact disjoint index authority",
-            ));
-        };
-        if actual_space != index_space {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-store index mapping identity changed",
-            ));
-        }
-        let value = self.lower_operand(block, None, &call.arguments()[2], operations)?;
-        let (value, value_ty) = value
-            .value()
-            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-        if value_ty != element_ty {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-store value type changed",
-            ));
-        }
-        let length = self.emit_id(
-            operations,
-            Type::INDEX,
-            OperationKind::SliceLength { slice },
-        )?;
-        let present = self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
-        let zero_index = self.emit_index_constant(operations, 0)?;
-        let guarded_index = self.emit_select_index(operations, present, index, zero_index)?;
-        let pointer_ty = Type::pointer(
-            element_ty.clone(),
-            slice_type.address_space,
-            slice_type.access,
-        );
-        let base = self.emit_id(
-            operations,
-            pointer_ty.clone(),
-            OperationKind::SliceData { slice },
-        )?;
-        let pointer = self.emit_id(
-            operations,
-            pointer_ty,
-            OperationKind::GetElementPointer {
-                base,
-                offset: guarded_index,
-            },
-        )?;
-        let alignment = strided_read_scalar_alignment_v1(&element_ty).ok_or_else(|| {
-            unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "volatile-store scalar has no exact alignment",
-            )
-        })?;
-        let mut access = MemoryAccess::new(AddressSpace::Global, alignment);
-        access.volatile = true;
-        self.push_operation(operations, || {
-            Operation::new(
-                Vec::new(),
-                OperationKind::GuardedStore {
-                    pointer,
-                    predicate: present,
-                    value,
-                    access,
-                },
-            )
-        })?;
-        Ok((SemanticValueBindingV1::Unit, present))
     }
 
     fn lower_subgroup_reduce_f32(
@@ -17881,6 +17888,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_checked_strided_read_view(
         &mut self,
         block: SemanticBlockIdV1,
@@ -22103,6 +22111,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .map_err(|detail| unsupported(0, None, None, detail))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn coerce_transport_value_v1(
         &mut self,
         operations: &mut Vec<Operation>,
@@ -22312,7 +22321,58 @@ fn strided_read_scalar_alignment_v1(element: &Type) -> Option<u32> {
     }
 }
 
-fn volatile_zero_constant_v1(element: &Type) -> Option<Constant> {
+fn semantic_volatile_load_contract_v1(
+    types: &[SemanticTypeDeclV1],
+    source: SemanticTypeIdV1,
+    index: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(source) = types.get(source.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Pointer(pointer) = source.shape() else {
+        return false;
+    };
+    if pointer.kind() != SemanticPointerKindV1::Reference
+        || pointer.mutability() != SemanticMutabilityV1::Immutable
+        || pointer.address_space() != 0
+        || pointer.pointer_width_bits() != 64
+        || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
+        || source.layout().size_bytes() != Some(16)
+        || source.layout().alignment_bytes() != 8
+    {
+        return false;
+    }
+    if !matches!(
+        types.get(pointer.pointee().index() as usize).map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Slice { element: actual }) if *actual == element
+    ) || !matches!(
+        types
+            .get(index.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        }))
+    ) {
+        return false;
+    }
+    matches!(
+        types
+            .get(element.index() as usize)
+            .map(SemanticTypeDeclV1::shape),
+        Some(SemanticTypeShapeV1::Scalar(
+            SemanticScalarTypeV1::Bool | SemanticScalarTypeV1::Char
+        )) | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            bits: 8 | 16 | 32 | 64,
+            ..
+        })) | Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float {
+            bits: 32 | 64,
+        }))
+    )
+}
+
+fn volatile_load_zero_constant_v1(element: &Type) -> Option<Constant> {
     Some(match element.as_scalar()? {
         ScalarType::Bool => Constant::Bool(false),
         ScalarType::I8 => Constant::I8(0),
@@ -22324,12 +22384,12 @@ fn volatile_zero_constant_v1(element: &Type) -> Option<Constant> {
         ScalarType::U32 => Constant::U32(0),
         ScalarType::U64 => Constant::U64(0),
         ScalarType::F32 => Constant::F32Bits(0),
-        ScalarType::Index
-        | ScalarType::I128
+        ScalarType::F64 => Constant::F64Bits(0),
+        ScalarType::I128
         | ScalarType::U128
+        | ScalarType::Index
         | ScalarType::F16
-        | ScalarType::Bf16
-        | ScalarType::F64 => return None,
+        | ScalarType::Bf16 => return None,
     })
 }
 
@@ -23491,6 +23551,7 @@ fn lower_workgroup_collective_scratch_transport_v1(
     ])
 }
 
+#[allow(clippy::type_complexity)]
 fn plan_enum_payload_storage_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -24389,12 +24450,6 @@ fn disjoint_slice_descriptor(
                         element,
                         raw_index,
                         ..
-                    }
-                    | SemanticCompilerIntrinsicOperationV1::VolatileStore {
-                        disjoint_slice,
-                        element,
-                        raw_index,
-                        ..
                     },
                 ..
             } if *disjoint_slice == ty => Some((*element, *raw_index, AccessMode::ReadWrite)),
@@ -24515,11 +24570,6 @@ fn disjoint_slice_operation_element(
             ..
         }
         | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
-            disjoint_slice,
-            element,
-            ..
-        }
-        | SemanticCompilerIntrinsicOperationV1::VolatileStore {
             disjoint_slice,
             element,
             ..
@@ -25120,557 +25170,7 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 
 #[cfg(test)]
 mod resource_tests {
-    use super::*;
-    use dialect_kernel::AccessKindAttr;
-    use fe2o3_mir_model::semantic_mir_v1::{InertSemanticMirRequestV1, SemanticMirLimitsV1};
-    use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiArgumentV1, SemanticAbiIdentityV1, SemanticAbiPassModeV1, SemanticAbiValueV1,
-        SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticAssignmentV1,
-        SemanticBackendReprV1, SemanticBackendScalarV1, SemanticBasicBlockV1,
-        SemanticBlockIdentityV1, SemanticCallDestinationV1, SemanticCallableIdV1,
-        SemanticCanonAbiV1, SemanticCompilerIntrinsicIdentityV1,
-        SemanticConstGenericArgumentsIdentityV1, SemanticConstantV1, SemanticControlFlowEdgeV1,
-        SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticExternAbiV1, SemanticFieldsShapeV1,
-        SemanticFunctionAbiV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
-        SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
-        SemanticKernelBindingIdentityV1, SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1,
-        SemanticKernelSourceContractV1, SemanticLayoutIdentityV1, SemanticLinkSymbolV1,
-        SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1,
-        SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandRoleV1,
-        SemanticMfmaRegisterDistributionV1, SemanticMonomorphizationIdentityV1,
-        SemanticNonBodyCallableBindingV1, SemanticProjectionV1, SemanticRustcVariantsV1,
-        SemanticRvalueV1, SemanticScalarValidityRangeV1, SemanticSourceProvenanceV1,
-        SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1,
-        SemanticTargetDataLayoutV1, SemanticTerminatorV1, SemanticTypeIdentityV1,
-        SemanticTypeLayoutDetailsV1, SemanticTypeLayoutV1, SemanticUnwindActionV1,
-        SemanticWorkgroupDimensionsV1,
-    };
-    use fe2o3_pliron::{
-        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
-        ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionSemanticMirLimitsV1,
-        ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
-        compile_ranked_kernel_for_lowering_v1,
-    };
-
-    #[test]
-    fn workgroup_reduction_accepts_only_the_closed_scalar_and_geometry_contract() {
-        assert_eq!(truncate_unsigned_constant_v1(64, &Type::INDEX), Some(64),);
-        assert_eq!(
-            truncate_unsigned_constant_v1(64, &Type::Scalar(ScalarType::U32)),
-            Some(64),
-        );
-        assert_eq!(
-            truncate_unsigned_constant_v1(u64::from(u32::MAX) + 2, &Type::Scalar(ScalarType::U32),),
-            Some(1),
-        );
-        assert_eq!(
-            truncate_unsigned_constant_v1(64, &Type::Scalar(ScalarType::I32)),
-            None,
-        );
-        for scalar in [ScalarType::U32, ScalarType::I32, ScalarType::F32] {
-            assert!(workgroup_reduction_scalar_supported_v1(&Type::Scalar(
-                scalar
-            )));
-        }
-        for scalar in [
-            ScalarType::U8,
-            ScalarType::U64,
-            ScalarType::I64,
-            ScalarType::F16,
-            ScalarType::F64,
-        ] {
-            assert!(!workgroup_reduction_scalar_supported_v1(&Type::Scalar(
-                scalar
-            )));
-        }
-
-        for width in [1, 2, 4, 64, 128, 256] {
-            assert_eq!(
-                validate_workgroup_reduction_geometry_v1(
-                    Some([width, 1, 1]),
-                    Some(width),
-                    Some(width),
-                ),
-                Ok(width),
-            );
-            assert_eq!(
-                validate_workgroup_reduction_geometry_v1(Some([width, 1, 1]), Some(width), None,),
-                Ok(width),
-            );
-        }
-        for geometry in [
-            None,
-            Some([0, 1, 1]),
-            Some([3, 1, 1]),
-            Some([257, 1, 1]),
-            Some([64, 2, 1]),
-            Some([64, 1, 2]),
-        ] {
-            assert!(
-                validate_workgroup_reduction_geometry_v1(geometry, Some(64), Some(64)).is_err()
-            );
-        }
-        for compiler_slots in [None, Some(0), Some(63), Some(65), Some(256)] {
-            assert!(
-                validate_workgroup_reduction_geometry_v1(
-                    Some([64, 1, 1]),
-                    compiler_slots,
-                    Some(64),
-                )
-                .is_err()
-            );
-        }
-        for scratch_slots in [Some(0), Some(63), Some(65), Some(256)] {
-            assert!(
-                validate_workgroup_reduction_geometry_v1(
-                    Some([64, 1, 1]),
-                    Some(64),
-                    scratch_slots,
-                )
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn subgroup_broadcast_accepts_local_u32_mask_below_wave64_width() {
-        let unknown = ValueId(0);
-        let mask = ValueId(1);
-        let masked = ValueId(2);
-        let constant = Operation::effect_free(
-            ValueDef::new(mask, Type::Scalar(ScalarType::U32)),
-            OperationKind::Constant(Constant::U32(63)),
-        );
-        for kind in [
-            OperationKind::Binary {
-                op: BinaryOp::BitAnd,
-                lhs: unknown,
-                rhs: mask,
-            },
-            OperationKind::Binary {
-                op: BinaryOp::BitAnd,
-                lhs: mask,
-                rhs: unknown,
-            },
-        ] {
-            let operations = [
-                constant.clone(),
-                Operation::effect_free(ValueDef::new(masked, Type::Scalar(ScalarType::U32)), kind),
-            ];
-            assert!(subgroup_broadcast_source_is_statically_bounded(
-                &operations,
-                masked,
-                64,
-            ));
-        }
-        assert!(subgroup_broadcast_source_is_statically_bounded(
-            &[constant],
-            mask,
-            64,
-        ));
-    }
-
-    #[test]
-    fn subgroup_broadcast_rejects_mask_at_width_and_missing_constant_mask() {
-        let unknown = ValueId(0);
-        let mask = ValueId(1);
-        let masked = ValueId(2);
-        let mask64 = Operation::effect_free(
-            ValueDef::new(mask, Type::Scalar(ScalarType::U32)),
-            OperationKind::Constant(Constant::U32(64)),
-        );
-        let bitand = |rhs| {
-            Operation::effect_free(
-                ValueDef::new(masked, Type::Scalar(ScalarType::U32)),
-                OperationKind::Binary {
-                    op: BinaryOp::BitAnd,
-                    lhs: unknown,
-                    rhs,
-                },
-            )
-        };
-        assert!(!subgroup_broadcast_source_is_statically_bounded(
-            &[mask64, bitand(mask)],
-            masked,
-            64,
-        ));
-        assert!(!subgroup_broadcast_source_is_statically_bounded(
-            &[bitand(ValueId(3))],
-            masked,
-            64,
-        ));
-    }
-
-    #[derive(Clone, Copy)]
-    struct AuthenticatedInductionFixtureV1 {
-        bits: u16,
-        bound: u128,
-        step: u128,
-        extra_write: bool,
-        bypass_guard: bool,
-    }
-
-    impl Default for AuthenticatedInductionFixtureV1 {
-        fn default() -> Self {
-            Self {
-                bits: 64,
-                bound: 64,
-                step: 1,
-                extra_write: false,
-                bypass_guard: false,
-            }
-        }
-    }
-
-    fn authenticated_induction_fixture_v1(
-        options: AuthenticatedInductionFixtureV1,
-    ) -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1) {
-        let unit = SemanticTypeIdV1::from_index(0);
-        let induction_ty = SemanticTypeIdV1::from_index(1);
-        let bool_ty = SemanticTypeIdV1::from_index(2);
-        let u32_ty = SemanticTypeIdV1::from_index(3);
-        let source = SemanticSourceProvenanceV1::unavailable();
-        let size = u8::try_from(options.bits / 8).unwrap();
-        let place = |local, ty| {
-            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
-        };
-        let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
-        let constant = |ty, value| {
-            SemanticOperandV1::Constant(SemanticConstantV1::new(
-                ty,
-                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, size).unwrap()),
-            ))
-        };
-        let assign = |local, ty, value| {
-            SemanticStatementV1::new(
-                source,
-                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                    place(local, ty),
-                    SemanticRvalueV1::new(ty, value),
-                )),
-            )
-        };
-        let edge = |role, target| {
-            SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
-        };
-        let block = |tag, statements, terminator| {
-            SemanticBasicBlockV1::new(
-                SemanticBlockIdentityV1::from_sha256([tag; 32]),
-                source,
-                statements,
-                SemanticTerminatorV1::new(source, terminator),
-            )
-            .unwrap()
-        };
-        let entry = block(
-            210,
-            vec![assign(
-                1,
-                induction_ty,
-                SemanticRvalueKindV1::Use(constant(induction_ty, 0)),
-            )],
-            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
-        );
-        let header = block(
-            211,
-            vec![assign(
-                2,
-                bool_ty,
-                SemanticRvalueKindV1::Binary {
-                    operation: SemanticBinaryOpV1::LessThan,
-                    left: operand(1, induction_ty),
-                    right: constant(induction_ty, options.bound),
-                },
-            )],
-            SemanticTerminatorKindV1::SwitchInt {
-                discriminant: operand(2, bool_ty),
-                targets: SemanticSwitchTargetsV1::new(
-                    vec![SemanticSwitchTargetV1::new(
-                        0,
-                        edge(SemanticEdgeRoleV1::SwitchValue, 4),
-                    )],
-                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
-                )
-                .unwrap(),
-            },
-        );
-        let mut body_statements = vec![assign(
-            3,
-            u32_ty,
-            SemanticRvalueKindV1::Cast {
-                kind: SemanticCastKindV1::Integer,
-                operand: operand(1, induction_ty),
-            },
-        )];
-        if options.extra_write {
-            body_statements.push(assign(
-                1,
-                induction_ty,
-                SemanticRvalueKindV1::Use(constant(induction_ty, 0)),
-            ));
-        }
-        let body = block(
-            212,
-            body_statements,
-            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
-        );
-        let latch = block(
-            213,
-            vec![assign(
-                1,
-                induction_ty,
-                SemanticRvalueKindV1::Binary {
-                    operation: SemanticBinaryOpV1::Add,
-                    left: operand(1, induction_ty),
-                    right: constant(induction_ty, options.step),
-                },
-            )],
-            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
-        );
-        let exit = block(
-            214,
-            vec![],
-            if options.bypass_guard {
-                SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 2))
-            } else {
-                SemanticTerminatorKindV1::Return
-            },
-        );
-        let abi = SemanticFunctionAbiV1::from_rustc(
-            SemanticAbiIdentityV1::from_sha256([215; 32]),
-            SemanticLayoutIdentityV1::from_sha256([216; 32]),
-            SemanticCanonAbiV1::GpuKernel,
-            SemanticExternAbiV1::GpuKernel,
-            false,
-            false,
-            0,
-            vec![],
-            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
-        )
-        .unwrap();
-        let locals: Vec<SemanticLocalDeclV1> = [
-            (unit, SemanticLocalRoleV1::Return),
-            (induction_ty, SemanticLocalRoleV1::Temporary),
-            (bool_ty, SemanticLocalRoleV1::Temporary),
-            (u32_ty, SemanticLocalRoleV1::Temporary),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(local, (ty, role))| {
-            SemanticLocalDeclV1::new(
-                SemanticLocalIdentityV1::from_sha256([217 + local as u8; 32]),
-                ty,
-                role,
-                source,
-            )
-        })
-        .collect();
-        let function = SemanticFunctionDeclV1::new(
-            SemanticFunctionIdentityV1::from_sha256([221; 32]),
-            SemanticFunctionRoleV1::InternalHelper,
-            SemanticItemDefinitionIdentityV1::from_sha256([222; 32]),
-            SemanticMonomorphizationIdentityV1::from_sha256([223; 32]),
-            SemanticGenericTypeArgumentsIdentityV1::from_sha256([224; 32]),
-            SemanticConstGenericArgumentsIdentityV1::from_sha256([225; 32]),
-            source,
-            abi,
-            locals,
-            SemanticBlockIdV1::from_index(0),
-            vec![entry, header, body, latch, exit],
-        )
-        .unwrap();
-        (
-            vec![
-                unit_type(),
-                unsigned_scalar_type(226, options.bits),
-                bool_type(),
-                unsigned_scalar_type(228, 32),
-            ],
-            function,
-        )
-    }
-
-    #[test]
-    fn ranked_canonical_induction_bound_survives_exact_u64_to_u32_cast() {
-        let (types, function) =
-            authenticated_induction_fixture_v1(AuthenticatedInductionFixtureV1::default());
-        let bounds = authenticated_loop_induction_bounds_v1(&types, &function).unwrap();
-        assert_eq!(bounds.get(&(2, 1)), Some(&64));
-        let alias = SemanticOperandV1::Copy(
-            SemanticPlaceV1::new(
-                SemanticLocalIdV1::from_index(3),
-                vec![],
-                SemanticTypeIdV1::from_index(3),
-            )
-            .unwrap(),
-        );
-        assert_eq!(
-            authenticated_unsigned_operand_exclusive_bound_v1(
-                &types,
-                &function,
-                &bounds,
-                SemanticBlockIdV1::from_index(2),
-                &alias,
-            ),
-            Some(64),
-        );
-    }
-
-    #[test]
-    fn authenticated_induction_bound_rejects_width_overrun_and_hostile_loops() {
-        let (types, function) =
-            authenticated_induction_fixture_v1(AuthenticatedInductionFixtureV1 {
-                bound: 65,
-                ..AuthenticatedInductionFixtureV1::default()
-            });
-        let bounds = authenticated_loop_induction_bounds_v1(&types, &function).unwrap();
-        assert_eq!(bounds.get(&(2, 1)), Some(&65));
-        assert!(!authenticated_subgroup_broadcast_source_is_bounded(
-            *bounds.get(&(2, 1)).unwrap(),
-            64,
-        ));
-        assert!(!authenticated_subgroup_broadcast_source_is_bounded(0, 0));
-
-        for options in [
-            AuthenticatedInductionFixtureV1 {
-                extra_write: true,
-                ..AuthenticatedInductionFixtureV1::default()
-            },
-            AuthenticatedInductionFixtureV1 {
-                step: 0,
-                ..AuthenticatedInductionFixtureV1::default()
-            },
-            AuthenticatedInductionFixtureV1 {
-                bits: 8,
-                bound: 255,
-                step: 2,
-                ..AuthenticatedInductionFixtureV1::default()
-            },
-            AuthenticatedInductionFixtureV1 {
-                bypass_guard: true,
-                ..AuthenticatedInductionFixtureV1::default()
-            },
-        ] {
-            let (types, function) = authenticated_induction_fixture_v1(options);
-            assert!(
-                authenticated_loop_induction_bounds_v1(&types, &function)
-                    .unwrap()
-                    .is_empty()
-            );
-        }
-    }
-
-    #[test]
-    fn inactive_launch_axes_use_canonical_identity_and_extent_constants() {
-        for rank in 1..=3 {
-            for (axis, axis_rank) in [(Axis::X, 1), (Axis::Y, 2), (Axis::Z, 3)] {
-                for kind in [IndexKind::Global, IndexKind::Workgroup, IndexKind::Local] {
-                    assert_eq!(
-                        inactive_launch_axis_value_v1(rank, kind, axis),
-                        (axis_rank > rank).then_some(0),
-                    );
-                }
-                for kind in [IndexKind::WorkgroupSize, IndexKind::WorkgroupCount] {
-                    assert_eq!(
-                        inactive_launch_axis_value_v1(rank, kind, axis),
-                        (axis_rank > rank).then_some(1),
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn semantic_casts_use_the_shared_bounded_kernel_ir_index_paths() {
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::Scalar(ScalarType::U32),
-                &Type::INDEX,
-            ),
-            Some([Some((CastKind::ZeroExtend, ScalarType::Index)), None])
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::Scalar(ScalarType::U64),
-                &Type::INDEX,
-            ),
-            Some([Some((CastKind::Bitcast, ScalarType::Index)), None])
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::INDEX,
-                &Type::Scalar(ScalarType::U64),
-            ),
-            Some([Some((CastKind::Bitcast, ScalarType::U64)), None])
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::Scalar(ScalarType::I32),
-                &Type::INDEX,
-            ),
-            Some([
-                Some((CastKind::SignExtend, ScalarType::U64)),
-                Some((CastKind::Bitcast, ScalarType::Index)),
-            ])
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::INDEX,
-                &Type::Scalar(ScalarType::U32),
-            ),
-            Some([
-                Some((CastKind::Bitcast, ScalarType::U64)),
-                Some((CastKind::Truncate, ScalarType::U32)),
-            ])
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::INDEX,
-                &Type::Scalar(ScalarType::F64),
-            ),
-            None
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Float,
-                &Type::Scalar(ScalarType::U64),
-                &Type::INDEX,
-            ),
-            None
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Integer,
-                &Type::Scalar(ScalarType::U32),
-                &Type::Scalar(ScalarType::U64),
-            ),
-            Some([Some((CastKind::ZeroExtend, ScalarType::U64)), None])
-        );
-        assert_eq!(
-            lower_cast_path(
-                SemanticCastKindV1::Transmute,
-                &Type::Scalar(ScalarType::U32),
-                &Type::Scalar(ScalarType::F32),
-            ),
-            Some([Some((CastKind::Bitcast, ScalarType::F32)), None])
-        );
-        for (from, to) in [
-            (Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U64)),
-            (Type::Scalar(ScalarType::U32), Type::Unit),
-        ] {
-            assert_eq!(
-                lower_cast_path(SemanticCastKindV1::Transmute, &from, &to),
-                None
-            );
-        }
-    }
-
+    include!("production_semantic_kir_v1/resource_01_tests.rs");
     #[test]
     fn admitted_strided_read_scalars_have_exact_byte_alignments() {
         for (scalar, alignment) in [
@@ -25687,6 +25187,298 @@ mod resource_tests {
             );
         }
         assert_eq!(strided_read_scalar_alignment_v1(&Type::INDEX), None);
+    }
+
+    #[test]
+    fn volatile_load_supported_scalar_set_is_exact_and_closed() {
+        for scalar in [
+            ScalarType::Bool,
+            ScalarType::I8,
+            ScalarType::I16,
+            ScalarType::I32,
+            ScalarType::I64,
+            ScalarType::U8,
+            ScalarType::U16,
+            ScalarType::U32,
+            ScalarType::U64,
+            ScalarType::F32,
+            ScalarType::F64,
+        ] {
+            assert!(volatile_load_zero_constant_v1(&Type::Scalar(scalar)).is_some());
+            assert!(strided_read_scalar_alignment_v1(&Type::Scalar(scalar)).is_some());
+        }
+        for scalar in [
+            ScalarType::I128,
+            ScalarType::U128,
+            ScalarType::Index,
+            ScalarType::F16,
+            ScalarType::Bf16,
+        ] {
+            assert!(volatile_load_zero_constant_v1(&Type::Scalar(scalar)).is_none());
+        }
+        assert!(volatile_load_zero_constant_v1(&Type::INDEX).is_none());
+    }
+
+    fn lower_volatile_load_for_test(
+        semantic_address_space: u32,
+        semantic_reference_size: u64,
+        index_type: SemanticTypeIdV1,
+        lowered_address_space: AddressSpace,
+        lowered_access: AccessMode,
+    ) -> Result<(Vec<Operation>, Terminator), ProductionSemanticKirErrorV1> {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let element = SemanticTypeIdV1::from_index(1);
+        let slice = SemanticTypeIdV1::from_index(3);
+        let slice_reference = SemanticTypeIdV1::from_index(4);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let types = vec![
+            unit_type(),
+            unsigned_scalar_type(151, 32),
+            u64_type(),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([153; 32]),
+                SemanticLayoutIdentityV1::from_sha256([154; 32]),
+                SemanticTypeLayoutV1::new(None, 4).unwrap(),
+                SemanticTypeShapeV1::Slice { element },
+            ),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([155; 32]),
+                SemanticLayoutIdentityV1::from_sha256([156; 32]),
+                SemanticTypeLayoutV1::new(Some(semantic_reference_size), 8).unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1::new_with_kind(
+                        slice,
+                        SemanticPointerKindV1::Reference,
+                        SemanticMutabilityV1::Immutable,
+                        semantic_address_space,
+                        64,
+                        SemanticPointerMetadataV1::SliceLength,
+                    )
+                    .unwrap(),
+                ),
+            ),
+        ];
+        let unit_abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([157; 32]),
+            SemanticLayoutIdentityV1::from_sha256([158; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let callable = SemanticCallableDeclV1::CompilerIntrinsic {
+            binding: SemanticNonBodyCallableBindingV1::new(
+                SemanticFunctionIdentityV1::from_sha256([159; 32]),
+                SemanticItemDefinitionIdentityV1::from_sha256([160; 32]),
+                SemanticMonomorphizationIdentityV1::from_sha256([161; 32]),
+                SemanticGenericTypeArgumentsIdentityV1::from_sha256([162; 32]),
+                SemanticConstGenericArgumentsIdentityV1::from_sha256([163; 32]),
+                source,
+                unit_abi.clone(),
+            ),
+            operation: SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element },
+            operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([164; 32]),
+        };
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([165; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([166; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([167; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([168; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([169; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([170; 32]),
+            source,
+            unit_abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([171; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([172; 32]),
+                    slice_reference,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([173; 32]),
+                    index_type,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([174; 32]),
+                    element,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap();
+        let callables = [callable];
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &callables,
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+                local_bindings: None,
+            },
+            Some(BlockId(2)),
+            None,
+            BTreeSet::new(),
+            1,
+            false,
+            32,
+        )?;
+        lowering.locals[1] = Some(SemanticValueBindingV1::Value {
+            id: ValueId(0),
+            ty: Type::slice(
+                Type::Scalar(ScalarType::U32),
+                lowered_address_space,
+                lowered_access,
+            ),
+        });
+        lowering.locals[2] = Some(SemanticValueBindingV1::Value {
+            id: ValueId(1),
+            ty: Type::INDEX,
+        });
+        lowering.next_value = 2;
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![
+                SemanticOperandV1::Copy(place(1, slice_reference)),
+                SemanticOperandV1::Copy(place(2, index_type)),
+            ],
+            Some(SemanticCallDestinationV1::new(
+                place(3, element),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let mut operations = Vec::new();
+        let terminator =
+            lowering.lower_call(SemanticBlockIdV1::from_index(0), &call, &mut operations)?;
+        Ok((operations, terminator))
+    }
+
+    #[test]
+    fn volatile_load_lowers_to_checked_non_speculative_global_read_and_oob_trap() {
+        let usize_ty = SemanticTypeIdV1::from_index(2);
+        let (operations, terminator) = lower_volatile_load_for_test(
+            0,
+            16,
+            usize_ty,
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        )
+        .unwrap();
+        assert!(matches!(
+            operations[0].kind,
+            OperationKind::SliceLength { slice: ValueId(0) }
+        ));
+        assert!(matches!(
+            operations[1].kind,
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            }
+        ));
+        assert!(matches!(
+            operations[3].kind,
+            OperationKind::Select {
+                condition: ValueId(3),
+                true_value: ValueId(1),
+                false_value: ValueId(4),
+            }
+        ));
+        assert!(matches!(
+            operations[7].kind,
+            OperationKind::GuardedLoad {
+                predicate: ValueId(3),
+                access: MemoryAccess {
+                    address_space: AddressSpace::Global,
+                    alignment: 4,
+                    volatile: true,
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            terminator,
+            Terminator::ConditionalBranch {
+                condition: ValueId(3),
+                then_target: BlockId(1),
+                else_target: BlockId(2),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn volatile_load_lowering_rejects_substituted_semantic_or_memory_contracts() {
+        let usize_ty = SemanticTypeIdV1::from_index(2);
+        let u32_ty = SemanticTypeIdV1::from_index(1);
+        for result in [
+            lower_volatile_load_for_test(
+                1,
+                16,
+                usize_ty,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            lower_volatile_load_for_test(
+                0,
+                8,
+                usize_ty,
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            lower_volatile_load_for_test(0, 16, u32_ty, AddressSpace::Global, AccessMode::ReadOnly),
+            lower_volatile_load_for_test(
+                0,
+                16,
+                usize_ty,
+                AddressSpace::Workgroup,
+                AccessMode::ReadOnly,
+            ),
+            lower_volatile_load_for_test(
+                0,
+                16,
+                usize_ty,
+                AddressSpace::Global,
+                AccessMode::ReadWrite,
+            ),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported { .. })
+            ));
+        }
     }
 
     #[test]
@@ -28119,9 +27911,66 @@ mod resource_tests {
             .operations
     }
 
+    fn append_guarded_output_store(fixture: &mut GuardedAddressFixture) {
+        let output_slice = Type::slice(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::WriteOnly,
+        );
+        let output_pointer = Type::pointer(
+            Type::Scalar(ScalarType::U16),
+            AddressSpace::Global,
+            AccessMode::WriteOnly,
+        );
+        fixture.module.functions[0].signature.parameters[1] = output_slice;
+        let operations = guarded_fixture_operations_mut(fixture);
+        let next_value = operations
+            .iter()
+            .flat_map(|operation| operation.results.iter().map(|result| result.id.0))
+            .max()
+            .unwrap()
+            + 1;
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(next_value), output_pointer.clone()),
+            OperationKind::SliceData { slice: ValueId(1) },
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(next_value + 1), output_pointer),
+            OperationKind::GetElementPointer {
+                base: ValueId(next_value),
+                offset: ValueId(5),
+            },
+        ));
+        operations.push(Operation::new(
+            vec![],
+            OperationKind::GuardedStore {
+                pointer: ValueId(next_value + 1),
+                predicate: ValueId(6),
+                value: ValueId(7),
+                access: MemoryAccess::new(AddressSpace::Global, 2),
+            },
+        ));
+        verify_module(&fixture.module)
+            .expect("guarded output store fixture must remain valid Kernel IR");
+    }
+
     #[test]
     fn generated_matrix_tail_guarded_loads_have_structural_address_proofs() {
         let fixture = generated_matrix_tail_fixture(4);
+        let operation_count = fixture.module.functions[0].body.as_ref().unwrap().blocks[0]
+            .operations
+            .len();
+        assert!(guarded_accesses_have_structural_bounds(
+            &fixture.module,
+            &fixture.locations,
+            operation_count,
+        ));
+    }
+
+    #[test]
+    fn guarded_load_audit_ignores_formally_analyzed_guarded_output_stores() {
+        let mut fixture = generated_matrix_tail_fixture(2);
+        append_guarded_output_store(&mut fixture);
         let operation_count = fixture.module.functions[0].body.as_ref().unwrap().blocks[0]
             .operations
             .len();

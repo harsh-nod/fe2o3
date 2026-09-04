@@ -63,6 +63,7 @@ documentation.
 - [Debugger and profiler architecture](debugger-profiler-architecture-v1.md)
 - [Profiler Variant V3](profiler-variant-v3.md): finalizer-replayed production KIR comparison.
 - [Production profiler KIR archive V1](production-profiler-kir-archive-v1.md): bounded self-contained structural-owner replay.
+- [Profiler regression explanation V1](profiler-regression-explanation-v1.md): evidence-linked hypotheses and next measurements.
 - [Semantic debug transformation map V2](semantic-debug-transformation-map-v2.md): exact
   cross-layer cardinality separated from producer-authenticated optimization classification.
 - [Debugger and profiler task matrix](debugger-profiler-task-matrix-v1.md)

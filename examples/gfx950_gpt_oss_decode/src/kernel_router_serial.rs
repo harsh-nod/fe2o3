@@ -1,4 +1,8 @@
 //! Safe Rust source for the serial-router GPT-OSS-120B gfx950 decode ablation.
+//!
+//! This compatibility-validated control replaces wave-parallel router scoring
+//! with a lane-local serial traversal. The other phases intentionally mirror the
+//! production kernel, making the cost of router parallelism independently visible.
 
 #![allow(missing_docs)]
 
@@ -17,6 +21,7 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
+/// Measures a serial router while preserving attention, expert, and store semantics.
 #[cfg(any(
     not(target_arch = "amdgpu"),
     feature = "kernel-gpt-oss-decode-router-serial"
@@ -42,6 +47,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     mut expert_output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
     mut packed_top4: DisjointSlice<u32>,
 ) -> KernelResult {
+    // Validate the entire item contract before attention collectives or MFMA.
     if hidden_f32.len() < crate::PROFILE_ITEMS * HIDDEN_SIZE
         || router_f32.len() < EXPERTS * HIDDEN_SIZE
         || query_bf16.len() < crate::PROFILE_ITEMS * MATRIX_ROWS * HEAD_DIM
@@ -60,6 +66,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // One Wave64 owns one independent profile item.
     let index = thread::index_1d();
     let global_index = index.get();
     let lane_index = global_index % crate::WAVE_SIZE;
@@ -67,6 +74,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let lane = WaveLane::<Wave64>::current();
     let subgroup = Gfx950Subgroup::current();
 
+    // Checked views establish offsets and strides once for all following phases.
     let Ok(hidden) = StridedReadView2D::from_shared_slice(
         hidden_f32,
         item_index.wrapping_mul(HIDDEN_SIZE),
@@ -82,6 +90,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         return Err(KernelError::InvalidArgument);
     };
 
+    // Lane-local scoring is the single changed variable in this control kernel.
     let mut best0 = ROUTER_FLOOR;
     let mut best1 = ROUTER_FLOOR;
     let mut best2 = ROUTER_FLOOR;
@@ -161,6 +170,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     }
     let selected = (id0 as usize) & (EXPERTS - 1);
 
+    // BF16 MFMA and Wave16 reductions retain the production attention path.
     let Ok(query) = Bf16MfmaAMatrix::row_major(
         query_bf16,
         item_index.wrapping_mul(MATRIX_ROWS * HEAD_DIM),
@@ -271,6 +281,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         token += 1;
     }
 
+    // Four scaled gfx950 MXFP4 blocks retain the production expert path.
     let expert_reduction_base = selected
         .wrapping_mul(MXFP4_BLOCKS)
         .wrapping_mul(EXPERT_K_TILE);
@@ -416,6 +427,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     expert_acc2 += expert3[2] * scale3;
     expert_acc3 += expert3[3] * scale3;
 
+    // Blocked capabilities prove the four output stores per lane are disjoint.
     let Some(output_block) = index.checked_block::<64, 4>() else {
         return Err(KernelError::OutOfBounds);
     };

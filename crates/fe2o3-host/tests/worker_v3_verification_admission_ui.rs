@@ -8,7 +8,7 @@ fn worker_v3_verification_typestate_is_closed() {
         "prepared_cannot_dispatch_twice.rs",
         "unload_while_prepared.rs",
     ];
-    let default_build_only = [
+    let verifier_test_support_unavailable = [
         "compiler_execution_synthetic_constructor_is_unavailable.rs",
         "synthetic_verifier_is_unavailable.rs",
         "verifier_is_sealed.rs",
@@ -30,7 +30,7 @@ fn worker_v3_verification_typestate_is_closed() {
             && path
                 .file_name()
                 .and_then(|value| value.to_str())
-                .is_some_and(|name| default_build_only.contains(&name))
+                .is_some_and(|name| verifier_test_support_unavailable.contains(&name))
         {
             continue;
         }

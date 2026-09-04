@@ -2,7 +2,11 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-use fe2o3_host::{KernelId, consume_inherited_worker_v3_application_handoff_v1};
+use fe2o3_host::{
+    __hardware_test::ApplicationHandoffVecAddRosterFixtureV1, KernelId,
+    consume_inherited_worker_v3_application_handoff_v1,
+    consume_inherited_worker_v3_application_roster_handoff_v1,
+};
 use fe2o3_runtime_protocol::{
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
@@ -21,9 +25,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     if !(3..=4).contains(&arguments.len()) {
         return Err("usage: worker-v3-host-consumer KERNEL-ID TARGET REPORT [TEST-CONTROL]".into());
     }
-    let substitute_commitment = match arguments.get(3) {
-        None => false,
-        Some(control) if control == "--fe2o3-test-substitute-commitment" => true,
+    let (substitute_commitment, consume_roster) = match arguments.get(3) {
+        None => (false, false),
+        Some(control) if control == "--fe2o3-test-substitute-commitment" => (true, false),
+        Some(control) if control == "--fe2o3-test-consume-roster" => (false, true),
         Some(control) => return Err(format!("unknown fixture control {control:?}").into()),
     };
     let handoff_names = [
@@ -64,6 +69,33 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     let kernel = KernelId::from_bytes(decode_hex_32(fs::read_to_string(&arguments[0])?.trim())?);
     let target = arguments[1].to_str().ok_or("target is not UTF-8")?;
+    if consume_roster {
+        if kernel.as_bytes() != &[0xa1; 32] {
+            return Err("roster fixture received a different kernel identity".into());
+        }
+        // SAFETY: the fixture has not created threads, signal handlers, descendants, or touched
+        // the inherited handoff descriptors.
+        let recovered = unsafe {
+            consume_inherited_worker_v3_application_roster_handoff_v1::<
+                ApplicationHandoffVecAddRosterFixtureV1,
+            >()?
+        };
+        if recovered.target().to_string() != target {
+            return Err("recovered roster target differs from the expected target".into());
+        }
+        if recovered.entrypoints().len() != 1
+            || recovered.descriptor(0).map(|entry| entry.kernel_id()) != Some(kernel)
+        {
+            return Err("recovered roster differs from the exact fixture marker".into());
+        }
+        recovered.revalidate_currentness()?;
+        drop(recovered);
+        fs::write(
+            report,
+            br#"{"host_consumer":true,"loader_environment_clear":true,"admitted":true,"current":true,"roster":true}"#,
+        )?;
+        return Ok(());
+    }
     // SAFETY: the fixture has not created threads, signal handlers, descendants, or touched the
     // inherited handoff descriptors.
     let recovered = unsafe { consume_inherited_worker_v3_application_handoff_v1(kernel)? };

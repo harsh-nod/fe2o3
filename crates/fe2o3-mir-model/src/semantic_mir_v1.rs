@@ -17,8 +17,13 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 mod canonical_decode;
+mod target_properties;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
+use target_properties::{
+    target_object_size_bound_in, target_pointer_profile, target_vector_alignment,
+    validate_target_primitive,
+};
 
 const MAGIC: &[u8] = b"fe2o3.inert-semantic-mir";
 pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
@@ -31,6 +36,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V8: u16 = 8;
 pub const INERT_SEMANTIC_MIR_VERSION_V9: u16 = 9;
 pub const INERT_SEMANTIC_MIR_VERSION_V10: u16 = 10;
 pub const INERT_SEMANTIC_MIR_VERSION_V11: u16 = 11;
+pub const INERT_SEMANTIC_MIR_VERSION_V12: u16 = 12;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -49,6 +55,7 @@ pub enum SemanticMirWireVersionV1 {
     V9,
     V10,
     V11,
+    V12,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -64,6 +71,7 @@ impl SemanticMirWireVersionV1 {
             Self::V9 => INERT_SEMANTIC_MIR_VERSION_V9,
             Self::V10 => INERT_SEMANTIC_MIR_VERSION_V10,
             Self::V11 => INERT_SEMANTIC_MIR_VERSION_V11,
+            Self::V12 => INERT_SEMANTIC_MIR_VERSION_V12,
         }
     }
 
@@ -79,6 +87,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V9 => Some(Self::V9),
             INERT_SEMANTIC_MIR_VERSION_V10 => Some(Self::V10),
             INERT_SEMANTIC_MIR_VERSION_V11 => Some(Self::V11),
+            INERT_SEMANTIC_MIR_VERSION_V12 => Some(Self::V12),
             _ => None,
         }
     }
@@ -1909,6 +1918,80 @@ impl SemanticTypeDeclV1 {
     pub const fn rust_type_kind(&self) -> SemanticRustTypeKindV1 {
         self.rust_type_kind
     }
+}
+
+/// Returns the sole scalar field of an exact rustc transparent scalar carrier.
+///
+/// This is an ABI transport predicate, not a numerical-type classification.
+/// Every retained layout and ABI fact must agree before a consumer may replace
+/// the aggregate carrier with its physical scalar field.
+pub fn exact_transparent_scalar_carrier_field_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<SemanticTypeIdV1> {
+    let carrier = types.get(ty.index() as usize)?;
+    let SemanticTypeShapeV1::Aggregate(fields) = carrier.shape() else {
+        return None;
+    };
+    let [field] = fields.fields() else {
+        return None;
+    };
+    let field_decl = types.get(field.index() as usize)?;
+    if !matches!(field_decl.shape(), SemanticTypeShapeV1::Scalar(_)) {
+        return None;
+    }
+    let carrier_layout = carrier.layout();
+    let field_layout = field_decl.layout();
+    let exact_scalar_repr = matches!(
+        carrier_layout.backend_repr(),
+        SemanticBackendReprV1::Scalar(SemanticBackendScalarV1::Initialized { .. })
+    ) && carrier_layout.backend_repr() == field_layout.backend_repr();
+    let exact_fields = matches!(
+        carrier_layout.fields(),
+        SemanticFieldsShapeV1::Arbitrary {
+            source_order_offsets_bytes,
+            memory_order_source_indices,
+        } if source_order_offsets_bytes.as_ref() == [0]
+            && memory_order_source_indices.as_ref() == [0]
+    ) && matches!(field_layout.fields(), SemanticFieldsShapeV1::Primitive);
+    let exact_details = matches!(
+        carrier_layout.details(),
+        SemanticTypeLayoutDetailsV1::Aggregate(layout)
+            if layout.field_offsets() == [0] && layout.padding().is_empty()
+    ) && matches!(field_layout.details(), SemanticTypeLayoutDetailsV1::None);
+    let exact_variants = matches!(
+        carrier_layout.variants(),
+        SemanticRustcVariantsV1::Single { index: 0 }
+    ) && matches!(
+        field_layout.variants(),
+        SemanticRustcVariantsV1::Single { index: 0 }
+    );
+    let exact_layout = carrier_layout.size_bytes() == field_layout.size_bytes()
+        && carrier_layout.rustc_size_bytes() == field_layout.rustc_size_bytes()
+        && carrier_layout.alignment_bytes() == field_layout.alignment_bytes()
+        && carrier_layout.unadjusted_abi_alignment_bytes()
+            == field_layout.unadjusted_abi_alignment_bytes()
+        && carrier_layout.max_repr_alignment_bytes() == field_layout.max_repr_alignment_bytes()
+        && carrier_layout.largest_niche().is_none()
+        && field_layout.largest_niche().is_none()
+        && !carrier_layout.is_uninhabited()
+        && !field_layout.is_uninhabited();
+    let exact_abi_properties = [carrier, field_decl].into_iter().all(|ty| {
+        let properties = ty.abi_properties();
+        !properties.pass_indirectly_in_non_rustic_abis()
+            && !properties.has_unsized_foreign_tail()
+            && properties.rustc_layout_is_noundef()
+            && properties.first_pointee().is_none()
+            && properties.second_pointee().is_none()
+            && ty.rust_type_kind() == SemanticRustTypeKindV1::Ordinary
+    });
+    (exact_scalar_repr
+        && exact_fields
+        && exact_details
+        && exact_variants
+        && exact_layout
+        && exact_abi_properties)
+        .then_some(*field)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -5161,20 +5244,6 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
     GridDimension(SemanticAxisV1),
-    /// Performs one bounds-checked volatile load from a shared global slice.
-    VolatileLoad {
-        slice: SemanticTypeIdV1,
-        element: SemanticTypeIdV1,
-        raw_index: SemanticTypeIdV1,
-    },
-    /// Performs one bounds-checked volatile store through disjoint write authority.
-    VolatileStore {
-        disjoint_slice: SemanticTypeIdV1,
-        index_witness: SemanticTypeIdV1,
-        element: SemanticTypeIdV1,
-        raw_index: SemanticTypeIdV1,
-        index_space: SemanticDisjointIndexSpaceV1,
-    },
     /// Executes the target's canonical trap instruction and never returns.
     Trap,
     /// Creates one exact compiler-owned allocation in the current workgroup's LDS.
@@ -5217,6 +5286,10 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
+    /// Performs one bounds-checked volatile read from an immutable Rust slice.
+    MemoryVolatileLoad {
+        element: SemanticTypeIdV1,
+    },
     /// Creates compiler-issued authority for scalar device math.
     MathContextCurrent {
         context: SemanticTypeIdV1,
@@ -6011,8 +6084,7 @@ impl InertSemanticMirRequestV1 {
     }
 
     /// Admits under the exact closed V11 schema that retains the V10 operation
-    /// encodings and adds the compiler trap plus authenticated, bounds-checked
-    /// scalar global volatile load and store terminals at unique tags.
+    /// encodings and adds the compiler trap terminal at its unique tag.
     pub fn admit_exact_v11(
         self,
         limits: SemanticMirLimitsV1,
@@ -6020,12 +6092,21 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V11, limits)
     }
 
+    /// Admits under the exact closed V12 schema that retains the V11 compiler
+    /// trap and adds checked scalar volatile loads from immutable slices.
+    pub fn admit_exact_v12(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V12, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
     /// workgroup pipelines occur together, V10 for target-neutral scans, and
-    /// V11 when the compiler trap or authenticated scalar global volatile
-    /// memory terminals are present.
+    /// V11 when the compiler trap terminal is present, and V12 for checked
+    /// volatile loads.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7482,15 +7563,6 @@ fn record_intrinsic_capability_claims(
             claims.claim_mapping(disjoint_slice, index_space)
                 && claims.claim_mapping(index_witness, index_space)
         }
-        SemanticCompilerIntrinsicOperationV1::VolatileStore {
-            disjoint_slice,
-            index_witness,
-            index_space,
-            ..
-        } => {
-            claims.claim_mapping(disjoint_slice, index_space)
-                && claims.claim_mapping(index_witness, index_space)
-        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
             disjoint_slice,
             grid_leader,
@@ -7635,7 +7707,6 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
-        | SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
         | SemanticCompilerIntrinsicOperationV1::Trap
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts { .. }
@@ -7647,6 +7718,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { .. }
         | SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
@@ -7795,41 +7867,6 @@ fn compiler_intrinsic_signature_matches(
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_) => {
             inputs.is_empty() && is_unsigned_integer_with_bits(request, output, 32)
         }
-        SemanticCompilerIntrinsicOperationV1::VolatileLoad {
-            slice,
-            element,
-            raw_index,
-        } => {
-            inputs == [slice, raw_index]
-                && output == element
-                && shared_slice_reference_with_element(request, slice, element)
-                && is_unsigned_integer_with_bits(request, raw_index, 64)
-                && supported_volatile_scalar_type(request, element)
-        }
-        SemanticCompilerIntrinsicOperationV1::VolatileStore {
-            disjoint_slice,
-            index_witness,
-            element,
-            raw_index,
-            ..
-        } => {
-            inputs.len() == 3
-                && shared_reference_to(request, inputs[1], index_witness)
-                && inputs[2] == element
-                && mutable_reference_to(request, inputs[0], disjoint_slice)
-                && transparent_index_witness_matches(request, index_witness, raw_index)
-                && exclusive_disjoint_slice_type_matches(
-                    request,
-                    disjoint_slice,
-                    element,
-                    raw_index,
-                )
-                && matches!(
-                    request.types[output.0 as usize].shape,
-                    SemanticTypeShapeV1::Unit
-                )
-                && supported_volatile_scalar_type(request, element)
-        }
         SemanticCompilerIntrinsicOperationV1::Trap => {
             inputs.is_empty()
                 && matches!(
@@ -7921,6 +7958,13 @@ fn compiler_intrinsic_signature_matches(
                     scalar_type(request, output),
                     Some(SemanticScalarTypeV1::Float { bits: 32 })
                 )
+        }
+        SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
+            inputs.len() == 2
+                && shared_slice_reference_with_element(request, inputs[0], element)
+                && is_unsigned_integer_with_bits(request, inputs[1], 64)
+                && output == element
+                && supported_volatile_load_scalar_type(request, element)
         }
         SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context } => {
             inputs.is_empty() && output == context
@@ -8766,7 +8810,7 @@ fn supported_read_view_scalar_type(
     )
 }
 
-fn supported_volatile_scalar_type(
+fn supported_volatile_load_scalar_type(
     request: &InertSemanticMirRequestV1,
     element: SemanticTypeIdV1,
 ) -> bool {
@@ -8777,7 +8821,7 @@ fn supported_volatile_scalar_type(
                 bits: 8 | 16 | 32 | 64,
                 ..
             })
-            | Some(SemanticScalarTypeV1::Float { bits: 32 })
+            | Some(SemanticScalarTypeV1::Float { bits: 32 | 64 })
     )
 }
 
@@ -9954,115 +9998,12 @@ fn validate_target_backend_repr(
                 .size_bytes()
                 .and_then(|size| size.checked_mul(count))
                 .ok_or(SemanticMirErrorV1::InvalidTypeLayout)?;
-            if layout.alignment_bytes != gfx942_vector_alignment(vector_size)? {
+            if layout.alignment_bytes != target_vector_alignment(target, vector_size)? {
                 return Err(SemanticMirErrorV1::InvalidTypeLayout);
             }
             Ok(())
         }
     }
-}
-
-fn validate_target_primitive(
-    target: SemanticTargetDataLayoutV1,
-    primitive: SemanticBackendPrimitiveV1,
-) -> Result<(), SemanticMirErrorV1> {
-    let expected = match target.architecture {
-        SemanticTargetArchitectureV1::AmdGpuGfx942 => match primitive {
-            SemanticBackendPrimitiveV1::Integer { bits, .. } => match bits {
-                8 => Some((1, 1)),
-                16 => Some((2, 2)),
-                32 => Some((4, 4)),
-                64 | 128 => Some(((bits / 8) as u64, 8)),
-                _ => None,
-            },
-            SemanticBackendPrimitiveV1::Float { bits, .. } => match bits {
-                16 => Some((2, 2)),
-                32 => Some((4, 4)),
-                64 => Some((8, 8)),
-                128 => Some((16, 16)),
-                _ => None,
-            },
-            SemanticBackendPrimitiveV1::Pointer { address_space, .. } => {
-                gfx942_pointer_profile(address_space)
-                    .map(|profile| (profile.size_bytes, profile.alignment_bytes))
-            }
-        },
-    };
-    if expected
-        != primitive
-            .size_bytes()
-            .map(|size| (size, primitive.alignment_bytes()))
-    {
-        return Err(SemanticMirErrorV1::InvalidTypeLayout);
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-struct TargetPointerProfileV1 {
-    size_bytes: u64,
-    alignment_bytes: u64,
-    offset_bits: u16,
-}
-
-const fn gfx942_pointer_profile(address_space: u32) -> Option<TargetPointerProfileV1> {
-    let (size_bytes, alignment_bytes, offset_bits) = match address_space {
-        0 | 1 | 4 => (8, 8, 64),
-        2 | 3 | 5 | 6 => (4, 4, 32),
-        7 => (20, 32, 32),
-        8 => (16, 16, 48),
-        9 => (24, 32, 32),
-        _ => return None,
-    };
-    Some(TargetPointerProfileV1 {
-        size_bytes,
-        alignment_bytes,
-        offset_bits,
-    })
-}
-
-fn target_pointer_profile(
-    target: SemanticTargetDataLayoutV1,
-    address_space: u32,
-) -> Option<TargetPointerProfileV1> {
-    match target.architecture {
-        SemanticTargetArchitectureV1::AmdGpuGfx942 => gfx942_pointer_profile(address_space),
-    }
-}
-
-fn target_object_size_bound_in(
-    target: SemanticTargetDataLayoutV1,
-    address_space: u32,
-) -> Option<u64> {
-    if matches!(address_space, 7..=9) {
-        return None;
-    }
-    let profile = target_pointer_profile(target, address_space)?;
-    match profile.offset_bits {
-        16 => Some(1 << 15),
-        32 => Some(1 << 31),
-        64 => Some(1 << 61),
-        // Rust source objects cannot inhabit descriptor address spaces whose
-        // pointer-offset width is not one of rustc's object-size domains.
-        _ => None,
-    }
-}
-
-fn gfx942_vector_alignment(vector_size_bytes: u64) -> Result<u64, SemanticMirErrorV1> {
-    let alignment = match vector_size_bytes {
-        2 => 2,
-        3 | 4 => 4,
-        6 | 8 => 8,
-        12 | 16 => 16,
-        24 | 32 => 32,
-        64 => 64,
-        128 => 128,
-        256 => 256,
-        size => size
-            .checked_next_power_of_two()
-            .ok_or(SemanticMirErrorV1::InvalidTypeLayout)?,
-    };
-    Ok(alignment)
 }
 
 fn memory_order_for_offsets(offsets: &[u64]) -> Result<Vec<u32>, SemanticMirErrorV1> {
@@ -15547,26 +15488,8 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
-        SemanticCompilerIntrinsicOperationV1::VolatileLoad {
-            slice,
-            element,
-            raw_index,
-        } => {
-            pending.push_back(slice);
+        SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
             pending.push_back(element);
-            pending.push_back(raw_index);
-        }
-        SemanticCompilerIntrinsicOperationV1::VolatileStore {
-            disjoint_slice,
-            index_witness,
-            element,
-            raw_index,
-            ..
-        } => {
-            pending.push_back(disjoint_slice);
-            pending.push_back(index_witness);
-            pending.push_back(element);
-            pending.push_back(raw_index);
         }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
@@ -16405,21 +16328,7 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
-    let mut required = SemanticMirWireVersionV1::V2;
-    if request.callables.iter().any(|callable| {
-        matches!(
-            callable,
-            SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::VolatileLoad { .. }
-                    | SemanticCompilerIntrinsicOperationV1::VolatileStore { .. }
-                    | SemanticCompilerIntrinsicOperationV1::Trap,
-                ..
-            }
-        )
-    }) {
-        required = required.max(SemanticMirWireVersionV1::V11);
-    }
-    if request.callables.iter().any(|callable| {
+    let uses_scan = request.callables.iter().any(|callable| {
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -16427,11 +16336,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                 ..
             }
         )
-    }) {
-        required = required.max(SemanticMirWireVersionV1::V10);
-    }
-
-    if request.callables.iter().any(|callable| {
+    });
+    let uses_reduce = request.callables.iter().any(|callable| {
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -16439,8 +16345,29 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                 ..
             }
         )
+    });
+    let mut required = SemanticMirWireVersionV1::V2;
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Trap,
+                ..
+            }
+        )
     }) {
+        required = required.max(SemanticMirWireVersionV1::V11);
+    }
+
+    if uses_scan {
+        required = required.max(SemanticMirWireVersionV1::V10);
+    }
+
+    if uses_reduce {
         required = required.max(SemanticMirWireVersionV1::V9);
+    }
+    if uses_scan && uses_reduce {
+        required = required.max(SemanticMirWireVersionV1::V11);
     }
 
     if request.callables.iter().any(|callable| {
@@ -16544,6 +16471,17 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     }
     if uses_pipeline && uses_bf16 {
         required = required.max(SemanticMirWireVersionV1::V9);
+    }
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { .. },
+                ..
+            }
+        )
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V12);
     }
     required
 }
@@ -17388,34 +17326,15 @@ fn encode_compiler_intrinsic_operation(
             encode_axis(writer, axis)
         }
         SemanticCompilerIntrinsicOperationV1::Trap => {
-            require_v11_wire_version(wire_version)?;
+            if wire_version != SemanticMirWireVersionV1::V11
+                && wire_version != SemanticMirWireVersionV1::V12
+            {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V11,
+                });
+            }
             writer.u8(64)
-        }
-        SemanticCompilerIntrinsicOperationV1::VolatileLoad {
-            slice,
-            element,
-            raw_index,
-        } => {
-            require_v11_wire_version(wire_version)?;
-            writer.u8(65)?;
-            writer.u32(slice.0)?;
-            writer.u32(element.0)?;
-            writer.u32(raw_index.0)
-        }
-        SemanticCompilerIntrinsicOperationV1::VolatileStore {
-            disjoint_slice,
-            index_witness,
-            element,
-            raw_index,
-            index_space,
-        } => {
-            require_v11_wire_version(wire_version)?;
-            writer.u8(66)?;
-            writer.u32(disjoint_slice.0)?;
-            writer.u32(index_witness.0)?;
-            writer.u32(element.0)?;
-            writer.u32(raw_index.0)?;
-            encode_disjoint_index_space(writer, index_space)
         }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
@@ -17484,6 +17403,16 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => writer.u8(4),
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
+        SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
+            if wire_version != SemanticMirWireVersionV1::V12 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V12,
+                });
+            }
+            writer.u8(65)?;
+            writer.u32(element.0)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
             raw_index,
@@ -17738,7 +17667,10 @@ fn encode_compiler_intrinsic_operation(
             element_storage,
             element,
         } => {
-            if wire_version < SemanticMirWireVersionV1::V9 {
+            if wire_version != SemanticMirWireVersionV1::V9
+                && wire_version != SemanticMirWireVersionV1::V11
+                && wire_version != SemanticMirWireVersionV1::V12
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V9,
@@ -17757,7 +17689,10 @@ fn encode_compiler_intrinsic_operation(
             element,
             kind,
         } => {
-            if wire_version < SemanticMirWireVersionV1::V10 {
+            if wire_version != SemanticMirWireVersionV1::V10
+                && wire_version != SemanticMirWireVersionV1::V11
+                && wire_version != SemanticMirWireVersionV1::V12
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V10,
@@ -18155,19 +18090,6 @@ fn require_workgroup_pipeline_wire_version(
         Err(SemanticMirErrorV1::WireVersionCannotRepresent {
             requested: wire_version,
             required,
-        })
-    } else {
-        Ok(())
-    }
-}
-
-fn require_v11_wire_version(
-    wire_version: SemanticMirWireVersionV1,
-) -> Result<(), SemanticMirErrorV1> {
-    if wire_version < SemanticMirWireVersionV1::V11 {
-        Err(SemanticMirErrorV1::WireVersionCannotRepresent {
-            requested: wire_version,
-            required: SemanticMirWireVersionV1::V11,
         })
     } else {
         Ok(())
@@ -19500,120 +19422,6 @@ mod private_tests {
             value(output),
         )
         .unwrap()
-    }
-
-    fn volatile_load_signature_fixture(
-        address_space: u32,
-    ) -> (
-        InertSemanticMirRequestV1,
-        SemanticFunctionAbiV1,
-        [SemanticTypeIdV1; 4],
-    ) {
-        let element = SemanticTypeIdV1::from_index(0);
-        let other_element = SemanticTypeIdV1::from_index(1);
-        let raw_index = SemanticTypeIdV1::from_index(2);
-        let slice = SemanticTypeIdV1::from_index(3);
-        let slice_reference = SemanticTypeIdV1::from_index(4);
-        let request = InertSemanticMirRequestV1 {
-            target: SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(
-                [96; 32],
-            )),
-            types: vec![
-                full_range_scalar_type(
-                    97,
-                    SemanticBackendPrimitiveV1::integer(false, 32, 4),
-                    SemanticScalarTypeV1::Integer {
-                        signed: false,
-                        bits: 32,
-                    },
-                ),
-                full_range_scalar_type(
-                    98,
-                    SemanticBackendPrimitiveV1::float(32, 4),
-                    SemanticScalarTypeV1::Float { bits: 32 },
-                ),
-                full_range_scalar_type(
-                    99,
-                    SemanticBackendPrimitiveV1::integer(false, 64, 8),
-                    SemanticScalarTypeV1::Integer {
-                        signed: false,
-                        bits: 64,
-                    },
-                ),
-                test_type(
-                    100,
-                    SemanticTypeLayoutV1::new(None, 4).unwrap(),
-                    SemanticTypeShapeV1::Slice { element },
-                ),
-                test_type(
-                    101,
-                    SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
-                    SemanticTypeShapeV1::Pointer(
-                        SemanticPointerTypeV1::new_with_kind(
-                            slice,
-                            SemanticPointerKindV1::Reference,
-                            SemanticMutabilityV1::Immutable,
-                            address_space,
-                            64,
-                            SemanticPointerMetadataV1::SliceLength,
-                        )
-                        .unwrap(),
-                    ),
-                ),
-            ]
-            .into_boxed_slice(),
-            allocations: Box::new([]),
-            statics: Box::new([]),
-            vtables: Box::new([]),
-            functions: Box::new([]),
-            callables: Box::new([]),
-            roots: Box::new([]),
-        };
-        let value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
-        let abi = SemanticFunctionAbiV1::new(
-            SemanticAbiIdentityV1::from_sha256([102; 32]),
-            SemanticLayoutIdentityV1::from_sha256([103; 32]),
-            SemanticCanonAbiV1::Rust,
-            false,
-            false,
-            vec![value(slice_reference), value(raw_index)],
-            value(element),
-        )
-        .unwrap();
-        (
-            request,
-            abi,
-            [slice_reference, element, other_element, raw_index],
-        )
-    }
-
-    #[test]
-    fn volatile_load_signature_rejects_type_and_address_space_substitution() {
-        let operation =
-            |slice, element, raw_index| SemanticCompilerIntrinsicOperationV1::VolatileLoad {
-                slice,
-                element,
-                raw_index,
-            };
-        let (request, abi, [slice, element, other_element, raw_index]) =
-            volatile_load_signature_fixture(0);
-        assert!(compiler_intrinsic_signature_matches(
-            &request,
-            operation(slice, element, raw_index),
-            &abi,
-        ));
-        assert!(!compiler_intrinsic_signature_matches(
-            &request,
-            operation(slice, other_element, raw_index),
-            &abi,
-        ));
-
-        let (wrong_space, abi, [slice, element, _, raw_index]) = volatile_load_signature_fixture(1);
-        assert!(!compiler_intrinsic_signature_matches(
-            &wrong_space,
-            operation(slice, element, raw_index),
-            &abi,
-        ));
     }
 
     fn pipeline_current_production_request() -> InertSemanticMirRequestV1 {

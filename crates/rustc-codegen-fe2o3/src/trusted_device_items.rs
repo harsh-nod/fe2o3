@@ -19,7 +19,10 @@ use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, UintTy};
+use rustc_middle::mir::{
+    BinOp, Body, Operand, Rvalue, StatementKind, TerminatorKind, UnwindAction,
+};
+use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, TypingEnv, UintTy};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
 
@@ -34,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x25, 0x35, 0x71, 0xfc, 0xf3, 0x12, 0x22, 0xfa, 0x37, 0x94, 0x91, 0x61, 0x93, 0xe1, 0xa6, 0x13,
-    0x39, 0x48, 0xf5, 0x58, 0x78, 0x71, 0x57, 0x01, 0x5b, 0x66, 0x01, 0xb6, 0x66, 0xab, 0x17, 0x3a,
+    0x78, 0xbe, 0x27, 0x8d, 0x50, 0xcf, 0xc9, 0xd0, 0x9f, 0x31, 0xe8, 0x74, 0xba, 0x33, 0x45, 0xdd,
+    0xe0, 0x6f, 0x14, 0x05, 0x2b, 0x19, 0xaa, 0x50, 0x78, 0xa3, 0x55, 0x2a, 0xb0, 0x54, 0x1f, 0xa9,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -1599,8 +1602,6 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic => {
             Some("fe2o3_device::atomic::{impl#3}::as_atomic")
         }
-        TrustedDeviceItem::MemoryVolatileLoad => Some("fe2o3_device::memory::volatile_load"),
-        TrustedDeviceItem::MemoryVolatileStore => Some("fe2o3_device::memory::volatile_store"),
         _ if safe_execution_provider_bound_item(item) => {
             Some(safe_execution_compiler_definition_path(item))
         }
@@ -2076,6 +2077,387 @@ pub(crate) fn authenticate_reviewed_safe_core_scalar_bitcast_helper_v1<'tcx>(
             TyKind::Float(FloatTy::F64),
             TyKind::Uint(UintTy::U64),
         )
+    )
+}
+
+/// Recognizes the pinned safe `f32::abs` wrapper while retaining its MIR so
+/// the nested exact `core::intrinsics::fabs::<f32>` call is still classified.
+pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let Some(core_lang_item) = tcx.lang_items().sized_trait() else {
+        return false;
+    };
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || instance.def_id().krate != core_lang_item.krate
+        || tcx.crate_name(core_lang_item.krate).as_str() != "core"
+        || !instance.args.is_empty()
+        || !tcx.is_mir_available(instance.def_id())
+        || tcx.def_path_str(instance.def_id()) != "core::f32::<impl f32>::abs"
+    {
+        return false;
+    }
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    signature.safety == Safety::Safe
+        && signature.abi == ExternAbi::Rust
+        && !signature.c_variadic
+        && matches!(signature.inputs(), [input] if matches!(input.kind(), TyKind::Float(FloatTy::F32)))
+        && matches!(signature.output().kind(), TyKind::Float(FloatTy::F32))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedSafeCoreF32IsFiniteContractV1<'a> {
+    item_instance: bool,
+    core_lang_crate: bool,
+    crate_name: &'a str,
+    generic_arguments: usize,
+    mir_available: bool,
+    canonical_path: &'a str,
+    safe_signature: bool,
+    rust_abi: bool,
+    variadic: bool,
+    input_f32: bool,
+    output_bool: bool,
+    exact_reviewed_body: bool,
+}
+
+fn authenticate_reviewed_safe_core_f32_is_finite_contract_v1(
+    contract: ReviewedSafeCoreF32IsFiniteContractV1<'_>,
+) -> bool {
+    contract.item_instance
+        && contract.core_lang_crate
+        && contract.crate_name == "core"
+        && contract.generic_arguments == 0
+        && contract.mir_available
+        && contract.canonical_path == "core::f32::<impl f32>::is_finite"
+        && contract.safe_signature
+        && contract.rust_abi
+        && !contract.variadic
+        && contract.input_f32
+        && contract.output_bool
+        && contract.exact_reviewed_body
+}
+
+/// Recognizes only the reviewed pinned-core `f32::is_finite` implementation.
+/// Its exact two-block MIR remains in the call graph, so the nested `f32::abs`
+/// and `core::intrinsics::fabs::<f32>` chain is still independently checked.
+pub(crate) fn authenticate_reviewed_safe_core_f32_is_finite_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let Some(core_lang_item) = tcx.lang_items().sized_trait() else {
+        return false;
+    };
+    let crate_name = tcx.crate_name(instance.def_id().krate);
+    let canonical_path = tcx.def_path_str(instance.def_id());
+    let mir_available = tcx.is_mir_available(instance.def_id());
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let input_f32 = matches!(signature.inputs(), [input] if matches!(input.kind(), TyKind::Float(FloatTy::F32)));
+    let output_bool = matches!(signature.output().kind(), TyKind::Bool);
+    let exact_reviewed_body =
+        mir_available && reviewed_safe_core_f32_is_finite_body_v1(tcx, instance);
+    authenticate_reviewed_safe_core_f32_is_finite_contract_v1(
+        ReviewedSafeCoreF32IsFiniteContractV1 {
+            item_instance: matches!(instance.def, InstanceKind::Item(_)),
+            core_lang_crate: instance.def_id().krate == core_lang_item.krate,
+            crate_name: crate_name.as_str(),
+            generic_arguments: instance.args.len(),
+            mir_available,
+            canonical_path: &canonical_path,
+            safe_signature: signature.safety == Safety::Safe,
+            rust_abi: signature.abi == ExternAbi::Rust,
+            variadic: signature.c_variadic,
+            input_f32,
+            output_bool,
+            exact_reviewed_body,
+        },
+    )
+}
+
+fn reviewed_safe_core_f32_is_finite_body_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    let body = tcx.instance_mir(instance.def);
+    reviewed_safe_core_f32_is_finite_route_body_v1(tcx, body)
+        || reviewed_safe_core_f32_is_finite_optimized_body_v1(tcx, body)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+    argument_count: usize,
+    local_count: usize,
+    block_count: usize,
+    source_scope_count: usize,
+    exact_local_types: bool,
+    root_scope_not_inlined: bool,
+    entry_has_no_statements: bool,
+    exact_abs_callee: bool,
+    copies_input: bool,
+    writes_absolute_temporary: bool,
+    comparison_target: bool,
+    unwind_unreachable: bool,
+    exact_less_than_infinity: bool,
+    returns_result: bool,
+}
+
+fn authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1(
+    contract: ReviewedSafeCoreF32IsFiniteRouteBodyContractV1,
+) -> bool {
+    contract.argument_count == 1
+        && contract.local_count == 3
+        && contract.block_count == 2
+        && contract.source_scope_count == 1
+        && contract.exact_local_types
+        && contract.root_scope_not_inlined
+        && contract.entry_has_no_statements
+        && contract.exact_abs_callee
+        && contract.copies_input
+        && contract.writes_absolute_temporary
+        && contract.comparison_target
+        && contract.unwind_unreachable
+        && contract.exact_less_than_infinity
+        && contract.returns_result
+}
+
+// Production and engineering extraction disable MIR inlining. Bind the exact
+// retained wrapper before treating its unavailable cross-crate HIR as safe.
+fn reviewed_safe_core_f32_is_finite_route_body_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> bool {
+    let mut locals = body.local_decls.iter();
+    let exact_local_types = matches!(locals.next(), Some(result) if matches!(result.ty.kind(), TyKind::Bool))
+        && matches!(locals.next(), Some(input) if matches!(input.ty.kind(), TyKind::Float(FloatTy::F32)))
+        && matches!(locals.next(), Some(absolute) if matches!(absolute.ty.kind(), TyKind::Float(FloatTy::F32)))
+        && locals.next().is_none();
+    let mut scopes = body.source_scopes.iter();
+    let root_scope_not_inlined =
+        matches!(scopes.next(), Some(scope) if scope.inlined.is_none()) && scopes.next().is_none();
+
+    let mut blocks = body.basic_blocks.iter();
+    let Some(entry) = blocks.next() else {
+        return false;
+    };
+    let Some(comparison) = blocks.next() else {
+        return false;
+    };
+    if blocks.next().is_some() {
+        return false;
+    }
+    let Some(entry_terminator) = &entry.terminator else {
+        return false;
+    };
+    let TerminatorKind::Call {
+        func,
+        args,
+        destination,
+        target,
+        unwind,
+        ..
+    } = &entry_terminator.kind
+    else {
+        return false;
+    };
+    let Some(target) = target else {
+        return false;
+    };
+    let Operand::Constant(function) = func else {
+        return false;
+    };
+    let TyKind::FnDef(def_id, arguments) = function.const_.ty().kind() else {
+        return false;
+    };
+    let Ok(Some(abs)) =
+        Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, arguments)
+    else {
+        return false;
+    };
+    let exact_abs_callee = authenticate_reviewed_safe_core_fabs_f32_helper_v1(tcx, abs);
+
+    let [statement] = comparison.statements.as_slice() else {
+        return false;
+    };
+    let StatementKind::Assign(assignment) = &statement.kind else {
+        return false;
+    };
+    let (result, rvalue) = &**assignment;
+    let Rvalue::BinaryOp(BinOp::Lt, operands) = rvalue else {
+        return false;
+    };
+    let (absolute, infinity) = &**operands;
+    let Operand::Constant(infinity) = infinity else {
+        return false;
+    };
+    let exact_less_than_infinity = result.local.as_usize() == 0
+        && result.projection.is_empty()
+        && matches!(absolute, Operand::Move(place) if place.local.as_usize() == 2 && place.projection.is_empty())
+        && matches!(infinity.const_.ty().kind(), TyKind::Float(FloatTy::F32))
+        && infinity
+            .const_
+            .try_eval_bits(tcx, TypingEnv::fully_monomorphized())
+            == Some(u128::from(f32::INFINITY.to_bits()));
+
+    authenticate_reviewed_safe_core_f32_is_finite_route_body_contract_v1(
+        ReviewedSafeCoreF32IsFiniteRouteBodyContractV1 {
+            argument_count: body.arg_count,
+            local_count: body.local_decls.len(),
+            block_count: body.basic_blocks.len(),
+            source_scope_count: body.source_scopes.len(),
+            exact_local_types,
+            root_scope_not_inlined,
+            entry_has_no_statements: entry.statements.is_empty(),
+            exact_abs_callee,
+            copies_input: matches!(&args[..], [argument] if matches!(&argument.node, Operand::Copy(place) if place.local.as_usize() == 1 && place.projection.is_empty())),
+            writes_absolute_temporary: destination.local.as_usize() == 2
+                && destination.projection.is_empty(),
+            comparison_target: target.index() == 1,
+            unwind_unreachable: matches!(unwind, UnwindAction::Unreachable),
+            exact_less_than_infinity,
+            returns_result: matches!(
+                comparison.terminator.as_ref().map(|term| &term.kind),
+                Some(TerminatorKind::Return)
+            ),
+        },
+    )
+}
+
+// An independently closed form covers opt3 extraction tests, where rustc
+// inlines `f32::abs` but retains its exact core instance in the source scope.
+fn reviewed_safe_core_f32_is_finite_optimized_body_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> bool {
+    if body.arg_count != 1 || body.local_decls.len() != 3 || body.basic_blocks.len() != 2 {
+        return false;
+    }
+    let mut locals = body.local_decls.iter();
+    if !matches!(locals.next(), Some(result) if matches!(result.ty.kind(), TyKind::Bool))
+        || !matches!(locals.next(), Some(input) if matches!(input.ty.kind(), TyKind::Float(FloatTy::F32)))
+        || !matches!(locals.next(), Some(absolute) if matches!(absolute.ty.kind(), TyKind::Float(FloatTy::F32)))
+        || locals.next().is_some()
+    {
+        return false;
+    }
+    let mut scopes = body.source_scopes.iter();
+    let Some(root_scope) = scopes.next() else {
+        return false;
+    };
+    let Some(abs_scope) = scopes.next() else {
+        return false;
+    };
+    if scopes.next().is_some() || root_scope.inlined.is_some() {
+        return false;
+    }
+    let Some((inlined_abs, _)) = abs_scope.inlined else {
+        return false;
+    };
+    if !authenticate_reviewed_safe_core_fabs_f32_helper_v1(tcx, inlined_abs) {
+        return false;
+    }
+
+    let mut blocks = body.basic_blocks.iter();
+    let Some(entry) = blocks.next() else {
+        return false;
+    };
+    if !matches!(
+        entry.statements.as_slice(),
+        [statement]
+            if matches!(statement.kind, StatementKind::StorageLive(local) if local.as_usize() == 2)
+    ) {
+        return false;
+    }
+    let Some(entry_terminator) = &entry.terminator else {
+        return false;
+    };
+    let TerminatorKind::Call {
+        func,
+        args,
+        destination,
+        target,
+        unwind,
+        ..
+    } = &entry_terminator.kind
+    else {
+        return false;
+    };
+    let Some(target) = target else {
+        return false;
+    };
+    if target.index() != 1
+        || !matches!(unwind, UnwindAction::Unreachable)
+        || args.len() != 1
+        || !matches!(&args[0].node, Operand::Move(place) if place.local.as_usize() == 1 && place.projection.is_empty())
+        || destination.local.as_usize() != 2
+        || !destination.projection.is_empty()
+    {
+        return false;
+    }
+    let Operand::Constant(function) = func else {
+        return false;
+    };
+    let TyKind::FnDef(def_id, arguments) = function.const_.ty().kind() else {
+        return false;
+    };
+    let Ok(Some(fabs)) =
+        Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, arguments)
+    else {
+        return false;
+    };
+    if !matches!(
+        crate::production_rustc_intrinsic_v1::classify(tcx, fabs),
+        Ok(Some(classification))
+            if classification.operation
+                == crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1::FabsF32
+    ) {
+        return false;
+    }
+
+    let Some(comparison) = blocks.next() else {
+        return false;
+    };
+    let [statement, storage_dead] = comparison.statements.as_slice() else {
+        return false;
+    };
+    if !matches!(storage_dead.kind, StatementKind::StorageDead(local) if local.as_usize() == 2) {
+        return false;
+    }
+    let StatementKind::Assign(assignment) = &statement.kind else {
+        return false;
+    };
+    let (destination, rvalue) = &**assignment;
+    if destination.local.as_usize() != 0 || !destination.projection.is_empty() {
+        return false;
+    }
+    let Rvalue::BinaryOp(BinOp::Lt, operands) = rvalue else {
+        return false;
+    };
+    let (absolute, infinity) = &**operands;
+    if !matches!(absolute, Operand::Move(place) if place.local.as_usize() == 2 && place.projection.is_empty())
+    {
+        return false;
+    }
+    let Operand::Constant(infinity) = infinity else {
+        return false;
+    };
+    if !matches!(infinity.const_.ty().kind(), TyKind::Float(FloatTy::F32))
+        || infinity
+            .const_
+            .try_eval_bits(tcx, TypingEnv::fully_monomorphized())
+            != Some(u128::from(f32::INFINITY.to_bits()))
+    {
+        return false;
+    }
+    matches!(
+        comparison.terminator.as_ref().map(|term| &term.kind),
+        Some(TerminatorKind::Return)
     )
 }
 
@@ -2634,181 +3016,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::{
-        CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
-        ReviewedProviderSemanticDefinitionV1, TrustedAmdGpuDiagnosticOperation,
-        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedHalfOperation,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
-        exact_provider_compiler_definition_path_v1, pinned_core_semantic_terminal_identity_v1,
-        reviewed_provider_source_closure_from_definition,
-        reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
-        safe_execution_compiler_definition_path, safe_execution_provider_bound_item,
-        sort_reviewed_source_files_by_relative_path, structural_local_definition_component_v1,
-        validate_compiled_provider_source_hash_v1,
-        validate_reviewed_fe2o3_device_provider_definition_v1,
-    };
-    use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
-    use rustc_span::{SourceFileHash, SourceFileHashAlgorithm};
-
-    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
-
-    struct ProviderPackageFixture {
-        root: PathBuf,
-    }
-
-    impl ProviderPackageFixture {
-        fn new() -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "fe2o3-provider-profile-{}-{}",
-                std::process::id(),
-                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(root.join("src/nested")).unwrap();
-            fs::write(root.join("Cargo.toml"), b"[package]\nname='fixture'\n").unwrap();
-            fs::write(root.join("src/lib.rs"), b"pub mod nested;\n").unwrap();
-            fs::write(root.join("src/nested/mod.rs"), b"pub fn value() {}\n").unwrap();
-            Self { root }
-        }
-
-        fn source_root(&self) -> PathBuf {
-            self.root.join("src")
-        }
-
-        fn definition(&self) -> PathBuf {
-            self.source_root().join("lib.rs")
-        }
-    }
-
-    impl Drop for ProviderPackageFixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
-
-    fn digest(hex: &str) -> [u8; 32] {
-        assert_eq!(hex.len(), 64);
-        let mut output = [0_u8; 32];
-        for (byte, pair) in output.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-            *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
-        }
-        output
-    }
-
-    fn semantic_definition(
-        path: &str,
-        source_closure_identity: [u8; 32],
-        definition_source_identity: [u8; 32],
-    ) -> ReviewedProviderSemanticDefinitionV1 {
-        ReviewedProviderSemanticDefinitionV1 {
-            provider: CompilerProviderObservationV1 {
-                crate_name: "fe2o3_device".into(),
-                stable_crate_id: 7,
-                crate_hash_observation: [3; 16],
-            },
-            canonical_definition_path: format!("fe2o3_device::{path}"),
-            structural_local_definition_component: structural_local_definition_component_v1(path)
-                .unwrap(),
-            cargo_metadata_build_observation: [4; 32],
-            source_closure_identity,
-            definition_source_identity,
-        }
-    }
-
-    #[test]
-    fn provider_semantic_identity_excludes_volatile_compilation_disambiguators() {
-        fn identity(definition: &ReviewedProviderSemanticDefinitionV1) -> Result<[u8; 32], String> {
-            definition.durable_semantic_identity("fe2o3_device::thread::thread_idx_x")
-        }
-
-        let definition = ReviewedProviderSemanticDefinitionV1 {
-            provider: CompilerProviderObservationV1 {
-                crate_name: "fe2o3_device".into(),
-                stable_crate_id: 7,
-                crate_hash_observation: [3; 16],
-            },
-            canonical_definition_path: "fe2o3_device::thread::thread_idx_x".into(),
-            structural_local_definition_component: structural_local_definition_component_v1(
-                "thread::thread_idx_x",
-            )
-            .unwrap(),
-            cargo_metadata_build_observation: [4; 32],
-            source_closure_identity: [5; 32],
-            definition_source_identity: [6; 32],
-        };
-        let exact = identity(&definition).expect("complete provider semantic identity");
-        assert_eq!(
-            exact,
-            digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
-        );
-
-        let mut mutation = definition.clone();
-        mutation.provider.stable_crate_id ^= 1;
-        assert_ne!(mutation.provider, definition.provider);
-        assert_eq!(identity(&mutation).unwrap(), exact);
-        mutation = definition.clone();
-        mutation.provider.crate_hash_observation[0] ^= 1;
-        assert_ne!(mutation.provider, definition.provider);
-        assert_eq!(identity(&mutation).unwrap(), exact);
-
-        mutation = definition.clone();
-        mutation.provider.crate_name = "fake_fe2o3_device".into();
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.canonical_definition_path = "fe2o3_device::thread::block_idx_x".into();
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.canonical_definition_path = "fe2o3_device::thread::block_idx_x".into();
-        mutation.structural_local_definition_component =
-            structural_local_definition_component_v1("thread::block_idx_x").unwrap();
-        assert_ne!(identity(&mutation).unwrap(), exact);
-        mutation = definition.clone();
-        mutation.structural_local_definition_component[0] ^= 1;
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.cargo_metadata_build_observation[0] ^= 1;
-        assert_ne!(identity(&mutation).unwrap(), exact);
-        mutation = definition.clone();
-        mutation.source_closure_identity[0] ^= 1;
-        assert_ne!(identity(&mutation).unwrap(), exact);
-        mutation = definition.clone();
-        mutation.definition_source_identity[0] ^= 1;
-        assert_ne!(identity(&mutation).unwrap(), exact);
-        mutation = definition.clone();
-        mutation.source_closure_identity = [0; 32];
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.definition_source_identity = [0; 32];
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.cargo_metadata_build_observation = [0; 32];
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.provider.stable_crate_id = 0;
-        assert!(identity(&mutation).is_err());
-        mutation = definition.clone();
-        mutation.provider.crate_hash_observation = [0; 16];
-        assert!(identity(&mutation).is_err());
-        assert_eq!(
-            definition
-                .durable_semantic_identity("fe2o3_device::thread::thread_idx_x")
-                .unwrap(),
-            exact
-        );
-        assert!(definition.durable_semantic_identity("").is_err());
-        assert_ne!(
-            definition
-                .durable_semantic_identity("fe2o3_device::thread::block_idx_x",)
-                .unwrap(),
-            exact
-        );
-    }
-
+    include!("trusted_device_items/core_01_tests.rs");
     #[test]
     fn exact_device_provider_rejects_same_name_path_and_source_substitution() {
         let item = TrustedDeviceItem::ThreadIndexCheckedBlock;
@@ -2871,7 +3079,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_memory_capabilities_reject_type_constructor_and_load_lookalikes() {
+    fn checked_view_capabilities_reject_type_constructor_and_load_lookalikes() {
         for item in [
             TrustedDeviceItem::StridedReadView2D,
             TrustedDeviceItem::StridedReadView2DError,
@@ -2883,8 +3091,6 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
-            TrustedDeviceItem::MemoryVolatileLoad,
-            TrustedDeviceItem::MemoryVolatileStore,
         ] {
             let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
             let local = structural.strip_prefix("fe2o3_device::").unwrap();
@@ -3022,7 +3228,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("253571fcf31222fa3794916193e1a6133948f558787157015b6601b666ab173a")
+            digest("78be278d50cfc9d09f31e874ba3345dde06f14052b19aa5078a3552ab0541fa9")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }

@@ -532,7 +532,13 @@ structural owners. Typed producer gaps are returned without retaining a query
 owner. `compare_variants` cites those exact archive identities while embedding
 the unchanged V2 treatment wire. `compare_complete_structural_catalogs` uses
 the same treatment and archive references, recomputes Variant V3, and exposes
-the complete-catalog multiset contract. Requests are revisioned and unique;
+the complete-catalog multiset contract. `explain_regression` additionally
+projects the exact replayed optimizer audit and joins it to duration, counter,
+HSACO resource, positive source/IR/ISA, and complete structural changes. Its
+fixed-order hypotheses retain supporting and contradicting evidence IDs,
+typed missing facts, confidence limitations, and the next discriminating
+measurement. They remain inferred co-observations, never causal attribution.
+Requests are revisioned and unique;
 every response is content-identified and independently verifiable.
 
 The archive makes finalizer-derived structural evidence restartable. It does
@@ -540,7 +546,8 @@ not authenticate external provenance, prove live capture, or grant execution,
 attach, scheduling, collection, decoder, publication, load, launch, dispatch,
 or runtime authority. See
 [`docs/profiler-variant-v3.md`](../../docs/profiler-variant-v3.md) and
-[`docs/production-profiler-kir-archive-v1.md`](../../docs/production-profiler-kir-archive-v1.md).
+[`docs/production-profiler-kir-archive-v1.md`](../../docs/production-profiler-kir-archive-v1.md),
+and [`docs/profiler-regression-explanation-v1.md`](../../docs/profiler-regression-explanation-v1.md).
 
 ## Distributed-overlap extension
 

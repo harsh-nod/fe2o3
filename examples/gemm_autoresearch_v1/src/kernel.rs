@@ -1,4 +1,8 @@
 //! Mutable safe Rust candidate for the gfx942 GEMM autoresearch loop.
+//!
+//! Keep experiments reviewable by preserving the same phases: validate dynamic
+//! extents, assign one wave per tile, construct typed matrices, execute uniform
+//! K phases, and use the tiled capability for edge-safe stores.
 
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
@@ -41,6 +45,7 @@ pub fn gemm_autoresearch_v1(
     alpha: f32,
     beta: f32,
 ) -> KernelResult {
+    // Reject incompatible shapes and strides before every lane enters MFMA.
     let invalid_stride = (m != 0 && k != 0 && lda < k)
         || (k != 0 && n != 0 && ldb < n)
         || (m != 0 && n != 0 && ldc < n);
@@ -55,6 +60,7 @@ pub fn gemm_autoresearch_v1(
         return Err(KernelError::InvalidArgument);
     }
 
+    // Grid coordinates assign one Wave64 to one 16x16 output tile.
     let thread_index = thread::index_1d();
     let raw_index = thread_index.get();
     let tiles_per_row = (n as usize + 15) / 16;
@@ -65,11 +71,13 @@ pub fn gemm_autoresearch_v1(
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
 
+    // Typed views centralize layout and padding; the output witness captures ownership.
     let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
     let a_matrix = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize)?;
     let b_matrix = Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize)?;
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
+    // All lanes traverse identical K tiles and keep the FP32 accumulator in registers.
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let mut phase = 0_usize;
     while phase < k as usize {
@@ -79,6 +87,7 @@ pub fn gemm_autoresearch_v1(
         phase += 16;
     }
 
+    // The tiled capability clips M/N edges while proving unique ownership of valid C.
     let values = accumulator.into_values();
     if let Some(output_tile) = output_tile {
         if let Some(output) =

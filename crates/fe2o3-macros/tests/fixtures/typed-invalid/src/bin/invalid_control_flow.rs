@@ -46,6 +46,32 @@ fn guarded_switch(value: u32) {
     }
 }
 
+#[kernel(control_flow(loop_bounds(8)))]
+fn optional_raw_u32_without_switch_declaration(selector: u32) {
+    let mut iteration = 0;
+    match selector {
+        0 => {}
+        _ => {
+            while iteration < 8 {
+                iteration += 1;
+            }
+        }
+    }
+}
+
+#[kernel(control_flow(loop_bounds(8), integer_switches(u64)))]
+fn optional_raw_u32_with_wrong_switch_declaration(selector: u32) {
+    let mut iteration = 0;
+    match selector {
+        0u32 => {}
+        _ => {
+            while iteration < 8 {
+                iteration += 1;
+            }
+        }
+    }
+}
+
 #[kernel(control_flow(loop_bounds(1)))]
 fn valued_break() {
     let _ = loop {

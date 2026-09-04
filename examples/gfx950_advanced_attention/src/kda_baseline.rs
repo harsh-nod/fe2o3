@@ -1,4 +1,8 @@
 //! Independent 256-thread matrix-state KDA roots for measured ablations.
+//!
+//! These baselines preserve launch shape, tensor layout, state ordering, and
+//! output ownership. Only the recurrent formulation changes, so comparisons
+//! isolate chunkwise WY/UT transformation rather than unrelated behavior.
 
 use fe2o3_device::{DisjointSlice, Gfx950Subgroup, Index1D, StridedReadView2D, kernel, thread};
 
@@ -11,6 +15,7 @@ const MULTIGRID_WORKGROUPS_V1: usize = 4;
 macro_rules! kda_recurrent_step_baseline_v1 {
     ($token:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
      $subgroup:ident, $key_index:ident, $value_column:ident, $state:ident, $output:ident) => {{
+        // Predict, correct, then query the updated matrix state for one token.
         let token = $token;
         let key_value = $key.load_or(token, $key_index, 0.0);
         let decay = $alpha.load_or(token, $key_index, 0.0) * $state;
@@ -27,6 +32,7 @@ macro_rules! kda_recurrent_step_baseline_v1 {
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
+/// Evaluates one KDA decode token with the scalar recurrent formulation.
 pub fn gfx950_kda_decode(
     query: &[f32],
     key: &[f32],
@@ -37,6 +43,7 @@ pub fn gfx950_kda_decode(
     mut final_state: DisjointSlice<f32, Index1D>,
     mut output: DisjointSlice<f32, Index1D>,
 ) {
+    // One workgroup owns one complete 16x16 state matrix.
     let batches = MULTIGRID_WORKGROUPS_V1;
     let batch = thread::block_idx_x() as usize;
     if query.len() != batches * KDA_KEY_DIMENSION_V1
@@ -50,6 +57,7 @@ pub fn gfx950_kda_decode(
     {
         return;
     }
+    // Checked views make every batch offset and tensor stride explicit.
     let Ok(query) = StridedReadView2D::from_shared_slice(
         query,
         batch.wrapping_mul(KDA_KEY_DIMENSION_V1),
@@ -98,16 +106,19 @@ pub fn gfx950_kda_decode(
     ) else {
         return;
     };
+    // The 256 threads map bijectively to (value column, key index).
     let linear = thread::thread_idx_x() as usize;
     let key_index = linear & 15;
     let value_column = linear >> 4;
     let subgroup = Gfx950Subgroup::current();
     let decay = alpha.load_or(0, key_index, 0.0) * state.load_or(value_column, key_index, 0.0);
+    // Wave16 reductions implement both matrix-vector products over K=16.
     let prediction = subgroup.reduce_sum_f32::<16>(key.load_or(0, key_index, 0.0) * decay);
     let error = value.load_or(0, value_column, 0.0) - prediction;
     let step = beta.load_or(0, 0, 0.0);
     let updated = decay + step * key.load_or(0, key_index, 0.0) * error;
     let result = subgroup.reduce_sum_f32::<16>(0.25 * query.load_or(0, key_index, 0.0) * updated);
+    // Each thread publishes one state element and one replicated output element.
     if let Some(slot) = final_state.get_mut(thread::index_1d()) {
         *slot = updated;
     }
@@ -121,6 +132,7 @@ pub fn gfx950_kda_decode(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
+/// Evaluates eight KDA prefill tokens as an ordered recurrent baseline.
 pub fn gfx950_kda_chunkwise_prefill(
     query: &[f32],
     key: &[f32],
@@ -132,6 +144,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     mut output_chunk0: DisjointSlice<f32, Index1D>,
     mut output_chunk1: DisjointSlice<f32, Index1D>,
 ) {
+    // One workgroup owns one eight-token sequence and its complete state.
     let batches = MULTIGRID_WORKGROUPS_V1;
     let batch = thread::block_idx_x() as usize;
     if query.len() != batches * PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
@@ -146,6 +159,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     {
         return;
     }
+    // Derive checked token-major views for this workgroup's sequence.
     let token_base = batch.wrapping_mul(PREFILL_TOKENS_V1);
     let Ok(query) = StridedReadView2D::from_shared_slice(
         query,
@@ -195,6 +209,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     ) else {
         return;
     };
+    // The 256 threads map bijectively to (value column, key index).
     let linear = thread::thread_idx_x() as usize;
     let key_index = linear & 15;
     let value_column = linear >> 4;
@@ -208,6 +223,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     let mut c11 = 0.0;
     let mut c12 = 0.0;
     let mut c13 = 0.0;
+    // Advance tokens in order; capture outputs at the two chunk boundaries.
     kda_recurrent_step_baseline_v1!(
         0,
         query,
@@ -336,6 +352,7 @@ pub fn gfx950_kda_chunkwise_prefill(
     if let Some(slot) = output_chunk1.get_mut(thread::index_1d()) {
         *slot = selected1;
     }
+    // Preserve production output ownership for a controlled comparison.
     if let Some(slot) = final_state.get_mut(thread::index_1d()) {
         *slot = state;
     }

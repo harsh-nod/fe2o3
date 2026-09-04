@@ -20,6 +20,7 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
+mod engineering_hsaco;
 mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
@@ -62,6 +63,10 @@ pub use compiler_ffi_observation::{
     StagedCompilerFfiEnvelopeBlockerV1, StagedCompilerFfiEnvelopeIdentityV1,
     StagedCompilerFfiEnvelopeInspectionV1, StagedCompilerFfiEnvelopeV1,
     stage_compiler_ffi_envelope_v1,
+};
+pub use engineering_hsaco::{
+    EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
+    observe_engineering_hsaco_v1,
 };
 pub use fe2o3_build_authority::CompilerClosureV2;
 pub use fe2o3_compiler_ffi::{
@@ -109,7 +114,8 @@ pub use production_profiler_kir_archive_v1::{
     PRODUCTION_PROFILER_KIR_ARCHIVE_VERSION_V1, PreparedProductionProfilerKirArchiveV1,
     ProductionProfilerKirArchiveAdmissionV1, ProductionProfilerKirArchiveErrorV1,
     ProductionProfilerKirArchiveIdentityV1, ProductionProfilerKirArchiveUnavailableClassV1,
-    ProductionProfilerKirArchiveUnavailableV1, prepare_production_profiler_kir_archive_v1,
+    ProductionProfilerKirArchiveUnavailableV1, ProductionProfilerOptimizationEvidenceV1,
+    prepare_production_profiler_kir_archive_v1,
 };
 pub use production_semantic_anchor_v1::{
     AdmittedProductionSemanticAnchorV1, AdmittedProductionSemanticAnchorsV1,

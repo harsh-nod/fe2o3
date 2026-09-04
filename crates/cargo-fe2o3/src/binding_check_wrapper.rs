@@ -1,16 +1,23 @@
 //! Authority-free rustc wrapper for host-only workspace checking and trusted tests.
 //!
-//! This mode derives the same compilation-unit binding as the production
-//! wrapper, but deliberately has no backend, artifact directory, capability
-//! broker, build attempt, publication, or GPU authority and performs no performance
-//! prediction. Test execution remains trusted project code; this wrapper is not a sandbox.
+//! This mode derives the same checkout-independent selected-crate binding as
+//! terminal compiler extraction, but deliberately has no backend, artifact
+//! directory, capability broker, build attempt, publication, or GPU authority
+//! and performs no performance prediction. It leaves Cargo's rustc metadata
+//! unchanged. Test execution remains trusted project code; this wrapper is not
+//! a sandbox.
 
 use fe2o3_artifact_transaction::BUILD_ATTEMPT_ENV_V1;
 use fe2o3_rustc_invocation::{
-    RustcArgsErrorV2, RustcCodegenMetadataErrorV1, RustcInvocationV2, classify_rustc_invocation_v2,
+    PortableMetadataErrorV1, PortablePackageIdentityV1, RustcArgsErrorV2,
+    RustcCodegenMetadataErrorV1, RustcCompileInvocationV2, RustcInvocationV2,
+    capture_cargo_package_identity_v1, classify_rustc_invocation_v2,
     is_rustc_codegen_backend_selector_v2, ordered_rustc_codegen_metadata_v1,
+    portable_rustc_metadata_v1,
 };
-use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
+use reserved_fe2o3_symbols::{
+    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, derive_crate_binding_id_v1,
+};
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
@@ -67,6 +74,7 @@ const PROHIBITED_ENVIRONMENT: &[&str] = &[
 pub(crate) enum BindingCheckWrapperError {
     Arguments(RustcArgsErrorV2),
     Metadata(RustcCodegenMetadataErrorV1),
+    PortableMetadata(PortableMetadataErrorV1),
     MissingMetadata { crate_name: String },
     PreexistingBinding,
     ProhibitedEnvironment(&'static str),
@@ -82,6 +90,7 @@ impl fmt::Display for BindingCheckWrapperError {
         match self {
             Self::Arguments(error) => write!(formatter, "invalid rustc invocation: {error}"),
             Self::Metadata(error) => error.fmt(formatter),
+            Self::PortableMetadata(error) => error.fmt(formatter),
             Self::MissingMetadata { crate_name } => write!(
                 formatter,
                 "rustc compile for crate `{crate_name}` has no explicit -C metadata value"
@@ -114,6 +123,7 @@ impl Error for BindingCheckWrapperError {
         match self {
             Self::Arguments(error) => Some(error),
             Self::Metadata(error) => Some(error),
+            Self::PortableMetadata(error) => Some(error),
             Self::Spawn(error) => Some(error),
             Self::MissingMetadata { .. }
             | Self::PreexistingBinding
@@ -135,6 +145,12 @@ impl From<RustcArgsErrorV2> for BindingCheckWrapperError {
 impl From<RustcCodegenMetadataErrorV1> for BindingCheckWrapperError {
     fn from(value: RustcCodegenMetadataErrorV1) -> Self {
         Self::Metadata(value)
+    }
+}
+
+impl From<PortableMetadataErrorV1> for BindingCheckWrapperError {
+    fn from(value: PortableMetadataErrorV1) -> Self {
+        Self::PortableMetadata(value)
     }
 }
 
@@ -167,16 +183,9 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingCheckWrapper
     match invocation {
         RustcInvocationV2::Compile(compile) => {
             if projection_binding_for_source(&projection, compile.source_path())? {
-                let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
-                if metadata.is_empty() {
-                    return Err(BindingCheckWrapperError::MissingMetadata {
-                        crate_name: compile.crate_name().to_owned(),
-                    });
-                }
-                let binding = derive_crate_binding_id_v1(
-                    compile.crate_name(),
-                    metadata.iter().map(String::as_str),
-                );
+                require_raw_cargo_metadata_v1(compile)?;
+                let package_identity = capture_cargo_package_identity_v1()?;
+                let binding = portable_binding_for_compile_v1(compile, &package_identity)?;
                 command.env(CRATE_BINDING_ID_ENV_V1, binding.to_hex());
             } else {
                 command.env_remove(CRATE_BINDING_ID_ENV_V1);
@@ -191,6 +200,28 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingCheckWrapper
     }
 
     crate::process_execution::status(&mut command).map_err(BindingCheckWrapperError::Spawn)
+}
+
+fn require_raw_cargo_metadata_v1(
+    compile: RustcCompileInvocationV2<'_>,
+) -> Result<(), BindingCheckWrapperError> {
+    if ordered_rustc_codegen_metadata_v1(compile)?.is_empty() {
+        return Err(BindingCheckWrapperError::MissingMetadata {
+            crate_name: compile.crate_name().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn portable_binding_for_compile_v1(
+    compile: RustcCompileInvocationV2<'_>,
+    package_identity: &PortablePackageIdentityV1,
+) -> Result<CrateBindingIdV1, BindingCheckWrapperError> {
+    let metadata = portable_rustc_metadata_v1(compile, package_identity)?;
+    Ok(derive_crate_binding_id_v1(
+        compile.crate_name(),
+        [metadata.as_str()],
+    ))
 }
 
 fn projection_binding_for_source(
@@ -450,27 +481,103 @@ mod tests {
         assert!(lexical_normalize_absolute(Path::new("relative.rs")).is_err());
     }
 
+    fn compile(argv: &[OsString]) -> RustcCompileInvocationV2<'_> {
+        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(argv).unwrap()
+        else {
+            panic!("expected compile invocation");
+        };
+        compile
+    }
+
+    fn portable_compile(checkout: &str, metadata: &str, feature: &str) -> Vec<OsString> {
+        args(&[
+            "rustc",
+            "--crate-name",
+            "unit",
+            &format!("{checkout}/src/lib.rs"),
+            "--crate-type=lib",
+            "--edition=2024",
+            "--target=amdgcn-amd-amdhsa",
+            "--cfg",
+            &format!("feature=\"{feature}\""),
+            "-Ctarget-cpu=gfx942",
+            "-Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack",
+            "-Copt-level=3",
+            &format!("-Cmetadata={metadata}"),
+            &format!("-Cextra-filename=-{metadata}"),
+            "--out-dir",
+            &format!("{checkout}/target/out"),
+            "--extern",
+            &format!("dependency={checkout}/target/libdependency.rmeta"),
+        ])
+    }
+
     #[test]
-    fn ordinary_metadata_derives_the_shared_binding_contract() {
+    fn raw_cargo_salts_do_not_change_the_portable_binding() {
+        let identity = PortablePackageIdentityV1::new("package", "1.0.0", [0x11; 32]).unwrap();
+        let first_argv = portable_compile("/checkout/one", "first-cargo-salt", "kernel-gemm");
+        let relocated_argv =
+            portable_compile("/different/root", "second-cargo-salt", "kernel-gemm");
+        let first = compile(&first_argv);
+        let relocated = compile(&relocated_argv);
+
+        require_raw_cargo_metadata_v1(first).unwrap();
+        require_raw_cargo_metadata_v1(relocated).unwrap();
+        let first_raw_metadata = ordered_rustc_codegen_metadata_v1(first).unwrap();
+        let relocated_raw_metadata = ordered_rustc_codegen_metadata_v1(relocated).unwrap();
+        assert_ne!(first_raw_metadata, relocated_raw_metadata);
+        assert_ne!(
+            derive_crate_binding_id_v1("unit", first_raw_metadata.iter().map(String::as_str)),
+            derive_crate_binding_id_v1("unit", relocated_raw_metadata.iter().map(String::as_str)),
+        );
+        assert_eq!(
+            portable_binding_for_compile_v1(first, &identity).unwrap(),
+            portable_binding_for_compile_v1(relocated, &identity).unwrap(),
+        );
+    }
+
+    #[test]
+    fn portable_binding_separates_semantic_compile_and_package_identity() {
+        let identity = PortablePackageIdentityV1::new("package", "1.0.0", [0x11; 32]).unwrap();
+        let changed_version =
+            PortablePackageIdentityV1::new("package", "1.0.1", [0x11; 32]).unwrap();
+        let changed_manifest =
+            PortablePackageIdentityV1::new("package", "1.0.0", [0x22; 32]).unwrap();
+        let baseline_argv = portable_compile("/checkout/one", "cargo-salt", "kernel-gemm");
+        let changed_feature_argv =
+            portable_compile("/checkout/one", "cargo-salt", "kernel-attention");
+        let baseline = compile(&baseline_argv);
+        let changed_feature = compile(&changed_feature_argv);
+        let baseline_binding = portable_binding_for_compile_v1(baseline, &identity).unwrap();
+
+        assert_ne!(
+            baseline_binding,
+            portable_binding_for_compile_v1(changed_feature, &identity).unwrap(),
+        );
+        assert_ne!(
+            baseline_binding,
+            portable_binding_for_compile_v1(baseline, &changed_version).unwrap(),
+        );
+        assert_ne!(
+            baseline_binding,
+            portable_binding_for_compile_v1(baseline, &changed_manifest).unwrap(),
+        );
+    }
+
+    #[test]
+    fn portable_binding_still_requires_explicit_raw_cargo_metadata() {
         let argv = args(&[
             "rustc",
             "--crate-name",
             "unit",
             "src/lib.rs",
-            "-C",
-            "metadata=first",
-            "-Cmetadata=second",
+            "--crate-type=lib",
         ]);
-        let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&argv).unwrap()
-        else {
-            panic!("expected compile invocation");
-        };
-        let metadata = ordered_rustc_codegen_metadata_v1(compile).unwrap();
-        assert_eq!(metadata, ["first", "second"]);
-        assert_eq!(
-            derive_crate_binding_id_v1("unit", metadata.iter().map(String::as_str)),
-            derive_crate_binding_id_v1("unit", ["first", "second"]),
-        );
+        let compile = compile(&argv);
+        assert!(matches!(
+            require_raw_cargo_metadata_v1(compile),
+            Err(BindingCheckWrapperError::MissingMetadata { crate_name }) if crate_name == "unit"
+        ));
     }
 
     #[test]

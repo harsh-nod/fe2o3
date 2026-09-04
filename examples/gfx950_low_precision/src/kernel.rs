@@ -1,4 +1,10 @@
 //! Safe Rust fixed-shape gfx950 kernels.
+//!
+//! Read each entrypoint in five phases: validate the complete launch contract,
+//! map the global thread to a Wave64-owned batch, build typed matrix views,
+//! execute collective matrix or reduction operations, and publish through a
+//! statically disjoint output view. Those explicit phases keep the safety
+//! argument and the expected gfx950 ISA reviewable together.
 
 #![allow(missing_docs)]
 
@@ -45,20 +51,24 @@ fn decode_fp4_e2m1(bits: u8) -> f32 {
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
+/// Computes 16 independent 16x16x128 packed-E2M1 GEMM tiles.
 pub fn gfx950_fp4_gemm_rust(
     lhs: &[u8],
     rhs: &[u8],
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) -> KernelResult {
+    // Validate all wave-shared inputs before any lane performs matrix work.
     if lhs.len() < GFX950_BATCHES * GEMM_M * GEMM_K
         || rhs.len() < GFX950_BATCHES * GEMM_K * GEMM_N
         || output.len() < GFX950_BATCHES * GEMM_M * GEMM_N
     {
         return Err(KernelError::InvalidArgument);
     }
+    // Four Wave64 tiles per WG256 and four workgroups produce 16 batches.
     let index = thread::index_1d();
     let batch = index.get() / 64;
     let lane = WaveLane::<Wave64>::current();
+    // Typed views encode operand layout and bounds before fragment loads.
     let Ok(lhs_matrix) = Gfx950Fp4MfmaAMatrix::row_major(
         lhs,
         batch.wrapping_mul(GEMM_M * GEMM_K),
@@ -79,10 +89,12 @@ pub fn gfx950_fp4_gemm_rust(
         return Err(KernelError::InvalidArgument);
     };
     let rhs = rhs_matrix.load_k128n16(&lane, 0, 0);
+    // One native gfx950 MFMA covers the fixed K=128 reduction.
     let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane);
     let values = Gfx950Matrix::current()
         .multiply_accumulate_fp4(lhs, rhs, accumulator)
         .into_values();
+    // Each lane owns four accumulator elements; the blocked proof makes stores disjoint.
     let Some(output_block) = index.checked_block::<16, 4>() else {
         return Err(KernelError::OutOfBounds);
     };
@@ -106,20 +118,24 @@ pub fn gfx950_fp4_gemm_rust(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
+/// Computes 16 independent 16x16x128 E4M3 GEMM tiles.
 pub fn gfx950_fp8_gemm_rust(
     lhs: &[u8],
     rhs: &[u8],
     mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
 ) -> KernelResult {
+    // Validate the launch-wide storage contract before entering MFMA code.
     if lhs.len() < GFX950_BATCHES * GEMM_M * GEMM_K
         || rhs.len() < GFX950_BATCHES * GEMM_K * GEMM_N
         || output.len() < GFX950_BATCHES * GEMM_M * GEMM_N
     {
         return Err(KernelError::InvalidArgument);
     }
+    // A global Wave64 index selects one of the 16 independent output tiles.
     let index = thread::index_1d();
     let batch = index.get() / 64;
     let lane = WaveLane::<Wave64>::current();
+    // Format-specific matrix views keep E4M3 layout out of pointer arithmetic.
     let Ok(lhs_matrix) = Gfx950Fp8MfmaAMatrix::row_major(
         lhs,
         batch.wrapping_mul(GEMM_M * GEMM_K),
@@ -140,10 +156,12 @@ pub fn gfx950_fp8_gemm_rust(
         return Err(KernelError::InvalidArgument);
     };
     let rhs = rhs_matrix.load_k128n16(&lane, 0, 0);
+    // Accumulate the unified low-precision MFMA result in FP32.
     let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp8E4M3>::zero(&lane);
     let values = Gfx950Matrix::current()
         .multiply_accumulate_fp8(lhs, rhs, accumulator)
         .into_values();
+    // Convert lane-local accumulator ownership into four proven-disjoint stores.
     let Some(output_block) = index.checked_block::<16, 4>() else {
         return Err(KernelError::OutOfBounds);
     };
@@ -167,6 +185,7 @@ pub fn gfx950_fp8_gemm_rust(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
+/// Computes batched FP4 QK, stable softmax, and the FP32 PV projection.
 pub fn gfx950_fp4_attention_rust(
     query: &[u8],
     key: &[u8],
@@ -181,10 +200,12 @@ pub fn gfx950_fp4_attention_rust(
     {
         fe2o3_device::trap();
     }
+    // A global wave owns one head; lane modulo 16 selects the PV value column.
     let index = thread::index_1d();
     let batch = index.get() / 64;
     let lane_column = index.get() % 16;
     let lane = WaveLane::<Wave64>::current();
+    // Load Q directly and stage K through a wave-private LDS transpose tile.
     let Ok(query_matrix) = Gfx950Fp4MfmaAMatrix::row_major(
         query,
         0,
@@ -218,6 +239,7 @@ pub fn gfx950_fp4_attention_rust(
     ) else {
         fe2o3_device::trap();
     };
+    // Subtract the row maximum before exponentiation to stabilize softmax.
     let subgroup = Gfx950Subgroup::current();
     let math = Math::current();
     let maximum0 = subgroup.reduce_max_f32::<16>(scores[0] * ATTENTION_SCALE);
@@ -232,6 +254,7 @@ pub fn gfx950_fp4_attention_rust(
     let normalized1 = probability1 / subgroup.reduce_sum_f32::<16>(probability1);
     let normalized2 = probability2 / subgroup.reduce_sum_f32::<16>(probability2);
     let normalized3 = probability3 / subgroup.reduce_sum_f32::<16>(probability3);
+    // Broadcast each key probability across its Wave16 row for the PV reduction.
     let mut result0 = 0.0;
     let mut result1 = 0.0;
     let mut result2 = 0.0;
@@ -316,6 +339,7 @@ pub fn gfx950_fp4_attention_rust(
     result1 += subgroup.broadcast_f32::<16>(normalized1, 15) * value15;
     result2 += subgroup.broadcast_f32::<16>(normalized2, 15) * value15;
     result3 += subgroup.broadcast_f32::<16>(normalized3, 15) * value15;
+    // Publish four rows per lane through the same blocked ownership used by GEMM.
     let Some(output_block) = index.checked_block::<16, 4>() else {
         fe2o3_device::trap();
     };
@@ -338,6 +362,7 @@ pub fn gfx950_fp4_attention_rust(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
+/// Computes batched FP8 QK, stable softmax, and the FP32 PV projection.
 pub fn gfx950_fp8_attention_rust(
     query: &[u8],
     key: &[u8],
@@ -352,10 +377,12 @@ pub fn gfx950_fp8_attention_rust(
     {
         fe2o3_device::trap();
     }
+    // A global wave owns one head; lane modulo 16 selects the PV value column.
     let index = thread::index_1d();
     let batch = index.get() / 64;
     let lane_column = index.get() % 16;
     let lane = WaveLane::<Wave64>::current();
+    // The E4M3 K operand uses a wave-private B8 LDS transpose tile.
     let Ok(query_matrix) = Gfx950Fp8MfmaAMatrix::row_major(
         query,
         0,
@@ -389,6 +416,7 @@ pub fn gfx950_fp8_attention_rust(
     ) else {
         fe2o3_device::trap();
     };
+    // Keep maxima, exponentials, denominators, and final division in FP32.
     let subgroup = Gfx950Subgroup::current();
     let math = Math::current();
     let maximum0 = subgroup.reduce_max_f32::<16>(scores[0] * ATTENTION_SCALE);
@@ -403,6 +431,7 @@ pub fn gfx950_fp8_attention_rust(
     let normalized1 = probability1 / subgroup.reduce_sum_f32::<16>(probability1);
     let normalized2 = probability2 / subgroup.reduce_sum_f32::<16>(probability2);
     let normalized3 = probability3 / subgroup.reduce_sum_f32::<16>(probability3);
+    // Broadcast probabilities within each Wave16 row while accumulating PV.
     let mut result0 = 0.0;
     let mut result1 = 0.0;
     let mut result2 = 0.0;
@@ -807,6 +836,7 @@ pub fn gfx950_fp8_attention_rust(
     result1 += subgroup.broadcast_f32::<16>(normalized1, 15) * value15;
     result2 += subgroup.broadcast_f32::<16>(normalized2, 15) * value15;
     result3 += subgroup.broadcast_f32::<16>(normalized3, 15) * value15;
+    // The blocked output mapping proves the four stores owned by each lane do not race.
     let Some(output_block) = index.checked_block::<16, 4>() else {
         fe2o3_device::trap();
     };

@@ -9,6 +9,10 @@ cargo fmt --all -- --check
 bash scripts/ci-local.sh standalone-locks
 bash scripts/tests/quickstart.sh
 bash scripts/quickstart.sh source-check examples/vecadd/Cargo.toml
+BASE_SHA="$(git merge-base origin/main HEAD)"
+HEAD_SHA="$(git rev-parse HEAD)"
+bash scripts/ci-local.sh workspace-policy
+bash scripts/ci-local.sh hygiene-delta "${BASE_SHA}" "${HEAD_SHA}"
 ```
 
 Proof, compiler, runtime, and trust-policy changes should also run their

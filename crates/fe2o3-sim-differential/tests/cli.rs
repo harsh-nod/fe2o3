@@ -181,7 +181,7 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
         "fe2o3-sim-f32-differential-capabilities-v3"
     );
     assert_eq!(capabilities["authority"], "none");
-    assert_eq!(capabilities["case_limit"], 17);
+    assert_eq!(capabilities["case_limit"], 18);
     assert_eq!(capabilities["maximum_rows_per_case"], 10);
     assert_eq!(capabilities["hardware_observed"], false);
     assert_eq!(capabilities["performance_prediction"], false);
@@ -198,9 +198,9 @@ fn f32_commands_emit_bounded_exact_bit_matrix_and_replay_evidence() {
         "independent_exact_bit_table_agreement"
     );
     assert_eq!(report["authority"], "none");
-    assert_eq!(report["operation_cases"], 17);
-    assert_eq!(report["rows_compared"], 149);
-    assert_eq!(report["cases"].as_array().unwrap().len(), 17);
+    assert_eq!(report["operation_cases"], 18);
+    assert_eq!(report["rows_compared"], 159);
+    assert_eq!(report["cases"].as_array().unwrap().len(), 18);
     assert_eq!(report["hardware_observed"], false);
     assert_eq!(report["performance_prediction"], false);
 
