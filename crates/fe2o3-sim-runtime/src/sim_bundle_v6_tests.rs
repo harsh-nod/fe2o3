@@ -226,6 +226,7 @@ fn bundle_v6_executes_through_the_normal_runtime_lifecycle() {
                 workgroup: [1, 1, 1],
                 dynamic_shared_bytes: 0,
             },
+            semantic_launch: fe2o3_runtime::BackendSemanticLaunchV1::Ordinary,
         })
         .unwrap();
     assert_eq!(
