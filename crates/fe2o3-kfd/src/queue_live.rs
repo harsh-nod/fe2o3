@@ -60,9 +60,11 @@ use crate::sdma::{
     Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
     Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
     Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1, Gfx942SdmaMemoryPoolObservationV1,
-    Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1,
-    allocate_device_buffer, allocate_host_buffer, read_host_buffer, release_buffer,
-    striped_sdma_queue_count_is_admitted, write_host_buffer,
+    Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueueShardTicketsV1,
+    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
+    Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1, Gfx942SdmaUnpublishedCopyRequestV1,
+    MultiQueueSdmaSubmitFailureV1, allocate_device_buffer, allocate_host_buffer, read_host_buffer,
+    release_buffer, striped_sdma_queue_count_is_admitted, write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -1198,6 +1200,244 @@ impl Gfx942SdmaBatchSubmissionFailureV1 {
         Option<Vec<Gfx942SdmaCopyRequestV1>>,
     ) {
         (self.error, self.recovered)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942SdmaMultiQueueFailureDispositionV1 {
+    RetryablePreflight,
+    TerminalPrePublication,
+    TerminalPartialPublication,
+    TerminalPostPublication,
+}
+
+/// Addressless observation of queue-retained terminal custody.
+///
+/// Ticket values are intentionally not exposed: after any multi-queue terminal failure the
+/// session is poisoned, so these records cannot be polled, drained, or resubmitted safely.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942SdmaTerminalShardObservationV1<'a> {
+    queue_ordinal: usize,
+    queue_id: u32,
+    request_indices: &'a [u16],
+    retained_ticket_count: usize,
+}
+
+impl<'a> Gfx942SdmaTerminalShardObservationV1<'a> {
+    pub const fn queue_ordinal(self) -> usize {
+        self.queue_ordinal
+    }
+
+    pub const fn queue_id(self) -> u32 {
+        self.queue_id
+    }
+
+    pub const fn request_indices(self) -> &'a [u16] {
+        self.request_indices
+    }
+
+    pub const fn retained_ticket_count(self) -> usize {
+        self.retained_ticket_count
+    }
+}
+
+enum Gfx942SdmaTerminalCustodyStateV1 {
+    BeforePublication(Vec<Gfx942SdmaCopyRequestV1>),
+    Publication {
+        plan: Gfx942SdmaMultiQueuePlanV1,
+        confirmed: Vec<Gfx942SdmaMultiQueueShardTicketsV1>,
+        indeterminate: Option<Gfx942SdmaMultiQueueShardTicketsV1>,
+        untouched: Vec<Gfx942SdmaUnpublishedCopyRequestV1>,
+    },
+    CompletePublication {
+        plan: Gfx942SdmaMultiQueuePlanV1,
+        confirmed: Vec<Gfx942SdmaMultiQueueShardTicketsV1>,
+    },
+}
+
+/// Audit-only ownership retained after a terminal multi-queue failure.
+///
+/// The contained buffers remain either queue-retained or tied to the poisoned queue occurrence.
+/// This type deliberately provides observations only and has no ticket/request extraction or
+/// drain API. It must remain owned until process teardown.
+#[must_use = "terminal SDMA custody must remain retained until process teardown"]
+pub struct Gfx942SdmaMultiQueueTerminalCustodyV1 {
+    state: Gfx942SdmaTerminalCustodyStateV1,
+}
+
+impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
+    fn before_publication(requests: Vec<Gfx942SdmaCopyRequestV1>) -> Self {
+        Self {
+            state: Gfx942SdmaTerminalCustodyStateV1::BeforePublication(requests),
+        }
+    }
+
+    fn publication(
+        plan: Gfx942SdmaMultiQueuePlanV1,
+        confirmed: Vec<Gfx942SdmaMultiQueueShardTicketsV1>,
+        indeterminate: Option<Gfx942SdmaMultiQueueShardTicketsV1>,
+        untouched: Vec<Gfx942SdmaUnpublishedCopyRequestV1>,
+    ) -> Self {
+        Self {
+            state: Gfx942SdmaTerminalCustodyStateV1::Publication {
+                plan,
+                confirmed,
+                indeterminate,
+                untouched,
+            },
+        }
+    }
+
+    fn complete_publication(submission: Gfx942SdmaMultiQueueSubmissionV1) -> Self {
+        let (plan, confirmed) = submission.into_parts();
+        Self {
+            state: Gfx942SdmaTerminalCustodyStateV1::CompletePublication { plan, confirmed },
+        }
+    }
+
+    pub const fn plan(&self) -> Option<&Gfx942SdmaMultiQueuePlanV1> {
+        match &self.state {
+            Gfx942SdmaTerminalCustodyStateV1::BeforePublication(_) => None,
+            Gfx942SdmaTerminalCustodyStateV1::Publication { plan, .. }
+            | Gfx942SdmaTerminalCustodyStateV1::CompletePublication { plan, .. } => Some(plan),
+        }
+    }
+
+    pub fn confirmed_shard_count(&self) -> usize {
+        match &self.state {
+            Gfx942SdmaTerminalCustodyStateV1::BeforePublication(_) => 0,
+            Gfx942SdmaTerminalCustodyStateV1::Publication { confirmed, .. }
+            | Gfx942SdmaTerminalCustodyStateV1::CompletePublication { confirmed, .. } => {
+                confirmed.len()
+            }
+        }
+    }
+
+    pub fn confirmed_shard(
+        &self,
+        index: usize,
+    ) -> Option<Gfx942SdmaTerminalShardObservationV1<'_>> {
+        let shard = match &self.state {
+            Gfx942SdmaTerminalCustodyStateV1::BeforePublication(_) => None,
+            Gfx942SdmaTerminalCustodyStateV1::Publication { confirmed, .. }
+            | Gfx942SdmaTerminalCustodyStateV1::CompletePublication { confirmed, .. } => {
+                confirmed.get(index)
+            }
+        }?;
+        Some(Gfx942SdmaTerminalShardObservationV1 {
+            queue_ordinal: shard.queue_ordinal(),
+            queue_id: shard.queue_id(),
+            request_indices: shard.request_indices(),
+            retained_ticket_count: shard.tickets().len(),
+        })
+    }
+
+    pub fn indeterminate_shard(&self) -> Option<Gfx942SdmaTerminalShardObservationV1<'_>> {
+        let Gfx942SdmaTerminalCustodyStateV1::Publication { indeterminate, .. } = &self.state
+        else {
+            return None;
+        };
+        let shard = indeterminate.as_ref()?;
+        Some(Gfx942SdmaTerminalShardObservationV1 {
+            queue_ordinal: shard.queue_ordinal(),
+            queue_id: shard.queue_id(),
+            request_indices: shard.request_indices(),
+            retained_ticket_count: shard.tickets().len(),
+        })
+    }
+
+    pub fn untouched_request_count(&self) -> usize {
+        match &self.state {
+            Gfx942SdmaTerminalCustodyStateV1::BeforePublication(requests) => requests.len(),
+            Gfx942SdmaTerminalCustodyStateV1::Publication { untouched, .. } => untouched.len(),
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication { .. } => 0,
+        }
+    }
+
+    pub fn untouched_request_index(&self, index: usize) -> Option<usize> {
+        match &self.state {
+            Gfx942SdmaTerminalCustodyStateV1::BeforePublication(requests) => {
+                (index < requests.len()).then_some(index)
+            }
+            Gfx942SdmaTerminalCustodyStateV1::Publication { untouched, .. } => {
+                untouched.get(index).map(|request| request.request_index())
+            }
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication { .. } => None,
+        }
+    }
+}
+
+#[must_use = "inspect retryable requests or retain terminal custody through process teardown"]
+pub enum Gfx942SdmaMultiQueueFailureCustodyV1 {
+    /// No native side effect occurred and the requests may be submitted again.
+    RetryableRequests(Vec<Gfx942SdmaCopyRequestV1>),
+    /// The queue occurrence is terminal. This is audit-only/process-teardown custody.
+    ProcessTeardown(Gfx942SdmaMultiQueueTerminalCustodyV1),
+}
+
+#[must_use = "failure preserves exact multi-queue custody and publication progress"]
+pub struct Gfx942SdmaMultiQueueSubmissionFailureV1 {
+    error: ComputeAqlQueueSessionErrorV1,
+    disposition: Gfx942SdmaMultiQueueFailureDispositionV1,
+    custody: Gfx942SdmaMultiQueueFailureCustodyV1,
+}
+
+impl Gfx942SdmaMultiQueueSubmissionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub const fn disposition(&self) -> Gfx942SdmaMultiQueueFailureDispositionV1 {
+        self.disposition
+    }
+
+    pub const fn is_retryable(&self) -> bool {
+        matches!(
+            self.disposition,
+            Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight
+        )
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942SdmaMultiQueueFailureDispositionV1,
+        Gfx942SdmaMultiQueueFailureCustodyV1,
+    ) {
+        (self.error, self.disposition, self.custody)
+    }
+}
+
+const fn classify_multi_queue_preparation_failure(
+    owner_poisoned: bool,
+    closing_currentness_failed: bool,
+) -> Gfx942SdmaMultiQueueFailureDispositionV1 {
+    if owner_poisoned || closing_currentness_failed {
+        Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+    } else {
+        Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight
+    }
+}
+
+const fn classify_multi_queue_availability_failure(
+    session_terminal: bool,
+) -> Gfx942SdmaMultiQueueFailureDispositionV1 {
+    if session_terminal {
+        Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+    } else {
+        Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight
+    }
+}
+
+const fn classify_multi_queue_publication_failure(
+    published_shards: usize,
+    has_indeterminate_shard: bool,
+) -> Gfx942SdmaMultiQueueFailureDispositionV1 {
+    if published_shards == 0 && !has_indeterminate_shard {
+        Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+    } else {
+        Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPartialPublication
     }
 }
 
@@ -3122,10 +3362,7 @@ impl ComputeAqlQueueSessionV1 {
             Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count).map_err(Into::into)
         });
         match created {
-            Ok(owner) => {
-                let observations = owner
-                    .striped_observations()
-                    .expect("created striped SDMA queue set");
+            Ok((owner, observations)) => {
                 self.sdma = Some(owner);
                 Ok(observations)
             }
@@ -3811,6 +4048,189 @@ impl ComputeAqlQueueSessionV1 {
                 Err(Gfx942SdmaBatchSubmissionFailureV1 {
                     error,
                     recovered: None,
+                })
+            }
+        }
+    }
+
+    /// Preflights and then publishes one balanced batch across every striped SDMA queue.
+    ///
+    /// All shards are prepared before the first queue write-pointer publication. Native queues
+    /// cannot be rolled back as a group, so a later shard failure reports confirmed earlier
+    /// shards, one optional indeterminate retained shard, and every untouched request separately.
+    /// Terminal custody is observation-only and must remain retained until process teardown.
+    // Inline custody avoids allocating an error after native publication has begun.
+    #[allow(clippy::result_large_err)]
+    pub fn submit_gfx942_striped_sdma_copy_batch_v1(
+        &mut self,
+        requests: Vec<Gfx942SdmaCopyRequestV1>,
+    ) -> Result<Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaMultiQueueSubmissionFailureV1> {
+        if let Err(error) = self.require_sdma_enabled() {
+            let disposition = classify_multi_queue_availability_failure(self.terminal_poisoned);
+            let custody = if self.terminal_poisoned {
+                Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                    Gfx942SdmaMultiQueueTerminalCustodyV1::before_publication(requests),
+                )
+            } else {
+                Gfx942SdmaMultiQueueFailureCustodyV1::RetryableRequests(requests)
+            };
+            return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                error,
+                disposition,
+                custody,
+            });
+        }
+        if requests.iter().any(|request| {
+            !request.source.belongs_to(self.key) || !request.destination.belongs_to(self.key)
+        }) {
+            return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                disposition: Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight,
+                custody: Gfx942SdmaMultiQueueFailureCustodyV1::RetryableRequests(requests),
+            });
+        }
+        if !self
+            .sdma
+            .as_ref()
+            .is_some_and(Gfx942SdmaQueueSetV1::is_striped)
+        {
+            return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "multi-queue submission requires striped SDMA queues",
+                ),
+                disposition: Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight,
+                custody: Gfx942SdmaMultiQueueFailureCustodyV1::RetryableRequests(requests),
+            });
+        }
+        if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        }) {
+            self.poison_terminal();
+            return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                error,
+                disposition: Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication,
+                custody: Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                    Gfx942SdmaMultiQueueTerminalCustodyV1::before_publication(requests),
+                ),
+            });
+        }
+
+        let mut pending = Some(requests);
+        let mut submitted = None;
+        let operation = self.with_sdma_owner_memory(|owner, memory| {
+            let requests = pending.take().expect("multi-queue requests consumed once");
+            submitted = Some(owner.submit_striped_multi_queue_batch(memory, requests));
+            Ok(())
+        });
+        if submitted.is_none() {
+            self.poison_terminal();
+            return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                error: operation
+                    .err()
+                    .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "multi-queue operation did not execute",
+                    )),
+                disposition: Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication,
+                custody: Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                    Gfx942SdmaMultiQueueTerminalCustodyV1::before_publication(
+                        pending.expect("unexecuted operation retains requests"),
+                    ),
+                ),
+            });
+        }
+        let post = self.with_sdma_owner_memory(|_, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(Into::into)
+        });
+        let closing_error = operation.err().or_else(|| post.err());
+        match submitted.expect("executed multi-queue operation stores result") {
+            Ok(submission) => match closing_error {
+                None => {
+                    let committed = self
+                        .sdma
+                        .as_mut()
+                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "missing striped SDMA cursor owner",
+                        ))
+                        .and_then(|owner| {
+                            owner
+                                .commit_striped_multi_queue_success(submission.plan())
+                                .map_err(Into::into)
+                        });
+                    match committed {
+                        Ok(()) => Ok(submission),
+                        Err(error) => {
+                            self.poison_terminal();
+                            Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                                error,
+                                disposition: Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPostPublication,
+                                custody: Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                                    Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(
+                                        submission,
+                                    ),
+                                ),
+                            })
+                        }
+                    }
+                }
+                Some(error) => {
+                    self.poison_terminal();
+                    Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                        error,
+                        disposition:
+                            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPostPublication,
+                        custody: Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                            Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(submission),
+                        ),
+                    })
+                }
+            },
+            Err(MultiQueueSdmaSubmitFailureV1::Preparation(failure)) => {
+                let poisoned = self
+                    .sdma
+                    .as_ref()
+                    .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
+                let disposition =
+                    classify_multi_queue_preparation_failure(poisoned, closing_error.is_some());
+                let terminal =
+                    disposition == Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication;
+                let error = closing_error.unwrap_or_else(|| failure.error.into());
+                if terminal {
+                    self.poison_terminal();
+                }
+                let custody = if terminal {
+                    Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                        Gfx942SdmaMultiQueueTerminalCustodyV1::before_publication(failure.requests),
+                    )
+                } else {
+                    Gfx942SdmaMultiQueueFailureCustodyV1::RetryableRequests(failure.requests)
+                };
+                Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                    error,
+                    disposition,
+                    custody,
+                })
+            }
+            Err(MultiQueueSdmaSubmitFailureV1::Publication(failure)) => {
+                self.poison_terminal();
+                let disposition = classify_multi_queue_publication_failure(
+                    failure.published.len(),
+                    failure.indeterminate.is_some(),
+                );
+                Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                    error: closing_error.unwrap_or_else(|| failure.error.into()),
+                    disposition,
+                    custody: Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
+                        Gfx942SdmaMultiQueueTerminalCustodyV1::publication(
+                            failure.plan,
+                            failure.published,
+                            failure.indeterminate,
+                            failure.unpublished,
+                        ),
+                    ),
                 })
             }
         }
@@ -6710,6 +7130,63 @@ mod tests {
         let released = take_after_auxiliary_destroy_preflight_v1(&mut state, |_| Ok(())).unwrap();
         assert!(!released.leased);
         assert!(state.is_none());
+    }
+
+    #[test]
+    fn multi_queue_failures_distinguish_retryable_and_terminal_truth() {
+        assert_eq!(
+            classify_multi_queue_preparation_failure(false, false),
+            Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight
+        );
+        assert_eq!(
+            classify_multi_queue_preparation_failure(true, false),
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+        );
+        assert_eq!(
+            classify_multi_queue_preparation_failure(false, true),
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+        );
+        assert_eq!(
+            classify_multi_queue_publication_failure(0, false),
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+        );
+        assert_eq!(
+            classify_multi_queue_publication_failure(0, true),
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPartialPublication
+        );
+        assert_eq!(
+            classify_multi_queue_publication_failure(1, false),
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPartialPublication
+        );
+    }
+
+    #[test]
+    fn already_terminal_multi_queue_session_never_advertises_retryable_custody() {
+        assert_eq!(
+            classify_multi_queue_availability_failure(false),
+            Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight
+        );
+        assert_eq!(
+            classify_multi_queue_availability_failure(true),
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication
+        );
+    }
+
+    #[test]
+    fn terminal_shard_observation_returns_the_source_slice_lifetime() {
+        fn request_indices<'a>(observation: Gfx942SdmaTerminalShardObservationV1<'a>) -> &'a [u16] {
+            observation.request_indices()
+        }
+
+        let indices = [1_u16, 5, 9];
+        let observation = Gfx942SdmaTerminalShardObservationV1 {
+            queue_ordinal: 3,
+            queue_id: 17,
+            request_indices: &indices,
+            retained_ticket_count: indices.len(),
+        };
+        let retained = request_indices(observation);
+        assert_eq!(retained, indices);
     }
 
     #[test]

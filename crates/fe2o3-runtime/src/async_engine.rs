@@ -2,7 +2,7 @@
 
 use crate::{
     RuntimeBackendV1, RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeErrorV1,
-    RuntimeEventIdV1, RuntimeValidationErrorV1,
+    RuntimeEventIdV1, RuntimeFlushBackendV1, RuntimeStreamIdV1, RuntimeValidationErrorV1,
 };
 use core::fmt;
 use std::collections::BTreeMap;
@@ -31,6 +31,10 @@ pub const MAX_RUNTIME_ASYNC_COMMANDS_PER_TICK_V1: usize = 1024;
 pub const MAX_RUNTIME_ASYNC_POLLS_PER_TICK_V1: usize = 1024;
 /// Longest accepted interval between background completion scans.
 pub const MAX_RUNTIME_ASYNC_POLL_INTERVAL_V1: Duration = Duration::from_secs(1);
+/// Hard upper bound for streams registered with one async progress engine.
+pub const MAX_RUNTIME_ASYNC_PROGRESS_STREAMS_V1: usize = 65_536;
+/// Hard upper bound for stream flushes attempted in one scheduling tick.
+pub const MAX_RUNTIME_ASYNC_FLUSHES_PER_TICK_V1: usize = 1024;
 
 /// Bounded scheduling configuration for one async observation engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,6 +132,66 @@ impl fmt::Display for RuntimeAsyncEngineConfigErrorV1 {
 
 impl Error for RuntimeAsyncEngineConfigErrorV1 {}
 
+/// Bounded scheduling configuration for opt-in background stream progress.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeAsyncProgressConfigV1 {
+    stream_capacity: usize,
+    flushes_per_tick: usize,
+}
+
+impl RuntimeAsyncProgressConfigV1 {
+    pub fn new(
+        stream_capacity: usize,
+        flushes_per_tick: usize,
+    ) -> Result<Self, RuntimeAsyncProgressConfigErrorV1> {
+        if stream_capacity == 0 || stream_capacity > MAX_RUNTIME_ASYNC_PROGRESS_STREAMS_V1 {
+            return Err(RuntimeAsyncProgressConfigErrorV1::StreamCapacity);
+        }
+        if flushes_per_tick == 0 || flushes_per_tick > MAX_RUNTIME_ASYNC_FLUSHES_PER_TICK_V1 {
+            return Err(RuntimeAsyncProgressConfigErrorV1::FlushesPerTick);
+        }
+        Ok(Self {
+            stream_capacity,
+            flushes_per_tick,
+        })
+    }
+
+    pub const fn stream_capacity(self) -> usize {
+        self.stream_capacity
+    }
+
+    pub const fn flushes_per_tick(self) -> usize {
+        self.flushes_per_tick
+    }
+}
+
+impl Default for RuntimeAsyncProgressConfigV1 {
+    fn default() -> Self {
+        Self {
+            stream_capacity: 1024,
+            flushes_per_tick: 64,
+        }
+    }
+}
+
+/// Invalid async progress scheduling configuration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeAsyncProgressConfigErrorV1 {
+    StreamCapacity,
+    FlushesPerTick,
+}
+
+impl fmt::Display for RuntimeAsyncProgressConfigErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid runtime async progress configuration: {self:?}"
+        )
+    }
+}
+
+impl Error for RuntimeAsyncProgressConfigErrorV1 {}
+
 /// Failure to start an async engine, retaining the still-owning context.
 pub struct RuntimeAsyncEngineSpawnFailureV1<B: RuntimeBackendV1> {
     context: Box<RuntimeContextV1<B>>,
@@ -182,6 +246,65 @@ impl Error for RuntimeAsyncEngineSpawnErrorV1 {
     }
 }
 
+/// Failure to start an async progress engine, retaining the still-owning context.
+pub struct RuntimeAsyncProgressEngineSpawnFailureV1<B: RuntimeBackendV1> {
+    context: Box<RuntimeContextV1<B>>,
+    error: RuntimeAsyncProgressEngineSpawnErrorV1,
+}
+
+impl<B: RuntimeBackendV1> fmt::Debug for RuntimeAsyncProgressEngineSpawnFailureV1<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeAsyncProgressEngineSpawnFailureV1")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: RuntimeBackendV1> RuntimeAsyncProgressEngineSpawnFailureV1<B> {
+    pub fn context(&self) -> &RuntimeContextV1<B> {
+        self.context.as_ref()
+    }
+
+    pub const fn error(&self) -> &RuntimeAsyncProgressEngineSpawnErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (RuntimeContextV1<B>, RuntimeAsyncProgressEngineSpawnErrorV1) {
+        (*self.context, self.error)
+    }
+}
+
+/// Reason an async progress engine could not be started.
+#[derive(Debug)]
+pub enum RuntimeAsyncProgressEngineSpawnErrorV1 {
+    InvalidEngineConfig(RuntimeAsyncEngineConfigErrorV1),
+    InvalidProgressConfig(RuntimeAsyncProgressConfigErrorV1),
+    Thread(io::Error),
+}
+
+impl fmt::Display for RuntimeAsyncProgressEngineSpawnErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidEngineConfig(error) => error.fmt(formatter),
+            Self::InvalidProgressConfig(error) => error.fmt(formatter),
+            Self::Thread(error) => {
+                write!(formatter, "runtime async progress engine thread: {error}")
+            }
+        }
+    }
+}
+
+impl Error for RuntimeAsyncProgressEngineSpawnErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidEngineConfig(error) => Some(error),
+            Self::InvalidProgressConfig(error) => Some(error),
+            Self::Thread(error) => Some(error),
+        }
+    }
+}
+
 /// Failure to enqueue or complete a context command on the engine thread.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeAsyncEngineCallErrorV1 {
@@ -220,6 +343,28 @@ impl fmt::Display for RuntimeAsyncEventRegistrationErrorV1 {
 }
 
 impl Error for RuntimeAsyncEventRegistrationErrorV1 {}
+
+/// Failure to register a unique stream for opt-in background progress.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeAsyncProgressRegistrationErrorV1 {
+    CommandQueueFull,
+    EngineStopped,
+    ReentrantCall,
+    Capacity,
+    DuplicateStream,
+    InvalidStream(RuntimeValidationErrorV1),
+}
+
+impl fmt::Display for RuntimeAsyncProgressRegistrationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "runtime async progress registration failed: {self:?}"
+        )
+    }
+}
+
+impl Error for RuntimeAsyncProgressRegistrationErrorV1 {}
 
 /// Error produced while awaiting one registered runtime event.
 #[derive(Debug)]
@@ -376,6 +521,117 @@ impl<E> Drop for RuntimeEventFutureV1<E> {
     }
 }
 
+struct RuntimeAsyncProgressStateV1<E> {
+    failure: Option<RuntimeErrorV1<E>>,
+    failure_count: u64,
+}
+
+struct RuntimeAsyncProgressCellV1<E> {
+    abandoned: AtomicBool,
+    stopped: AtomicBool,
+    state: Mutex<RuntimeAsyncProgressStateV1<E>>,
+}
+
+impl<E> RuntimeAsyncProgressCellV1<E> {
+    fn new() -> Self {
+        Self {
+            abandoned: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
+            state: Mutex::new(RuntimeAsyncProgressStateV1 {
+                failure: None,
+                failure_count: 0,
+            }),
+        }
+    }
+
+    fn retain_failure(&self, failure: RuntimeErrorV1<E>, terminal: bool) {
+        if self.abandoned.load(Ordering::Acquire) {
+            return;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        state.failure_count = state.failure_count.saturating_add(1);
+        if terminal || state.failure.is_none() {
+            state.failure = Some(failure);
+        }
+    }
+
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+/// Unique lifetime guard for one stream's opt-in background progress.
+///
+/// Retryable flush failures remain available in one bounded slot until taken;
+/// [`failure_count`](Self::failure_count) is a saturating count of observed
+/// failures. A terminal failure replaces any retained retryable failure so the
+/// exact sealing error remains observable. Dropping the guard only unregisters
+/// the stream after any in-flight flush returns. It never cancels work,
+/// destroys a stream, releases a resource, or performs a final flush.
+#[must_use = "dropping a progress registration stops background flush attempts"]
+pub struct RuntimeAsyncProgressRegistrationV1<E> {
+    stream: RuntimeStreamIdV1,
+    cell: Arc<RuntimeAsyncProgressCellV1<E>>,
+}
+
+impl<E> RuntimeAsyncProgressRegistrationV1<E> {
+    pub const fn stream(&self) -> RuntimeStreamIdV1 {
+        self.stream
+    }
+
+    /// Returns the number of observed failures, saturated at [`u64::MAX`].
+    pub fn failure_count(&self) -> u64 {
+        self.cell
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .failure_count
+    }
+
+    pub fn take_failure(&self) -> Option<RuntimeErrorV1<E>> {
+        self.cell
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .failure
+            .take()
+    }
+
+    /// Reports that the engine stopped or permanently removed this stream.
+    pub fn is_stopped(&self) -> bool {
+        self.cell.stopped.load(Ordering::Acquire)
+    }
+}
+
+impl<E> Drop for RuntimeAsyncProgressRegistrationV1<E> {
+    fn drop(&mut self) {
+        self.cell.abandoned.store(true, Ordering::Release);
+    }
+}
+
+struct RuntimeAsyncProgressRegistryV1<E> {
+    entries: BTreeMap<RuntimeStreamIdV1, Arc<RuntimeAsyncProgressCellV1<E>>>,
+}
+
+impl<E> RuntimeAsyncProgressRegistryV1<E> {
+    fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl<E> Drop for RuntimeAsyncProgressRegistryV1<E> {
+    fn drop(&mut self) {
+        for cell in self.entries.values() {
+            cell.stop();
+        }
+    }
+}
+
 type RuntimeContextCommandV1<B> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) + Send + 'static>;
 
 enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
@@ -384,6 +640,11 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
         event: RuntimeEventIdV1,
         cell: Arc<RuntimeAsyncFutureCellV1<B::Error>>,
         response: SyncSender<Result<(), RuntimeAsyncEventRegistrationErrorV1>>,
+    },
+    RegisterProgress {
+        stream: RuntimeStreamIdV1,
+        cell: Arc<RuntimeAsyncProgressCellV1<B::Error>>,
+        response: SyncSender<Result<(), RuntimeAsyncProgressRegistrationErrorV1>>,
     },
     Stop,
 }
@@ -481,6 +742,81 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineHandleV1<B> {
     }
 }
 
+/// Cloneable observation and stream-registration handle for an opt-in progress engine.
+///
+/// Only this handle can register streams for background flushes. Its observer
+/// view retains the ordinary engine's observation-only context and event APIs.
+pub struct RuntimeAsyncProgressHandleV1<B: RuntimeBackendV1 + Send + 'static> {
+    observer: RuntimeAsyncEngineHandleV1<B>,
+}
+
+impl<B: RuntimeBackendV1 + Send + 'static> Clone for RuntimeAsyncProgressHandleV1<B> {
+    fn clone(&self) -> Self {
+        Self {
+            observer: self.observer.clone(),
+        }
+    }
+}
+
+impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncProgressHandleV1<B> {
+    pub const fn observer(&self) -> &RuntimeAsyncEngineHandleV1<B> {
+        &self.observer
+    }
+
+    /// Registers one unique live stream for cyclic background flush attempts.
+    ///
+    /// Registration authorizes the backend scheduling domain selected by this
+    /// stream. A backend may publish other dependency-ready work in that same
+    /// domain. Retryable failures do not unregister the stream.
+    pub fn register_stream(
+        &self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<RuntimeAsyncProgressRegistrationV1<B::Error>, RuntimeAsyncProgressRegistrationErrorV1>
+    {
+        if self.observer.is_worker_thread() {
+            return Err(RuntimeAsyncProgressRegistrationErrorV1::ReentrantCall);
+        }
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let (response_sender, response_receiver) = sync_channel(1);
+        let command = RuntimeAsyncEngineCommandV1::RegisterProgress {
+            stream,
+            cell: Arc::clone(&cell),
+            response: response_sender,
+        };
+        match self.observer.sender.try_send(command) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                return Err(RuntimeAsyncProgressRegistrationErrorV1::CommandQueueFull);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err(RuntimeAsyncProgressRegistrationErrorV1::EngineStopped);
+            }
+        }
+        response_receiver
+            .recv()
+            .unwrap_or(Err(RuntimeAsyncProgressRegistrationErrorV1::EngineStopped))?;
+        Ok(RuntimeAsyncProgressRegistrationV1 { stream, cell })
+    }
+}
+
+type RuntimeAsyncFlushDriverV1<B> =
+    fn(
+        &mut RuntimeContextV1<B>,
+        RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+
+struct RuntimeAsyncProgressModeV1<B: RuntimeBackendV1> {
+    config: RuntimeAsyncProgressConfigV1,
+    flush_stream: RuntimeAsyncFlushDriverV1<B>,
+}
+
+fn flush_stream_v1<B: RuntimeFlushBackendV1>(
+    context: &mut RuntimeContextV1<B>,
+    stream: RuntimeStreamIdV1,
+) -> Result<(), RuntimeErrorV1<B::Error>> {
+    context.flush_stream(stream)
+}
+
 /// One owned background observer for a runtime context.
 ///
 /// The engine uses exactly one host thread for every registered event. It
@@ -529,7 +865,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
                     .unwrap_or_else(|poison| poison.into_inner())
                     .take()
                     .expect("async engine context is taken exactly once");
-                run_engine_v1(context, receiver, config)
+                run_engine_v1(context, receiver, config, None)
             });
         let worker = match worker {
             Ok(worker) => worker,
@@ -560,7 +896,97 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         ))
     }
 
+    /// Starts an opt-in engine that observes events and flushes registered streams.
+    ///
+    /// The backend and its error type must be transferable without unsafe
+    /// overrides. Runtime Worker V4 and V5 backends provide that path for KFD;
+    /// thread-affine direct KFD owners remain caller-driven.
+    pub fn spawn_with_progress(
+        context: RuntimeContextV1<B>,
+        config: RuntimeAsyncEngineConfigV1,
+        progress_config: RuntimeAsyncProgressConfigV1,
+    ) -> Result<(Self, RuntimeAsyncProgressHandleV1<B>), RuntimeAsyncProgressEngineSpawnFailureV1<B>>
+    where
+        B: RuntimeFlushBackendV1,
+    {
+        if let Err(error) = RuntimeAsyncEngineConfigV1::new(
+            config.command_capacity,
+            config.waiter_capacity,
+            config.commands_per_tick,
+            config.polls_per_tick,
+            config.poll_interval,
+        ) {
+            return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
+                context: Box::new(context),
+                error: RuntimeAsyncProgressEngineSpawnErrorV1::InvalidEngineConfig(error),
+            });
+        }
+        if let Err(error) = RuntimeAsyncProgressConfigV1::new(
+            progress_config.stream_capacity,
+            progress_config.flushes_per_tick,
+        ) {
+            return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
+                context: Box::new(context),
+                error: RuntimeAsyncProgressEngineSpawnErrorV1::InvalidProgressConfig(error),
+            });
+        }
+        let (sender, receiver) = sync_channel(config.command_capacity);
+        let context_slot = Arc::new(Mutex::new(Some(context)));
+        let worker_slot = Arc::clone(&context_slot);
+        let worker_thread = Arc::new(OnceLock::new());
+        let worker_thread_slot = Arc::clone(&worker_thread);
+        let progress = RuntimeAsyncProgressModeV1 {
+            config: progress_config,
+            flush_stream: flush_stream_v1::<B>,
+        };
+        let worker = thread::Builder::new()
+            .name("fe2o3-runtime-progress-v1".to_owned())
+            .spawn(move || {
+                worker_thread_slot
+                    .set(thread::current().id())
+                    .expect("async engine worker identity is set exactly once");
+                let context = worker_slot
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .take()
+                    .expect("async engine context is taken exactly once");
+                run_engine_v1(context, receiver, config, Some(progress))
+            });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                let context = context_slot
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .take()
+                    .expect("failed thread spawn retains the runtime context");
+                return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
+                    context: Box::new(context),
+                    error: RuntimeAsyncProgressEngineSpawnErrorV1::Thread(error),
+                });
+            }
+        };
+        drop(context_slot);
+        let observer = RuntimeAsyncEngineHandleV1 {
+            sender: sender.clone(),
+            worker_thread,
+        };
+        Ok((
+            Self {
+                sender: Some(sender),
+                worker: Some(worker),
+                thread_affinity: PhantomData,
+            },
+            RuntimeAsyncProgressHandleV1 { observer },
+        ))
+    }
+
     /// Stops observation, wakes pending futures as stopped, and returns the context.
+    ///
+    /// Stop is an ordered command rather than enqueue-time preemption. If it is
+    /// beyond the current command batch, that tick completes its event-poll and
+    /// progress-flush phases before Stop is dequeued on the next tick. No final
+    /// flush is added after the command is dequeued.
     pub fn into_context(mut self) -> Result<RuntimeContextV1<B>, RuntimeAsyncEngineJoinErrorV1> {
         self.stop_and_join()
     }
@@ -602,14 +1028,26 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
     mut context: RuntimeContextV1<B>,
     receiver: Receiver<RuntimeAsyncEngineCommandV1<B>>,
     config: RuntimeAsyncEngineConfigV1,
+    progress: Option<RuntimeAsyncProgressModeV1<B>>,
 ) -> RuntimeContextV1<B> {
     let mut waiters = RuntimeAsyncWaiterRegistryV1::new();
+    let mut progress_registry = progress
+        .as_ref()
+        .map(|_| RuntimeAsyncProgressRegistryV1::new());
     let mut next_event = None;
-    let mut stopped = false;
+    let mut next_stream = None;
+    let mut stopped = context.is_terminal();
     while !stopped {
         match receiver.recv_timeout(config.poll_interval) {
             Ok(command) => {
-                stopped = handle_command_v1(&mut context, &mut waiters.entries, command, config);
+                stopped = handle_command_v1(
+                    &mut context,
+                    &mut waiters.entries,
+                    progress_registry.as_mut(),
+                    command,
+                    config,
+                    progress.as_ref().map(|mode| mode.config),
+                );
                 for _ in 1..config.commands_per_tick {
                     if stopped {
                         break;
@@ -619,8 +1057,10 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
                             stopped = handle_command_v1(
                                 &mut context,
                                 &mut waiters.entries,
+                                progress_registry.as_mut(),
                                 command,
                                 config,
+                                progress.as_ref().map(|mode| mode.config),
                             );
                         }
                         Err(TryRecvError::Empty) => break,
@@ -635,16 +1075,32 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => stopped = true,
         }
         if !stopped {
-            poll_waiters_v1(
+            stopped = poll_waiters_v1(
                 &mut context,
                 &mut waiters.entries,
                 &mut next_event,
                 config.polls_per_tick,
             );
         }
+        if !stopped
+            && let (Some(mode), Some(registry)) = (progress.as_ref(), progress_registry.as_mut())
+        {
+            stopped = flush_progress_v1(
+                &mut context,
+                &mut registry.entries,
+                &mut next_stream,
+                mode.config.flushes_per_tick,
+                mode.flush_stream,
+            );
+        }
     }
     for (_, cell) in core::mem::take(&mut waiters.entries) {
         cell.complete(Err(RuntimeAsyncEventErrorV1::EngineStopped));
+    }
+    if let Some(registry) = progress_registry.as_mut() {
+        for (_, cell) in core::mem::take(&mut registry.entries) {
+            cell.stop();
+        }
     }
     context
 }
@@ -652,13 +1108,15 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
 fn handle_command_v1<B: RuntimeBackendV1 + Send + 'static>(
     context: &mut RuntimeContextV1<B>,
     waiters: &mut BTreeMap<RuntimeEventIdV1, Arc<RuntimeAsyncFutureCellV1<B::Error>>>,
+    progress: Option<&mut RuntimeAsyncProgressRegistryV1<B::Error>>,
     command: RuntimeAsyncEngineCommandV1<B>,
     config: RuntimeAsyncEngineConfigV1,
+    progress_config: Option<RuntimeAsyncProgressConfigV1>,
 ) -> bool {
     match command {
         RuntimeAsyncEngineCommandV1::Context(command) => {
             command(context);
-            false
+            context.is_terminal()
         }
         RuntimeAsyncEngineCommandV1::Register {
             event,
@@ -701,6 +1159,55 @@ fn handle_command_v1<B: RuntimeBackendV1 + Send + 'static>(
             let _ = response.send(result);
             false
         }
+        RuntimeAsyncEngineCommandV1::RegisterProgress {
+            stream,
+            cell,
+            response,
+        } => {
+            let Some(progress) = progress else {
+                let _ = response.send(Err(RuntimeAsyncProgressRegistrationErrorV1::EngineStopped));
+                return false;
+            };
+            let capacity = progress_config
+                .expect("a progress registry always has progress configuration")
+                .stream_capacity;
+            if progress
+                .entries
+                .get(&stream)
+                .is_some_and(|prior| prior.abandoned.load(Ordering::Acquire))
+                && let Some(prior) = progress.entries.remove(&stream)
+            {
+                prior.stop();
+            }
+            let result = if progress.entries.contains_key(&stream) {
+                Err(RuntimeAsyncProgressRegistrationErrorV1::DuplicateStream)
+            } else if let Err(error) = context.query_stream(stream) {
+                Err(RuntimeAsyncProgressRegistrationErrorV1::InvalidStream(
+                    error,
+                ))
+            } else {
+                if progress.entries.len() >= capacity {
+                    progress.entries.retain(|_, prior| {
+                        let retained = !prior.abandoned.load(Ordering::Acquire);
+                        if !retained {
+                            prior.stop();
+                        }
+                        retained
+                    });
+                }
+                if progress.entries.len() >= capacity {
+                    let _ = response.send(Err(RuntimeAsyncProgressRegistrationErrorV1::Capacity));
+                    return false;
+                }
+                if response.send(Ok(())).is_ok() {
+                    progress.entries.insert(stream, cell);
+                    return false;
+                }
+                return false;
+            };
+            let _ = response.send(result);
+            false
+        }
         RuntimeAsyncEngineCommandV1::Stop => true,
     }
 }
@@ -710,7 +1217,7 @@ fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
     waiters: &mut BTreeMap<RuntimeEventIdV1, Arc<RuntimeAsyncFutureCellV1<B::Error>>>,
     next_event: &mut Option<RuntimeEventIdV1>,
     budget: usize,
-) {
+) -> bool {
     let mut events = Vec::with_capacity(budget.min(waiters.len()));
     if let Some(start) = *next_event {
         events.extend(waiters.range(start..).map(|(event, _)| *event).take(budget));
@@ -741,8 +1248,12 @@ fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
                 waiters.remove(&event);
             }
             Err(error) => {
+                let terminal = runtime_error_is_terminal_v1(&error);
                 cell.complete(Err(RuntimeAsyncEventErrorV1::Runtime(error)));
                 waiters.remove(&event);
+                if terminal {
+                    return true;
+                }
             }
         }
     }
@@ -754,6 +1265,82 @@ fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
             .or_else(|| waiters.first_key_value())
             .map(|(event, _)| *event)
     });
+    false
+}
+
+fn flush_progress_v1<B: RuntimeBackendV1 + Send + 'static>(
+    context: &mut RuntimeContextV1<B>,
+    registrations: &mut BTreeMap<RuntimeStreamIdV1, Arc<RuntimeAsyncProgressCellV1<B::Error>>>,
+    next_stream: &mut Option<RuntimeStreamIdV1>,
+    budget: usize,
+    flush_stream: RuntimeAsyncFlushDriverV1<B>,
+) -> bool {
+    let mut streams = Vec::with_capacity(budget.min(registrations.len()));
+    if let Some(start) = *next_stream {
+        streams.extend(
+            registrations
+                .range(start..)
+                .map(|(stream, _)| *stream)
+                .take(budget),
+        );
+        if streams.len() < budget {
+            streams.extend(
+                registrations
+                    .range(..start)
+                    .map(|(stream, _)| *stream)
+                    .take(budget - streams.len()),
+            );
+        }
+    } else {
+        streams.extend(registrations.keys().copied().take(budget));
+    }
+
+    for stream in streams.iter().copied() {
+        let Some(cell) = registrations.get(&stream) else {
+            continue;
+        };
+        if cell.abandoned.load(Ordering::Acquire) {
+            cell.stop();
+            registrations.remove(&stream);
+            continue;
+        }
+        match context.query_stream(stream) {
+            Ok(observation) if observation.is_quiescent() => continue,
+            Ok(_) => {}
+            Err(error) => {
+                cell.retain_failure(RuntimeErrorV1::Validation(error), false);
+                cell.stop();
+                registrations.remove(&stream);
+                continue;
+            }
+        }
+        if let Err(error) = flush_stream(context, stream) {
+            let terminal = runtime_error_is_terminal_v1(&error);
+            cell.retain_failure(error, terminal);
+            if terminal {
+                cell.stop();
+                return true;
+            }
+        }
+    }
+
+    *next_stream = streams.last().and_then(|last| {
+        registrations
+            .range((Excluded(*last), Unbounded))
+            .next()
+            .or_else(|| registrations.first_key_value())
+            .map(|(stream, _)| *stream)
+    });
+    false
+}
+
+fn runtime_error_is_terminal_v1<E>(error: &RuntimeErrorV1<E>) -> bool {
+    matches!(
+        error,
+        RuntimeErrorV1::BackendProtocol(_)
+            | RuntimeErrorV1::BackendTerminal(_)
+            | RuntimeErrorV1::Validation(RuntimeValidationErrorV1::ContextTerminal)
+    )
 }
 
 #[cfg(test)]
@@ -764,22 +1351,31 @@ mod tests {
         RuntimeArgumentsV1, RuntimeBackendFailureV1, RuntimeBindingV1, RuntimeCapabilitiesV1,
         RuntimeLaunchGeometryV1, RuntimeMemoryKindV1,
     };
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::task::{Wake, Waker};
     use std::thread::ThreadId;
     use std::time::Instant;
 
-    #[derive(Debug)]
-    struct MockError;
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct MockError(&'static str);
 
     impl fmt::Display for MockError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("mock error")
+            formatter.write_str(self.0)
         }
     }
 
     impl Error for MockError {}
+
+    #[derive(Clone, Copy, Debug)]
+    enum MockFlushOutcome {
+        Success,
+        Rejected(&'static str),
+        Quiescent(&'static str),
+        Terminal(&'static str),
+    }
 
     #[derive(Default)]
     struct MockState {
@@ -787,6 +1383,11 @@ mod tests {
         statuses: HashMap<u64, BackendPollV1>,
         poll_threads: HashSet<ThreadId>,
         poll_calls: usize,
+        poll_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
+        created_streams: Vec<u64>,
+        flush_calls: Vec<(u64, ThreadId)>,
+        flush_outcomes: VecDeque<MockFlushOutcome>,
+        flush_barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
         release_calls: usize,
         panic_on_poll: bool,
     }
@@ -828,7 +1429,9 @@ mod tests {
             &mut self,
             _device: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-            Ok(self.next())
+            let stream = self.next();
+            self.state.lock().unwrap().created_streams.push(stream);
+            Ok(stream)
         }
 
         fn destroy_stream_v1(
@@ -918,6 +1521,9 @@ mod tests {
             assert!(!state.panic_on_poll, "requested backend poll panic");
             state.poll_threads.insert(thread::current().id());
             state.poll_calls += 1;
+            if let Some(failure) = state.poll_failures.pop_front() {
+                return Err(failure);
+            }
             Ok(*state.statuses.get(&submission).unwrap())
         }
 
@@ -961,7 +1567,43 @@ mod tests {
             _destination: BackendMemoryRegionV1,
             _dependencies: &[u64],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-            Err(RuntimeBackendFailureV1::Rejected(MockError))
+            Err(RuntimeBackendFailureV1::Rejected(MockError("peer copy")))
+        }
+    }
+
+    impl RuntimeFlushBackendV1 for MockBackend {
+        fn flush_stream_v1(
+            &mut self,
+            stream: u64,
+        ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            let barriers = {
+                let mut state = self.state.lock().unwrap();
+                state.flush_calls.push((stream, thread::current().id()));
+                state.flush_barriers.take()
+            };
+            if let Some((entered, release)) = barriers {
+                entered.wait();
+                release.wait();
+            }
+            match self
+                .state
+                .lock()
+                .unwrap()
+                .flush_outcomes
+                .pop_front()
+                .unwrap_or(MockFlushOutcome::Success)
+            {
+                MockFlushOutcome::Success => Ok(()),
+                MockFlushOutcome::Rejected(message) => {
+                    Err(RuntimeBackendFailureV1::Rejected(MockError(message)))
+                }
+                MockFlushOutcome::Quiescent(message) => {
+                    Err(RuntimeBackendFailureV1::Quiescent(MockError(message)))
+                }
+                MockFlushOutcome::Terminal(message) => {
+                    Err(RuntimeBackendFailureV1::Terminal(MockError(message)))
+                }
+            }
         }
     }
 
@@ -1024,8 +1666,32 @@ mod tests {
         image: u8,
         name: &str,
     ) -> (RuntimeEventIdV1, u64) {
+        let (_, event, backend_submission) =
+            append_submission_with_stream(context, state, image, name);
+        (event, backend_submission)
+    }
+
+    fn append_submission_with_stream(
+        context: &mut RuntimeContextV1<MockBackend>,
+        state: &Arc<Mutex<MockState>>,
+        image: u8,
+        name: &str,
+    ) -> (RuntimeStreamIdV1, RuntimeEventIdV1, u64) {
         let device = context.devices()[0].id();
         let stream = context.create_stream(device).unwrap();
+        let (event, backend_submission) =
+            append_submission_on_stream(context, state, stream, image, name);
+        (stream, event, backend_submission)
+    }
+
+    fn append_submission_on_stream(
+        context: &mut RuntimeContextV1<MockBackend>,
+        state: &Arc<Mutex<MockState>>,
+        stream: RuntimeStreamIdV1,
+        image: u8,
+        name: &str,
+    ) -> (RuntimeEventIdV1, u64) {
+        let device = context.devices()[0].id();
         let module = context.load_module(device, &[image]).unwrap();
         let kernel = context.resolve_kernel::<EmptyArgs>(module, name).unwrap();
         let arguments = EmptyArgs;
@@ -1051,6 +1717,31 @@ mod tests {
             .expect("fixture launch creates one backend submission");
         let event = context.record_event(&submission).unwrap();
         (event, backend_submission)
+    }
+
+    fn progress_fixture() -> (
+        RuntimeContextV1<MockBackend>,
+        Arc<Mutex<MockState>>,
+        RuntimeStreamIdV1,
+        RuntimeEventIdV1,
+        u64,
+    ) {
+        let state = Arc::new(Mutex::new(MockState::default()));
+        let mut context = RuntimeContextV1::open(MockBackend {
+            state: Arc::clone(&state),
+        })
+        .unwrap();
+        let (stream, event, submission) =
+            append_submission_with_stream(&mut context, &state, 1, "empty");
+        (context, state, stream, event, submission)
+    }
+
+    fn wait_until(mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !condition() {
+            assert!(Instant::now() < deadline, "condition did not become true");
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     fn poll_once<E>(
@@ -1389,6 +2080,689 @@ mod tests {
             state.lock().unwrap().statuses.get(&backend_submission),
             Some(&BackendPollV1::Pending)
         );
+    }
+
+    #[test]
+    fn ordinary_spawn_remains_observation_only() {
+        let (context, state, _stream, _event, _submission) = progress_fixture();
+        let (engine, handle) =
+            RuntimeAsyncEngineV1::spawn(context, RuntimeAsyncEngineConfigV1::default()).unwrap();
+        thread::sleep(Duration::from_millis(10));
+        assert!(state.lock().unwrap().flush_calls.is_empty());
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn progress_engine_flushes_only_registered_pending_streams() {
+        let (mut context, state, first_stream, _event, _submission) = progress_fixture();
+        let (second_stream, _, _) =
+            append_submission_with_stream(&mut context, &state, 2, "second");
+        let backend_streams = state.lock().unwrap().created_streams.clone();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let registration = handle.register_stream(first_stream).unwrap();
+        wait_until(|| !state.lock().unwrap().flush_calls.is_empty());
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .flush_calls
+                .iter()
+                .all(|(stream, _)| *stream == backend_streams[0])
+        );
+        assert_ne!(first_stream, second_stream);
+        drop(registration);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn idle_registration_starts_flushing_after_a_later_submission() {
+        let state = Arc::new(Mutex::new(MockState::default()));
+        let mut context = RuntimeContextV1::open(MockBackend {
+            state: Arc::clone(&state),
+        })
+        .unwrap();
+        let stream = context.create_stream(context.devices()[0].id()).unwrap();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let registration = handle.register_stream(stream).unwrap();
+        thread::sleep(Duration::from_millis(10));
+        assert!(state.lock().unwrap().flush_calls.is_empty());
+
+        let submission_state = Arc::clone(&state);
+        handle
+            .observer()
+            .try_with_context(move |context| {
+                append_submission_on_stream(context, &submission_state, stream, 1, "later")
+            })
+            .unwrap();
+        wait_until(|| !state.lock().unwrap().flush_calls.is_empty());
+
+        drop(registration);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn progress_registration_is_unique_bounded_and_context_checked() {
+        let (mut context, state, first_stream, _event, _submission) = progress_fixture();
+        let (second_stream, _, _) =
+            append_submission_with_stream(&mut context, &state, 2, "second");
+        let (mut foreign_context, foreign_state, _, _, _) = progress_fixture();
+        let foreign_stream = foreign_context
+            .create_stream(foreign_context.devices()[0].id())
+            .unwrap();
+        drop(foreign_state);
+
+        let progress_config = RuntimeAsyncProgressConfigV1::new(1, 1).unwrap();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            progress_config,
+        )
+        .unwrap();
+        let first = handle.register_stream(first_stream).unwrap();
+        assert!(matches!(
+            handle.register_stream(first_stream),
+            Err(RuntimeAsyncProgressRegistrationErrorV1::DuplicateStream)
+        ));
+        assert!(matches!(
+            handle.register_stream(second_stream),
+            Err(RuntimeAsyncProgressRegistrationErrorV1::Capacity)
+        ));
+        assert!(matches!(
+            handle.register_stream(foreign_stream),
+            Err(RuntimeAsyncProgressRegistrationErrorV1::InvalidStream(
+                RuntimeValidationErrorV1::UnknownStream
+            ))
+        ));
+        let nested = handle.clone();
+        assert!(matches!(
+            handle
+                .observer()
+                .try_with_context(move |_| nested.register_stream(second_stream))
+                .unwrap(),
+            Err(RuntimeAsyncProgressRegistrationErrorV1::ReentrantCall)
+        ));
+        drop(first);
+        let second = handle.register_stream(second_stream).unwrap();
+        drop(second);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn progress_scan_has_an_independent_budget_and_cyclic_cursor() {
+        let (mut context, state, first_stream, _event, _submission) = progress_fixture();
+        let (second_stream, _, _) =
+            append_submission_with_stream(&mut context, &state, 2, "second");
+        let (third_stream, _, _) = append_submission_with_stream(&mut context, &state, 3, "third");
+        state.lock().unwrap().flush_outcomes.extend([
+            MockFlushOutcome::Rejected("first"),
+            MockFlushOutcome::Rejected("second"),
+            MockFlushOutcome::Rejected("third"),
+        ]);
+        let cells = [
+            (first_stream, Arc::new(RuntimeAsyncProgressCellV1::new())),
+            (second_stream, Arc::new(RuntimeAsyncProgressCellV1::new())),
+            (third_stream, Arc::new(RuntimeAsyncProgressCellV1::new())),
+        ];
+        let mut registrations = BTreeMap::from(cells.clone());
+        let mut next_stream = None;
+        for _ in 0..3 {
+            assert!(!flush_progress_v1(
+                &mut context,
+                &mut registrations,
+                &mut next_stream,
+                1,
+                flush_stream_v1::<MockBackend>,
+            ));
+        }
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state
+                .flush_calls
+                .iter()
+                .map(|(stream, _)| *stream)
+                .collect::<Vec<_>>(),
+            state.created_streams
+        );
+        assert!(
+            cells
+                .iter()
+                .all(|(_, cell)| { cell.state.lock().unwrap().failure_count == 1 })
+        );
+    }
+
+    #[test]
+    fn progress_cursor_rotates_across_quiescent_abandoned_and_removed_streams() {
+        let state = Arc::new(Mutex::new(MockState::default()));
+        let mut context = RuntimeContextV1::open(MockBackend {
+            state: Arc::clone(&state),
+        })
+        .unwrap();
+        let device = context.devices()[0].id();
+
+        let first = context.create_stream(device).unwrap();
+        append_submission_on_stream(&mut context, &state, first, 1, "first");
+        let quiescent = context.create_stream(device).unwrap();
+        let abandoned = context.create_stream(device).unwrap();
+        append_submission_on_stream(&mut context, &state, abandoned, 2, "abandoned");
+        let removed = context.create_stream(device).unwrap();
+        let last = context.create_stream(device).unwrap();
+        append_submission_on_stream(&mut context, &state, last, 3, "last");
+        let backend_streams = state.lock().unwrap().created_streams.clone();
+        context.destroy_stream(removed).unwrap();
+
+        let first_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let quiescent_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let abandoned_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let removed_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let last_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let abandoned_registration = RuntimeAsyncProgressRegistrationV1 {
+            stream: abandoned,
+            cell: Arc::clone(&abandoned_cell),
+        };
+        let removed_registration = RuntimeAsyncProgressRegistrationV1 {
+            stream: removed,
+            cell: Arc::clone(&removed_cell),
+        };
+        let mut registrations = BTreeMap::from([
+            (first, first_cell),
+            (quiescent, Arc::clone(&quiescent_cell)),
+            (abandoned, Arc::clone(&abandoned_cell)),
+            (removed, Arc::clone(&removed_cell)),
+            (last, last_cell),
+        ]);
+        drop(abandoned_registration);
+
+        let mut next_stream = None;
+        for _ in 0..6 {
+            assert!(!flush_progress_v1(
+                &mut context,
+                &mut registrations,
+                &mut next_stream,
+                1,
+                flush_stream_v1::<MockBackend>,
+            ));
+        }
+
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .flush_calls
+                .iter()
+                .map(|(stream, _)| *stream)
+                .collect::<Vec<_>>(),
+            vec![backend_streams[0], backend_streams[4], backend_streams[0]]
+        );
+        assert_eq!(next_stream, Some(quiescent));
+        assert!(abandoned_cell.stopped.load(Ordering::Acquire));
+        assert!(removed_registration.is_stopped());
+        assert!(matches!(
+            removed_registration.take_failure(),
+            Some(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::UnknownStream
+            ))
+        ));
+        assert_eq!(removed_registration.failure_count(), 1);
+        assert!(!quiescent_cell.stopped.load(Ordering::Acquire));
+        assert_eq!(registrations.len(), 3);
+    }
+
+    #[test]
+    fn retryable_progress_failures_are_retained_without_unregistering() {
+        let (mut context, state, stream, _event, _submission) = progress_fixture();
+        state.lock().unwrap().flush_outcomes.extend([
+            MockFlushOutcome::Rejected("busy"),
+            MockFlushOutcome::Quiescent("retry quiescent"),
+            MockFlushOutcome::Success,
+        ]);
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let registration = RuntimeAsyncProgressRegistrationV1 {
+            stream,
+            cell: Arc::clone(&cell),
+        };
+        let mut registrations = BTreeMap::from([(stream, cell)]);
+        let mut next_stream = None;
+        for _ in 0..3 {
+            assert!(!flush_progress_v1(
+                &mut context,
+                &mut registrations,
+                &mut next_stream,
+                1,
+                flush_stream_v1::<MockBackend>,
+            ));
+        }
+        assert_eq!(registration.failure_count(), 2);
+        assert!(matches!(
+            registration.take_failure(),
+            Some(RuntimeErrorV1::BackendRejected(MockError("busy")))
+        ));
+        assert!(!registration.is_stopped());
+        assert!(registrations.contains_key(&stream));
+    }
+
+    #[test]
+    fn progress_failure_count_saturates_without_losing_the_retained_failure() {
+        let cell = RuntimeAsyncProgressCellV1::new();
+        cell.state.lock().unwrap().failure_count = u64::MAX - 1;
+
+        cell.retain_failure(RuntimeErrorV1::BackendRejected(MockError("first")), false);
+        assert_eq!(cell.state.lock().unwrap().failure_count, u64::MAX);
+        cell.retain_failure(
+            RuntimeErrorV1::BackendQuiescent(MockError("discarded")),
+            false,
+        );
+        let mut state = cell.state.lock().unwrap();
+        assert_eq!(state.failure_count, u64::MAX);
+        assert!(matches!(
+            state.failure.take(),
+            Some(RuntimeErrorV1::BackendRejected(MockError("first")))
+        ));
+        drop(state);
+
+        cell.retain_failure(RuntimeErrorV1::BackendTerminal(MockError("terminal")), true);
+        let state = cell.state.lock().unwrap();
+        assert_eq!(state.failure_count, u64::MAX);
+        assert!(matches!(
+            state.failure,
+            Some(RuntimeErrorV1::BackendTerminal(MockError("terminal")))
+        ));
+    }
+
+    #[test]
+    fn terminal_progress_failure_replaces_a_retained_retryable_failure() {
+        let (mut context, state, stream, _event, _submission) = progress_fixture();
+        state.lock().unwrap().flush_outcomes.extend([
+            MockFlushOutcome::Rejected("busy"),
+            MockFlushOutcome::Terminal("terminal"),
+        ]);
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let registration = RuntimeAsyncProgressRegistrationV1 {
+            stream,
+            cell: Arc::clone(&cell),
+        };
+        let mut registrations = BTreeMap::from([(stream, cell)]);
+        let mut next_stream = None;
+        assert!(!flush_progress_v1(
+            &mut context,
+            &mut registrations,
+            &mut next_stream,
+            1,
+            flush_stream_v1::<MockBackend>,
+        ));
+        assert!(flush_progress_v1(
+            &mut context,
+            &mut registrations,
+            &mut next_stream,
+            1,
+            flush_stream_v1::<MockBackend>,
+        ));
+        assert_eq!(registration.failure_count(), 2);
+        assert!(matches!(
+            registration.take_failure(),
+            Some(RuntimeErrorV1::BackendTerminal(MockError("terminal")))
+        ));
+        assert!(registration.is_stopped());
+        assert!(context.is_terminal());
+    }
+
+    #[test]
+    fn dropping_progress_observers_never_cancels_or_releases_work() {
+        let (context, state, stream, event, submission) = progress_fixture();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let registration = handle.register_stream(stream).unwrap();
+        drop(handle.observer().event_future(event).unwrap());
+        wait_until(|| !state.lock().unwrap().flush_calls.is_empty());
+        assert_eq!(state.lock().unwrap().release_calls, 0);
+        assert_eq!(
+            state.lock().unwrap().statuses.get(&submission),
+            Some(&BackendPollV1::Pending)
+        );
+        drop(registration);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+        assert_eq!(state.lock().unwrap().release_calls, 0);
+    }
+
+    #[test]
+    fn dropping_registration_removes_it_without_a_final_flush() {
+        let (mut context, state, stream, _event, _submission) = progress_fixture();
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let registration = RuntimeAsyncProgressRegistrationV1 {
+            stream,
+            cell: Arc::clone(&cell),
+        };
+        let mut registrations = BTreeMap::from([(stream, cell)]);
+        drop(registration);
+        assert!(!flush_progress_v1(
+            &mut context,
+            &mut registrations,
+            &mut None,
+            1,
+            flush_stream_v1::<MockBackend>,
+        ));
+        assert!(registrations.is_empty());
+        assert!(state.lock().unwrap().flush_calls.is_empty());
+        assert_eq!(state.lock().unwrap().release_calls, 0);
+    }
+
+    #[test]
+    fn dropping_registration_during_a_claimed_flush_allows_only_that_flush() {
+        let (context, state, stream, _event, _submission) = progress_fixture();
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        state.lock().unwrap().flush_barriers = Some((Arc::clone(&entered), Arc::clone(&release)));
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let registration = handle.register_stream(stream).unwrap();
+
+        entered.wait();
+        drop(registration);
+        release.wait();
+        handle.observer().try_with_context(|_| ()).unwrap();
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+
+        let state = state.lock().unwrap();
+        assert_eq!(state.flush_calls.len(), 1);
+        assert_eq!(state.release_calls, 0);
+    }
+
+    #[test]
+    fn queued_stop_with_active_registration_performs_no_final_backend_call() {
+        let (context, state, stream, _event, submission) = progress_fixture();
+        let config = RuntimeAsyncEngineConfigV1::default();
+        let progress_config = RuntimeAsyncProgressConfigV1::default();
+        let (sender, receiver) = sync_channel(config.command_capacity);
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let (response_sender, response_receiver) = sync_channel(1);
+        sender
+            .try_send(RuntimeAsyncEngineCommandV1::RegisterProgress {
+                stream,
+                cell: Arc::clone(&cell),
+                response: response_sender,
+            })
+            .unwrap();
+        sender.try_send(RuntimeAsyncEngineCommandV1::Stop).unwrap();
+        drop(sender);
+
+        let context = run_engine_v1(
+            context,
+            receiver,
+            config,
+            Some(RuntimeAsyncProgressModeV1 {
+                config: progress_config,
+                flush_stream: flush_stream_v1::<MockBackend>,
+            }),
+        );
+        assert_eq!(response_receiver.recv().unwrap(), Ok(()));
+        assert!(cell.stopped.load(Ordering::Acquire));
+        let state = state.lock().unwrap();
+        assert!(state.flush_calls.is_empty());
+        assert_eq!(state.release_calls, 0);
+        assert_eq!(
+            state.statuses.get(&submission),
+            Some(&BackendPollV1::Pending)
+        );
+        drop(state);
+        assert!(!context.is_terminal());
+    }
+
+    #[test]
+    fn stop_beyond_the_command_budget_takes_effect_at_the_next_tick_boundary() {
+        let (context, state, stream, _event, submission) = progress_fixture();
+        let config = RuntimeAsyncEngineConfigV1::new(8, 8, 1, 1, Duration::from_millis(1)).unwrap();
+        let progress_config = RuntimeAsyncProgressConfigV1::default();
+        let (sender, receiver) = sync_channel(config.command_capacity);
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let (response_sender, response_receiver) = sync_channel(1);
+        sender
+            .try_send(RuntimeAsyncEngineCommandV1::RegisterProgress {
+                stream,
+                cell: Arc::clone(&cell),
+                response: response_sender,
+            })
+            .unwrap();
+        sender.try_send(RuntimeAsyncEngineCommandV1::Stop).unwrap();
+        drop(sender);
+
+        let context = run_engine_v1(
+            context,
+            receiver,
+            config,
+            Some(RuntimeAsyncProgressModeV1 {
+                config: progress_config,
+                flush_stream: flush_stream_v1::<MockBackend>,
+            }),
+        );
+
+        assert_eq!(response_receiver.recv().unwrap(), Ok(()));
+        assert!(cell.stopped.load(Ordering::Acquire));
+        let state = state.lock().unwrap();
+        assert_eq!(state.flush_calls.len(), 1);
+        assert_eq!(state.release_calls, 0);
+        assert_eq!(
+            state.statuses.get(&submission),
+            Some(&BackendPollV1::Pending)
+        );
+        drop(state);
+        assert!(!context.is_terminal());
+    }
+
+    #[test]
+    fn destroyed_registered_stream_retains_validation_failure_and_stops() {
+        let (mut context, _state, stream, _event, _submission) = progress_fixture();
+        let cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let registration = RuntimeAsyncProgressRegistrationV1 {
+            stream,
+            cell: Arc::clone(&cell),
+        };
+        let mut registrations = BTreeMap::from([(stream, cell)]);
+        context.destroy_stream(stream).unwrap();
+        assert!(!flush_progress_v1(
+            &mut context,
+            &mut registrations,
+            &mut None,
+            1,
+            flush_stream_v1::<MockBackend>,
+        ));
+        assert!(matches!(
+            registration.take_failure(),
+            Some(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::UnknownStream
+            ))
+        ));
+        assert!(registration.is_stopped());
+        assert!(registrations.is_empty());
+    }
+
+    #[test]
+    fn terminal_progress_failure_is_exact_and_seals_all_engine_activity() {
+        let (mut context, state, first_stream, event, _submission) = progress_fixture();
+        let (second_stream, _, _) =
+            append_submission_with_stream(&mut context, &state, 2, "second");
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let mut future = handle.observer().event_future(event).unwrap();
+        let first = handle.register_stream(first_stream).unwrap();
+        let second = handle.register_stream(second_stream).unwrap();
+        state
+            .lock()
+            .unwrap()
+            .flush_outcomes
+            .push_back(MockFlushOutcome::Terminal("sealed"));
+        wait_until(|| first.is_stopped() && second.is_stopped());
+        let failures = [first.take_failure(), second.take_failure()];
+        assert_eq!(
+            failures
+                .iter()
+                .filter(|failure| matches!(
+                    failure,
+                    Some(RuntimeErrorV1::BackendTerminal(MockError("sealed")))
+                ))
+                .count(),
+            1
+        );
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_until_ready(&mut future, &waker),
+            Err(RuntimeAsyncEventErrorV1::EngineStopped)
+        ));
+        let calls_after_seal = state.lock().unwrap().flush_calls.len();
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(state.lock().unwrap().flush_calls.len(), calls_after_seal);
+        drop(handle);
+        let context = engine.into_context().unwrap();
+        assert!(context.is_terminal());
+        assert_eq!(state.lock().unwrap().release_calls, 0);
+    }
+
+    #[test]
+    fn terminal_event_poll_stops_progress_before_the_flush_phase() {
+        let (context, state, stream, event, _submission) = progress_fixture();
+        state
+            .lock()
+            .unwrap()
+            .poll_failures
+            .push_back(RuntimeBackendFailureV1::Terminal(MockError("poll sealed")));
+        let config = RuntimeAsyncEngineConfigV1::default();
+        let progress_config = RuntimeAsyncProgressConfigV1::default();
+        let (sender, receiver) = sync_channel(config.command_capacity);
+        let progress_cell = Arc::new(RuntimeAsyncProgressCellV1::new());
+        let (progress_response_sender, progress_response_receiver) = sync_channel(1);
+        sender
+            .try_send(RuntimeAsyncEngineCommandV1::RegisterProgress {
+                stream,
+                cell: Arc::clone(&progress_cell),
+                response: progress_response_sender,
+            })
+            .unwrap();
+        let future_cell = Arc::new(RuntimeAsyncFutureCellV1::new());
+        let (future_response_sender, future_response_receiver) = sync_channel(1);
+        sender
+            .try_send(RuntimeAsyncEngineCommandV1::Register {
+                event,
+                cell: Arc::clone(&future_cell),
+                response: future_response_sender,
+            })
+            .unwrap();
+
+        let context = run_engine_v1(
+            context,
+            receiver,
+            config,
+            Some(RuntimeAsyncProgressModeV1 {
+                config: progress_config,
+                flush_stream: flush_stream_v1::<MockBackend>,
+            }),
+        );
+        drop(sender);
+        assert_eq!(progress_response_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(future_response_receiver.recv().unwrap(), Ok(()));
+        assert!(progress_cell.stopped.load(Ordering::Acquire));
+        assert!(state.lock().unwrap().flush_calls.is_empty());
+        assert!(context.is_terminal());
+
+        let mut future = RuntimeEventFutureV1 {
+            event,
+            cell: future_cell,
+            completed: false,
+        };
+        let waker = Waker::from(Arc::new(WakeCounter(AtomicUsize::new(0))));
+        assert!(matches!(
+            poll_once(&mut future, &waker),
+            Poll::Ready(Err(RuntimeAsyncEventErrorV1::Runtime(
+                RuntimeErrorV1::BackendTerminal(MockError("poll sealed"))
+            )))
+        ));
+    }
+
+    #[test]
+    fn event_poll_and_progress_flush_share_one_worker_thread() {
+        let (context, state, stream, event, _submission) = progress_fixture();
+        let (engine, handle) = RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            RuntimeAsyncProgressConfigV1::default(),
+        )
+        .unwrap();
+        let _future = handle.observer().event_future(event).unwrap();
+        let registration = handle.register_stream(stream).unwrap();
+        wait_until(|| {
+            let state = state.lock().unwrap();
+            !state.poll_threads.is_empty() && !state.flush_calls.is_empty()
+        });
+        let state_guard = state.lock().unwrap();
+        assert_eq!(state_guard.poll_threads.len(), 1);
+        assert!(
+            state_guard
+                .flush_calls
+                .iter()
+                .all(|(_, worker)| state_guard.poll_threads.contains(worker))
+        );
+        drop(state_guard);
+        drop(registration);
+        drop(handle);
+        let _context = engine.into_context().unwrap();
+    }
+
+    #[test]
+    fn progress_handle_and_worker_v4_v5_paths_are_send_compatible() {
+        fn require_send<T: Send>() {}
+        fn require_send_sync<T: Send + Sync>() {}
+        require_send_sync::<RuntimeAsyncProgressHandleV1<MockBackend>>();
+        require_send::<crate::RuntimeWorkerBackendV4<crate::RuntimeBinaryCodecV4>>();
+        require_send::<crate::RuntimeWorkerBackendV5<crate::RuntimeBinaryCodecV5>>();
+    }
+
+    #[test]
+    fn invalid_progress_config_retains_the_unstarted_context() {
+        let (context, _state, _stream, _event, _submission) = progress_fixture();
+        let invalid = RuntimeAsyncProgressConfigV1 {
+            stream_capacity: 0,
+            ..RuntimeAsyncProgressConfigV1::default()
+        };
+        let failure = match RuntimeAsyncEngineV1::spawn_with_progress(
+            context,
+            RuntimeAsyncEngineConfigV1::default(),
+            invalid,
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("invalid progress configuration must retain the context"),
+        };
+        assert!(matches!(
+            failure.error(),
+            RuntimeAsyncProgressEngineSpawnErrorV1::InvalidProgressConfig(
+                RuntimeAsyncProgressConfigErrorV1::StreamCapacity
+            )
+        ));
+        let (_context, _) = failure.into_parts();
     }
 
     #[test]

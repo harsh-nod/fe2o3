@@ -660,6 +660,25 @@ all-or-nothing multi-queue publication transaction: a later shard failure after
 an earlier publication is a terminal benchmark failure, and no production
 atomic-batch claim follows from the measurement.
 
+The separate production
+`submit_gfx942_striped_sdma_copy_batch_v1` operation accepts at most 1,008
+requests over exactly 2 through 16 admitted striped queues. It deterministically
+balances no more than 63 requests per queue, prepares every shard before the
+first visible publication, and commits its round-robin cursor only after every
+shard publishes and closing currentness succeeds. A no-effect preflight failure
+returns the intact requests for retry. Any terminal failure instead returns
+move-only, observation-only custody that must be retained until process teardown:
+all request count/ordinals before publication; confirmed published shards, at
+most one indeterminate failing shard, and untouched request ordinals after
+partial publication; or all confirmed shards after a closing failure. It exposes
+no drain, ticket, buffer, or resubmission authority. Earlier publications cannot
+be rolled back, so this is a bounded prepare-all/typed-partial-outcome boundary,
+not an atomic device transaction. Safe fault-injection tests exercise the same
+production preparation/publication algorithms. Closing-currentness injection
+exercises the shared post-publication cursor/state transition, not the outer
+live-session currentness/poison path. These tests do not claim live native fault
+injection or firmware/coherence proof.
+
 `GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
 capability sidecar, reviewed ROCr revision, direction policy and packet sources,
 packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves

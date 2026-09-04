@@ -177,7 +177,11 @@ adds a separate abstract logical-stream leasing model; it likewise is not a
 Rust-to-Verus refinement of the concrete scheduler. These
 proofs are not a refinement proof of the Rust KFD implementation and make no
 Rust-to-Verus, compiler-to-ISA, firmware, or hardware refinement claim. The
-runtime therefore remains below this parity profile.
+runtime therefore remains below this parity profile. The additive R16 Worker V5
+model raises the authenticated totals to 193 obligations and 121 rejected
+mutations. It proves a reachable already-decoded request/response abstraction,
+exact response custody classes, and an ordered exhaustive sidecar join, not a
+parser, subprocess, Rust-to-Verus, or native refinement proof.
 
 ## Required Gates
 
@@ -212,6 +216,14 @@ aggregate stream synchronization applies one shared deadline without obscuring
 failed or quiescent-without-result submissions. Nonterminal wait errors do not
 prevent later pending submissions from receiving their one bounded wait;
 terminal ambiguity stops immediately.
+
+The additive runtime async progress mode is one declared portable mechanism for
+Send-capable backends: a bounded registered-stream roster receives bounded,
+cyclic `flush_stream` attempts on the owner thread while event observation keeps
+its independent budget. Ordinary async-engine construction remains
+observation-only. Direct KFD is thread-affine and therefore still requires
+caller-driven flush. These host tests establish transition behavior, not native
+liveness or scheduling parity.
 
 ### G3: memory and copies
 

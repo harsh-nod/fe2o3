@@ -19,6 +19,7 @@ r11_runtime_semantics_proof="$script_dir/r11_runtime_semantics_v1.rs"
 r12_native_concurrency_proof="$script_dir/r12_native_concurrency_v1.rs"
 r13_logical_scheduler_proof="$script_dir/r13_logical_scheduler_v1.rs"
 r14_async_observer_proof="$script_dir/r14_async_observer_v1.rs"
+r16_worker_semantic_boundary_proof="$script_dir/r16_worker_semantic_boundary_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -130,6 +131,16 @@ negative_r14_key_order="$script_dir/negative/r14_async_observer_v1_key_order.rs"
 negative_r14_pending_removal="$script_dir/negative/r14_async_observer_v1_pending_removal.rs"
 negative_r14_status_substitution="$script_dir/negative/r14_async_observer_v1_status_substitution.rs"
 negative_r14_stop_cancel="$script_dir/negative/r14_async_observer_v1_stop_cancel.rs"
+negative_r16_contract_substitution="$script_dir/negative/r16_worker_semantic_boundary_v1_contract_substitution.rs"
+negative_r16_dependency_bound="$script_dir/negative/r16_worker_semantic_boundary_v1_dependency_bound.rs"
+negative_r16_handshake_downgrade="$script_dir/negative/r16_worker_semantic_boundary_v1_handshake_downgrade.rs"
+negative_r16_pre_custody="$script_dir/negative/r16_worker_semantic_boundary_v1_pre_custody.rs"
+negative_r16_reachability="$script_dir/negative/r16_worker_semantic_boundary_v1_reachability.rs"
+negative_r16_response_custody="$script_dir/negative/r16_worker_semantic_boundary_v1_response_custody.rs"
+negative_r16_sidecar_scope="$script_dir/negative/r16_worker_semantic_boundary_v1_sidecar_scope.rs"
+negative_r16_sidecar_substitution="$script_dir/negative/r16_worker_semantic_boundary_v1_sidecar_substitution.rs"
+negative_r16_terminal_reopen="$script_dir/negative/r16_worker_semantic_boundary_v1_terminal_reopen.rs"
+negative_r16_variant_mismatch="$script_dir/negative/r16_worker_semantic_boundary_v1_variant_mismatch.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -170,6 +181,7 @@ expected_r11_runtime_semantics=$(read_pin "$pin_dir/R11_RUNTIME_SEMANTICS_SHA256
 expected_r12_native_concurrency=$(read_pin "$pin_dir/R12_NATIVE_CONCURRENCY_SHA256")
 expected_r13_logical_scheduler=$(read_pin "$pin_dir/R13_LOGICAL_SCHEDULER_SHA256")
 expected_r14_async_observer=$(read_pin "$pin_dir/R14_ASYNC_OBSERVER_SHA256")
+expected_r16_worker_semantic_boundary=$(read_pin "$pin_dir/R16_WORKER_SEMANTIC_BOUNDARY_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -281,6 +293,16 @@ expected_negative_r14_key_order=$(read_pin "$pin_dir/NEGATIVE_R14_KEY_ORDER_SHA2
 expected_negative_r14_pending_removal=$(read_pin "$pin_dir/NEGATIVE_R14_PENDING_REMOVAL_SHA256")
 expected_negative_r14_status_substitution=$(read_pin "$pin_dir/NEGATIVE_R14_STATUS_SUBSTITUTION_SHA256")
 expected_negative_r14_stop_cancel=$(read_pin "$pin_dir/NEGATIVE_R14_STOP_CANCEL_SHA256")
+expected_negative_r16_contract_substitution=$(read_pin "$pin_dir/NEGATIVE_R16_CONTRACT_SUBSTITUTION_SHA256")
+expected_negative_r16_dependency_bound=$(read_pin "$pin_dir/NEGATIVE_R16_DEPENDENCY_BOUND_SHA256")
+expected_negative_r16_handshake_downgrade=$(read_pin "$pin_dir/NEGATIVE_R16_HANDSHAKE_DOWNGRADE_SHA256")
+expected_negative_r16_pre_custody=$(read_pin "$pin_dir/NEGATIVE_R16_PRE_CUSTODY_SHA256")
+expected_negative_r16_reachability=$(read_pin "$pin_dir/NEGATIVE_R16_REACHABILITY_SHA256")
+expected_negative_r16_response_custody=$(read_pin "$pin_dir/NEGATIVE_R16_RESPONSE_CUSTODY_SHA256")
+expected_negative_r16_sidecar_scope=$(read_pin "$pin_dir/NEGATIVE_R16_SIDECAR_SCOPE_SHA256")
+expected_negative_r16_sidecar_substitution=$(read_pin "$pin_dir/NEGATIVE_R16_SIDECAR_SUBSTITUTION_SHA256")
+expected_negative_r16_terminal_reopen=$(read_pin "$pin_dir/NEGATIVE_R16_TERMINAL_REOPEN_SHA256")
+expected_negative_r16_variant_mismatch=$(read_pin "$pin_dir/NEGATIVE_R16_VARIANT_MISMATCH_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -324,6 +346,7 @@ check_sources() {
     check_digest "$expected_r12_native_concurrency" "$r12_native_concurrency_proof"
     check_digest "$expected_r13_logical_scheduler" "$r13_logical_scheduler_proof"
     check_digest "$expected_r14_async_observer" "$r14_async_observer_proof"
+    check_digest "$expected_r16_worker_semantic_boundary" "$r16_worker_semantic_boundary_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -435,6 +458,16 @@ check_sources() {
     check_digest "$expected_negative_r14_pending_removal" "$negative_r14_pending_removal"
     check_digest "$expected_negative_r14_status_substitution" "$negative_r14_status_substitution"
     check_digest "$expected_negative_r14_stop_cancel" "$negative_r14_stop_cancel"
+    check_digest "$expected_negative_r16_contract_substitution" "$negative_r16_contract_substitution"
+    check_digest "$expected_negative_r16_dependency_bound" "$negative_r16_dependency_bound"
+    check_digest "$expected_negative_r16_handshake_downgrade" "$negative_r16_handshake_downgrade"
+    check_digest "$expected_negative_r16_pre_custody" "$negative_r16_pre_custody"
+    check_digest "$expected_negative_r16_reachability" "$negative_r16_reachability"
+    check_digest "$expected_negative_r16_response_custody" "$negative_r16_response_custody"
+    check_digest "$expected_negative_r16_sidecar_scope" "$negative_r16_sidecar_scope"
+    check_digest "$expected_negative_r16_sidecar_substitution" "$negative_r16_sidecar_substitution"
+    check_digest "$expected_negative_r16_terminal_reopen" "$negative_r16_terminal_reopen"
+    check_digest "$expected_negative_r16_variant_mismatch" "$negative_r16_variant_mismatch"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -459,6 +492,7 @@ check_sources
     "$r12_native_concurrency_proof" \
     "$r13_logical_scheduler_proof" \
     "$r14_async_observer_proof" \
+    "$r16_worker_semantic_boundary_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -566,7 +600,17 @@ check_sources
     "$negative_r14_key_order" \
     "$negative_r14_pending_removal" \
     "$negative_r14_status_substitution" \
-    "$negative_r14_stop_cancel"
+    "$negative_r14_stop_cancel" \
+    "$negative_r16_contract_substitution" \
+    "$negative_r16_dependency_bound" \
+    "$negative_r16_handshake_downgrade" \
+    "$negative_r16_pre_custody" \
+    "$negative_r16_reachability" \
+    "$negative_r16_response_custody" \
+    "$negative_r16_sidecar_scope" \
+    "$negative_r16_sidecar_substitution" \
+    "$negative_r16_terminal_reopen" \
+    "$negative_r16_variant_mismatch"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -681,6 +725,7 @@ check_positive "$r11_runtime_semantics_proof" 'verification results:: 18 verifie
 check_positive "$r12_native_concurrency_proof" 'verification results:: 23 verified, 0 errors' r12-native-concurrency
 check_positive "$r13_logical_scheduler_proof" 'verification results:: 20 verified, 0 errors' r13-logical-scheduler
 check_positive "$r14_async_observer_proof" 'verification results:: 10 verified, 0 errors' r14-async-observer
+check_positive "$r16_worker_semantic_boundary_proof" 'verification results:: 21 verified, 0 errors' r16-worker-semantic-boundary
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -792,13 +837,23 @@ check_negative "$negative_r14_key_order" mutated_event_key_order_is_lexicographi
 check_negative "$negative_r14_pending_removal" mutated_pending_observation_preserves_waiter_v1 r14-pending-removal
 check_negative "$negative_r14_status_substitution" mutated_terminal_observation_is_exact_v1 r14-status-substitution
 check_negative "$negative_r14_stop_cancel" mutated_stop_preserves_runtime_custody_v1 r14-stop-cancel
+check_negative "$negative_r16_contract_substitution" mutated_custody_preserves_exact_contract_v1 r16-contract-substitution
+check_negative "$negative_r16_dependency_bound" mutated_dependency_count_above_v5_bound_is_rejected_v1 r16-dependency-bound
+check_negative "$negative_r16_handshake_downgrade" mutated_v4_handshake_is_rejected_v1 r16-handshake-downgrade
+check_negative "$negative_r16_pre_custody" mutated_invalid_request_remains_pre_custody_v1 r16-pre-custody
+check_negative "$negative_r16_reachability" mutated_terminal_response_preserves_reachability_v1 r16-reachability
+check_negative "$negative_r16_response_custody" mutated_rejection_does_not_accept_backend_custody_v1 r16-response-custody
+check_negative "$negative_r16_sidecar_scope" mutated_worker_and_sidecar_scope_predicates_are_distinct_v1 r16-sidecar-scope
+check_negative "$negative_r16_sidecar_substitution" mutated_sidecar_contract_substitution_is_rejected_v1 r16-sidecar-substitution
+check_negative "$negative_r16_terminal_reopen" mutated_terminal_response_seals_and_absorbs_v1 r16-terminal-reopen
+check_negative "$negative_r16_variant_mismatch" mutated_variant_mismatch_is_rejected_v1 r16-variant-mismatch
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 mutations=111'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 mutations=121'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

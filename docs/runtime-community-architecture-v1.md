@@ -83,7 +83,7 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The direct backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. At most one dispatch occupies each lane, and concurrent native work must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. Exact atomic/collective contracts can use a separate unsafe semantic-authority constructor; ordinary constructors remain fail-closed. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. | Background native publication, queue-side dependency packets, more than two in-flight compute dispatches, unified compute plus native XGMI, a concrete production semantic authority, semantic Worker transport, broader atomic/collective profiles, formal native refinement |
+| KFD | The direct runtime backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. The lower-level `fe2o3-kfd` compute session additionally supports an even 2-through-16 striped SDMA set, which is not yet wired into `KfdRuntimeBackendV1`. At most one dispatch occupies each compute lane, and concurrent native work must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. Exact atomic/collective contracts can use a separate unsafe semantic-authority constructor; ordinary constructors remain fail-closed. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. Lower-level production striped submission prepares every bounded shard before publication and reports exact partial custody without rollback. | Native queue-side dependency packets, more than two in-flight compute dispatches, runtime-facade striped SDMA integration, unified persistent compute/SDMA/XGMI storage, unified compute plus native XGMI, a concrete production semantic authority, broader atomic/collective profiles, formal native refinement, clean hardware evidence |
 | HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy through host
@@ -102,8 +102,9 @@ A separate unsafe semantic-authority constructor advertises only its enumerated
 non-System-atomic and workgroup-collective profiles, and mismatches reject
 before custody. Final invocation authorization still occurs during preparation;
 a denial settles the accepted unpublished submission and releases its custody
-before native publication. No concrete production authority or Worker wire
-operation is provided, and structural machine evidence alone is insufficient.
+before native publication. Runtime Worker V5 preserves the exact validated
+semantic contract over its bounded wire operation, but provides no concrete
+production authority; structural machine evidence alone is insufficient.
 These rows are not HIP/HSA parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
@@ -175,9 +176,15 @@ interval are bounded. Polling uses a stable cyclic event-identity cursor;
 dropping a future abandons observation without cancellation or release.
 Command and executor-waker panics are contained, worker-thread reentry rejects,
 and consuming shutdown returns the context while waking retained futures as
-stopped. The owner is deliberately thread-affine. This is background
-completion observation only; it does not publish deferred work or remove the
-portable explicit-flush obligation.
+stopped. The original `spawn` mode remains background completion observation
+only. Additive `spawn_with_progress` permits a bounded, independently rotating
+set of move-only stream registrations; each tick may flush at most its declared
+budget of registered streams that still have pending work. Retryable failures
+are retained, terminal ambiguity seals the engine, and dropping a registration
+does not cancel, release, or finally flush work. This is explicit host-driven
+progress on the owner thread, not native queue-side scheduling or a hardware
+liveness proof. Only Send-capable backends such as Worker V4/V5 can cross the
+engine thread boundary; direct KFD owners remain deliberately thread-affine.
 
 `query_stream` aggregates every retained submission by typed status and reports
 the first failure deterministically by submission identity. `synchronize_stream`
@@ -247,6 +254,21 @@ validation failures return the move-only buffers after a successful currentness
 check. Counter or generation divergence, currentness failure, and any
 uncertainty after mutation terminally poison the session and retain native
 custody.
+
+The production striped submission operation creates one deterministic bounded
+plan over an admitted even set of 2 through 16 queues and at most 1,008
+requests. It prepares every per-queue shard before publishing any shard and
+uses a production-checked publication mask. A later failure reports confirmed
+published shards, an optional indeterminate failing shard, and untouched
+indexed requests separately; there is no rollback or device-transaction
+atomicity claim. Terminal results expose addressless audit observations only and
+must remain retained until process teardown; only no-effect preflight returns
+retryable requests. Selection advances only after complete publication plus
+closing currentness. Preparation and publication failures execute the shared
+production algorithms through safe callbacks. Closing-currentness failure uses
+the shared cursor/state transition after a successful test publication, not the
+outer live-session currentness/poison path. There is no live hardware fault
+injection.
 
 The R9 native XGMI variant additionally binds a generation-retained
 directional type-11 link, same-hive endpoints, the exact XGMI engine inventory,
@@ -443,9 +465,14 @@ tail cancellation, dependent retention, and currentness quarantine. Twenty
 additional obligations and eleven mutations bring the totals to 162 and 103.
 R14 adds ten obligations and eight mutations for bounded event observation,
 exact outcome preservation, abandonment/stop custody, and stable identity
-ordering, bringing the totals to 172 and 111. These tranches prove only their
-abstract finite models; none establishes a Rust-to-Verus refinement, native
-behavior, progress, or performance.
+ordering, bringing the totals to 172 and 111. R16 adds twenty-one obligations and
+ten expected-negative mutations for reachable already-decoded Worker V5 states,
+exact attempted/accepted/indeterminate custody, response sealing, and an ordered
+exhaustive sidecar sequence join, bringing the pinned totals to 193 and 121. It
+deliberately does not model byte parsing, serde, SHA-256, subprocess execution,
+concrete backend invocation counts, Rust refinement, or native execution. These
+tranches prove only their abstract finite models; none establishes a
+Rust-to-Verus refinement, native behavior, progress, or performance.
 
 The remaining community-launch blockers are material. Direct KFD owns exactly
 two compute lanes per child, but has no background native-publication scheduler, queue-side

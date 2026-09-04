@@ -41,6 +41,11 @@ const GFX942_SDMA_RING_SLOT_COUNT_V1: usize =
 pub const GFX942_SDMA_MAX_IN_FLIGHT_V1: usize = GFX942_SDMA_RING_SLOT_COUNT_V1 - 1;
 pub const GFX942_SDMA_D2H_ENGINE_INDEX_V1: u32 = 0;
 pub const GFX942_SDMA_H2D_ENGINE_INDEX_V1: u32 = 1;
+pub const GFX942_SDMA_MAX_STRIPED_QUEUES_V1: usize =
+    (KFD_GFX942_SDMA_ENGINE_COUNT_V1 * KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1) as usize;
+pub const GFX942_SDMA_MAX_MULTI_QUEUE_SHARDS_V1: usize = GFX942_SDMA_MAX_STRIPED_QUEUES_V1;
+pub const GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1: usize =
+    GFX942_SDMA_MAX_STRIPED_QUEUES_V1 * GFX942_SDMA_MAX_IN_FLIGHT_V1;
 const GFX942_SDMA_D2H_OWNER_SLOT_V1: usize = 0;
 const GFX942_SDMA_H2D_OWNER_SLOT_V1: usize = 1;
 const GFX942_SDMA_SINGLE_OWNER_COUNT_V1: usize = 1;
@@ -48,7 +53,7 @@ const GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1: usize = 2;
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v3\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v4\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -63,13 +68,13 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "engines=generic-compatible-or-topology-exact-ordinary:2,queues-per-engine:8,h2d-index:1,d2h-index:0,targeted-queue-type:4,balanced-striped-queues:even-2..16,round-robin-per-successful-batch\n",
     "queue-identity=all-directional-or-striped-native-queue-ids-must-be-distinct-before-publication\n",
     "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight\n",
-    "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
+    "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,striped-multi-queue-bounds:2..16-queues-and-1..1008-requests-and-at-most-63-per-shard,all-striped-shards-and-outcome-storage-prepared-before-first-publication,no-heap-allocation-after-first-publication,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
     "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-generation,nonblocking-poll,queue-progress-at-host-monotonic-instant,adaptive-deadline-wait,custody-returned-only-after-observation,no-gpu-clock-calibration\n",
     "cancellation=published-packets-cannot-be-retracted,typed-rejection-retains-ticket,poll-or-explicit-drain-required\n",
     "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown\n",
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
     "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,internal-atomics-and-mapped-writes-only-inside-envelope\n",
-    "failure=structural-preflight-and-ordinary-capacity-rejection-recover-inputs,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,partial-directional-create-or-destroy-has-process-only-terminal-custody\n",
+    "failure=structural-preflight-and-ordinary-capacity-rejection-recover-inputs,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-cursor-commits-only-after-complete-publication-and-closing-currentness,partial-directional-or-striped-create-or-destroy-has-process-only-terminal-custody\n",
     "teardown=destroy-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,no-executable-rust-refinement\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
@@ -78,7 +83,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "749e371515337e9ce0ef25f6f96c42087c1b44b3057b0dd905b9e7b635b4fe21";
+    "8543f344b4fba5fff152b718ea547e620e931ca01101f32f65828fe1eb9a303b";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -198,6 +203,156 @@ pub enum Gfx942SdmaErrorV1 {
     PublishedCancellationUnsupported,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Gfx942SdmaMultiQueuePlanErrorV1 {
+    QueueCount { actual: usize },
+    DuplicateQueueId { queue_id: u32 },
+    RequestCount { actual: usize, maximum: usize },
+    InvalidCursor { actual: usize, queue_count: usize },
+    Allocation,
+}
+
+impl fmt::Display for Gfx942SdmaMultiQueuePlanErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid gfx942 SDMA multi-queue plan: {self:?}")
+    }
+}
+
+impl std::error::Error for Gfx942SdmaMultiQueuePlanErrorV1 {}
+
+/// Deterministic bounded request-to-queue assignment for one striped submission.
+///
+/// This is a structural plan. It neither publishes packets nor proves queue currentness.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Gfx942SdmaMultiQueuePlanV1 {
+    queue_ids: Vec<u32>,
+    first_queue: u16,
+    request_count: u16,
+    assignments: Vec<u16>,
+    shard_counts: Vec<u16>,
+}
+
+impl Gfx942SdmaMultiQueuePlanV1 {
+    pub fn new(
+        queue_ids: &[u32],
+        request_count: usize,
+        first_queue: usize,
+    ) -> Result<Self, Gfx942SdmaMultiQueuePlanErrorV1> {
+        if queue_ids.len() < KFD_GFX942_SDMA_ENGINE_COUNT_V1 as usize
+            || !queue_ids
+                .len()
+                .is_multiple_of(KFD_GFX942_SDMA_ENGINE_COUNT_V1 as usize)
+            || queue_ids.len() > GFX942_SDMA_MAX_STRIPED_QUEUES_V1
+        {
+            return Err(Gfx942SdmaMultiQueuePlanErrorV1::QueueCount {
+                actual: queue_ids.len(),
+            });
+        }
+        for (index, queue_id) in queue_ids.iter().copied().enumerate() {
+            if queue_ids[..index].contains(&queue_id) {
+                return Err(Gfx942SdmaMultiQueuePlanErrorV1::DuplicateQueueId { queue_id });
+            }
+        }
+        let maximum = queue_ids
+            .len()
+            .checked_mul(GFX942_SDMA_MAX_IN_FLIGHT_V1)
+            .ok_or(Gfx942SdmaMultiQueuePlanErrorV1::RequestCount {
+                actual: request_count,
+                maximum: GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1,
+            })?;
+        if request_count == 0
+            || request_count > maximum
+            || request_count > GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1
+        {
+            return Err(Gfx942SdmaMultiQueuePlanErrorV1::RequestCount {
+                actual: request_count,
+                maximum,
+            });
+        }
+        if first_queue >= queue_ids.len() {
+            return Err(Gfx942SdmaMultiQueuePlanErrorV1::InvalidCursor {
+                actual: first_queue,
+                queue_count: queue_ids.len(),
+            });
+        }
+        let mut retained_queue_ids = Vec::new();
+        retained_queue_ids
+            .try_reserve_exact(queue_ids.len())
+            .map_err(|_| Gfx942SdmaMultiQueuePlanErrorV1::Allocation)?;
+        retained_queue_ids.extend_from_slice(queue_ids);
+        let mut assignments = Vec::new();
+        assignments
+            .try_reserve_exact(request_count)
+            .map_err(|_| Gfx942SdmaMultiQueuePlanErrorV1::Allocation)?;
+        let mut shard_counts = Vec::new();
+        shard_counts
+            .try_reserve_exact(queue_ids.len())
+            .map_err(|_| Gfx942SdmaMultiQueuePlanErrorV1::Allocation)?;
+        shard_counts.resize(queue_ids.len(), 0_u16);
+        for request_index in 0..request_count {
+            let queue = (first_queue + request_index) % queue_ids.len();
+            assignments.push(queue as u16);
+            shard_counts[queue] += 1;
+        }
+        debug_assert!(
+            shard_counts
+                .iter()
+                .all(|count| usize::from(*count) <= GFX942_SDMA_MAX_IN_FLIGHT_V1)
+        );
+        Ok(Self {
+            queue_ids: retained_queue_ids,
+            first_queue: first_queue as u16,
+            request_count: request_count as u16,
+            assignments,
+            shard_counts,
+        })
+    }
+
+    pub fn queue_ids(&self) -> &[u32] {
+        &self.queue_ids
+    }
+
+    pub const fn first_queue(&self) -> usize {
+        self.first_queue as usize
+    }
+
+    pub const fn request_count(&self) -> usize {
+        self.request_count as usize
+    }
+
+    pub fn queue_for_request(&self, request_index: usize) -> Option<usize> {
+        self.assignments
+            .get(request_index)
+            .map(|queue| *queue as usize)
+    }
+
+    pub fn shard_count(&self, queue: usize) -> Option<usize> {
+        self.shard_counts.get(queue).map(|count| *count as usize)
+    }
+
+    pub fn active_shard_count(&self) -> usize {
+        self.shard_counts
+            .iter()
+            .filter(|count| **count != 0)
+            .count()
+    }
+
+    pub fn next_queue_after_success(&self) -> usize {
+        (self.first_queue() + self.request_count()) % self.queue_ids.len()
+    }
+
+    pub fn is_current_for(&self, queue_ids: &[u32], first_queue: usize) -> bool {
+        self.queue_ids.as_slice() == queue_ids && self.first_queue() == first_queue
+    }
+
+    pub fn is_balanced(&self) -> bool {
+        let minimum = self.shard_counts.iter().copied().min().unwrap_or(0);
+        let maximum = self.shard_counts.iter().copied().max().unwrap_or(0);
+        maximum - minimum <= 1
+    }
+}
+
 impl fmt::Display for Gfx942SdmaErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
@@ -216,6 +371,30 @@ impl From<Gfx942SdmaPacketErrorV1> for Gfx942SdmaErrorV1 {
     fn from(value: Gfx942SdmaPacketErrorV1) -> Self {
         Self::Packet(value)
     }
+}
+
+fn map_multi_queue_plan_error(error: Gfx942SdmaMultiQueuePlanErrorV1) -> Gfx942SdmaErrorV1 {
+    match error {
+        Gfx942SdmaMultiQueuePlanErrorV1::Allocation => {
+            Gfx942SdmaErrorV1::Contract("multi-queue SDMA plan allocation")
+        }
+        Gfx942SdmaMultiQueuePlanErrorV1::QueueCount { .. }
+        | Gfx942SdmaMultiQueuePlanErrorV1::DuplicateQueueId { .. }
+        | Gfx942SdmaMultiQueuePlanErrorV1::RequestCount { .. }
+        | Gfx942SdmaMultiQueuePlanErrorV1::InvalidCursor { .. } => {
+            Gfx942SdmaErrorV1::Contract("invalid multi-queue SDMA plan")
+        }
+    }
+}
+
+fn preallocate_doorbell_failure_message() -> Result<String, Gfx942SdmaErrorV1> {
+    const MESSAGE: &str = "SDMA doorbell operation failed";
+    let mut message = String::new();
+    message
+        .try_reserve_exact(MESSAGE.len())
+        .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA doorbell error allocation"))?;
+    message.push_str(MESSAGE);
+    Ok(message)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -367,6 +546,81 @@ pub struct Gfx942SdmaCopyTicketV1 {
     generation: u32,
 }
 
+/// Exact custody record for one queue shard after successful or indeterminate publication.
+/// A success result means the shard publication returned success; the `indeterminate` field of a
+/// failure means mapped publication began but its final device-visible state is not known.
+#[must_use = "published tickets retain queue-owned buffer custody until completion"]
+pub struct Gfx942SdmaMultiQueueShardTicketsV1 {
+    queue_ordinal: u16,
+    queue_id: u32,
+    request_indices: Vec<u16>,
+    tickets: Vec<Gfx942SdmaCopyTicketV1>,
+}
+
+impl Gfx942SdmaMultiQueueShardTicketsV1 {
+    pub const fn queue_ordinal(&self) -> usize {
+        self.queue_ordinal as usize
+    }
+
+    pub const fn queue_id(&self) -> u32 {
+        self.queue_id
+    }
+
+    pub fn request_indices(&self) -> &[u16] {
+        &self.request_indices
+    }
+
+    pub fn tickets(&self) -> &[Gfx942SdmaCopyTicketV1] {
+        &self.tickets
+    }
+
+    pub fn into_tickets(self) -> Vec<Gfx942SdmaCopyTicketV1> {
+        self.tickets
+    }
+}
+
+impl fmt::Debug for Gfx942SdmaMultiQueueShardTicketsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942SdmaMultiQueueShardTicketsV1")
+            .field("queue_ordinal", &self.queue_ordinal)
+            .field("queue_id", &self.queue_id)
+            .field("request_indices", &self.request_indices)
+            .field("ticket_count", &self.tickets.len())
+            .finish()
+    }
+}
+
+/// Successful publication across every non-empty shard in one bounded plan.
+#[must_use = "every shard contains live tickets that must be completed"]
+pub struct Gfx942SdmaMultiQueueSubmissionV1 {
+    plan: Gfx942SdmaMultiQueuePlanV1,
+    shards: Vec<Gfx942SdmaMultiQueueShardTicketsV1>,
+}
+
+impl Gfx942SdmaMultiQueueSubmissionV1 {
+    pub const fn plan(&self) -> &Gfx942SdmaMultiQueuePlanV1 {
+        &self.plan
+    }
+
+    pub fn shards(&self) -> &[Gfx942SdmaMultiQueueShardTicketsV1] {
+        &self.shards
+    }
+
+    pub fn into_shards(self) -> Vec<Gfx942SdmaMultiQueueShardTicketsV1> {
+        self.shards
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Gfx942SdmaMultiQueuePlanV1,
+        Vec<Gfx942SdmaMultiQueueShardTicketsV1>,
+    ) {
+        (self.plan, self.shards)
+    }
+}
+
 #[must_use = "the request owns both mapped buffers until submission"]
 pub struct Gfx942SdmaCopyRequestV1 {
     pub(crate) source: Gfx942SdmaBufferV1,
@@ -374,6 +628,23 @@ pub struct Gfx942SdmaCopyRequestV1 {
     pub(crate) destination: Gfx942SdmaBufferV1,
     pub(crate) destination_offset: u64,
     pub(crate) copy_bytes: u32,
+}
+
+/// One request that was not handed to a native queue after partial publication.
+#[must_use = "the unpublished request still owns both mapped buffers"]
+pub struct Gfx942SdmaUnpublishedCopyRequestV1 {
+    request_index: u16,
+    request: Gfx942SdmaCopyRequestV1,
+}
+
+impl Gfx942SdmaUnpublishedCopyRequestV1 {
+    pub const fn request_index(&self) -> usize {
+        self.request_index as usize
+    }
+
+    pub fn into_request(self) -> Gfx942SdmaCopyRequestV1 {
+        self.request
+    }
 }
 
 /// One move-only XGMI copy request prepared for a directional route.
@@ -600,6 +871,181 @@ pub(crate) struct PreparedSdmaBatchV1 {
     copies: Vec<PreparedSdmaCopyV1>,
     tickets: Vec<Gfx942SdmaCopyTicketV1>,
     requests: Vec<Gfx942SdmaCopyRequestV1>,
+    doorbell_failure: String,
+}
+
+impl PreparedSdmaBatchV1 {
+    fn into_requests(self) -> Vec<Gfx942SdmaCopyRequestV1> {
+        self.requests
+    }
+}
+
+struct IndexedSdmaRequestV1<R = Gfx942SdmaCopyRequestV1> {
+    index: u16,
+    request: R,
+}
+
+struct PreparedMultiQueueShardV1<P = PreparedSdmaBatchV1> {
+    queue_ordinal: usize,
+    request_indices: Vec<u16>,
+    batch: P,
+}
+
+pub(crate) struct PreparedMultiQueueSdmaBatchV1<
+    P = PreparedSdmaBatchV1,
+    S = Gfx942SdmaMultiQueueShardTicketsV1,
+    U = Gfx942SdmaUnpublishedCopyRequestV1,
+> {
+    plan: Gfx942SdmaMultiQueuePlanV1,
+    shards: Vec<PreparedMultiQueueShardV1<P>>,
+    preflight: MultiQueuePreflightStateV1,
+    published_capacity: Vec<S>,
+    unpublished_capacity: Vec<U>,
+}
+
+pub(crate) struct MultiQueueSdmaPreparationFailureV1<R = Gfx942SdmaCopyRequestV1> {
+    pub(crate) error: Gfx942SdmaErrorV1,
+    pub(crate) requests: Vec<R>,
+}
+
+pub(crate) struct MultiQueueSdmaPublicationFailureV1<
+    S = Gfx942SdmaMultiQueueShardTicketsV1,
+    U = Gfx942SdmaUnpublishedCopyRequestV1,
+> {
+    pub(crate) error: Gfx942SdmaErrorV1,
+    pub(crate) plan: Gfx942SdmaMultiQueuePlanV1,
+    pub(crate) published: Vec<S>,
+    pub(crate) indeterminate: Option<S>,
+    pub(crate) unpublished: Vec<U>,
+}
+
+pub(crate) enum MultiQueueSdmaSubmitFailureV1 {
+    Preparation(MultiQueueSdmaPreparationFailureV1),
+    Publication(MultiQueueSdmaPublicationFailureV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MultiQueueCursorOutcomeV1 {
+    CompleteSuccess,
+    #[cfg(test)]
+    Failure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MultiQueuePreflightStateV1 {
+    expected_queue_mask: u16,
+    prepared_queue_mask: u16,
+    confirmed_queue_mask: u16,
+    indeterminate_queue_mask: u16,
+    publication_authorized: bool,
+}
+
+impl MultiQueuePreflightStateV1 {
+    fn new(plan: &Gfx942SdmaMultiQueuePlanV1) -> Self {
+        let mut expected_queue_mask = 0_u16;
+        for queue in 0..plan.queue_ids().len() {
+            if plan.shard_count(queue).is_some_and(|count| count != 0) {
+                expected_queue_mask |= 1_u16 << queue;
+            }
+        }
+        Self {
+            expected_queue_mask,
+            prepared_queue_mask: 0,
+            confirmed_queue_mask: 0,
+            indeterminate_queue_mask: 0,
+            publication_authorized: false,
+        }
+    }
+
+    fn record_prepared_queue(&mut self, queue: usize) -> Result<(), Gfx942SdmaErrorV1> {
+        let Some(bit) = 1_u16.checked_shl(queue as u32) else {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "multi-queue preflight queue bound",
+            ));
+        };
+        if self.publication_authorized
+            || self.expected_queue_mask & bit == 0
+            || self.prepared_queue_mask & bit != 0
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "multi-queue duplicate or unexpected preflight",
+            ));
+        }
+        self.prepared_queue_mask |= bit;
+        Ok(())
+    }
+
+    fn authorize_publication(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
+        if self.publication_authorized
+            || self.expected_queue_mask == 0
+            || self.prepared_queue_mask != self.expected_queue_mask
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "multi-queue publication before complete preflight",
+            ));
+        }
+        self.publication_authorized = true;
+        Ok(())
+    }
+
+    fn record_publication_observation(
+        &mut self,
+        queue: usize,
+        observation: MultiQueuePublicationObservationV1,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
+        let Some(bit) = 1_u16.checked_shl(queue as u32) else {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "multi-queue publication queue bound",
+            ));
+        };
+        if !self.publication_authorized
+            || self.expected_queue_mask & bit == 0
+            || (self.confirmed_queue_mask | self.indeterminate_queue_mask) & bit != 0
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "multi-queue duplicate or unexpected publication observation",
+            ));
+        }
+        match observation {
+            MultiQueuePublicationObservationV1::Confirmed => {
+                self.confirmed_queue_mask |= bit;
+            }
+            MultiQueuePublicationObservationV1::RecoverableNoEffect => {}
+            MultiQueuePublicationObservationV1::Indeterminate => {
+                if self.indeterminate_queue_mask != 0 {
+                    return Err(Gfx942SdmaErrorV1::Contract(
+                        "multi-queue duplicate indeterminate publication observation",
+                    ));
+                }
+                self.indeterminate_queue_mask = bit;
+            }
+        }
+        Ok(())
+    }
+
+    const fn publication_is_complete(&self) -> bool {
+        self.publication_authorized
+            && self.confirmed_queue_mask == self.expected_queue_mask
+            && self.indeterminate_queue_mask == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MultiQueuePublicationObservationV1 {
+    Confirmed,
+    RecoverableNoEffect,
+    Indeterminate,
+}
+
+enum PreparedSdmaPublicationFailureV1<P = PreparedSdmaBatchV1, T = Gfx942SdmaCopyTicketV1> {
+    Recoverable {
+        error: Gfx942SdmaErrorV1,
+        prepared: P,
+    },
+    Retained {
+        error: Gfx942SdmaErrorV1,
+        tickets: Vec<T>,
+    },
 }
 
 struct PreparedXgmiSdmaBatchV1 {
@@ -609,6 +1055,7 @@ struct PreparedXgmiSdmaBatchV1 {
     copies: Vec<PreparedXgmiSdmaCopyV1>,
     tickets: Vec<Gfx942SdmaCopyTicketV1>,
     requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    doorbell_failure: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -778,6 +1225,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             ),
         };
         let mut actual = expected;
+        let doorbell_failure = preallocate_doorbell_failure_message()?;
         create_queue(memory.kfd_fd(), &mut actual)
             .map_err(|_| Gfx942SdmaErrorV1::QueueCreationIndeterminate)?;
         let output_queue_id = actual.queue_id;
@@ -797,7 +1245,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA CREATE_QUEUE outputs"))?;
         let queue_id = outputs.queue_id().value();
         let doorbell = LinuxDoorbellSliceV1::map(memory.kfd_fd(), outputs, memory.opener_pid())
-            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
+            .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))?;
         memory.check_queue_currentness()?;
 
         Ok(Self {
@@ -951,6 +1399,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             ));
         }
 
+        let doorbell_failure = preallocate_doorbell_failure_message()?;
         self.poisoned = true;
         let completions = self.completions.as_mut().expect("checked completion arena");
         memory.overwrite_mapped_host_visible_subrange_in_current_scope(
@@ -983,7 +1432,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             .as_mut()
             .expect("checked SDMA doorbell")
             .store_packet_id_release(write_end)
-            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
+            .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))?;
         self.poisoned = false;
         Ok(Gfx942SdmaCopyTicketV1 {
             owner: self.owner,
@@ -1070,6 +1519,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             ));
         }
 
+        let doorbell_failure = preallocate_doorbell_failure_message()?;
         let source = source.take().expect("checked XGMI source mapping");
         let destination = destination
             .take()
@@ -1110,7 +1560,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             .as_mut()
             .expect("checked SDMA doorbell")
             .store_packet_id_release(write_end)
-            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
+            .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))?;
         self.poisoned = false;
         self.uncertain_xgmi_ticket = None;
         Ok(ticket)
@@ -1125,14 +1575,21 @@ impl Gfx942SdmaQueueOwnerV1 {
     ) -> Result<PreparedXgmiSdmaBatchV1, (Gfx942SdmaErrorV1, Vec<Gfx942XgmiSdmaCopyRequestV1>)>
     {
         match self.prepare_xgmi_batch(source_session, destination_session, route, &requests) {
-            Ok((write, write_end, copies, tickets)) => Ok(PreparedXgmiSdmaBatchV1 {
-                queue_id: self.queue_id,
-                write,
-                write_end,
-                copies,
-                tickets,
-                requests,
-            }),
+            Ok((write, write_end, copies, tickets)) => {
+                let doorbell_failure = match preallocate_doorbell_failure_message() {
+                    Ok(message) => message,
+                    Err(error) => return Err((error, requests)),
+                };
+                Ok(PreparedXgmiSdmaBatchV1 {
+                    queue_id: self.queue_id,
+                    write,
+                    write_end,
+                    copies,
+                    tickets,
+                    requests,
+                    doorbell_failure,
+                })
+            }
             Err(error) => Err((error, requests)),
         }
     }
@@ -1263,6 +1720,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             copies,
             tickets,
             requests,
+            doorbell_failure,
         } = prepared;
         // Retain every move-only mapping before the first fallible mapped write.
         // Thereafter any error returns only tickets and leaves native custody here.
@@ -1312,7 +1770,7 @@ impl Gfx942SdmaQueueOwnerV1 {
                 .as_mut()
                 .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA doorbell"))?
                 .store_packet_id_release(publication_plan.write_end)
-                .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))
+                .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))
         })();
         match publication {
             Ok(()) => {
@@ -1329,14 +1787,21 @@ impl Gfx942SdmaQueueOwnerV1 {
         requests: Vec<Gfx942SdmaCopyRequestV1>,
     ) -> Result<PreparedSdmaBatchV1, (Gfx942SdmaErrorV1, Vec<Gfx942SdmaCopyRequestV1>)> {
         match self.prepare_batch(memory, &requests) {
-            Ok((write, write_end, copies, tickets)) => Ok(PreparedSdmaBatchV1 {
-                queue_id: self.queue_id,
-                write,
-                write_end,
-                copies,
-                tickets,
-                requests,
-            }),
+            Ok((write, write_end, copies, tickets)) => {
+                let doorbell_failure = match preallocate_doorbell_failure_message() {
+                    Ok(message) => message,
+                    Err(error) => return Err((error, requests)),
+                };
+                Ok(PreparedSdmaBatchV1 {
+                    queue_id: self.queue_id,
+                    write,
+                    write_end,
+                    copies,
+                    tickets,
+                    requests,
+                    doorbell_failure,
+                })
+            }
             Err(error) => Err((error, requests)),
         }
     }
@@ -1418,20 +1883,44 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         prepared_batch: PreparedSdmaBatchV1,
     ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942SdmaErrorV1> {
+        self.submit_prepared_batch_with_custody(memory, prepared_batch)
+            .map_err(|failure| match failure {
+                PreparedSdmaPublicationFailureV1::Recoverable { error, .. }
+                | PreparedSdmaPublicationFailureV1::Retained { error, .. } => error,
+            })
+    }
+
+    // Inline failure custody avoids allocating after native publication has begun.
+    #[allow(clippy::result_large_err)]
+    fn submit_prepared_batch_with_custody(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared_batch: PreparedSdmaBatchV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, PreparedSdmaPublicationFailureV1> {
         if prepared_batch.queue_id != self.queue_id
             || prepared_batch.requests.len() != prepared_batch.copies.len()
             || prepared_batch.requests.len() != prepared_batch.tickets.len()
         {
             self.poisoned = true;
-            return Err(Gfx942SdmaErrorV1::Contract(
-                "SDMA prepared batch queue or roster",
-            ));
+            return Err(PreparedSdmaPublicationFailureV1::Recoverable {
+                error: Gfx942SdmaErrorV1::Contract("SDMA prepared batch queue or roster"),
+                prepared: prepared_batch,
+            });
         }
-        let publication_plan = admit_sdma_batch_publication_plan(
+        let publication_plan = match admit_sdma_batch_publication_plan(
             prepared_batch.write,
             prepared_batch.write_end,
             prepared_batch.copies.len(),
-        )?;
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(PreparedSdmaPublicationFailureV1::Recoverable {
+                    error,
+                    prepared: prepared_batch,
+                });
+            }
+        };
         let PreparedSdmaBatchV1 {
             queue_id: _,
             write: _,
@@ -1439,6 +1928,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             copies,
             tickets,
             requests,
+            doorbell_failure,
         } = prepared_batch;
         // Every fallible structural check and allocation precedes this point.
         // Retain all buffers before the first mapped write so a later error
@@ -1457,42 +1947,49 @@ impl Gfx942SdmaQueueOwnerV1 {
             });
         }
         self.poisoned = true;
-        let completions = self
-            .completions
-            .as_mut()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?;
-        for item in &copies {
-            memory.overwrite_mapped_host_visible_subrange_in_current_scope(
-                completions,
-                (item.slot * 8) as u64,
-                &[0; 8],
+        let publication = (|| {
+            let completions = self
+                .completions
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA completion arena"))?;
+            for item in &copies {
+                memory.overwrite_mapped_host_visible_subrange_in_current_scope(
+                    completions,
+                    (item.slot * 8) as u64,
+                    &[0; 8],
+                )?;
+            }
+            let ring = self
+                .ring
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA ring authority"))?;
+            for item in &copies {
+                memory.write_sdma_ring_slot_in_current_scope(
+                    ring,
+                    item.slot as u32,
+                    item.packet.bytes(),
+                )?;
+            }
+            memory.publish_sdma_control_write_release_in_current_scope(
+                self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
+                    "missing SDMA control authority",
+                ))?,
+                publication_plan.write,
+                publication_plan.write_end,
             )?;
+            self.doorbell
+                .as_mut()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
+                .store_packet_id_release(publication_plan.write_end)
+                .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))
+        })();
+        match publication {
+            Ok(()) => {
+                self.poisoned = false;
+                Ok(tickets)
+            }
+            Err(error) => Err(PreparedSdmaPublicationFailureV1::Retained { error, tickets }),
         }
-        let ring = self
-            .ring
-            .as_mut()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA ring authority"))?;
-        for item in &copies {
-            memory.write_sdma_ring_slot_in_current_scope(
-                ring,
-                item.slot as u32,
-                item.packet.bytes(),
-            )?;
-        }
-        memory.publish_sdma_control_write_release_in_current_scope(
-            self.control.as_mut().ok_or(Gfx942SdmaErrorV1::Contract(
-                "missing SDMA control authority",
-            ))?,
-            publication_plan.write,
-            publication_plan.write_end,
-        )?;
-        self.doorbell
-            .as_mut()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
-            .store_packet_id_release(publication_plan.write_end)
-            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
-        self.poisoned = false;
-        Ok(tickets)
     }
 
     fn checked_copy_addresses(
@@ -1963,6 +2460,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         }
         memory.check_queue_currentness()?;
         let mut args = KfdIoctlDestroyQueueArgs::new(self.queue_id);
+        let doorbell_failure = preallocate_doorbell_failure_message()?;
         // Once DESTROY_QUEUE reaches the kernel, failure cannot establish
         // whether the queue still exists. Keep every retained resource under
         // terminal custody instead of permitting a second mutation attempt.
@@ -1978,7 +2476,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             .take()
             .ok_or(Gfx942SdmaErrorV1::Contract("missing SDMA doorbell"))?
             .release()
-            .map_err(|error| Gfx942SdmaErrorV1::Doorbell(error.to_string()))?;
+            .map_err(|_| Gfx942SdmaErrorV1::Doorbell(doorbell_failure))?;
         self.destroyed = true;
         memory.check_queue_currentness()?;
         self.poisoned = false;
@@ -3065,7 +3563,7 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
         queue_count: u32,
-    ) -> Result<Self, Gfx942SdmaErrorV1> {
+    ) -> Result<(Self, Vec<Gfx942SdmaQueueObservationV1>), Gfx942SdmaErrorV1> {
         memory.check_gfx942_sdma_topology_capability_currentness()?;
         let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
         if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
@@ -3080,6 +3578,10 @@ impl Gfx942SdmaQueueSetV1 {
         owners
             .try_reserve_exact(queue_count as usize)
             .map_err(|_| Gfx942SdmaErrorV1::Contract("striped SDMA owner roster allocation"))?;
+        let mut observations = Vec::new();
+        observations
+            .try_reserve_exact(queue_count as usize)
+            .map_err(|_| Gfx942SdmaErrorV1::Contract("striped SDMA observation allocation"))?;
         for queue_index in 0..queue_count {
             let engine_index = queue_index % KFD_GFX942_SDMA_ENGINE_COUNT_V1;
             let engine = admit_kfd_gfx942_sdma_engine_id(engine_index)
@@ -3093,13 +3595,17 @@ impl Gfx942SdmaQueueSetV1 {
                     "striped SDMA duplicate native queue ID",
                 ));
             }
+            observations.push(created.observation());
             owners.push(created);
         }
         memory.check_gfx942_sdma_topology_capability_currentness()?;
-        Ok(Self::Striped {
-            owners,
-            next_owner: 0,
-        })
+        Ok((
+            Self::Striped {
+                owners,
+                next_owner: 0,
+            },
+            observations,
+        ))
     }
 
     pub(crate) fn generic_observation(&self) -> Option<Gfx942SdmaQueueObservationV1> {
@@ -3109,16 +3615,126 @@ impl Gfx942SdmaQueueSetV1 {
         }
     }
 
-    pub(crate) fn striped_observations(&self) -> Option<Vec<Gfx942SdmaQueueObservationV1>> {
-        match self {
-            Self::Striped { owners, .. } => Some(
-                owners
-                    .iter()
-                    .map(Gfx942SdmaQueueOwnerV1::observation)
-                    .collect(),
-            ),
-            Self::Generic(_) | Self::Directional(_) => None,
+    pub(crate) const fn is_striped(&self) -> bool {
+        matches!(self, Self::Striped { .. })
+    }
+
+    // Inline partial-publication custody is preallocated before the first publication.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn submit_striped_multi_queue_batch(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942SdmaCopyRequestV1>,
+    ) -> Result<Gfx942SdmaMultiQueueSubmissionV1, MultiQueueSdmaSubmitFailureV1> {
+        let (owners, next_owner) = match self {
+            Self::Striped { owners, next_owner } => (owners, next_owner),
+            Self::Generic(_) | Self::Directional(_) => {
+                return Err(MultiQueueSdmaSubmitFailureV1::Preparation(
+                    MultiQueueSdmaPreparationFailureV1 {
+                        error: Gfx942SdmaErrorV1::Contract(
+                            "multi-queue submission requires a striped SDMA queue set",
+                        ),
+                        requests,
+                    },
+                ));
+            }
+        };
+        let mut queue_ids = Vec::new();
+        if queue_ids.try_reserve_exact(owners.len()).is_err() {
+            return Err(MultiQueueSdmaSubmitFailureV1::Preparation(
+                MultiQueueSdmaPreparationFailureV1 {
+                    error: Gfx942SdmaErrorV1::Contract(
+                        "multi-queue SDMA queue identity allocation",
+                    ),
+                    requests,
+                },
+            ));
         }
+        queue_ids.extend(owners.iter().map(|owner| owner.queue_id));
+        let plan = match Gfx942SdmaMultiQueuePlanV1::new(&queue_ids, requests.len(), *next_owner) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return Err(MultiQueueSdmaSubmitFailureV1::Preparation(
+                    MultiQueueSdmaPreparationFailureV1 {
+                        error: map_multi_queue_plan_error(error),
+                        requests,
+                    },
+                ));
+            }
+        };
+        let prepared = match prepare_multi_queue_batch(
+            owners.len(),
+            plan,
+            requests,
+            |queue, requests| owners[queue].prepare_batch_recoverable(memory, requests),
+            PreparedSdmaBatchV1::into_requests,
+        ) {
+            Ok(prepared) => prepared,
+            Err(failure) => {
+                return Err(MultiQueueSdmaSubmitFailureV1::Preparation(failure));
+            }
+        };
+        match publish_multi_queue_batch(
+            prepared,
+            |queue, batch| {
+                let queue_id = batch.queue_id;
+                match owners[queue].submit_prepared_batch_with_custody(memory, batch) {
+                    Ok(tickets) => {
+                        debug_assert!(tickets.iter().all(|ticket| ticket.queue_id == queue_id));
+                        Ok((queue_id, tickets))
+                    }
+                    Err(failure) => Err((queue_id, failure)),
+                }
+            },
+            PreparedSdmaBatchV1::into_requests,
+            |queue_ordinal, queue_id, request_indices, tickets| {
+                Gfx942SdmaMultiQueueShardTicketsV1 {
+                    queue_ordinal: queue_ordinal as u16,
+                    queue_id,
+                    request_indices,
+                    tickets,
+                }
+            },
+            |request_index, request| Gfx942SdmaUnpublishedCopyRequestV1 {
+                request_index,
+                request,
+            },
+            |request| request.request_index,
+            |plan, shards| Gfx942SdmaMultiQueueSubmissionV1 { plan, shards },
+        ) {
+            Ok(submission) => Ok(submission),
+            // Failure deliberately performs no cursor write.
+            Err(failure) => Err(MultiQueueSdmaSubmitFailureV1::Publication(failure)),
+        }
+    }
+
+    pub(crate) fn commit_striped_multi_queue_success(
+        &mut self,
+        plan: &Gfx942SdmaMultiQueuePlanV1,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
+        let Self::Striped { owners, next_owner } = self else {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "multi-queue cursor commit requires striped SDMA queues",
+            ));
+        };
+        if plan.first_queue() != *next_owner
+            || plan.queue_ids().len() != owners.len()
+            || !plan
+                .queue_ids()
+                .iter()
+                .copied()
+                .eq(owners.iter().map(|owner| owner.queue_id))
+        {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "stale multi-queue cursor commit",
+            ));
+        }
+        *next_owner = cursor_after_multi_queue_outcome(
+            *next_owner,
+            plan,
+            MultiQueueCursorOutcomeV1::CompleteSuccess,
+        )?;
+        Ok(())
     }
 
     pub(crate) fn directional_observation(
@@ -3476,6 +4092,363 @@ impl Gfx942SdmaQueueSetV1 {
     }
 }
 
+struct MultiQueueShardBuildV1<R = Gfx942SdmaCopyRequestV1> {
+    request_indices: Vec<u16>,
+    requests: Vec<R>,
+}
+
+fn prepare_multi_queue_batch<R, P, S, U>(
+    queue_count: usize,
+    plan: Gfx942SdmaMultiQueuePlanV1,
+    requests: Vec<R>,
+    mut prepare_shard: impl FnMut(usize, Vec<R>) -> Result<P, (Gfx942SdmaErrorV1, Vec<R>)>,
+    mut prepared_into_requests: impl FnMut(P) -> Vec<R>,
+) -> Result<PreparedMultiQueueSdmaBatchV1<P, S, U>, MultiQueueSdmaPreparationFailureV1<R>> {
+    let allocation_error = || Gfx942SdmaErrorV1::Contract("multi-queue SDMA custody allocation");
+    let mut shards = Vec::new();
+    if shards.try_reserve_exact(queue_count).is_err() {
+        return Err(MultiQueueSdmaPreparationFailureV1 {
+            error: allocation_error(),
+            requests,
+        });
+    }
+    for queue in 0..queue_count {
+        let count = plan.shard_count(queue).unwrap_or(0);
+        let mut request_indices = Vec::new();
+        let mut queue_requests = Vec::new();
+        if request_indices.try_reserve_exact(count).is_err()
+            || queue_requests.try_reserve_exact(count).is_err()
+        {
+            return Err(MultiQueueSdmaPreparationFailureV1 {
+                error: allocation_error(),
+                requests,
+            });
+        }
+        shards.push(MultiQueueShardBuildV1 {
+            request_indices,
+            requests: queue_requests,
+        });
+    }
+    let mut prepared_shards = Vec::new();
+    let mut recovery_pairs = Vec::new();
+    let mut recovered_requests = Vec::new();
+    let mut published_capacity = Vec::new();
+    let mut unpublished_capacity = Vec::new();
+    let mut preflight = MultiQueuePreflightStateV1::new(&plan);
+    if prepared_shards
+        .try_reserve_exact(plan.active_shard_count())
+        .is_err()
+        || recovery_pairs
+            .try_reserve_exact(plan.request_count())
+            .is_err()
+        || recovered_requests
+            .try_reserve_exact(plan.request_count())
+            .is_err()
+        || published_capacity
+            .try_reserve_exact(plan.active_shard_count())
+            .is_err()
+        || unpublished_capacity
+            .try_reserve_exact(plan.request_count())
+            .is_err()
+    {
+        return Err(MultiQueueSdmaPreparationFailureV1 {
+            error: allocation_error(),
+            requests,
+        });
+    }
+    for (index, request) in requests.into_iter().enumerate() {
+        let queue = plan
+            .queue_for_request(index)
+            .expect("plan covers every bounded request");
+        shards[queue].request_indices.push(index as u16);
+        shards[queue].requests.push(request);
+    }
+    for step in 0..queue_count {
+        let queue = (plan.first_queue() + step) % queue_count;
+        if shards[queue].requests.is_empty() {
+            continue;
+        }
+        let queue_requests = std::mem::take(&mut shards[queue].requests);
+        match prepare_shard(queue, queue_requests) {
+            Ok(batch) => {
+                let prepared = PreparedMultiQueueShardV1 {
+                    queue_ordinal: queue,
+                    request_indices: std::mem::take(&mut shards[queue].request_indices),
+                    batch,
+                };
+                if let Err(error) = preflight.record_prepared_queue(queue) {
+                    prepared_shards.push(prepared);
+                    append_prepared_requests(
+                        &mut recovery_pairs,
+                        prepared_shards,
+                        &mut prepared_into_requests,
+                    );
+                    for shard in shards {
+                        append_indexed_requests(
+                            &mut recovery_pairs,
+                            shard.request_indices,
+                            shard.requests,
+                        );
+                    }
+                    recovery_pairs.sort_unstable_by_key(|request| request.index);
+                    recovered_requests
+                        .extend(recovery_pairs.into_iter().map(|request| request.request));
+                    return Err(MultiQueueSdmaPreparationFailureV1 {
+                        error,
+                        requests: recovered_requests,
+                    });
+                }
+                prepared_shards.push(prepared);
+            }
+            Err((error, queue_requests)) => {
+                append_prepared_requests(
+                    &mut recovery_pairs,
+                    prepared_shards,
+                    &mut prepared_into_requests,
+                );
+                append_indexed_requests(
+                    &mut recovery_pairs,
+                    std::mem::take(&mut shards[queue].request_indices),
+                    queue_requests,
+                );
+                for shard in shards {
+                    append_indexed_requests(
+                        &mut recovery_pairs,
+                        shard.request_indices,
+                        shard.requests,
+                    );
+                }
+                recovery_pairs.sort_unstable_by_key(|request| request.index);
+                recovered_requests
+                    .extend(recovery_pairs.into_iter().map(|request| request.request));
+                return Err(MultiQueueSdmaPreparationFailureV1 {
+                    error,
+                    requests: recovered_requests,
+                });
+            }
+        }
+    }
+    Ok(PreparedMultiQueueSdmaBatchV1 {
+        plan,
+        shards: prepared_shards,
+        preflight,
+        published_capacity,
+        unpublished_capacity,
+    })
+}
+
+// Boxing this error would add an allocation after a prior shard may be device-visible.
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+fn publish_multi_queue_batch<R, P, T, S, U, O>(
+    prepared: PreparedMultiQueueSdmaBatchV1<P, S, U>,
+    mut publish_shard: impl FnMut(
+        usize,
+        P,
+    ) -> Result<
+        (u32, Vec<T>),
+        (u32, PreparedSdmaPublicationFailureV1<P, T>),
+    >,
+    mut prepared_into_requests: impl FnMut(P) -> Vec<R>,
+    mut make_published: impl FnMut(usize, u32, Vec<u16>, Vec<T>) -> S,
+    mut make_unpublished: impl FnMut(u16, R) -> U,
+    unpublished_index: impl Fn(&U) -> u16,
+    make_submission: impl FnOnce(Gfx942SdmaMultiQueuePlanV1, Vec<S>) -> O,
+) -> Result<O, MultiQueueSdmaPublicationFailureV1<S, U>> {
+    let PreparedMultiQueueSdmaBatchV1 {
+        plan,
+        shards,
+        mut preflight,
+        mut published_capacity,
+        mut unpublished_capacity,
+    } = prepared;
+    if let Err(error) = preflight.authorize_publication() {
+        for shard in shards {
+            append_unpublished_requests(
+                &mut unpublished_capacity,
+                shard.request_indices,
+                prepared_into_requests(shard.batch),
+                &mut make_unpublished,
+            );
+        }
+        unpublished_capacity.sort_unstable_by_key(&unpublished_index);
+        return Err(MultiQueueSdmaPublicationFailureV1 {
+            error,
+            plan,
+            published: published_capacity,
+            indeterminate: None,
+            unpublished: unpublished_capacity,
+        });
+    }
+    let mut pending = shards.into_iter();
+    while let Some(shard) = pending.next() {
+        let queue_ordinal = shard.queue_ordinal;
+        match publish_shard(queue_ordinal, shard.batch) {
+            Ok((queue_id, tickets)) => {
+                debug_assert_eq!(tickets.len(), shard.request_indices.len());
+                if preflight
+                    .record_publication_observation(
+                        queue_ordinal,
+                        MultiQueuePublicationObservationV1::Confirmed,
+                    )
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                published_capacity.push(make_published(
+                    queue_ordinal,
+                    queue_id,
+                    shard.request_indices,
+                    tickets,
+                ));
+            }
+            Err((_, PreparedSdmaPublicationFailureV1::Recoverable { error, prepared })) => {
+                if preflight
+                    .record_publication_observation(
+                        queue_ordinal,
+                        MultiQueuePublicationObservationV1::RecoverableNoEffect,
+                    )
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                append_unpublished_requests(
+                    &mut unpublished_capacity,
+                    shard.request_indices,
+                    prepared_into_requests(prepared),
+                    &mut make_unpublished,
+                );
+                for pending_shard in pending {
+                    append_unpublished_requests(
+                        &mut unpublished_capacity,
+                        pending_shard.request_indices,
+                        prepared_into_requests(pending_shard.batch),
+                        &mut make_unpublished,
+                    );
+                }
+                unpublished_capacity.sort_unstable_by_key(&unpublished_index);
+                return Err(MultiQueueSdmaPublicationFailureV1 {
+                    error,
+                    plan,
+                    published: published_capacity,
+                    indeterminate: None,
+                    unpublished: unpublished_capacity,
+                });
+            }
+            Err((queue_id, PreparedSdmaPublicationFailureV1::Retained { error, tickets })) => {
+                debug_assert_eq!(tickets.len(), shard.request_indices.len());
+                if preflight
+                    .record_publication_observation(
+                        queue_ordinal,
+                        MultiQueuePublicationObservationV1::Indeterminate,
+                    )
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                let indeterminate = Some(make_published(
+                    queue_ordinal,
+                    queue_id,
+                    shard.request_indices,
+                    tickets,
+                ));
+                for pending_shard in pending {
+                    append_unpublished_requests(
+                        &mut unpublished_capacity,
+                        pending_shard.request_indices,
+                        prepared_into_requests(pending_shard.batch),
+                        &mut make_unpublished,
+                    );
+                }
+                unpublished_capacity.sort_unstable_by_key(&unpublished_index);
+                return Err(MultiQueueSdmaPublicationFailureV1 {
+                    error,
+                    plan,
+                    published: published_capacity,
+                    indeterminate,
+                    unpublished: unpublished_capacity,
+                });
+            }
+        }
+    }
+    if !preflight.publication_is_complete() {
+        std::process::abort();
+    }
+    Ok(make_submission(plan, published_capacity))
+}
+
+fn append_prepared_requests<R, P>(
+    output: &mut Vec<IndexedSdmaRequestV1<R>>,
+    shards: Vec<PreparedMultiQueueShardV1<P>>,
+    prepared_into_requests: &mut impl FnMut(P) -> Vec<R>,
+) {
+    for shard in shards {
+        append_indexed_requests(
+            output,
+            shard.request_indices,
+            prepared_into_requests(shard.batch),
+        );
+    }
+}
+
+fn append_indexed_requests<R>(
+    output: &mut Vec<IndexedSdmaRequestV1<R>>,
+    indices: Vec<u16>,
+    requests: Vec<R>,
+) {
+    debug_assert_eq!(indices.len(), requests.len());
+    output.extend(
+        indices
+            .into_iter()
+            .zip(requests)
+            .map(|(index, request)| IndexedSdmaRequestV1 { index, request }),
+    );
+}
+
+fn append_unpublished_requests<R, U>(
+    output: &mut Vec<U>,
+    indices: Vec<u16>,
+    requests: Vec<R>,
+    make_unpublished: &mut impl FnMut(u16, R) -> U,
+) {
+    debug_assert_eq!(indices.len(), requests.len());
+    output.extend(
+        indices
+            .into_iter()
+            .zip(requests)
+            .map(|(request_index, request)| make_unpublished(request_index, request)),
+    );
+}
+
+#[cfg(test)]
+fn multi_queue_custody_is_exact<'a>(
+    plan: &Gfx942SdmaMultiQueuePlanV1,
+    shards: impl IntoIterator<Item = (usize, &'a [u16])>,
+    unpublished: impl IntoIterator<Item = usize>,
+) -> bool {
+    let mut seen = [false; GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1];
+    let mut observed = 0usize;
+    for (queue, indices) in shards {
+        for index in indices.iter().map(|index| usize::from(*index)) {
+            if index >= plan.request_count()
+                || seen[index]
+                || plan.queue_for_request(index) != Some(queue)
+            {
+                return false;
+            }
+            seen[index] = true;
+            observed += 1;
+        }
+    }
+    for index in unpublished {
+        if index >= plan.request_count() || seen[index] {
+            return false;
+        }
+        seen[index] = true;
+        observed += 1;
+    }
+    observed == plan.request_count() && seen[..plan.request_count()].iter().all(|value| *value)
+}
+
 pub(crate) fn allocate_host_buffer(
     memory: &mut SharedGttMemorySessionV1,
     owner: QueueKeyV1,
@@ -3669,6 +4642,23 @@ fn next_striped_owner(current: usize, owner_count: usize) -> Result<usize, Gfx94
         return Err(Gfx942SdmaErrorV1::Contract("striped SDMA owner cursor"));
     }
     Ok((current + 1) % owner_count)
+}
+
+fn cursor_after_multi_queue_outcome(
+    current: usize,
+    plan: &Gfx942SdmaMultiQueuePlanV1,
+    outcome: MultiQueueCursorOutcomeV1,
+) -> Result<usize, Gfx942SdmaErrorV1> {
+    if plan.first_queue() != current {
+        return Err(Gfx942SdmaErrorV1::Contract(
+            "multi-queue cursor plan is stale",
+        ));
+    }
+    Ok(match outcome {
+        MultiQueueCursorOutcomeV1::CompleteSuccess => plan.next_queue_after_success(),
+        #[cfg(test)]
+        MultiQueueCursorOutcomeV1::Failure => current,
+    })
 }
 
 fn exact_queue_owner(left: QueueKeyV1, right: QueueKeyV1) -> bool {
@@ -3967,6 +4957,488 @@ mod tests {
         let mut poisoned = false;
         assert!(checked_sdma_write_end(u64::MAX - 63, 64, &mut poisoned).is_err());
         assert!(poisoned);
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum InjectedMultiQueueFaultV1 {
+        Preparation { call: usize },
+        RecoverablePublication { call: usize },
+        IndeterminatePublication { call: usize },
+        ClosingCurrentness,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct InjectedMultiQueueOutcomeV1 {
+        succeeded: bool,
+        confirmed_queues: Vec<usize>,
+        confirmed_requests: Vec<usize>,
+        indeterminate_queue: Option<usize>,
+        indeterminate_requests: Vec<usize>,
+        untouched_requests: Vec<usize>,
+        cursor: usize,
+    }
+
+    struct InjectedShardV1 {
+        queue_ordinal: usize,
+        queue_id: u32,
+        request_indices: Vec<u16>,
+        tickets: Vec<usize>,
+    }
+
+    struct InjectedSubmissionV1 {
+        plan: Gfx942SdmaMultiQueuePlanV1,
+        shards: Vec<InjectedShardV1>,
+    }
+
+    fn injected_multi_queue_outcome(
+        plan: &Gfx942SdmaMultiQueuePlanV1,
+        cursor: usize,
+        fault: Option<InjectedMultiQueueFaultV1>,
+    ) -> InjectedMultiQueueOutcomeV1 {
+        fn shard_observations(shards: &[InjectedShardV1]) -> (Vec<usize>, Vec<usize>) {
+            let queues = shards
+                .iter()
+                .map(|shard| {
+                    assert_eq!(shard.queue_id, 10 + shard.queue_ordinal as u32);
+                    assert_eq!(shard.request_indices.len(), shard.tickets.len());
+                    assert_eq!(
+                        shard
+                            .request_indices
+                            .iter()
+                            .map(|index| usize::from(*index))
+                            .collect::<Vec<_>>(),
+                        shard.tickets
+                    );
+                    shard.queue_ordinal
+                })
+                .collect();
+            let mut requests = shards
+                .iter()
+                .flat_map(|shard| shard.request_indices.iter().copied())
+                .map(usize::from)
+                .collect::<Vec<_>>();
+            requests.sort_unstable();
+            (queues, requests)
+        }
+
+        let requests = (0..plan.request_count()).collect::<Vec<_>>();
+        let mut preparation_call = 0;
+        let prepared: PreparedMultiQueueSdmaBatchV1<Vec<usize>, InjectedShardV1, (u16, usize)> =
+            match prepare_multi_queue_batch(
+                plan.queue_ids().len(),
+                plan.clone(),
+                requests,
+                |_, requests| {
+                    let this_call = preparation_call;
+                    preparation_call += 1;
+                    if fault == Some(InjectedMultiQueueFaultV1::Preparation { call: this_call }) {
+                        Err((
+                            Gfx942SdmaErrorV1::Contract("injected preparation failure"),
+                            requests,
+                        ))
+                    } else {
+                        Ok(requests)
+                    }
+                },
+                |prepared| prepared,
+            ) {
+                Ok(prepared) => prepared,
+                Err(failure) => {
+                    assert!(matches!(
+                        fault,
+                        Some(InjectedMultiQueueFaultV1::Preparation { .. })
+                    ));
+                    return InjectedMultiQueueOutcomeV1 {
+                        succeeded: false,
+                        confirmed_queues: Vec::new(),
+                        confirmed_requests: Vec::new(),
+                        indeterminate_queue: None,
+                        indeterminate_requests: Vec::new(),
+                        untouched_requests: failure.requests,
+                        cursor,
+                    };
+                }
+            };
+        assert_eq!(prepared.published_capacity.len(), 0);
+        assert!(prepared.published_capacity.capacity() >= plan.active_shard_count());
+        assert_eq!(prepared.unpublished_capacity.len(), 0);
+        assert!(prepared.unpublished_capacity.capacity() >= plan.request_count());
+
+        let mut publication_call = 0;
+        let published = publish_multi_queue_batch(
+            prepared,
+            |queue, prepared| {
+                let this_call = publication_call;
+                publication_call += 1;
+                let queue_id = plan.queue_ids()[queue];
+                match fault {
+                    Some(InjectedMultiQueueFaultV1::RecoverablePublication { call })
+                        if call == this_call =>
+                    {
+                        Err((
+                            queue_id,
+                            PreparedSdmaPublicationFailureV1::Recoverable {
+                                error: Gfx942SdmaErrorV1::Contract(
+                                    "injected recoverable publication failure",
+                                ),
+                                prepared,
+                            },
+                        ))
+                    }
+                    Some(InjectedMultiQueueFaultV1::IndeterminatePublication { call })
+                        if call == this_call =>
+                    {
+                        Err((
+                            queue_id,
+                            PreparedSdmaPublicationFailureV1::Retained {
+                                error: Gfx942SdmaErrorV1::Contract(
+                                    "injected indeterminate publication failure",
+                                ),
+                                tickets: prepared,
+                            },
+                        ))
+                    }
+                    _ => Ok((queue_id, prepared)),
+                }
+            },
+            |prepared| prepared,
+            |queue_ordinal, queue_id, request_indices, tickets| InjectedShardV1 {
+                queue_ordinal,
+                queue_id,
+                request_indices,
+                tickets,
+            },
+            |request_index, request| (request_index, request),
+            |request| request.0,
+            |plan, shards| InjectedSubmissionV1 { plan, shards },
+        );
+        match published {
+            Ok(submission) => {
+                assert_eq!(submission.plan, *plan);
+                assert!(submission.shards.capacity() >= plan.active_shard_count());
+                let (confirmed_queues, confirmed_requests) = shard_observations(&submission.shards);
+                let succeeded = fault != Some(InjectedMultiQueueFaultV1::ClosingCurrentness);
+                InjectedMultiQueueOutcomeV1 {
+                    succeeded,
+                    confirmed_queues,
+                    confirmed_requests,
+                    indeterminate_queue: None,
+                    indeterminate_requests: Vec::new(),
+                    untouched_requests: Vec::new(),
+                    cursor: if succeeded {
+                        cursor_after_multi_queue_outcome(
+                            cursor,
+                            plan,
+                            MultiQueueCursorOutcomeV1::CompleteSuccess,
+                        )
+                        .unwrap()
+                    } else {
+                        cursor
+                    },
+                }
+            }
+            Err(failure) => {
+                assert!(failure.published.capacity() >= plan.active_shard_count());
+                assert!(failure.unpublished.capacity() >= plan.request_count());
+                let (confirmed_queues, confirmed_requests) = shard_observations(&failure.published);
+                let (indeterminate_queue, indeterminate_requests) = failure
+                    .indeterminate
+                    .as_ref()
+                    .map(|shard| {
+                        let (_, requests) = shard_observations(std::slice::from_ref(shard));
+                        (Some(shard.queue_ordinal), requests)
+                    })
+                    .unwrap_or((None, Vec::new()));
+                let untouched_requests = failure
+                    .unpublished
+                    .into_iter()
+                    .map(|(index, request)| {
+                        assert_eq!(usize::from(index), request);
+                        request
+                    })
+                    .collect();
+                InjectedMultiQueueOutcomeV1 {
+                    succeeded: false,
+                    confirmed_queues,
+                    confirmed_requests,
+                    indeterminate_queue,
+                    indeterminate_requests,
+                    untouched_requests,
+                    cursor,
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multi_queue_plan_rejects_invalid_duplicate_and_overcapacity_inputs() {
+        assert_eq!(
+            Gfx942SdmaMultiQueuePlanV1::new(&[], 1, 0),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::QueueCount { actual: 0 })
+        );
+        assert_eq!(
+            Gfx942SdmaMultiQueuePlanV1::new(&[1, 2, 3], 1, 0),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::QueueCount { actual: 3 })
+        );
+        let too_many_queues = (0..=GFX942_SDMA_MAX_STRIPED_QUEUES_V1 as u32).collect::<Vec<_>>();
+        assert!(matches!(
+            Gfx942SdmaMultiQueuePlanV1::new(&too_many_queues, 1, 0),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::QueueCount { .. })
+        ));
+        assert_eq!(
+            Gfx942SdmaMultiQueuePlanV1::new(&[7, 8, 7, 9], 1, 0),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::DuplicateQueueId { queue_id: 7 })
+        );
+        assert!(matches!(
+            Gfx942SdmaMultiQueuePlanV1::new(&[7, 8], 0, 0),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::RequestCount { actual: 0, .. })
+        ));
+        assert!(matches!(
+            Gfx942SdmaMultiQueuePlanV1::new(&[7, 8], 2 * GFX942_SDMA_MAX_IN_FLIGHT_V1 + 1, 0,),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::RequestCount { .. })
+        ));
+        assert_eq!(
+            Gfx942SdmaMultiQueuePlanV1::new(&[7, 8], 1, 2),
+            Err(Gfx942SdmaMultiQueuePlanErrorV1::InvalidCursor {
+                actual: 2,
+                queue_count: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn multi_queue_plan_is_balanced_deterministic_fair_and_current() {
+        let queue_ids = [10, 11, 12, 13];
+        let plan = Gfx942SdmaMultiQueuePlanV1::new(&queue_ids, 10, 2).unwrap();
+        assert_eq!(
+            (0..10)
+                .map(|index| plan.queue_for_request(index).unwrap())
+                .collect::<Vec<_>>(),
+            [2, 3, 0, 1, 2, 3, 0, 1, 2, 3]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|queue| plan.shard_count(queue).unwrap())
+                .collect::<Vec<_>>(),
+            [2, 2, 3, 3]
+        );
+        assert!(plan.is_balanced());
+        assert_eq!(plan.active_shard_count(), 4);
+        assert_eq!(plan.next_queue_after_success(), 0);
+        assert!(plan.is_current_for(&queue_ids, 2));
+        assert!(!plan.is_current_for(&[10, 12, 11, 13], 2));
+        assert!(!plan.is_current_for(&queue_ids, 1));
+
+        let mut cursor = 0;
+        let mut selected = Vec::new();
+        for _ in 0..8 {
+            let single = Gfx942SdmaMultiQueuePlanV1::new(&queue_ids, 1, cursor).unwrap();
+            selected.push(single.queue_for_request(0).unwrap());
+            cursor = single.next_queue_after_success();
+        }
+        assert_eq!(selected, [0, 1, 2, 3, 0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn multi_queue_cursor_advances_only_after_complete_success() {
+        let plan = Gfx942SdmaMultiQueuePlanV1::new(&[10, 11, 12, 13], 3, 1).unwrap();
+        assert_eq!(
+            cursor_after_multi_queue_outcome(1, &plan, MultiQueueCursorOutcomeV1::CompleteSuccess,)
+                .unwrap(),
+            0
+        );
+        for failure_stage in ["preparation", "partial-publication", "terminal"] {
+            assert_eq!(
+                cursor_after_multi_queue_outcome(1, &plan, MultiQueueCursorOutcomeV1::Failure,)
+                    .unwrap(),
+                1,
+                "{failure_stage} failure advanced the cursor",
+            );
+        }
+        assert!(
+            cursor_after_multi_queue_outcome(0, &plan, MultiQueueCursorOutcomeV1::CompleteSuccess,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn multi_queue_partial_progress_accounting_is_exact() {
+        let plan = Gfx942SdmaMultiQueuePlanV1::new(&[10, 11, 12, 13], 10, 2).unwrap();
+        let published = [(2, [0_u16, 4, 8].as_slice())];
+        let indeterminate = [(3, [1_u16, 5, 9].as_slice())];
+        let unpublished = [2_usize, 3, 6, 7];
+        assert!(multi_queue_custody_is_exact(
+            &plan,
+            published.into_iter().chain(indeterminate),
+            unpublished,
+        ));
+        assert!(!multi_queue_custody_is_exact(
+            &plan,
+            [(2, [0_u16, 4, 8].as_slice()), (3, [1_u16, 5, 9].as_slice())],
+            [2_usize, 3, 6, 6],
+        ));
+        assert!(!multi_queue_custody_is_exact(
+            &plan,
+            [(1, [0_u16, 4, 8].as_slice()), (3, [1_u16, 5, 9].as_slice())],
+            unpublished,
+        ));
+    }
+
+    #[test]
+    fn multi_queue_preflight_gate_rejects_hostile_ordering_without_publication() {
+        let plan = Gfx942SdmaMultiQueuePlanV1::new(&[10, 11, 12, 13], 4, 2).unwrap();
+        let mut preflight = MultiQueuePreflightStateV1::new(&plan);
+        assert!(!preflight.publication_authorized);
+        assert!(
+            preflight
+                .record_publication_observation(2, MultiQueuePublicationObservationV1::Confirmed)
+                .is_err()
+        );
+        assert!(preflight.record_prepared_queue(4).is_err());
+        assert!(preflight.record_prepared_queue(2).is_ok());
+        assert!(preflight.record_prepared_queue(2).is_err());
+        assert!(preflight.authorize_publication().is_err());
+        assert!(!preflight.publication_authorized);
+        assert!(preflight.record_prepared_queue(3).is_ok());
+        assert!(preflight.record_prepared_queue(0).is_ok());
+        assert!(preflight.record_prepared_queue(1).is_ok());
+        assert!(preflight.authorize_publication().is_ok());
+        assert!(preflight.publication_authorized);
+        assert!(preflight.record_prepared_queue(0).is_err());
+        assert!(preflight.authorize_publication().is_err());
+        assert!(
+            preflight
+                .record_publication_observation(2, MultiQueuePublicationObservationV1::Confirmed)
+                .is_ok()
+        );
+        assert!(
+            preflight
+                .record_publication_observation(2, MultiQueuePublicationObservationV1::Confirmed)
+                .is_err()
+        );
+        assert!(!preflight.publication_is_complete());
+    }
+
+    #[test]
+    fn multi_queue_injected_coordinator_reports_exact_custody_and_cursor_outcomes() {
+        let plan = Gfx942SdmaMultiQueuePlanV1::new(&[10, 11, 12, 13], 10, 2).unwrap();
+
+        assert_eq!(
+            injected_multi_queue_outcome(&plan, 2, None),
+            InjectedMultiQueueOutcomeV1 {
+                succeeded: true,
+                confirmed_queues: vec![2, 3, 0, 1],
+                confirmed_requests: (0..10).collect(),
+                indeterminate_queue: None,
+                indeterminate_requests: vec![],
+                untouched_requests: vec![],
+                cursor: 0,
+            }
+        );
+        assert_eq!(
+            injected_multi_queue_outcome(
+                &plan,
+                2,
+                Some(InjectedMultiQueueFaultV1::Preparation { call: 1 }),
+            ),
+            InjectedMultiQueueOutcomeV1 {
+                succeeded: false,
+                confirmed_queues: vec![],
+                confirmed_requests: vec![],
+                indeterminate_queue: None,
+                indeterminate_requests: vec![],
+                untouched_requests: (0..10).collect(),
+                cursor: 2,
+            }
+        );
+        assert_eq!(
+            injected_multi_queue_outcome(
+                &plan,
+                2,
+                Some(InjectedMultiQueueFaultV1::RecoverablePublication { call: 1 }),
+            ),
+            InjectedMultiQueueOutcomeV1 {
+                succeeded: false,
+                confirmed_queues: vec![2],
+                confirmed_requests: vec![0, 4, 8],
+                indeterminate_queue: None,
+                indeterminate_requests: vec![],
+                untouched_requests: vec![1, 2, 3, 5, 6, 7, 9],
+                cursor: 2,
+            }
+        );
+        assert_eq!(
+            injected_multi_queue_outcome(
+                &plan,
+                2,
+                Some(InjectedMultiQueueFaultV1::IndeterminatePublication { call: 1 }),
+            ),
+            InjectedMultiQueueOutcomeV1 {
+                succeeded: false,
+                confirmed_queues: vec![2],
+                confirmed_requests: vec![0, 4, 8],
+                indeterminate_queue: Some(3),
+                indeterminate_requests: vec![1, 5, 9],
+                untouched_requests: vec![2, 3, 6, 7],
+                cursor: 2,
+            }
+        );
+        assert_eq!(
+            injected_multi_queue_outcome(
+                &plan,
+                2,
+                Some(InjectedMultiQueueFaultV1::ClosingCurrentness),
+            ),
+            InjectedMultiQueueOutcomeV1 {
+                succeeded: false,
+                confirmed_queues: vec![2, 3, 0, 1],
+                confirmed_requests: (0..10).collect(),
+                indeterminate_queue: None,
+                indeterminate_requests: vec![],
+                untouched_requests: vec![],
+                cursor: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn multi_queue_publication_requires_fully_prepared_private_custody() {
+        let source = include_str!("sdma.rs");
+        let coordinator = source
+            .split("pub(crate) fn submit_striped_multi_queue_batch")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn directional_observation")
+            .next()
+            .unwrap();
+        let prepare = coordinator.find("prepare_multi_queue_batch").unwrap();
+        let publish = coordinator.find("publish_multi_queue_batch").unwrap();
+        assert!(prepare < publish);
+
+        let prepare_body = source
+            .split("fn prepare_multi_queue_batch<")
+            .nth(1)
+            .unwrap()
+            .split("fn publish_multi_queue_batch<")
+            .next()
+            .unwrap();
+        assert!(coordinator.contains("prepare_batch_recoverable"));
+        assert!(coordinator.contains("submit_prepared_batch_with_custody"));
+        assert!(prepare_body.contains("prepare_shard(queue, queue_requests)"));
+        assert!(!prepare_body.contains("publish_shard(queue_ordinal"));
+
+        let publish_body = source
+            .split("fn publish_multi_queue_batch<")
+            .nth(1)
+            .unwrap()
+            .split("fn append_prepared_requests")
+            .next()
+            .unwrap();
+        assert!(publish_body.contains("publish_shard(queue_ordinal, shard.batch)"));
+        assert!(!publish_body.contains("try_reserve"));
+        assert!(!publish_body.contains("Vec::new"));
+        assert!(!publish_body.contains(".collect"));
+        assert!(!publish_body.contains("to_string"));
     }
 
     #[test]

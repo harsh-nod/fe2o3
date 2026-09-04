@@ -126,10 +126,19 @@ prior stream tail; cancellation after a doorbell is explicitly `TooLate`.
 immediately ready work. `wait` is likewise observation-only and does not publish
 deferred work. The additive in-process `flush_stream` operation may drive a
 dependency-ready FIFO head through potentially blocking dirty-buffer
-reconciliation and native publication. There is no background native
-publication scheduler or native queue-side dependency packet. The optional
-async engine observes completion only. Runtime Worker V1 has no flush request;
-negotiated Runtime Worker V4 exposes the same bounded progress operation.
+reconciliation and native publication. There is no native queue-side dependency
+packet. The optional async engine remains observation-only under its original
+`spawn` constructor. Its additive `spawn_with_progress` mode can register a
+bounded set of streams and call `flush_stream` for dependency-ready pending
+heads on the owner thread, using an independently bounded cyclic flush budget.
+Registration is move-only and dropping it stops future flush attempts without
+cancelling, releasing, or finally flushing work. Retryable rejected/quiescent
+failures remain registered and observable; terminal ambiguity seals the engine.
+This opt-in host scheduler is cooperative progress, not proof of native
+liveness, fairness, or hardware execution. Runtime Worker V1 has no flush
+request; negotiated Runtime Worker V4 and V5 expose the same bounded progress
+operation. Direct KFD owners remain thread-affine and cannot use the cross-thread
+engine; the Send-capable Worker V4/V5 adapters can.
 
 Same-device `copy_async` uses the native directional SDMA queues and splits
 logical ranges larger than one linear packet into sequential packets. Live
@@ -229,8 +238,12 @@ custody. R12 adds 23 obligations and 13 expected-negative mutations for abstract
 multi-queue custody, bringing the cumulative totals to 142 and 92. R13 adds 20
 obligations and 11 mutations for the bounded logical-stream scheduler, bringing
 the totals to 162 and 103. R14 adds 10 obligations and 8 mutations for bounded
-event observation, bringing the totals to 172 and 111. These pinned Verus
-obligations prove only the
+event observation, bringing the totals to 172 and 111. R16 adds 21 obligations
+and 10 mutations for a reachable, already-decoded Worker V5 semantic
+request/response boundary, exact attempted/accepted/indeterminate custody, and
+an ordered exhaustive sidecar sequence join, bringing the totals to 193 and
+121. It does not parse bytes, invoke a subprocess, authenticate a worker, or
+count concrete backend calls. These pinned Verus obligations prove only the
 corresponding abstract models; they are not a Rust-to-Verus refinement or native
 execution proof.
 

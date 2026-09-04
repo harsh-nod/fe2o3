@@ -346,3 +346,40 @@ a production multi-queue SDMA custody API and clean, idle-hardware evidence for
 the new striped profiles. Orders-of-magnitude speedups are accepted only for an
 exact matched workload with retained measurements; they are not a general
 runtime target or current claim.
+
+## Runtime R16 Status
+
+R16 adds an opt-in bounded async progress mode without changing the original
+observation-only engine constructor. Registered pending streams receive cyclic,
+budgeted `flush_stream` attempts on the single owner thread. Registration drop
+does not cancel, release, or finally flush work; retryable failures remain
+observable and terminal ambiguity seals the engine. Direct KFD remains
+thread-affine, so this cross-thread mode currently applies to Send-capable
+Worker V4/V5 adapters. It is a host progress mechanism, not a native liveness
+proof.
+
+The gfx942 KFD surface now has a production striped SDMA submission boundary for
+2 through 16 queues and at most 1,008 requests. It prepares all balanced shards
+before the first publication and reports exact confirmed, indeterminate, and
+untouched observations after partial failure. Terminal custody is audit-only
+and retained until process teardown; only no-effect preflight returns retryable
+requests. It provides no rollback or atomic device-transaction guarantee.
+Preparation/publication injection executes the shared production algorithms;
+closing-currentness injection covers the shared state transition but not the
+outer live-session currentness/poison path. Live native fault-injection evidence
+remains unavailable.
+
+The R16 abstract Worker V5 boundary adds 21 Verus obligations and 10
+expected-negative mutations, bringing authenticated totals to 193 and 121. It
+models reachable already-decoded request states, attempted versus accepted and
+indeterminate custody, response sealing, exact contract retention, and an
+ordered exhaustive semantic sidecar sequence join. It is not a byte parser,
+subprocess, concrete backend-call, Rust-to-Verus, or native execution refinement.
+
+R16 still does not establish HIP/HSA parity. The next native architecture step
+requires one persistent thread-affine allocation owner shared through bounded
+move-only compute, local-SDMA, and exact two-device XGMI use leases; the current
+linear owners cannot represent that safely. Clean idle-MI300X correctness and
+matched HIP/HSA performance evidence also remain open. General
+orders-of-magnitude superiority is not a credible acceptance criterion; each
+claim must name and retain its matched workload and measurement scope.

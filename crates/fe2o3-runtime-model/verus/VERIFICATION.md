@@ -3,8 +3,8 @@
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
-logical-scheduler, and R14 async-observer models. The authenticated runner
-proves 172 obligations and rejects 111
+logical-scheduler, R14 async-observer, and R16 Worker V5 semantic-boundary
+models. The authenticated runner proves 193 obligations and rejects 121
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -560,7 +560,11 @@ lane, a dependency count above its bound, non-head FIFO or dependency bypass,
 publication despite an active resource overlap, duplicate lane ownership, a
 terminal event from a foreign lane or same-numbered lane with a foreign owner,
 non-tail cancellation, terminal release
-despite a queued dependent, and currentness loss without quarantine. The launcher
+despite a queued dependent, and currentness loss without quarantine; and R16
+Worker V4 downgrade acceptance, an over-bound dependency count, semantic
+variant mismatch, custody on malformed admission, semantic-contract
+substitution, terminal reopening, collapsed worker/sidecar scope predicates,
+and sidecar contract substitution. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -584,6 +588,87 @@ polling, progress, fairness, latency, KFD, HSA, HIP, or hardware. In particular,
 observation neither publishes deferred work nor provides asynchronous device
 execution by itself; the runtime's declared progress operation remains a
 separate obligation.
+
+`r16_worker_semantic_boundary_v1.rs` verifies twenty-one abstract obligations for an
+already-decoded Worker V5 semantic request and direct-KFD sidecar boundary:
+
+1. only the exact V5 handshake opens the ready state;
+2. every non-V5 handshake seals without attempting or accepting custody;
+3. the exact atomic `63 + K + 29B + 8D` and collective
+   `69 + K + 29B + 8D` frame formulas fit the 65 MiB frame cap when `K` is at
+   most 1 MiB, `B` is at most 128, and `D` is at most 256;
+4. every modeled geometry component has the production `u32` bound, workgroup
+   multiplication has the `u32` bound, and collective participant products have
+   the production `u64` bound;
+5. composed binding/dependency admission is explicitly narrower than Worker
+   wire validation and does not assign those checks to the codec;
+6. malformed composed admission seals without increasing attempted or accepted
+   custody;
+7. a valid request starts one exact in-flight attempt without yet counting an
+   accepted custody;
+8. worker-wire and direct-KFD sidecar contract validity are distinct: the
+   worker boundary permits System atomics and Device collectives, rejects
+   System collectives, while the direct sidecar permits only non-System atomics
+   and Workgroup collectives;
+9. recoverable rejection and quiescence restore ready state without accepting
+   custody or fabricating a success;
+10. only a nonzero success accepts custody, exactly once, and preserves the
+   in-flight contract and launch;
+11. zero-handle success, terminal response, malformed response, timeout, and
+    EOF seal with the request explicitly indeterminate and without fabricating
+    accepted custody;
+12. terminal state is absorbing for requests and responses;
+13. the initial state satisfies a well-shaped reachable-state invariant;
+14. negotiation preserves that invariant;
+15. composed request admission preserves that invariant;
+16. response classification preserves that invariant;
+17. the handshake/request/nonzero-success composition preserves the exact
+    contract, launch, counts, and invariant;
+18. sidecar summaries use the exact V1 schema/version, nonzero encoded length
+    bounded to 16 MiB, at most 16,384 records, exact typed/ordinary counts, and
+    complete-history equality with the source runtime profile;
+19. an exact sidecar sequence is an ordered, unique, per-index bijection between
+    retained dispatch publications, producer observations, and records; and
+20. any per-index substituted sidecar record fails that sequence join.
+
+The recursive typed-record count contributes the twenty-first verified obligation
+reported by Verus.
+
+Ten R16 expected-negative mutations reject handshake downgrade, dependency and
+pre-custody bound weakening, exact-contract or sidecar substitution, collapsed
+Worker/direct-sidecar scope predicates, terminal reopening, variant mismatch,
+recoverable-response custody fabrication, and unreachable terminal in-flight
+state.
+
+The independent `no_std` executable model in
+`src/r16_worker_semantic_boundary.rs` has nine unit tests over the same abstract
+surface. It checks concrete model vectors for binding-patch alignment, bounds,
+zero placeholders, disjointness, nonempty checked regions, and unique
+dependencies. In the Verus file those facts are supplied as decoded-summary
+booleans; no theorem connects them to a byte parser.
+
+R16 request admission is intentionally a composed pre-custody abstraction. It
+does not assign each check to the production worker parser, dispatcher, or
+backend/facade call site. Attempted requests and in-flight/indeterminate custody
+are separate from accepted custody, which advances only after an abstract
+nonzero-success response; none is a concrete backend-invocation counter. The
+sidecar theorem covers ordered modeled fields but deliberately omits the
+SHA-derived record and content identities. Neither the Verus specification nor
+the executable
+model refines production Rust, a parser or codec, serde/JSON, SHA-256 or content
+identity, subprocess creation and teardown, channels, transport, authentication,
+timeouts, kill/reap behavior, compiler or ISA lowering, KFD/native execution,
+GPU atomics or collectives, hardware completion, liveness, or performance. The
+handshake values are abstract labels, not a proof of wire-byte compatibility.
+
+## R16 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract V5 negotiation, bounded request, composed pre-custody admission, response classification, reachability, and exact ordered sidecar-join relations | **Proved** | Twenty-one verified obligations in `r16_worker_semantic_boundary_v1.rs`; decoded mathematical summaries only. |
+| Independent bounded R16 executable model | **Checked** | Nine Rust unit tests exercise the separately implemented `no_std` finite model. |
+| Executable model or production Rust to Verus correspondence | **Not established** | No theorem connects either Rust implementation to the Verus structures, predicates, or transitions. |
+| Parser, serde, SHA, subprocess, transport, native KFD/GPU semantics, completion, liveness, or performance | **Not established** | These surfaces are explicitly outside the R16 model and require separate refinement or evidence. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
