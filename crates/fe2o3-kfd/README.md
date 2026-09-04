@@ -908,3 +908,44 @@ inputs, output bounds, redactions, availability claims, and authority
 exclusions. Reports and capability queries are fixed-size and allocation-free.
 Hostile tests use only crate-private detached-fact constructors; they perform
 no KFD, DRM, HIP, HSA, or ROCm runtime discovery.
+
+## R17 persistent device-allocation custody core
+
+`Gfx942PersistentDeviceAllocationV1` is an additive, addressless lifecycle
+core around exactly one existing mapped device-local allocation. It accepts
+either the ordinary single-device mapped lease or an already complete,
+canonical two-device peer mapping. The non-cloneable owner and every use lease
+are thread-affine. They expose no GPU address, native allocation handle,
+descriptor, pointer, or mapping identity, and use neither shared ownership nor
+interior locking.
+
+The owner retains the existing private allocation generation, selected device,
+VM, and mapped-state identity for exact substitution checks. A fixed 64-slot
+ledger admits Compute, LocalSdma, and peer-mapped source/destination
+classifications over checked nonempty allocation subranges. Operation selects
+the access class; callers cannot provide a contradictory access value.
+Overlapping reads can coexist and disjoint uses can coexist. Any active
+overlap involving a writer is rejected. A later overlapping use involving a
+writer must name the exact current host-confirmed successful frontier for the
+same native binding. Reservations then move through `Reserved`, `Prepared`,
+`Published`, `Completed`, and `Settled`; reserved and prepared uses can be
+cancelled, while a timeout returns the exact published custody unchanged.
+Settlement is ordered by reservation sequence so one frontier cannot skip an
+earlier live use. Retained settled history is bounded and can be retired only
+after every use is settled. Normal native-authority extraction requires no
+active use. Caller-reported indeterminate publication or currentness loss
+quarantines the owner and blocks normal extraction; `Drop` performs no KFD
+operation.
+
+This core does not yet connect to the compute AQL or SDMA packet owners. Its
+`Prepared`, `Published`, `Completed`, dependency-frontier, timeout, and
+quarantine transitions are host-side custody states invoked by a future
+adapter; they are not observations of a queue, packet, signal, device, driver,
+firmware, or hardware. In particular, a complete two-device peer mapping is
+not a `Gfx942XgmiRouteV1`: the peer-mapped operation names grant no route
+direction, topology generation, home endpoint, selected SDMA engine, XGMI
+publication, or completion authority. The currentness-loss entry point records
+only a caller report and performs no currentness check. Queue-owned publication
+callbacks, exact compute/SDMA binding, completion conversion, live currentness
+checks, and terminal process-teardown custody remain the next integration
+tranche. There is no concrete-to-model or formal proof for this ledger yet.

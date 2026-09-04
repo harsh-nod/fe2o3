@@ -140,6 +140,13 @@ request; negotiated Runtime Worker V4 and V5 expose the same bounded progress
 operation. Direct KFD owners remain thread-affine and cannot use the cross-thread
 engine; the Send-capable Worker V4/V5 adapters can.
 
+Live child-process regression tests exercise this progress path through exact
+V4 ordinary and V5 atomic wire requests: an event must first report pending,
+then the background engine emits the canonical flush request, and only then may
+the child report completion. Separate cases verify response-deadline,
+decoded-terminal, and EOF sealing. These tests validate host transport and
+runtime state propagation only; they are not native KFD or liveness evidence.
+
 Same-device `copy_async` uses the native directional SDMA queues and splits
 logical ranges larger than one linear packet into sequential packets. Live
 logical allocations retain native host or HBM SDMA storage, while bounded host
@@ -246,6 +253,17 @@ an ordered exhaustive sidecar sequence join, bringing the totals to 193 and
 count concrete backend calls. These pinned Verus obligations prove only the
 corresponding abstract models; they are not a Rust-to-Verus refinement or native
 execution proof.
+
+R17 adds 32 obligations and 14 mutations for a bounded persistent-allocation
+summary, bringing the totals to 225 and 135. It covers canonical R2-shaped
+admission, exact home-VM/queue and R9-shaped route predicates, reusable slot
+generations, hazards, dependency summaries, timeout custody, and quarantine.
+The independent executable model uses a private `Rc` registry incarnation to
+reject reconstructed-registry transition-token and dependency substitution;
+numeric observation identities are non-authoritative. The route predicate is
+metadata only and is not bound to the persistent mapping. Neither model is a
+refinement of the concrete KFD persistent owner, which remains disconnected
+from native compute/SDMA/XGMI publication and completion.
 
 The direct-KFD backend also exposes an opt-in bounded profiler. It records
 address-free logical resource lifecycle, host staging read/write ranges, native

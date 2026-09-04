@@ -383,3 +383,35 @@ linear owners cannot represent that safely. Clean idle-MI300X correctness and
 matched HIP/HSA performance evidence also remain open. General
 orders-of-magnitude superiority is not a credible acceptance criterion; each
 claim must name and retain its matched workload and measurement scope.
+
+## Runtime R17 Status
+
+R17 adds an addressless, thread-affine KFD custody core around one existing
+mapped device-local allocation. A fixed 64-slot ledger derives read/write
+access from closed compute, local-SDMA, and peer-mapped classifications;
+excludes overlapping active writers; preserves move-only custody across
+prepare, publication, timeout, completion, settlement, and caller-reported
+quarantine; and requires an exact successful host frontier before a later
+overlapping hazard can be reserved. The peer-mapped names deliberately grant
+no XGMI route, topology, engine, publication, or completion authority.
+
+An independent executable model adds exact home-VM/queue and directional R9
+route-metadata predicates, reusable slot generations, and a private registry
+incarnation that rejects reconstructed-registry transition-token and dependency
+substitution. Numeric observation keys remain non-authoritative. Its pinned
+Verus summary model adds 32 obligations and 14 expected-negative mutations, bringing
+the authenticated totals to 225 and 135. The proof consumes mathematical
+summary predicates for dependency readiness and conflicts; it is not a
+Rust-to-Verus, KFD, SDMA, firmware, or hardware refinement.
+
+Four real Python child-process tests now drive Runtime Worker V4/V5 through
+pending event observation and background `flush_stream` progress. They cover
+ordinary V4 completion, atomic V5 completion, response deadline sealing, and
+decoded-terminal plus EOF sealing. This is subprocess/protocol evidence, not
+native progress or performance evidence.
+
+R17 still does not establish HIP/HSA parity. The KFD custody core is not yet
+connected to compute AQL, local SDMA, native XGMI, live currentness observation,
+or the public runtime facade. The next tranche must bind an exact queue
+occurrence and native publication/completion ticket to each persistent use and
+retain terminally ambiguous native authority until process teardown.

@@ -183,6 +183,20 @@ mutations. It proves a reachable already-decoded request/response abstraction,
 exact response custody classes, and an ordered exhaustive sidecar join, not a
 parser, subprocess, Rust-to-Verus, or native refinement proof.
 
+R17 supplies the first concrete thread-affine KFD owner capable of retaining
+one mapped device-local allocation across a bounded ledger of classified uses.
+It is still detached from compute AQL, local SDMA, native XGMI, live
+currentness observation, and the runtime facade. Its independent executable
+and Verus summary models add registry-incarnation, exact home-VM/queue,
+directional route-metadata, range, hazard, dependency, timeout, and quarantine
+checks. The route metadata is not bound to the persistent allocation mapping
+and grants no XGMI publication authority.
+The pinned totals are 225 obligations and 135 rejected mutations, but no
+theorem connects those summaries to the KFD owner or native behavior. Real
+Worker V4/V5 subprocess tests now show background flush completing deferred
+ordinary and atomic events and sealing timeout/terminal/EOF failures; they are
+host protocol tests and do not satisfy the native liveness gate.
+
 ## Required Gates
 
 ### G1: API and ownership

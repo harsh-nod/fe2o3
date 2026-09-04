@@ -474,11 +474,26 @@ concrete backend invocation counts, Rust refinement, or native execution. These
 tranches prove only their abstract finite models; none establishes a
 Rust-to-Verus refinement, native behavior, progress, or performance.
 
+R17 adds a concrete, addressless KFD custody core for one persistent mapped
+device-local allocation. Its fixed ledger can classify bounded compute,
+local-SDMA, and peer-mapped range uses, but it does not publish work or grant a
+queue, XGMI route, topology, engine, currentness, or completion authority. A
+separate executable model uses a private process-local registry incarnation for
+transition tokens and dependency witnesses plus exact home-VM/queue bindings;
+copyable numeric observation identities remain non-authoritative. Its abstract
+Verus summary adds 32 obligations and 14 mutations, bringing the pinned totals
+to 225 and 135;
+there is no correspondence theorem between that proof and the KFD ledger.
+Runtime Worker V4/V5 background progress is additionally exercised through
+real child processes, including deadline, terminal-response, and EOF failure
+sealing, but those tests do not execute native KFD work.
+
 The remaining community-launch blockers are material. Direct KFD owns exactly
 two compute lanes per child, but has no background native-publication scheduler, queue-side
 dependency packets, or more than two in-flight compute dispatches. Native XGMI is owned by a separate
 exact two-device, copy-only backend; there is no unified native multi-device
-compute owner. The host exposes a typed unsafe boundary and sealed adapter for
+compute owner. The R17 persistent owner is not yet joined to either path. The
+host exposes a typed unsafe boundary and sealed adapter for
 a separately reviewed producer of the required Worker V3 semantic-to-machine
 refinement receipt, but the repository ships no concrete issue #214 proof
 backend or authenticated scalar proof artifact. The Rust

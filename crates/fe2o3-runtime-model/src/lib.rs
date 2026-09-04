@@ -34,6 +34,7 @@ mod r12_native_concurrency;
 mod r13_logical_scheduler;
 mod r14_async_observer;
 mod r16_worker_semantic_boundary;
+mod r17_persistent_native_allocation;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -55,6 +56,7 @@ pub use r12_native_concurrency::*;
 pub use r13_logical_scheduler::*;
 pub use r14_async_observer::*;
 pub use r16_worker_semantic_boundary::*;
+pub use r17_persistent_native_allocation::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -87,6 +89,8 @@ mod r13_logical_scheduler_tests;
 mod r14_async_observer_tests;
 #[cfg(test)]
 mod r16_worker_semantic_boundary_tests;
+#[cfg(test)]
+mod r17_persistent_native_allocation_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

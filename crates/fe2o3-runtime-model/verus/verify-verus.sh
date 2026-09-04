@@ -20,6 +20,7 @@ r12_native_concurrency_proof="$script_dir/r12_native_concurrency_v1.rs"
 r13_logical_scheduler_proof="$script_dir/r13_logical_scheduler_v1.rs"
 r14_async_observer_proof="$script_dir/r14_async_observer_v1.rs"
 r16_worker_semantic_boundary_proof="$script_dir/r16_worker_semantic_boundary_v1.rs"
+r17_persistent_native_allocation_proof="$script_dir/r17_persistent_native_allocation_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -141,6 +142,20 @@ negative_r16_sidecar_scope="$script_dir/negative/r16_worker_semantic_boundary_v1
 negative_r16_sidecar_substitution="$script_dir/negative/r16_worker_semantic_boundary_v1_sidecar_substitution.rs"
 negative_r16_terminal_reopen="$script_dir/negative/r16_worker_semantic_boundary_v1_terminal_reopen.rs"
 negative_r16_variant_mismatch="$script_dir/negative/r16_worker_semantic_boundary_v1_variant_mismatch.rs"
+negative_r17_allocation_extent="$script_dir/negative/r17_persistent_native_allocation_v1_allocation_extent.rs"
+negative_r17_compute_queue="$script_dir/negative/r17_persistent_native_allocation_v1_compute_queue.rs"
+negative_r17_dependency_bound="$script_dir/negative/r17_persistent_native_allocation_v1_dependency_bound.rs"
+negative_r17_dependency_bypass="$script_dir/negative/r17_persistent_native_allocation_v1_dependency_bypass.rs"
+negative_r17_device_count="$script_dir/negative/r17_persistent_native_allocation_v1_device_count.rs"
+negative_r17_failure_atomicity="$script_dir/negative/r17_persistent_native_allocation_v1_failure_atomicity.rs"
+negative_r17_identity_substitution="$script_dir/negative/r17_persistent_native_allocation_v1_identity_substitution.rs"
+negative_r17_local_sdma_engine="$script_dir/negative/r17_persistent_native_allocation_v1_local_sdma_engine.rs"
+negative_r17_quarantine_release="$script_dir/negative/r17_persistent_native_allocation_v1_quarantine_release.rs"
+negative_r17_range_overflow="$script_dir/negative/r17_persistent_native_allocation_v1_range_overflow.rs"
+negative_r17_slot_generation="$script_dir/negative/r17_persistent_native_allocation_v1_slot_generation.rs"
+negative_r17_use_slot_bound="$script_dir/negative/r17_persistent_native_allocation_v1_use_slot_bound.rs"
+negative_r17_writer_overlap="$script_dir/negative/r17_persistent_native_allocation_v1_writer_overlap.rs"
+negative_r17_xgmi_binding="$script_dir/negative/r17_persistent_native_allocation_v1_xgmi_binding.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -182,6 +197,7 @@ expected_r12_native_concurrency=$(read_pin "$pin_dir/R12_NATIVE_CONCURRENCY_SHA2
 expected_r13_logical_scheduler=$(read_pin "$pin_dir/R13_LOGICAL_SCHEDULER_SHA256")
 expected_r14_async_observer=$(read_pin "$pin_dir/R14_ASYNC_OBSERVER_SHA256")
 expected_r16_worker_semantic_boundary=$(read_pin "$pin_dir/R16_WORKER_SEMANTIC_BOUNDARY_SHA256")
+expected_r17_persistent_native_allocation=$(read_pin "$pin_dir/R17_PERSISTENT_NATIVE_ALLOCATION_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -303,6 +319,20 @@ expected_negative_r16_sidecar_scope=$(read_pin "$pin_dir/NEGATIVE_R16_SIDECAR_SC
 expected_negative_r16_sidecar_substitution=$(read_pin "$pin_dir/NEGATIVE_R16_SIDECAR_SUBSTITUTION_SHA256")
 expected_negative_r16_terminal_reopen=$(read_pin "$pin_dir/NEGATIVE_R16_TERMINAL_REOPEN_SHA256")
 expected_negative_r16_variant_mismatch=$(read_pin "$pin_dir/NEGATIVE_R16_VARIANT_MISMATCH_SHA256")
+expected_negative_r17_allocation_extent=$(read_pin "$pin_dir/NEGATIVE_R17_ALLOCATION_EXTENT_SHA256")
+expected_negative_r17_compute_queue=$(read_pin "$pin_dir/NEGATIVE_R17_COMPUTE_QUEUE_SHA256")
+expected_negative_r17_dependency_bound=$(read_pin "$pin_dir/NEGATIVE_R17_DEPENDENCY_BOUND_SHA256")
+expected_negative_r17_dependency_bypass=$(read_pin "$pin_dir/NEGATIVE_R17_DEPENDENCY_BYPASS_SHA256")
+expected_negative_r17_device_count=$(read_pin "$pin_dir/NEGATIVE_R17_DEVICE_COUNT_SHA256")
+expected_negative_r17_failure_atomicity=$(read_pin "$pin_dir/NEGATIVE_R17_FAILURE_ATOMICITY_SHA256")
+expected_negative_r17_identity_substitution=$(read_pin "$pin_dir/NEGATIVE_R17_IDENTITY_SUBSTITUTION_SHA256")
+expected_negative_r17_local_sdma_engine=$(read_pin "$pin_dir/NEGATIVE_R17_LOCAL_SDMA_ENGINE_SHA256")
+expected_negative_r17_quarantine_release=$(read_pin "$pin_dir/NEGATIVE_R17_QUARANTINE_RELEASE_SHA256")
+expected_negative_r17_range_overflow=$(read_pin "$pin_dir/NEGATIVE_R17_RANGE_OVERFLOW_SHA256")
+expected_negative_r17_slot_generation=$(read_pin "$pin_dir/NEGATIVE_R17_SLOT_GENERATION_SHA256")
+expected_negative_r17_use_slot_bound=$(read_pin "$pin_dir/NEGATIVE_R17_USE_SLOT_BOUND_SHA256")
+expected_negative_r17_writer_overlap=$(read_pin "$pin_dir/NEGATIVE_R17_WRITER_OVERLAP_SHA256")
+expected_negative_r17_xgmi_binding=$(read_pin "$pin_dir/NEGATIVE_R17_XGMI_BINDING_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -347,6 +377,7 @@ check_sources() {
     check_digest "$expected_r13_logical_scheduler" "$r13_logical_scheduler_proof"
     check_digest "$expected_r14_async_observer" "$r14_async_observer_proof"
     check_digest "$expected_r16_worker_semantic_boundary" "$r16_worker_semantic_boundary_proof"
+    check_digest "$expected_r17_persistent_native_allocation" "$r17_persistent_native_allocation_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -468,6 +499,20 @@ check_sources() {
     check_digest "$expected_negative_r16_sidecar_substitution" "$negative_r16_sidecar_substitution"
     check_digest "$expected_negative_r16_terminal_reopen" "$negative_r16_terminal_reopen"
     check_digest "$expected_negative_r16_variant_mismatch" "$negative_r16_variant_mismatch"
+    check_digest "$expected_negative_r17_allocation_extent" "$negative_r17_allocation_extent"
+    check_digest "$expected_negative_r17_compute_queue" "$negative_r17_compute_queue"
+    check_digest "$expected_negative_r17_dependency_bound" "$negative_r17_dependency_bound"
+    check_digest "$expected_negative_r17_dependency_bypass" "$negative_r17_dependency_bypass"
+    check_digest "$expected_negative_r17_device_count" "$negative_r17_device_count"
+    check_digest "$expected_negative_r17_failure_atomicity" "$negative_r17_failure_atomicity"
+    check_digest "$expected_negative_r17_identity_substitution" "$negative_r17_identity_substitution"
+    check_digest "$expected_negative_r17_local_sdma_engine" "$negative_r17_local_sdma_engine"
+    check_digest "$expected_negative_r17_quarantine_release" "$negative_r17_quarantine_release"
+    check_digest "$expected_negative_r17_range_overflow" "$negative_r17_range_overflow"
+    check_digest "$expected_negative_r17_slot_generation" "$negative_r17_slot_generation"
+    check_digest "$expected_negative_r17_use_slot_bound" "$negative_r17_use_slot_bound"
+    check_digest "$expected_negative_r17_writer_overlap" "$negative_r17_writer_overlap"
+    check_digest "$expected_negative_r17_xgmi_binding" "$negative_r17_xgmi_binding"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -493,6 +538,7 @@ check_sources
     "$r13_logical_scheduler_proof" \
     "$r14_async_observer_proof" \
     "$r16_worker_semantic_boundary_proof" \
+    "$r17_persistent_native_allocation_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -610,7 +656,21 @@ check_sources
     "$negative_r16_sidecar_scope" \
     "$negative_r16_sidecar_substitution" \
     "$negative_r16_terminal_reopen" \
-    "$negative_r16_variant_mismatch"
+    "$negative_r16_variant_mismatch" \
+    "$negative_r17_allocation_extent" \
+    "$negative_r17_compute_queue" \
+    "$negative_r17_dependency_bound" \
+    "$negative_r17_dependency_bypass" \
+    "$negative_r17_device_count" \
+    "$negative_r17_failure_atomicity" \
+    "$negative_r17_identity_substitution" \
+    "$negative_r17_local_sdma_engine" \
+    "$negative_r17_quarantine_release" \
+    "$negative_r17_range_overflow" \
+    "$negative_r17_slot_generation" \
+    "$negative_r17_use_slot_bound" \
+    "$negative_r17_writer_overlap" \
+    "$negative_r17_xgmi_binding"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -726,6 +786,7 @@ check_positive "$r12_native_concurrency_proof" 'verification results:: 23 verifi
 check_positive "$r13_logical_scheduler_proof" 'verification results:: 20 verified, 0 errors' r13-logical-scheduler
 check_positive "$r14_async_observer_proof" 'verification results:: 10 verified, 0 errors' r14-async-observer
 check_positive "$r16_worker_semantic_boundary_proof" 'verification results:: 21 verified, 0 errors' r16-worker-semantic-boundary
+check_positive "$r17_persistent_native_allocation_proof" 'verification results:: 32 verified, 0 errors' r17-persistent-native-allocation
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -847,13 +908,27 @@ check_negative "$negative_r16_sidecar_scope" mutated_worker_and_sidecar_scope_pr
 check_negative "$negative_r16_sidecar_substitution" mutated_sidecar_contract_substitution_is_rejected_v1 r16-sidecar-substitution
 check_negative "$negative_r16_terminal_reopen" mutated_terminal_response_seals_and_absorbs_v1 r16-terminal-reopen
 check_negative "$negative_r16_variant_mismatch" mutated_variant_mismatch_is_rejected_v1 r16-variant-mismatch
+check_negative "$negative_r17_allocation_extent" mutated_one_gib_allocation_is_rejected_v1 r17-allocation-extent
+check_negative "$negative_r17_compute_queue" mutated_compute_queue_substitution_is_rejected_v1 r17-compute-queue
+check_negative "$negative_r17_dependency_bound" mutated_257th_dependency_is_rejected_v1 r17-dependency-bound
+check_negative "$negative_r17_dependency_bypass" mutated_unready_dependency_blocks_publication_v1 r17-dependency-bypass
+check_negative "$negative_r17_device_count" mutated_duplicate_devices_are_rejected_v1 r17-device-count
+check_negative "$negative_r17_failure_atomicity" mutated_failed_reservation_preserves_state_v1 r17-failure-atomicity
+check_negative "$negative_r17_identity_substitution" mutated_allocation_mapping_substitution_is_rejected_v1 r17-identity-substitution
+check_negative "$negative_r17_local_sdma_engine" mutated_third_local_sdma_engine_is_rejected_v1 r17-local-sdma-engine
+check_negative "$negative_r17_quarantine_release" mutated_quarantined_terminal_is_unreleasable_v1 r17-quarantine-release
+check_negative "$negative_r17_range_overflow" mutated_out_of_extent_range_is_rejected_v1 r17-range-overflow
+check_negative "$negative_r17_slot_generation" mutated_slot_reuse_advances_generation_v1 r17-slot-generation
+check_negative "$negative_r17_use_slot_bound" mutated_65th_use_is_rejected_v1 r17-use-slot-bound
+check_negative "$negative_r17_writer_overlap" mutated_overlapping_read_write_conflicts_v1 r17-writer-overlap
+check_negative "$negative_r17_xgmi_binding" mutated_xgmi_route_metadata_roster_and_access_are_exact_v1 r17-xgmi-route-metadata
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 mutations=121'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 mutations=135'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

@@ -3698,11 +3698,19 @@ fn read_frame_v1(input: &mut impl Read) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
 mod tests {
     use super::*;
     use crate::{
-        RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeBindingV1,
-        RuntimeCapabilitiesV1, RuntimeContextV1, RuntimeLaunchGeometryV1, RuntimeMemoryKindV1,
-        RuntimeMemoryRegionV1,
+        RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeAsyncEngineConfigV1,
+        RuntimeAsyncEngineV1, RuntimeAsyncEventErrorV1, RuntimeAsyncProgressConfigV1,
+        RuntimeAtomicArgumentsV1, RuntimeBindingV1, RuntimeCapabilitiesV1,
+        RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeErrorV1, RuntimeEventFutureV1,
+        RuntimeEventIdV1, RuntimeLaunchGeometryV1, RuntimeMemoryKindV1, RuntimeMemoryRegionV1,
+        RuntimeStreamIdV1,
     };
+    use std::future::Future;
     use std::io::Cursor;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::mpsc::{SyncSender, sync_channel};
+    use std::task::{Context, Poll, Wake, Waker};
 
     #[derive(Debug)]
     struct TestCodecError(&'static str);
@@ -4044,6 +4052,44 @@ mod tests {
                 },
                 kernarg_byte_offset: 0,
             }]
+        }
+    }
+
+    struct AsyncProgressArgumentsV1;
+
+    impl RuntimeArgumentsV1 for AsyncProgressArgumentsV1 {
+        const SIGNATURE_V1: [u8; 32] = [31; 32];
+
+        fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+            Vec::new()
+        }
+
+        fn bindings_v1(&self) -> Vec<RuntimeBindingV1> {
+            Vec::new()
+        }
+    }
+
+    impl RuntimeAtomicArgumentsV1 for AsyncProgressArgumentsV1 {
+        const OPERATION_V1: RuntimeAtomicOperationV1 = RuntimeAtomicOperationV1::Add;
+        const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Device;
+        const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::AcquireRelease;
+    }
+
+    const ASYNC_PROGRESS_GEOMETRY_V1: RuntimeLaunchGeometryV1 = RuntimeLaunchGeometryV1 {
+        grid: [1, 1, 1],
+        workgroup: [1, 1, 1],
+        dynamic_shared_bytes: 0,
+    };
+
+    struct ChannelWakeV1(SyncSender<()>);
+
+    impl Wake for ChannelWakeV1 {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.try_send(());
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            let _ = self.0.try_send(());
         }
     }
 
@@ -4596,6 +4642,125 @@ while True:
     write_frame(response)
 "#;
 
+    const ASYNC_PROGRESS_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+version = sys.argv[1]
+outcome = sys.argv[2]
+flushed = False
+polls_before_flush = 0
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        part = stdin.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def read_frame():
+    size = struct.unpack('<I', read_exact(4))[0]
+    return read_exact(size)
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+def expect(wanted, failure):
+    if read_frame() != wanted:
+        sys.exit(failure)
+
+def blob(value):
+    return struct.pack('<I', len(value)) + value
+
+def handle(value):
+    write_frame(bytes((0,)) + struct.pack('<Q', value))
+
+def launch_payload():
+    payload = struct.pack('<QQI', 41, 47, 0)
+    payload += struct.pack('<I', 0)
+    payload += struct.pack('<I', 0)
+    payload += struct.pack('<IIIIIII', 1, 1, 1, 1, 1, 1, 0)
+    return payload
+
+if version == 'v4':
+    handshake = b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1'
+    capabilities = 0x0007
+    execution_capabilities = 0x0000
+    submit = bytes((11,)) + launch_payload()
+elif version == 'v5':
+    handshake = b'fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1'
+    capabilities = 0x0087
+    execution_capabilities = 0x0080
+    submit = bytes((23, 1, 0, 1, 3, 0, 0)) + launch_payload()
+else:
+    sys.exit(30)
+
+write_frame(handshake)
+expect(bytes((1,)), 31)
+name = b'progress-device'
+target = b'gfx942'
+devices = bytes((0,)) + struct.pack('<I', 1) + struct.pack('<Q', 1)
+devices += blob(name) + blob(target) + struct.pack('<QH', 1 << 30, capabilities)
+write_frame(devices)
+expect(bytes((19,)) + struct.pack('<Q', 1), 32)
+write_frame(bytes((0,)) + blob(struct.pack('<H', execution_capabilities)))
+expect(bytes((2,)) + struct.pack('<Q', 1), 33)
+handle(41)
+expect(bytes((8,)) + struct.pack('<Q', 1) + blob(b'object'), 34)
+handle(43)
+expect(bytes((10,)) + struct.pack('<Q', 43) + blob(b'progress') + bytes((31,)) * 32, 35)
+handle(47)
+expect(submit, 36)
+handle(53)
+expect(bytes((14,)) + struct.pack('<QQ', 41, 53), 37)
+handle(59)
+
+while True:
+    request = read_frame()
+    if request == bytes((12,)) + struct.pack('<Q', 53):
+        if flushed:
+            write_frame(bytes((0, 1)))
+            break
+        polls_before_flush += 1
+        write_frame(bytes((0, 0)))
+    elif request == bytes((18,)) + struct.pack('<Q', 41):
+        if polls_before_flush == 0:
+            sys.exit(38)
+        if outcome == 'success':
+            flushed = True
+            write_frame(bytes((0,)))
+        elif outcome == 'timeout':
+            time.sleep(60)
+        elif outcome == 'terminal':
+            write_frame(bytes((3,)) + blob(b'backend terminal'))
+            time.sleep(60)
+        elif outcome == 'eof':
+            sys.exit(0)
+        else:
+            sys.exit(39)
+    else:
+        sys.exit(40)
+
+if outcome != 'success' or not flushed:
+    sys.exit(41)
+cleanup = (
+    bytes((3,)) + struct.pack('<Q', 41),
+    bytes((15,)) + struct.pack('<Q', 59),
+    bytes((17,)) + struct.pack('<Q', 53),
+    bytes((9,)) + struct.pack('<Q', 43),
+)
+for request in cleanup:
+    expect(request, 42)
+    write_frame(bytes((0,)))
+sys.exit(0 if not read_frame() else 43)
+"#;
+
     const V4_FLUSH_WORKER_SERVER: &str = r#"
 import struct
 import sys
@@ -5099,6 +5264,260 @@ time.sleep(60)
             Instant::now() <= latest,
             "worker deadline exceeded scheduler tolerance"
         );
+    }
+
+    fn python3_available_for_async_progress() -> bool {
+        match std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+        {
+            Ok(output) if output.status.success() => true,
+            Ok(output) => {
+                eprintln!(
+                    "skipping live Runtime Worker async-progress test: python3 exited with {}",
+                    output.status
+                );
+                false
+            }
+            Err(error) => {
+                eprintln!(
+                    "skipping live Runtime Worker async-progress test: python3 is unavailable: {error}"
+                );
+                false
+            }
+        }
+    }
+
+    fn async_progress_worker_command(version: &str, outcome: &str) -> RuntimeWorkerCommandV1 {
+        RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(ASYNC_PROGRESS_WORKER_SERVER)
+            .argument(version)
+            .argument(outcome)
+    }
+
+    fn open_async_progress_v4(
+        outcome: &str,
+        request_timeout: Duration,
+    ) -> (
+        RuntimeContextV1<RuntimeWorkerBackendV4<RuntimeBinaryCodecV4>>,
+        RuntimeStreamIdV1,
+        RuntimeEventIdV1,
+    ) {
+        let command = async_progress_worker_command("v4", outcome);
+        let backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            request_timeout,
+        )
+        .unwrap();
+        let mut context = RuntimeContextV1::open(backend).unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let module = context.load_module(device, b"object").unwrap();
+        let kernel = context
+            .resolve_kernel::<AsyncProgressArgumentsV1>(module, "progress")
+            .unwrap();
+        let submission = context
+            .launch(
+                stream,
+                &kernel,
+                &AsyncProgressArgumentsV1,
+                ASYNC_PROGRESS_GEOMETRY_V1,
+                &[],
+            )
+            .unwrap();
+        let event = context.record_event(&submission).unwrap();
+        (context, stream, event)
+    }
+
+    fn open_async_progress_v5(
+        outcome: &str,
+        request_timeout: Duration,
+    ) -> (
+        RuntimeContextV1<RuntimeWorkerBackendV5<RuntimeBinaryCodecV5>>,
+        RuntimeStreamIdV1,
+        RuntimeEventIdV1,
+    ) {
+        let command = async_progress_worker_command("v5", outcome);
+        let backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            RuntimeBinaryCodecV5,
+            Duration::from_secs(2),
+            request_timeout,
+        )
+        .unwrap();
+        let mut context = RuntimeContextV1::open(backend).unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let module = context.load_module(device, b"object").unwrap();
+        let kernel = context
+            .resolve_kernel::<AsyncProgressArgumentsV1>(module, "progress")
+            .unwrap();
+        let submission = context
+            .launch_atomic(
+                stream,
+                &kernel,
+                &AsyncProgressArgumentsV1,
+                RuntimeAtomicLaunchContractV1 {
+                    operation: RuntimeAtomicOperationV1::Add,
+                    scope: RuntimeMemoryScopeV1::Device,
+                    order: RuntimeMemoryOrderV1::AcquireRelease,
+                    failure_order: None,
+                    weak: false,
+                    geometry: ASYNC_PROGRESS_GEOMETRY_V1,
+                },
+                &[],
+            )
+            .unwrap();
+        let event = context.record_event(&submission).unwrap();
+        (context, stream, event)
+    }
+
+    fn await_async_progress_event<E>(
+        mut future: RuntimeEventFutureV1<E>,
+        timeout: Duration,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeAsyncEventErrorV1<E>> {
+        let (sender, receiver) = sync_channel(1);
+        let waker = Waker::from(Arc::new(ChannelWakeV1(sender)));
+        let mut task_context = Context::from_waker(&waker);
+        let deadline = Instant::now().checked_add(timeout).unwrap();
+        loop {
+            if let Poll::Ready(outcome) = Future::poll(Pin::new(&mut future), &mut task_context) {
+                return outcome;
+            }
+            receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("live Runtime Worker event future did not wake before its test deadline");
+        }
+    }
+
+    fn run_async_progress_success<B>(
+        context: RuntimeContextV1<B>,
+        stream: RuntimeStreamIdV1,
+        event: RuntimeEventIdV1,
+    ) -> B
+    where
+        B: RuntimeBackendV1 + RuntimeFlushBackendV1 + Send + 'static,
+        B::Error: fmt::Debug,
+    {
+        let engine_config =
+            RuntimeAsyncEngineConfigV1::new(16, 16, 16, 16, Duration::from_millis(1)).unwrap();
+        let progress_config = RuntimeAsyncProgressConfigV1::new(1, 1).unwrap();
+        let (engine, handle) =
+            RuntimeAsyncEngineV1::spawn_with_progress(context, engine_config, progress_config)
+                .unwrap();
+        let future = handle.observer().event_future(event).unwrap();
+        let registration = handle.register_stream(stream).unwrap();
+        assert!(matches!(
+            await_async_progress_event(future, Duration::from_secs(5)),
+            Ok(RuntimeCompletionStatusV1::Succeeded)
+        ));
+        assert_eq!(registration.failure_count(), 0);
+        assert!(!registration.is_stopped());
+        drop(registration);
+        drop(handle);
+        let context = engine.into_context().unwrap();
+        assert_eq!(
+            context.query_event(event).unwrap(),
+            RuntimeCompletionStatusV1::Succeeded
+        );
+        context.shutdown().unwrap()
+    }
+
+    fn run_async_progress_terminal<B>(
+        context: RuntimeContextV1<B>,
+        stream: RuntimeStreamIdV1,
+        event: RuntimeEventIdV1,
+    ) -> RuntimeErrorV1<B::Error>
+    where
+        B: RuntimeBackendV1 + RuntimeFlushBackendV1 + Send + 'static,
+        B::Error: fmt::Debug,
+    {
+        let engine_config =
+            RuntimeAsyncEngineConfigV1::new(16, 16, 16, 16, Duration::from_millis(1)).unwrap();
+        let progress_config = RuntimeAsyncProgressConfigV1::new(1, 1).unwrap();
+        let (engine, handle) =
+            RuntimeAsyncEngineV1::spawn_with_progress(context, engine_config, progress_config)
+                .unwrap();
+        let future = handle.observer().event_future(event).unwrap();
+        let registration = handle.register_stream(stream).unwrap();
+        assert!(matches!(
+            await_async_progress_event(future, Duration::from_secs(5)),
+            Err(RuntimeAsyncEventErrorV1::EngineStopped)
+        ));
+        drop(handle);
+        let context = engine.into_context().unwrap();
+        assert!(context.is_terminal());
+        assert!(registration.is_stopped());
+        assert_eq!(registration.failure_count(), 1);
+        let failure = registration
+            .take_failure()
+            .expect("terminal progress failure must remain observable");
+        drop(registration);
+        drop(context);
+        failure
+    }
+
+    #[test]
+    fn async_progress_v4_worker_flush_completes_deferred_event() {
+        if !python3_available_for_async_progress() {
+            return;
+        }
+        let (context, stream, event) = open_async_progress_v4("success", Duration::from_secs(2));
+        let backend = run_async_progress_success(context, stream, event);
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn async_progress_v5_worker_flush_completes_deferred_atomic_event() {
+        if !python3_available_for_async_progress() {
+            return;
+        }
+        let (context, stream, event) = open_async_progress_v5("success", Duration::from_secs(2));
+        let backend = run_async_progress_success(context, stream, event);
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn async_progress_v4_worker_deadline_seals_registration_event_and_context() {
+        if !python3_available_for_async_progress() {
+            return;
+        }
+        let (context, stream, event) = open_async_progress_v4("timeout", TEST_WAIT_DEADLINE);
+        let failure = run_async_progress_terminal(context, stream, event);
+        assert!(matches!(
+            failure,
+            RuntimeErrorV1::BackendTerminal(RuntimeWorkerBackendErrorV1::Transport(
+                RuntimeWorkerErrorV1::ResponseTimeout
+            ))
+        ));
+    }
+
+    #[test]
+    fn async_progress_v5_worker_terminal_and_eof_seal_every_observer() {
+        if !python3_available_for_async_progress() {
+            return;
+        }
+        let (context, stream, event) = open_async_progress_v5("terminal", Duration::from_secs(2));
+        let failure = run_async_progress_terminal(context, stream, event);
+        assert!(matches!(
+            failure,
+            RuntimeErrorV1::BackendTerminal(RuntimeWorkerBackendErrorV1::Codec(
+                RuntimeBinaryCodecErrorV1::Remote(message)
+            )) if message == "backend terminal"
+        ));
+
+        let (context, stream, event) = open_async_progress_v5("eof", Duration::from_secs(2));
+        let failure = run_async_progress_terminal(context, stream, event);
+        assert!(matches!(
+            failure,
+            RuntimeErrorV1::BackendTerminal(RuntimeWorkerBackendErrorV1::Transport(
+                RuntimeWorkerErrorV1::Io(error)
+            )) if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
     }
 
     #[test]

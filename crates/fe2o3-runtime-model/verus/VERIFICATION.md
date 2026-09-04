@@ -3,8 +3,9 @@
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
-logical-scheduler, R14 async-observer, and R16 Worker V5 semantic-boundary
-models. The authenticated runner proves 193 obligations and rejects 121
+logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, and R17
+persistent-native-allocation models. The authenticated runner proves 225
+obligations and rejects 135
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -669,6 +670,49 @@ handshake values are abstract labels, not a proof of wire-byte compatibility.
 | Independent bounded R16 executable model | **Checked** | Nine Rust unit tests exercise the separately implemented `no_std` finite model. |
 | Executable model or production Rust to Verus correspondence | **Not established** | No theorem connects either Rust implementation to the Verus structures, predicates, or transitions. |
 | Parser, serde, SHA, subprocess, transport, native KFD/GPU semantics, completion, liveness, or performance | **Not established** | These surfaces are explicitly outside the R16 model and require separate refinement or evidence. |
+
+## R17 persistent native allocation
+
+`r17_persistent_native_allocation_v1.rs` proves 32 obligations over one
+abstract owner. Admission binds a nonzero, page-sized allocation of at most 256
+MiB to exact R2-shaped allocation/mapping identities, an exact canonical pair
+of device incarnations, and a private registry incarnation. The model fixes a
+reusable 64-slot use ledger and 256-dependency input bound. Slot reuse advances
+generation. A private registry incarnation rejects state-changing tokens and
+dependency witnesses from reconstructed registries; numeric observation keys
+and receipts remain non-authoritative and may coincide across reconstructions.
+
+Compute and local-SDMA descriptors bind the allocation's exact home device and
+VM plus a nonzero queue occurrence; local SDMA also binds one of two engines.
+XGMI route-metadata classifications validate an R9-shaped current directional
+route, the selected engine from the `[2,16)` R9 roster, both device identities,
+and owner-relative source-read or destination-write access. They do not bind
+the route to this R2 mapping and grant no mapping or publication authority.
+Half-open ranges are nonempty, nonoverflowing, and within the admitted
+allocation extent. Overlapping reads are compatible; overlap with a writer is
+excluded unless an exact successful terminal predecessor is named as a ready
+dependency. Unrelated terminal conflicts still block publication. Timeout and
+exact terminal observations retain custody, reserved dependents block terminal
+release, currentness loss cancels unpublished work and quarantines every
+published state, and quarantined owners cannot release. A concrete mixed
+compute/local-SDMA/XGMI-metadata witness prevents the class predicates from
+being vacuous.
+
+The independent executable model has 19 focused Rust unit tests plus
+compile-fail examples for `Clone` and `Send`. Its private `Rc` incarnation is a
+Rust type-system device, not a Verus refinement. Verus cannot prove Rust
+auto-traits, OS-thread affinity, native allocation/mapping, queue publication,
+KFD or SDMA behavior, currentness observation truth, GPU completion, liveness,
+or performance. There is no executable-Rust-to-Verus correspondence theorem,
+no two-registry atomic XGMI join, and no 1 GiB aggregate allocation claim.
+
+## R17 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Bounded owner admission, registry/slot identities, class/range binding, conflicts, dependency gate, custody, quarantine, and release | **Proved** | Thirty-two verified obligations over mathematical summaries in `r17_persistent_native_allocation_v1.rs`. |
+| Independent bounded executable lifecycle | **Checked** | Nineteen Rust tests plus compile-fail `Clone`/`Send` examples; no refinement theorem. |
+| Rust auto-traits, OS thread, native memory, queue publication, KFD/SDMA/GPU execution, liveness, or performance | **Not established** | Explicitly outside the R17 model. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
