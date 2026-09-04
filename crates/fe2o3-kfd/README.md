@@ -999,3 +999,42 @@ recoverable/retained/confirmed branch separation. These tests perform no KFD,
 DRM, SDMA, HIP, HSA, firmware, or GPU work. The adapter is not hardware
 execution evidence, a concurrency claim, a copy-performance result, or an
 executable-Rust/formal refinement proof.
+
+## R19 directional persistent local-SDMA adapter
+
+The additive R19 surface promotes one existing queue-owned device buffer into
+`Gfx942DirectionalQueuePersistentAllocationV1`, bound to the exact parent queue
+occurrence and the ordered pair of distinct native child queues: engine 1 for
+H2D and engine 0 for D2H. Unlike R18, pooled backing is admitted with
+`0 < logical <= physical <= 256 MiB`; the physical extent must remain page
+rounded and is the extent owned by R17, while every copy is bounded by the
+current logical extent. Promotion, use, completion, frontier retirement, and
+demotion preserve the one inherited `sdma_outstanding_buffers` debit.
+
+`submit_directional_persistent_sdma_copy_v1` selects direction explicitly on
+every use. After exact completion and frontier retirement, any next direction
+is admitted, including repeated same-direction chunks and arbitrary H2D/D2H
+sequences. Dependency chaining is not exposed: the exact completed frontier
+must be retired before the next use, which then reserves without a dependency.
+The lower single-copy prepare/publish path retains one request,
+packet, and full ticket inline; it does not allocate batch `Vec` rosters or an
+owned doorbell error string per packet. The lower maximum linear copy remains
+`0x003f_ffe0` bytes, so larger logical transfers require sequential chunks.
+Nonblocking `poll_directional_persistent_sdma_copy_v1` and bounded
+`wait_directional_persistent_sdma_copy_for_v1` retain exact pending custody.
+
+Clean rejection returns both owners and cancels Prepared. A retained lower
+publication quarantines Prepared, confirmed publication alone advances to
+Published, and exact child/ticket/range/storage restoration alone completes and
+settles the use. Promotion and demotion failures also distinguish explicit
+retryable custody from opaque process-teardown custody; no moved native owner is
+represented by `None`. Terminal currentness or publication ambiguity poisons
+the session, and outstanding persistent custody continues to block queue
+destruction. No topology or sysfs discovery occurs per packet.
+
+The frozen R19 manifest digest is
+`c04f67240eecff85cffb092a228554c88a72cb89f1d49865c123db559cfae319`.
+Evidence is native-neutral host custody and failure-injection testing only.
+R19 remains single-flight and local: it does not claim concurrent range borrows,
+striping, peer/XGMI copies, compute integration, hardware execution,
+copy-performance parity, or executable-Rust/formal refinement.

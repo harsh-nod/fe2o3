@@ -451,3 +451,36 @@ leases, directional or striped queue-set integration, peer/XGMI use, or unified
 multi-device graph. The shared MI300X host was busy during validation, so this
 tranche carries no native execution, copy-performance, or comparative HIP/HSA
 evidence.
+
+## Runtime R19 Status
+
+R19 adds a directional persistent local-SDMA adapter for the exact queue shape
+used by the direct KFD runtime: one parent occurrence with distinct engine-1
+H2D and engine-0 D2H children. It preserves the existing buffer-accounting
+debit, binds logical and physical pooled extents separately, and restricts
+every copy to `0 < range <= logical <= physical <= 256 MiB`. The public R19
+submit surface does not accept a dependency frontier: exact completion,
+settlement, and frontier retirement are the mandatory reuse gate. The next use
+may repeat the same direction or select the other child.
+
+All moved resources are represented explicitly on failure. Clean
+prepublication failure returns the allocation and host buffer; retained or
+currentness-ambiguous publication, promotion, demotion, or completion returns
+opaque process-teardown custody. The active packet path uses bounded
+operational currentness checks, while full topology and aperture observations
+remain lifecycle gates. A stack-sized single-request lower path avoids batch
+roster allocation for each packet.
+
+The independent R19 executable model has 23 focused tests. Its pinned Verus
+summary adds 46 obligations and 20 expected-negative mutations, bringing the
+authenticated totals to 305 and 179. This is an abstract proof of the bounded
+model, not a correspondence theorem for executable Rust, KFD, firmware, or
+hardware behavior.
+
+R19 is still a low-level prerequisite, not HIP/HSA parity. It is not connected
+to the runtime facade, async engine, or workers. The native linear packet cap is
+`0x003f_ffe0` bytes and the persistent allocation is single-flight, so a
+256 MiB transfer requires 65 complete submit/poll/restore/retire cycles. H2H,
+D2D, multi-packet batched publication, persistent compute/XGMI sharing, and
+matched hardware measurements remain open. This tranche therefore carries no
+copy-performance or comparative HIP/HSA claim.

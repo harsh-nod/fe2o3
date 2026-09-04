@@ -36,6 +36,7 @@ mod r14_async_observer;
 mod r16_worker_semantic_boundary;
 mod r17_persistent_native_allocation;
 mod r18_persistent_local_sdma_adapter;
+mod r19_directional_persistent_local_sdma_adapter;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -59,6 +60,7 @@ pub use r14_async_observer::*;
 pub use r16_worker_semantic_boundary::*;
 pub use r17_persistent_native_allocation::*;
 pub use r18_persistent_local_sdma_adapter::*;
+pub use r19_directional_persistent_local_sdma_adapter::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -95,6 +97,8 @@ mod r16_worker_semantic_boundary_tests;
 mod r17_persistent_native_allocation_tests;
 #[cfg(test)]
 mod r18_persistent_local_sdma_adapter_tests;
+#[cfg(test)]
+mod r19_directional_persistent_local_sdma_adapter_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

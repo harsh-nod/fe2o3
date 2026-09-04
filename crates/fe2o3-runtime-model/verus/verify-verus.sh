@@ -22,6 +22,7 @@ r14_async_observer_proof="$script_dir/r14_async_observer_v1.rs"
 r16_worker_semantic_boundary_proof="$script_dir/r16_worker_semantic_boundary_v1.rs"
 r17_persistent_native_allocation_proof="$script_dir/r17_persistent_native_allocation_v1.rs"
 r18_persistent_local_sdma_adapter_proof="$script_dir/r18_persistent_local_sdma_adapter_v1.rs"
+r19_directional_persistent_local_sdma_adapter_proof="$script_dir/r19_directional_persistent_local_sdma_adapter_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -181,6 +182,26 @@ negative_r18_permanent_quarantine="$script_dir/negative/r18_persistent_local_sdm
 negative_r18_frontier_substitution="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_frontier_substitution.rs"
 negative_r18_frontier_release="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_frontier_release.rs"
 negative_r18_frontier_reuse="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_frontier_reuse.rs"
+negative_r19_child_collision="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_child_collision.rs"
+negative_r19_demote_busy="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_demote_busy.rs"
+negative_r19_direction_role="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_direction_role.rs"
+negative_r19_early_release="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_early_release.rs"
+negative_r19_frontier_allocation="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_frontier_allocation.rs"
+negative_r19_frontier_incarnation="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_frontier_incarnation.rs"
+negative_r19_frontier_pair="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_frontier_pair.rs"
+negative_r19_frontier_reuse="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_frontier_reuse.rs"
+negative_r19_frontier_substitution="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_frontier_substitution.rs"
+negative_r19_physical_extent="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_physical_extent.rs"
+negative_r19_pool_aba="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_pool_aba.rs"
+negative_r19_preparation_ticket="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_preparation_ticket.rs"
+negative_r19_prepare_before_retirement="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_prepare_before_retirement.rs"
+negative_r19_rebind_busy="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_rebind_busy.rs"
+negative_r19_restore_currentness="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_restore_currentness.rs"
+negative_r19_retained_ticket="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_retained_ticket.rs"
+negative_r19_same_direction="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_same_direction.rs"
+negative_r19_terminal_status="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_terminal_status.rs"
+negative_r19_ticket_child="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_ticket_child.rs"
+negative_r19_timeout_custody="$script_dir/negative/r19_directional_persistent_local_sdma_adapter_v1_timeout_custody.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -224,6 +245,7 @@ expected_r14_async_observer=$(read_pin "$pin_dir/R14_ASYNC_OBSERVER_SHA256")
 expected_r16_worker_semantic_boundary=$(read_pin "$pin_dir/R16_WORKER_SEMANTIC_BOUNDARY_SHA256")
 expected_r17_persistent_native_allocation=$(read_pin "$pin_dir/R17_PERSISTENT_NATIVE_ALLOCATION_SHA256")
 expected_r18_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R18_PERSISTENT_LOCAL_SDMA_ADAPTER_SHA256")
+expected_r19_directional_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R19_DIRECTIONAL_PERSISTENT_LOCAL_SDMA_ADAPTER_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -383,6 +405,26 @@ expected_negative_r18_permanent_quarantine=$(read_pin "$pin_dir/NEGATIVE_R18_PER
 expected_negative_r18_frontier_substitution=$(read_pin "$pin_dir/NEGATIVE_R18_FRONTIER_SUBSTITUTION_SHA256")
 expected_negative_r18_frontier_release=$(read_pin "$pin_dir/NEGATIVE_R18_FRONTIER_RELEASE_SHA256")
 expected_negative_r18_frontier_reuse=$(read_pin "$pin_dir/NEGATIVE_R18_FRONTIER_REUSE_SHA256")
+expected_negative_r19_child_collision=$(read_pin "$pin_dir/NEGATIVE_R19_CHILD_COLLISION_SHA256")
+expected_negative_r19_demote_busy=$(read_pin "$pin_dir/NEGATIVE_R19_DEMOTE_BUSY_SHA256")
+expected_negative_r19_direction_role=$(read_pin "$pin_dir/NEGATIVE_R19_DIRECTION_ROLE_SHA256")
+expected_negative_r19_early_release=$(read_pin "$pin_dir/NEGATIVE_R19_EARLY_RELEASE_SHA256")
+expected_negative_r19_frontier_allocation=$(read_pin "$pin_dir/NEGATIVE_R19_FRONTIER_ALLOCATION_SHA256")
+expected_negative_r19_frontier_incarnation=$(read_pin "$pin_dir/NEGATIVE_R19_FRONTIER_INCARNATION_SHA256")
+expected_negative_r19_frontier_pair=$(read_pin "$pin_dir/NEGATIVE_R19_FRONTIER_PAIR_SHA256")
+expected_negative_r19_frontier_reuse=$(read_pin "$pin_dir/NEGATIVE_R19_FRONTIER_REUSE_SHA256")
+expected_negative_r19_frontier_substitution=$(read_pin "$pin_dir/NEGATIVE_R19_FRONTIER_SUBSTITUTION_SHA256")
+expected_negative_r19_physical_extent=$(read_pin "$pin_dir/NEGATIVE_R19_PHYSICAL_EXTENT_SHA256")
+expected_negative_r19_pool_aba=$(read_pin "$pin_dir/NEGATIVE_R19_POOL_ABA_SHA256")
+expected_negative_r19_preparation_ticket=$(read_pin "$pin_dir/NEGATIVE_R19_PREPARATION_TICKET_SHA256")
+expected_negative_r19_prepare_before_retirement=$(read_pin "$pin_dir/NEGATIVE_R19_PREPARE_BEFORE_RETIREMENT_SHA256")
+expected_negative_r19_rebind_busy=$(read_pin "$pin_dir/NEGATIVE_R19_REBIND_BUSY_SHA256")
+expected_negative_r19_restore_currentness=$(read_pin "$pin_dir/NEGATIVE_R19_RESTORE_CURRENTNESS_SHA256")
+expected_negative_r19_retained_ticket=$(read_pin "$pin_dir/NEGATIVE_R19_RETAINED_TICKET_SHA256")
+expected_negative_r19_same_direction=$(read_pin "$pin_dir/NEGATIVE_R19_SAME_DIRECTION_SHA256")
+expected_negative_r19_terminal_status=$(read_pin "$pin_dir/NEGATIVE_R19_TERMINAL_STATUS_SHA256")
+expected_negative_r19_ticket_child=$(read_pin "$pin_dir/NEGATIVE_R19_TICKET_CHILD_SHA256")
+expected_negative_r19_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R19_TIMEOUT_CUSTODY_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -429,6 +471,7 @@ check_sources() {
     check_digest "$expected_r16_worker_semantic_boundary" "$r16_worker_semantic_boundary_proof"
     check_digest "$expected_r17_persistent_native_allocation" "$r17_persistent_native_allocation_proof"
     check_digest "$expected_r18_persistent_local_sdma_adapter" "$r18_persistent_local_sdma_adapter_proof"
+    check_digest "$expected_r19_directional_persistent_local_sdma_adapter" "$r19_directional_persistent_local_sdma_adapter_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -588,6 +631,26 @@ check_sources() {
     check_digest "$expected_negative_r18_frontier_substitution" "$negative_r18_frontier_substitution"
     check_digest "$expected_negative_r18_frontier_release" "$negative_r18_frontier_release"
     check_digest "$expected_negative_r18_frontier_reuse" "$negative_r18_frontier_reuse"
+    check_digest "$expected_negative_r19_child_collision" "$negative_r19_child_collision"
+    check_digest "$expected_negative_r19_demote_busy" "$negative_r19_demote_busy"
+    check_digest "$expected_negative_r19_direction_role" "$negative_r19_direction_role"
+    check_digest "$expected_negative_r19_early_release" "$negative_r19_early_release"
+    check_digest "$expected_negative_r19_frontier_allocation" "$negative_r19_frontier_allocation"
+    check_digest "$expected_negative_r19_frontier_incarnation" "$negative_r19_frontier_incarnation"
+    check_digest "$expected_negative_r19_frontier_pair" "$negative_r19_frontier_pair"
+    check_digest "$expected_negative_r19_frontier_reuse" "$negative_r19_frontier_reuse"
+    check_digest "$expected_negative_r19_frontier_substitution" "$negative_r19_frontier_substitution"
+    check_digest "$expected_negative_r19_physical_extent" "$negative_r19_physical_extent"
+    check_digest "$expected_negative_r19_pool_aba" "$negative_r19_pool_aba"
+    check_digest "$expected_negative_r19_preparation_ticket" "$negative_r19_preparation_ticket"
+    check_digest "$expected_negative_r19_prepare_before_retirement" "$negative_r19_prepare_before_retirement"
+    check_digest "$expected_negative_r19_rebind_busy" "$negative_r19_rebind_busy"
+    check_digest "$expected_negative_r19_restore_currentness" "$negative_r19_restore_currentness"
+    check_digest "$expected_negative_r19_retained_ticket" "$negative_r19_retained_ticket"
+    check_digest "$expected_negative_r19_same_direction" "$negative_r19_same_direction"
+    check_digest "$expected_negative_r19_terminal_status" "$negative_r19_terminal_status"
+    check_digest "$expected_negative_r19_ticket_child" "$negative_r19_ticket_child"
+    check_digest "$expected_negative_r19_timeout_custody" "$negative_r19_timeout_custody"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -615,6 +678,7 @@ check_sources
     "$r16_worker_semantic_boundary_proof" \
     "$r17_persistent_native_allocation_proof" \
     "$r18_persistent_local_sdma_adapter_proof" \
+    "$r19_directional_persistent_local_sdma_adapter_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -770,7 +834,27 @@ check_sources
     "$negative_r18_permanent_quarantine" \
     "$negative_r18_frontier_substitution" \
     "$negative_r18_frontier_release" \
-    "$negative_r18_frontier_reuse"
+    "$negative_r18_frontier_reuse" \
+    "$negative_r19_child_collision" \
+    "$negative_r19_demote_busy" \
+    "$negative_r19_direction_role" \
+    "$negative_r19_early_release" \
+    "$negative_r19_frontier_allocation" \
+    "$negative_r19_frontier_incarnation" \
+    "$negative_r19_frontier_pair" \
+    "$negative_r19_frontier_reuse" \
+    "$negative_r19_frontier_substitution" \
+    "$negative_r19_physical_extent" \
+    "$negative_r19_pool_aba" \
+    "$negative_r19_preparation_ticket" \
+    "$negative_r19_prepare_before_retirement" \
+    "$negative_r19_rebind_busy" \
+    "$negative_r19_restore_currentness" \
+    "$negative_r19_retained_ticket" \
+    "$negative_r19_same_direction" \
+    "$negative_r19_terminal_status" \
+    "$negative_r19_ticket_child" \
+    "$negative_r19_timeout_custody"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -888,6 +972,7 @@ check_positive "$r14_async_observer_proof" 'verification results:: 10 verified, 
 check_positive "$r16_worker_semantic_boundary_proof" 'verification results:: 21 verified, 0 errors' r16-worker-semantic-boundary
 check_positive "$r17_persistent_native_allocation_proof" 'verification results:: 32 verified, 0 errors' r17-persistent-native-allocation
 check_positive "$r18_persistent_local_sdma_adapter_proof" 'verification results:: 34 verified, 0 errors' r18-persistent-local-sdma-adapter
+check_positive "$r19_directional_persistent_local_sdma_adapter_proof" 'verification results:: 46 verified, 0 errors' r19-directional-persistent-local-sdma-adapter
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1047,13 +1132,33 @@ check_negative "$negative_r18_permanent_quarantine" mutated_permanent_quarantine
 check_negative "$negative_r18_frontier_substitution" mutated_stale_frontier_is_rejected_atomically_v1 r18-frontier-substitution
 check_negative "$negative_r18_frontier_release" mutated_pending_frontier_blocks_release_v1 r18-frontier-release
 check_negative "$negative_r18_frontier_reuse" mutated_sixty_five_sequential_uses_reuse_slots_v1 r18-frontier-reuse
+check_negative "$negative_r19_child_collision" mutated_child_queue_collision_is_rejected_v1 r19-child-collision
+check_negative "$negative_r19_demote_busy" mutated_active_or_frontier_state_blocks_demotion_v1 r19-demote-busy
+check_negative "$negative_r19_direction_role" mutated_h2d_engine_zero_is_rejected_v1 r19-direction-role
+check_negative "$negative_r19_early_release" mutated_published_custody_blocks_release_v1 r19-early-release
+check_negative "$negative_r19_frontier_allocation" mutated_cross_allocation_frontier_is_rejected_v1 r19-frontier-allocation
+check_negative "$negative_r19_frontier_incarnation" mutated_cross_incarnation_frontier_is_rejected_v1 r19-frontier-incarnation
+check_negative "$negative_r19_frontier_pair" mutated_cross_pair_frontier_is_rejected_v1 r19-frontier-pair
+check_negative "$negative_r19_frontier_reuse" mutated_one_hundred_thirty_retired_uses_reuse_slots_v1 r19-frontier-reuse
+check_negative "$negative_r19_frontier_substitution" mutated_stale_frontier_is_rejected_v1 r19-frontier-substitution
+check_negative "$negative_r19_physical_extent" mutated_logical_may_not_exceed_physical_v1 r19-physical-extent
+check_negative "$negative_r19_pool_aba" mutated_old_pool_frontier_is_rejected_v1 r19-pool-aba
+check_negative "$negative_r19_preparation_ticket" mutated_preparation_quarantine_has_no_ticket_v1 r19-preparation-ticket
+check_negative "$negative_r19_prepare_before_retirement" mutated_frontier_must_retire_before_prepare_v1 r19-prepare-before-retirement
+check_negative "$negative_r19_rebind_busy" mutated_active_or_frontier_state_blocks_rebind_v1 r19-rebind-busy
+check_negative "$negative_r19_restore_currentness" mutated_restore_currentness_ambiguity_quarantines_v1 r19-restore-currentness
+check_negative "$negative_r19_retained_ticket" mutated_retained_publication_keeps_ticket_v1 r19-retained-ticket
+check_negative "$negative_r19_same_direction" mutated_repeated_h2d_is_admitted_v1 r19-same-direction
+check_negative "$negative_r19_terminal_status" mutated_terminal_status_substitution_is_rejected_v1 r19-terminal-status
+check_negative "$negative_r19_ticket_child" mutated_ticket_must_bind_selected_child_v1 r19-ticket-child
+check_negative "$negative_r19_timeout_custody" mutated_timeout_retains_ticket_v1 r19-timeout-custody
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 mutations=159'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 mutations=179'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

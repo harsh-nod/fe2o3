@@ -31,6 +31,9 @@ mod shared_memory;
 mod persistent_allocation;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod persistent_directional_sdma;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod persistent_sdma;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -78,6 +81,9 @@ pub use shared_memory::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use persistent_allocation::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use persistent_directional_sdma::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use persistent_sdma::*;

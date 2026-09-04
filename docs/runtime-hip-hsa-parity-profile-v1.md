@@ -211,6 +211,23 @@ native-neutral tests cover 66 sequential transition cycles. The tranche
 supplies no persistent compute, XGMI, concurrency, hardware-execution,
 refinement, or performance evidence.
 
+R19 adds the exact directional pair needed by the current KFD runtime queue
+shape: distinct engine-1 H2D and engine-0 D2H children under one parent queue
+occurrence. Pooled allocations retain separate logical and page-rounded
+physical extents, copy ranges are logical-bound, and exact frontier retirement
+is required before arbitrary repeated or mixed-direction reuse. Explicit
+retryable versus process-teardown custody covers promotion, demotion,
+publication, completion, and currentness failure. The active packet path uses
+the bounded operational currentness fence, not full topology discovery.
+
+The independent R19 executable model and abstract Verus proof add 46
+obligations and 20 rejected mutations for pinned totals of 305 and 179. No
+theorem connects them to executable Rust or native behavior. The adapter is not
+connected to the public facade or async progress engine, supports neither H2H
+nor D2D, and remains single-flight with a `0x003f_ffe0`-byte packet cap. It has
+no hardware-execution or matched HIP/HSA performance evidence and therefore
+does not satisfy this parity profile.
+
 ## Required Gates
 
 ### G1: API and ownership

@@ -4,8 +4,9 @@ This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
 logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
-persistent-native-allocation, and R18 persistent-local-SDMA-adapter models. The
-authenticated runner proves 259 obligations and rejects 159
+persistent-native-allocation, R18 persistent-local-SDMA-adapter, and R19
+directional-persistent-local-SDMA-adapter models. The authenticated runner
+proves 305 obligations and rejects 179
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -784,6 +785,65 @@ memory visibility, liveness, or performance.
 | Identity, direction, restoration, ambiguity, timeout, completion, frontier, reuse, and release countermodels | **Rejected** | Twenty-four pinned expected-negative proof files fail only at their named postconditions. |
 | R17, concrete persistent-ledger, or native SDMA refinement | **Not established** | No theorem links the abstract R18 values or transitions to executable Rust or KFD state. |
 | Native ordering, DMA/completion truth, liveness, HIP/HSA parity, or performance | **Not established** | Requires a concrete sealed adapter, hardware execution evidence, and matched benchmarks. |
+
+## R19 directional persistent local SDMA adapter
+
+`r19_directional_persistent_local_sdma_adapter_v1.rs` proves 46 obligations
+over one bounded allocation and one exact bidirectional child-queue pair. The
+allocation binds a nonzero pool generation and distinct logical and physical
+extents with `logical <= physical <= 256 MiB`; the physical extent is 4 KiB
+page-rounded, while copy ranges are checked against the logical extent. Both
+children share one logical parent queue and pair occurrence, have distinct
+native queue IDs below 1024, and bind device-to-host to engine zero/read/source
+and host-to-device to engine one/write/destination.
+
+The adapter is single-flight across the pair. Direction is selected explicitly
+for every submission and is not constrained by the prior direction: repeated
+H2D/H2D, repeated D2H/D2H, and alternating sequences are all admitted. Exact
+completion, restoration, settlement, and frontier retirement must finish
+before the next submission. Retirement clears the R17 settled frontier; it
+does not manufacture a post-retirement dependency token, and the next R17
+reservation has no dependency. A recursive transition composes prepare,
+publication, completion, restoration, settlement, and exact retirement before
+the next recursive prepare. It derives 130 mixed-direction uses and 70 repeated
+H2D uses with zero occupied slots and no pending frontier after retirement.
+
+Confirmed, recoverable, and retained publication classifications remain
+distinct. Pending and timeout retain the exact child ticket. The proof uses
+bounded pair-global rotating ticket coordinates independent of the R17 use
+generation; concrete child queues have independent planners and are outside
+this proof. Succeeded and signed `i32` failed terminal statuses are exact
+through restore and settlement. Preparation currentness ambiguity quarantines
+without claiming a live ticket; ambiguity after possible native custody
+quarantines with the exact ticket and clears the terminal status. Release,
+rebind, and demotion require idle current custody and no pending frontier.
+Demotion advances the pool generation; old frontiers cannot match a re-promoted
+allocation. Exact frontiers bind the complete allocation and mapping identity,
+parent and child pair, attachment, pool, direction, and adapter incarnation.
+Executable Rust additionally binds transition tokens to a private `Rc`
+incarnation.
+
+The independent executable model has 23 focused Rust tests and compile-fail
+examples for `Clone` and `Send`. Twenty pinned expected-negative mutations
+cover child collision, physical extent, direction, repeated same-direction
+admission, selected-child tickets, optional-ticket quarantine, timeout custody,
+terminal status and restore currentness, early release, prepare-before-retire,
+rebind/demotion busy gates, frontier allocation/pair/incarnation substitution
+and actual recursive reuse, and isolated pool-generation ABA.
+
+R19 is not a refinement proof of R17, R18, executable Rust, or KFD. The Verus
+file proves mathematical summaries only; it does not establish Rust ownership,
+native allocation or queue state, mapped-write ordering, doorbell delivery,
+DMA/completion truth, liveness, HIP/HSA parity, or performance.
+
+## R19 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Directional pair identity, extents, child roles, ticket custody, terminal status, currentness quarantine, stateful frontier/rebind/demotion gates, arbitrary sequential direction, pool-generation retirement, and bounded recursive reuse | **Proved** | Forty-six obligations in `r19_directional_persistent_local_sdma_adapter_v1.rs`. |
+| Independent executable custody lifecycle | **Checked** | Twenty-three Rust tests plus compile-fail `Clone`/`Send`; it directly composes a private R17 registry but has no refinement theorem. |
+| Boundary countermodels | **Rejected** | Twenty pinned expected-negative files fail only at their named postconditions. |
+| Executable-Rust, R17/R18, or native KFD refinement; hardware behavior or performance | **Not established** | Explicitly outside the R19 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

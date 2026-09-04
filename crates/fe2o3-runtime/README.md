@@ -280,6 +280,27 @@ abstract totals to 259 obligations and 159 rejected mutations, without a
 Rust-to-Verus or native refinement claim. No hardware or performance evidence
 is attached to this tranche.
 
+R19 adds a versioned directional local-SDMA adapter without weakening R18. One
+promoted device allocation is bound to the exact parent queue occurrence and
+to distinct engine-1 H2D and engine-0 D2H child queues. It admits pooled backing
+with `0 < logical <= physical <= 256 MiB`, keeps copy ranges within the logical
+extent, and preserves the inherited outstanding-buffer debit. Each exact
+frontier must be retired before the next use; after retirement the next use may
+repeat or change direction. Promotion, demotion, submission, polling, waiting,
+completion, and failure paths retain either retryable owners or explicit opaque
+process-teardown custody. Active packet checks use the bounded operational
+currentness fence rather than rediscovering topology through sysfs.
+
+The independent R19 executable model and Verus summary add 46 obligations and
+20 expected-negative mutations, bringing the pinned abstract totals to 305 and
+179. They cover the bounded directional state machine but do not prove a
+Rust-to-Verus or native refinement. R19 is not wired into
+`RuntimeContextV1`, `RuntimeAsyncEngineV1`, or Worker V4/V5. Its native packet
+limit remains `0x003f_ffe0` bytes and its allocation ledger is single-flight,
+so large transfers still require repeated completion and retirement cycles.
+There is no D2D or H2H path and no hardware or comparative HIP/HSA performance
+evidence in this tranche.
+
 The direct-KFD backend also exposes an opt-in bounded profiler. It records
 address-free logical resource lifecycle, host staging read/write ranges, native
 queue creation/teardown, successful AQL publication, completion, and

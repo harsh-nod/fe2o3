@@ -499,6 +499,19 @@ quiescent-frontier retirement reclaims settled ledger history; stale or
 cross-allocation frontiers return their allocation and frontier custody
 unchanged. Native-neutral tests cover 66 sequential transition cycles without
 establishing hardware progress.
+
+R19 adds a separate versioned adapter for the runtime's directional queue pair:
+one exact parent occurrence, distinct engine-1 H2D and engine-0 D2H children,
+and pooled device backing with separately bound logical and physical extents.
+Every use remains single-flight and must complete, settle, and retire its exact
+frontier before arbitrary same-direction or mixed-direction reuse. Promotion,
+demotion, submission, and observation failures retain explicit retryable or
+opaque process-teardown custody. Packet hot paths use bounded operational
+currentness checks; topology and aperture discovery remain lifecycle checks.
+Its independent model and Verus summary add 46 obligations and 20 mutations,
+bringing the abstract totals to 305 and 179 without an executable/native
+refinement theorem or hardware evidence.
+
 Runtime Worker V4/V5 background progress is additionally exercised through
 real child processes, including deadline, terminal-response, and EOF failure
 sealing, but those tests do not execute native KFD work.
@@ -507,9 +520,11 @@ The remaining community-launch blockers are material. Direct KFD owns exactly
 two compute lanes per child, but has no background native-publication scheduler, queue-side
 dependency packets, or more than two in-flight compute dispatches. Native XGMI is owned by a separate
 exact two-device, copy-only backend; there is no unified native multi-device
-compute owner. R18 joins one persistent owner only to a targeted local SDMA
-queue; persistent compute, native XGMI, concurrent range leases, and runtime
-facade/progress integration remain absent. The host exposes a typed unsafe
+compute owner. R19 joins one persistent owner to the exact directional
+local-SDMA pair, but the runtime facade and progress engine do not yet own that
+adapter. Its single-flight `0x003f_ffe0`-byte packet path is not a batched
+large-copy path; H2H, D2D, persistent compute, native XGMI sharing, and
+concurrent range leases remain absent. The host exposes a typed unsafe
 boundary and sealed adapter for
 a separately reviewed producer of the required Worker V3 semantic-to-machine
 refinement receipt, but the repository ships no concrete issue #214 proof
