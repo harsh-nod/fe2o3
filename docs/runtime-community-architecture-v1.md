@@ -55,10 +55,19 @@ An error is classified as one of:
 - `Terminal`: native state or quiescence is ambiguous; resources remain retained
   and the backend context cannot be used again.
 
-Community applications should host native KFD backends in
-`RuntimeWorkerBackendV1`. The same isolation can contain deprecated HSA
-qualification code, but that is not a public runtime route. Its public
-handshake verifies protocol compatibility;
+Community applications should host native KFD backends in the negotiated
+`RuntimeWorkerBackendV4`; its exact profile carries execution-capability
+discovery, flush, same-device async copy, cancellation, and deadline-bounded
+drain. The canonical V4 server requires the backend to implement all three
+additive SPIs; the direct, multi-device, and native-XGMI KFD owners satisfy that
+bound. Frozen `RuntimeWorkerBackendV1` remains for backends that explicitly opt
+into immediate progress. The versioned transports share one subprocess owner
+and reject cross-version handshakes. V4 caches capability records only for the
+latest successfully enumerated roster and fails closed before enumeration,
+after a failed replacement, and for unknown handles. Runtime Worker transport
+versioning is separate from compiler/proof Worker V3. The same isolation can
+contain deprecated HSA qualification code, but that is not a public runtime
+route. Its public handshake verifies protocol compatibility;
 it does not authenticate the executable, module, or host. The caller must
 select a trusted worker and provide any required artifact authority, sandbox,
 or operating-system isolation. The worker may abort for terminal ambiguity
@@ -69,7 +78,7 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The direct backend owns one admitted `gfx942:xnack-` device, one reusable compute queue, directional SDMA queues, serialized logical compute streams, and allocation-disjoint compute/copy overlap. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. | Concurrent compute on one device, unified compute plus native XGMI, per-dispatch device timestamps, native-authorized atomic/collective execution |
+| KFD | The direct backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. At most one dispatch occupies each lane, and concurrent native work must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. | Background progress, queue-side dependency packets, more than two in-flight compute dispatches, unified compute plus native XGMI, authenticated per-dispatch device timestamps, native-authorized atomic/collective execution |
 | HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy through host
@@ -104,15 +113,19 @@ successful exact-roster mapping for reuse across copies until host access or
 allocation release requires an explicit unmap. For each direction it selects
 submissions through a deterministic FIFO readiness queue, publishes at most 63 in one
 native reservation and doorbell store, and retains every mapping through exact
-completion. Polling a submission beyond the current batch advances a published
-ticket in front of it, so caller-driven polling or waiting cannot indefinitely
-ignore the batch that must drain first. This is bounded cooperative fairness,
-not background progress. The additive in-process `flush_stream` operation
-publishes a complete dependency-ready directional set of at most 63 before
-returning. This permits subsequent host work to overlap the DMA batch without
-waiting for its first poll. Oversubscription rejects before native mutation, and
-poll or wait remains the fallback; flush itself performs no dependency or
-completion progress and creates no background thread. Worker V3 is unchanged.
+completion. Polling a submission beyond the current batch may observe a
+published ticket in front of it, so caller-driven observation cannot
+indefinitely ignore the batch that must drain first. Neither poll nor wait
+publishes deferred work. The additive in-process `flush_stream` operation
+snapshots the complete dependency-ready directional set and publishes it in FIFO
+prefixes of at most 63. It synchronously completes each non-final prefix before
+publishing the next, then returns with the final prefix outstanding so subsequent
+host work can overlap DMA. First-prefix allocation failure rejects before
+mutation; a recoverable later-prefix failure is quiescent because prior prefixes
+have completed and the remaining custody is retryable. Flush creates no
+background thread. Frozen Runtime Worker V1 has no flush request; negotiated
+Runtime Worker V4 exposes the complete additive SPI profile with request-timeout
+and caller-drain-deadline bounds.
 
 The feature-gated gfx942 qualification lane is intentionally outside production
 authority. It re-hashes and loader-validates one repository-owned COV6 object,
@@ -150,9 +163,10 @@ waits once for each pending submission using one shared monotonic deadline and
 returns the same aggregate observation; it may remain non-quiescent if the
 deadline expires. Rejected and quiescent wait errors are remembered while later
 pending submissions receive their one observation; terminal ambiguity stops
-the operation immediately. These operations do not create independent native streams:
-the current direct-KFD backend still serializes logical compute streams through
-one compute queue.
+the operation immediately. These operations do not create independent native
+streams: the current direct-KFD backend multiplexes logical streams over exactly
+two native lanes, with caller-driven FIFO scheduling and at most one active
+dispatch per lane.
 
 `launch_atomic` and `launch_collective` match their contracts against the
 argument type before admission. Compare-exchange binds its success order,
@@ -182,12 +196,14 @@ only encode that shared result into their owned kernarg storage.
 Peer copies require two distinct peer-capable devices, an exact destination
 stream, equal nonempty source/destination ranges, and explicit event
 dependencies. Each copy retains a model peer-transfer contract identity. The
-current KFD router returns before child allocation access. `poll` advances one
-dependency observation or issues one child range request of at most 64 KiB,
-while `wait` repeatedly drives those same steps to its monotonic deadline. The
-child may first reconcile allocation-wide native-dirty or copy-on-write state,
-so the range size is not a strict host-work or latency bound. Pending staging is
-capped at 1 GiB per router and released at conclusive completion. Overlapping
+current KFD router returns before child allocation access. Poll and wait are
+observation-only and do not issue deferred child range operations. The additive
+in-process `flush_stream` operation advances the oldest dependency first, then
+performs cooperative child range operations of at most 64 KiB. A child may first
+reconcile allocation-wide native-dirty or copy-on-write state, so flush is
+potentially blocking and the range size is not a strict host-work or latency
+bound. Pending staging is capped at 1 GiB per router and released at conclusive
+completion. Overlapping
 copies require an exact dependency, live copies retain both allocations, and
 ambiguous child failure terminally seals the router without releasing the
 retained state. This is cooperative host progress, not asynchronous native peer
@@ -228,6 +244,15 @@ ambiguity.
   operations, not hot transitions.
 - Completion waits use deadlines and a bounded spin/backoff policy. Poll counts
   are not timeout units.
+- Direct KFD logical-stream creation does not lease a native lane. Accepted
+  compute work is retained in bounded per-stream FIFOs, with O(1) head/tail
+  operations and O(stream depth) interior cancellation. The scheduler scans
+  exactly two physical lanes. Implicit stream-tail and explicit dependency
+  chains are capped at depth 256. Poll is observation-only; submit may publish
+  immediately ready work; wait is observation-only; and explicit in-process
+  stream flush may enter the potentially blocking dirty-buffer reconciliation
+  and publication path. Progress is caller-driven. Frozen Runtime Worker V1 does
+  not expose flush; negotiated Runtime Worker V4 does.
 - SDMA batch submission and batch completion are linear in batch depth, bounded
   by 63 so one of the 64 physical ring slots remains empty. Currentness
   validation is constant per batch rather than per packet; packet construction
@@ -242,8 +267,10 @@ ambiguity.
   wakeup is O(waiters for the completed dependency times the bounded 256-entry
   dependency roster). Prepublication cancellation may remove an arbitrary
   ready entry in O(ready), and allocation-overlap admission remains O(active).
-  A poll focused beyond the published batch advances its earliest published
-  predecessor; progress remains caller-driven.
+  A poll focused beyond the published batch may observe its earliest published
+  predecessor but does not publish deferred work. Explicit flush remains the
+  publication mechanism and synchronously drains fixed-size prefixes when the
+  entry snapshot exceeds one native batch.
 - KFD device, VM, allocation, mapping, and queue lifecycle transitions use the
   full contracted topology/aperture currentness composite. Active mapped-memory
   and queue operations use the retained process, reset-event, descriptor, UAPI,
@@ -370,10 +397,24 @@ pinned totals to 119 and 79. The proof covers the abstract model only: it makes
 no Rust-to-Verus refinement claim and supplies no compiler, KFD, firmware, or
 native execution authority.
 
-The remaining community-launch blockers are material. Direct KFD still owns one
-compute queue per child and serializes logical compute streams. Native XGMI is
-owned by a separate exact two-device, copy-only backend; there is no unified
-native multi-device compute owner. The repository has no reviewed production
-Worker V3 application verifier, and the Rust device-language path includes a
-bounded volatile-load/store bridge rather than broad Rust language support.
-Consequently, the runtime is not at HIP/HSA parity.
+R12 adds a bounded abstract multi-queue model for capability admission, queue
+occurrences and slot generations, dependency-gated publication, terminal
+observation, cancellation, release, currentness quarantine, drain, and queue
+recreation. Twenty-three additional obligations and thirteen expected-negative
+mutations bring the pinned totals to 142 and 92. R13 adds a bounded abstract
+logical-stream scheduler with exactly two lanes, effective implicit and explicit
+dependencies, FIFO publication, resource custody, lane-bound terminal events,
+tail cancellation, dependent retention, and currentness quarantine. Twenty
+additional obligations and eleven mutations bring the totals to 162 and 103.
+Both tranches prove only their abstract finite models; neither establishes a
+Rust-to-Verus refinement, native behavior, progress, or performance.
+
+The remaining community-launch blockers are material. Direct KFD owns exactly
+two compute lanes per child, but has no background scheduler, queue-side
+dependency packets, or more than two in-flight compute dispatches. Native XGMI is owned by a separate
+exact two-device, copy-only backend; there is no unified native multi-device
+compute owner. The repository has no reviewed production producer for the
+required Worker V3 semantic-to-machine refinement receipt, and the Rust
+device-language path includes a bounded volatile-load/store bridge rather than
+broad Rust language support. Consequently, the runtime is not at HIP/HSA
+parity.

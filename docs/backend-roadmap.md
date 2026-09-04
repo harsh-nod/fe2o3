@@ -293,7 +293,9 @@ atomic/collective language support.
 ## Runtime R10 Status
 
 R10 adds explicit execution-detail capability discovery plus cancellation and
-drain to the public facade without changing the Worker V3 wire protocol. The
+drain to the public facade without changing the frozen Runtime Worker V1 wire
+protocol. R13's separately negotiated Runtime Worker V4 transports those
+additive SPIs; this runtime transport is distinct from compiler/proof Worker V3. The
 direct KFD backend now retains pooled native host/HBM SDMA allocations, fully
 zero-initializes new HBM allocations, scrubs them before recycle, trims the
 pool at shutdown, and admits allocation-disjoint compute/copy overlap. Native

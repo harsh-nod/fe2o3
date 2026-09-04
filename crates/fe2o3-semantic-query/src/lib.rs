@@ -39,6 +39,8 @@ mod decoded_att_source_isa_v1;
 pub use decoded_att_source_isa_v1::*;
 mod runtime_causality_v1;
 pub use runtime_causality_v1::*;
+mod dispatch_timestamps_v1;
+pub use dispatch_timestamps_v1::*;
 mod agent_variant_service_v1;
 pub use agent_variant_service_v1::*;
 mod agent_variant_service_v2;

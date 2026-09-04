@@ -10,9 +10,21 @@ Host staging records always bind allocation-relative ranges. The capture
 explicitly declares whether payload content identities were requested or the
 low-overhead range-only policy was used.
 
-The capture does not claim GPU clock timestamps, DMA/copy-engine events,
+The frozen Runtime Profile V1 capture does not claim GPU clock timestamps,
+DMA/copy-engine events,
 hardware counters, PC samples, decoded ATT, rocprofv3 dispatch correlation, or
 authenticated source/IR/ISA attribution. Those facts are returned as typed
 unavailable capabilities until independently collected evidence can be joined.
 No record in this crate grants compiler, proof, load, dispatch, or native-handle
 authority.
+
+The separate additive Dispatch Timestamp Capture V1 schema can structurally
+admit an external producer claim against the exact Runtime Profile V1,
+producer-declared evidence, and collection-configuration bytes. Each bounded record binds
+dispatch, queue, device, kernel, and artifact identity; a CPU publication tick;
+device start/end ticks; and before/after CPU/device correlation brackets. Raw
+ticks remain opaque and the schema explicitly leaves device publication,
+frequency/nanosecond conversion, global synchronization, and authenticated
+producer provenance unavailable. Every tick and bracket is explicitly labeled
+as a producer-declared observation, never as an authenticated `Observed` fact.
+No production collector adapter currently mints authenticated records.

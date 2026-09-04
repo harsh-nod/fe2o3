@@ -1,6 +1,7 @@
 //! Bounded subprocess transport for terminal native runtime backends.
 
 use core::fmt;
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -9,8 +10,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::{
-    BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
-    BackendPollV1, MAX_RUNTIME_MODULE_IMAGE_BYTES_V1, RuntimeBackendFailureV1, RuntimeBackendV1,
+    BackendBindingV1, BackendCancellationV1, BackendDeviceDescriptionV1, BackendLaunchV1,
+    BackendMemoryRegionV1, BackendPollV1, MAX_RUNTIME_MODULE_IMAGE_BYTES_V1,
+    RuntimeAsyncCopyBackendV1, RuntimeBackendFailureV1, RuntimeBackendV1,
+    RuntimeCancellationBackendV1, RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1,
     RuntimeLaunchGeometryV1, RuntimeMemoryKindV1,
 };
 
@@ -24,6 +27,13 @@ pub const MAX_RUNTIME_WORKER_BYTE_RESPONSE_BYTES_V1: usize =
     MAX_RUNTIME_WORKER_FRAME_BYTES_V1 - 1 - size_of::<u32>();
 /// Exact first frame emitted by a conforming runtime worker.
 pub const RUNTIME_WORKER_HANDSHAKE_V1: &[u8] = b"fe2o3-runtime-worker-v1";
+/// Exact first frame emitted by a worker supporting the complete V4 extension set.
+///
+/// A distinct handshake prevents either endpoint from silently treating the
+/// additive operations as part of the frozen Runtime Worker V1 wire surface.
+/// This transport version is separate from the compiler's Worker V3 proof and
+/// application protocol.
+pub const RUNTIME_WORKER_HANDSHAKE_V4: &[u8] = b"fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1";
 /// Parent-side allowance reserved inside a caller deadline for a wait response.
 pub const RUNTIME_WORKER_RESPONSE_GRACE_V1: Duration = Duration::from_millis(100);
 
@@ -165,6 +175,61 @@ pub trait RuntimeWorkerCodecV1 {
     ) -> Result<RuntimeWorkerResponseV1, RuntimeBackendFailureV1<Self::Error>>;
 }
 
+/// Complete extension set negotiated by the Worker V4 handshake.
+///
+/// Implementing the V1 codec alone enables none of these operations. A V4
+/// backend requires this trait and the exact V4 handshake before it publishes
+/// capability, flush, asynchronous-copy, cancellation, or drain requests.
+pub trait RuntimeWorkerCodecV4: RuntimeWorkerCodecV1 {
+    fn encode_execution_capabilities_request_v4(
+        &mut self,
+        device: u64,
+    ) -> Result<Vec<u8>, Self::Error>;
+
+    fn decode_execution_capabilities_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeBackendFailureV1<Self::Error>>;
+
+    fn encode_flush_stream_request_v4(&mut self, stream: u64) -> Result<Vec<u8>, Self::Error>;
+
+    fn decode_flush_stream_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
+
+    fn encode_async_copy_request_v4(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<Vec<u8>, Self::Error>;
+
+    fn decode_async_copy_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+
+    fn encode_cancel_request_v4(&mut self, submission: u64) -> Result<Vec<u8>, Self::Error>;
+
+    fn decode_cancel_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>>;
+
+    fn encode_drain_request_v4(
+        &mut self,
+        submission: u64,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, Self::Error>;
+
+    fn decode_drain_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>>;
+}
+
 const MAX_RUNTIME_WORKER_ERROR_BYTES_V1: usize = 4096;
 
 /// Canonical bounded binary worker protocol failure.
@@ -218,6 +283,29 @@ impl RuntimeWorkerCodecV1 for RuntimeBinaryCodecV1 {
     }
 }
 
+/// Canonical address-free Worker V4 codec.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuntimeBinaryCodecV4;
+
+impl RuntimeWorkerCodecV1 for RuntimeBinaryCodecV4 {
+    type Error = RuntimeBinaryCodecErrorV1;
+
+    fn encode_request_v1(
+        &mut self,
+        operation: RuntimeWorkerOperationV1<'_>,
+    ) -> Result<Vec<u8>, Self::Error> {
+        encode_binary_request_v1(operation)
+    }
+
+    fn decode_response_v1(
+        &mut self,
+        expected: RuntimeWorkerOperationKindV1,
+        response: &[u8],
+    ) -> Result<RuntimeWorkerResponseV1, RuntimeBackendFailureV1<Self::Error>> {
+        decode_binary_response_v1(expected, response)
+    }
+}
+
 const OP_ENUMERATE_DEVICES_V1: u8 = 1;
 const OP_CREATE_STREAM_V1: u8 = 2;
 const OP_DESTROY_STREAM_V1: u8 = 3;
@@ -235,6 +323,11 @@ const OP_RECORD_EVENT_V1: u8 = 14;
 const OP_RELEASE_EVENT_V1: u8 = 15;
 const OP_PEER_COPY_V1: u8 = 16;
 const OP_RELEASE_SUBMISSION_V1: u8 = 17;
+const OP_FLUSH_STREAM_V4: u8 = 18;
+const OP_EXECUTION_CAPABILITIES_V4: u8 = 19;
+const OP_ASYNC_COPY_V4: u8 = 20;
+const OP_CANCEL_V4: u8 = 21;
+const OP_DRAIN_V4: u8 = 22;
 
 const RESPONSE_OK_V1: u8 = 0;
 const RESPONSE_REJECTED_V1: u8 = 1;
@@ -409,26 +502,7 @@ fn decode_binary_response_v1(
     expected: RuntimeWorkerOperationKindV1,
     response: &[u8],
 ) -> Result<RuntimeWorkerResponseV1, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
-    let mut input = BinaryCursorV1::new(response);
-    let status = input.u8().map_err(RuntimeBackendFailureV1::Terminal)?;
-    if status != RESPONSE_OK_V1 {
-        let message = input
-            .string(MAX_RUNTIME_WORKER_ERROR_BYTES_V1)
-            .and_then(|message| {
-                input.finish()?;
-                Ok(message.to_owned())
-            })
-            .map_err(RuntimeBackendFailureV1::Terminal)?;
-        let error = RuntimeBinaryCodecErrorV1::Remote(message);
-        return Err(match status {
-            RESPONSE_REJECTED_V1 => RuntimeBackendFailureV1::Rejected(error),
-            RESPONSE_QUIESCENT_V1 => RuntimeBackendFailureV1::Quiescent(error),
-            RESPONSE_TERMINAL_V1 => RuntimeBackendFailureV1::Terminal(error),
-            _ => RuntimeBackendFailureV1::Terminal(RuntimeBinaryCodecErrorV1::Malformed(
-                "response status",
-            )),
-        });
-    }
+    let mut input = decode_binary_success_payload_v1(response)?;
     let decoded = match expected {
         RuntimeWorkerOperationKindV1::EnumerateDevices => {
             let count = input.count(crate::MAX_RUNTIME_DEVICES_V1, "device count")?;
@@ -464,6 +538,159 @@ fn decode_binary_response_v1(
     };
     input.finish().map_err(RuntimeBackendFailureV1::Terminal)?;
     Ok(decoded)
+}
+
+fn decode_binary_success_payload_v1(
+    response: &[u8],
+) -> Result<BinaryCursorV1<'_>, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+    let mut input = BinaryCursorV1::new(response);
+    let status = input.u8().map_err(RuntimeBackendFailureV1::Terminal)?;
+    if status != RESPONSE_OK_V1 {
+        let message = input
+            .string(MAX_RUNTIME_WORKER_ERROR_BYTES_V1)
+            .and_then(|message| {
+                input.finish()?;
+                Ok(message.to_owned())
+            })
+            .map_err(RuntimeBackendFailureV1::Terminal)?;
+        let error = RuntimeBinaryCodecErrorV1::Remote(message);
+        return Err(match status {
+            RESPONSE_REJECTED_V1 => RuntimeBackendFailureV1::Rejected(error),
+            RESPONSE_QUIESCENT_V1 => RuntimeBackendFailureV1::Quiescent(error),
+            RESPONSE_TERMINAL_V1 => RuntimeBackendFailureV1::Terminal(error),
+            _ => RuntimeBackendFailureV1::Terminal(RuntimeBinaryCodecErrorV1::Malformed(
+                "response status",
+            )),
+        });
+    }
+    Ok(input)
+}
+
+fn decode_fixed_blob_response_v4<const N: usize>(
+    response: &[u8],
+    detail: &'static str,
+) -> Result<[u8; N], RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+    let mut input = decode_binary_success_payload_v1(response)?;
+    let bytes = input.blob(N).map_err(RuntimeBackendFailureV1::Terminal)?;
+    let bytes: [u8; N] = bytes.try_into().map_err(|_| {
+        RuntimeBackendFailureV1::Terminal(RuntimeBinaryCodecErrorV1::Malformed(detail))
+    })?;
+    input.finish().map_err(RuntimeBackendFailureV1::Terminal)?;
+    Ok(bytes)
+}
+
+impl RuntimeWorkerCodecV4 for RuntimeBinaryCodecV4 {
+    fn encode_execution_capabilities_request_v4(
+        &mut self,
+        device: u64,
+    ) -> Result<Vec<u8>, Self::Error> {
+        let mut output = vec![OP_EXECUTION_CAPABILITIES_V4];
+        put_u64_v1(&mut output, device);
+        Ok(output)
+    }
+
+    fn decode_execution_capabilities_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeBackendFailureV1<Self::Error>> {
+        let bits = u16::from_le_bytes(decode_fixed_blob_response_v4(
+            response,
+            "execution-capabilities response",
+        )?);
+        decode_execution_capabilities_v4(bits).map_err(RuntimeBackendFailureV1::Terminal)
+    }
+
+    fn encode_flush_stream_request_v4(&mut self, stream: u64) -> Result<Vec<u8>, Self::Error> {
+        let mut output = vec![OP_FLUSH_STREAM_V4];
+        put_u64_v1(&mut output, stream);
+        Ok(output)
+    }
+
+    fn decode_flush_stream_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        match decode_binary_response_v1(RuntimeWorkerOperationKindV1::Unit, response)? {
+            RuntimeWorkerResponseV1::Unit => Ok(()),
+            _ => Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeBinaryCodecErrorV1::Malformed("flush response"),
+            )),
+        }
+    }
+
+    fn encode_async_copy_request_v4(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<Vec<u8>, Self::Error> {
+        if dependencies.len() > crate::MAX_RUNTIME_DEPENDENCIES_V1 {
+            return Err(RuntimeBinaryCodecErrorV1::Limit("async-copy dependencies"));
+        }
+        let mut output = vec![OP_ASYNC_COPY_V4];
+        put_u64_v1(&mut output, stream);
+        put_backend_region_v1(&mut output, source);
+        put_backend_region_v1(&mut output, destination);
+        put_dependencies_v1(&mut output, dependencies)?;
+        debug_assert!(output.len() <= MAX_RUNTIME_WORKER_FRAME_BYTES_V1);
+        Ok(output)
+    }
+
+    fn decode_async_copy_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        match decode_binary_response_v1(RuntimeWorkerOperationKindV1::Handle, response)? {
+            RuntimeWorkerResponseV1::Handle(handle) => Ok(handle),
+            _ => Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeBinaryCodecErrorV1::Malformed("async-copy response"),
+            )),
+        }
+    }
+
+    fn encode_cancel_request_v4(&mut self, submission: u64) -> Result<Vec<u8>, Self::Error> {
+        let mut output = vec![OP_CANCEL_V4];
+        put_u64_v1(&mut output, submission);
+        Ok(output)
+    }
+
+    fn decode_cancel_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+        match decode_fixed_blob_response_v4(response, "cancel response")? {
+            [0] => Ok(BackendCancellationV1::Cancelled),
+            [1] => Ok(BackendCancellationV1::TooLate),
+            _ => Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeBinaryCodecErrorV1::Malformed("cancel response"),
+            )),
+        }
+    }
+
+    fn encode_drain_request_v4(
+        &mut self,
+        submission: u64,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, Self::Error> {
+        let mut output = vec![OP_DRAIN_V4];
+        put_u64_v1(&mut output, submission);
+        put_u64_v1(&mut output, timeout.as_secs());
+        put_u32_v1(&mut output, timeout.subsec_nanos());
+        Ok(output)
+    }
+
+    fn decode_drain_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        match decode_binary_response_v1(RuntimeWorkerOperationKindV1::Poll, response)? {
+            RuntimeWorkerResponseV1::Poll(poll) => Ok(poll),
+            _ => Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeBinaryCodecErrorV1::Malformed("drain response"),
+            )),
+        }
+    }
 }
 
 fn put_u16_v1(output: &mut Vec<u8>, value: u16) {
@@ -669,6 +896,39 @@ fn decode_capabilities_v1(
     })
 }
 
+fn execution_capabilities_bits_v4(capabilities: RuntimeExecutionCapabilitiesV1) -> u16 {
+    u16::from(capabilities.native_async_copy)
+        | (u16::from(capabilities.native_peer_copy) << 1)
+        | (u16::from(capabilities.concurrent_compute) << 2)
+        | (u16::from(capabilities.compute_copy_overlap) << 3)
+        | (u16::from(capabilities.memory_pool) << 4)
+        | (u16::from(capabilities.profiling) << 5)
+        | (u16::from(capabilities.cancellation) << 6)
+        | (u16::from(capabilities.atomics) << 7)
+        | (u16::from(capabilities.collectives) << 8)
+}
+
+fn decode_execution_capabilities_v4(
+    bits: u16,
+) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeBinaryCodecErrorV1> {
+    if bits & !0x01ff != 0 {
+        return Err(RuntimeBinaryCodecErrorV1::Malformed(
+            "execution-capability bits",
+        ));
+    }
+    Ok(RuntimeExecutionCapabilitiesV1 {
+        native_async_copy: bits & 1 != 0,
+        native_peer_copy: bits & 2 != 0,
+        concurrent_compute: bits & 4 != 0,
+        compute_copy_overlap: bits & 8 != 0,
+        memory_pool: bits & 16 != 0,
+        profiling: bits & 32 != 0,
+        cancellation: bits & 64 != 0,
+        atomics: bits & 128 != 0,
+        collectives: bits & 256 != 0,
+    })
+}
+
 fn encode_poll_v1(output: &mut Vec<u8>, poll: BackendPollV1) {
     match poll {
         BackendPollV1::Pending => output.push(0),
@@ -693,20 +953,154 @@ fn decode_poll_v1(
     }
 }
 
-/// Serves the canonical bounded protocol over any concrete runtime backend.
+/// Explicit admission marker for canonical Runtime Worker V1 backends.
+///
+/// An implementation certifies that every successfully accepted operation can
+/// reach publication and completion without a later explicit progress call.
+/// This marker is intentionally not implemented as a blanket: downstream
+/// backends may opt in only after reviewing that progress invariant. Backends
+/// that defer publication must use Worker V4 instead.
+///
+/// Direct, multi-device, and native-XGMI KFD backends require explicit flush
+/// progress and therefore cannot satisfy this bound:
+///
+/// ```compile_fail
+/// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeWorkerV1ImmediateProgressBackendV1};
+/// fn require_v1<T: RuntimeWorkerV1ImmediateProgressBackendV1>() {}
+/// require_v1::<KfdRuntimeBackendV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_runtime::{KfdMultiDeviceRuntimeBackendV1, RuntimeWorkerV1ImmediateProgressBackendV1};
+/// fn require_v1<T: RuntimeWorkerV1ImmediateProgressBackendV1>() {}
+/// require_v1::<KfdMultiDeviceRuntimeBackendV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_runtime::{KfdNativeXgmiRuntimeBackendV1, RuntimeWorkerV1ImmediateProgressBackendV1};
+/// fn require_v1<T: RuntimeWorkerV1ImmediateProgressBackendV1>() {}
+/// require_v1::<KfdNativeXgmiRuntimeBackendV1>();
+/// ```
+pub trait RuntimeWorkerV1ImmediateProgressBackendV1: RuntimeBackendV1 {}
+
+/// Serves the canonical bounded Runtime Worker V1 protocol.
+///
+/// The hosted backend must never require deferred publication or cooperative
+/// progress after a successful submission. A flush-dependent deployment must
+/// use [`serve_runtime_backend_worker_v4`]; V1 cannot express that operation.
 pub fn serve_runtime_backend_worker_v1<B, R, W>(
     mut backend: B,
     input: R,
     output: W,
 ) -> Result<(), RuntimeWorkerErrorV1>
 where
-    B: RuntimeBackendV1,
+    B: RuntimeWorkerV1ImmediateProgressBackendV1,
     R: Read,
     W: Write,
 {
     serve_runtime_worker_v1(input, output, |request| {
         dispatch_binary_request_v1(&mut backend, request)
     })
+}
+
+/// Serves the canonical bounded Worker V4 protocol over a backend implementing
+/// the complete negotiated extension set.
+pub fn serve_runtime_backend_worker_v4<B, R, W>(
+    mut backend: B,
+    input: R,
+    output: W,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1 + RuntimeAsyncCopyBackendV1 + RuntimeCancellationBackendV1,
+    R: Read,
+    W: Write,
+{
+    serve_runtime_worker_v4(input, output, |request| {
+        dispatch_binary_request_v4(&mut backend, request)
+    })
+}
+
+fn dispatch_binary_request_v4<B>(
+    backend: &mut B,
+    request: &[u8],
+) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1 + RuntimeAsyncCopyBackendV1 + RuntimeCancellationBackendV1,
+{
+    let Some(operation) = request.first().copied() else {
+        return dispatch_binary_request_v1(backend, request);
+    };
+    if !matches!(
+        operation,
+        OP_FLUSH_STREAM_V4
+            | OP_EXECUTION_CAPABILITIES_V4
+            | OP_ASYNC_COPY_V4
+            | OP_CANCEL_V4
+            | OP_DRAIN_V4
+    ) {
+        return dispatch_binary_request_v1(backend, request);
+    }
+    let mut input = BinaryCursorV1::new(request);
+    let _operation = binary_u8_v1(&mut input)?;
+    let response = match operation {
+        OP_EXECUTION_CAPABILITIES_V4 => {
+            let device = binary_u64_v1(&mut input)?;
+            require_binary_end_v1(&input)?;
+            let bits = execution_capabilities_bits_v4(backend.execution_capabilities_v1(device));
+            encode_success_response_v1(|output| put_blob_v1(output, &bits.to_le_bytes(), 2))?
+        }
+        OP_FLUSH_STREAM_V4 => {
+            let stream = binary_u64_v1(&mut input)?;
+            require_binary_end_v1(&input)?;
+            encode_unit_response_v1(backend.flush_stream_v1(stream))?
+        }
+        OP_ASYNC_COPY_V4 => {
+            let stream = binary_u64_v1(&mut input)?;
+            let source = binary_region_v1(&mut input)?;
+            let destination = binary_region_v1(&mut input)?;
+            let dependencies = binary_dependencies_v1(&mut input)?;
+            require_binary_end_v1(&input)?;
+            encode_handle_response_v1(backend.copy_async_v1(
+                stream,
+                source,
+                destination,
+                &dependencies,
+            ))?
+        }
+        OP_CANCEL_V4 => {
+            let submission = binary_u64_v1(&mut input)?;
+            require_binary_end_v1(&input)?;
+            encode_backend_response_v1(backend.cancel_v1(submission), |output, disposition| {
+                let tag = match disposition {
+                    BackendCancellationV1::Cancelled => 0,
+                    BackendCancellationV1::TooLate => 1,
+                };
+                put_blob_v1(output, &[tag], 1)
+            })?
+        }
+        OP_DRAIN_V4 => {
+            let submission = binary_u64_v1(&mut input)?;
+            let seconds = binary_u64_v1(&mut input)?;
+            let nanoseconds = binary_u32_v1(&mut input)?;
+            if nanoseconds >= 1_000_000_000 {
+                return Err(RuntimeWorkerErrorV1::Protocol("invalid drain duration"));
+            }
+            let timeout = Duration::new(seconds, nanoseconds);
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .ok_or(RuntimeWorkerErrorV1::InvalidDeadline)?;
+            require_binary_end_v1(&input)?;
+            encode_poll_response_v1(backend.drain_v1(submission, deadline))?
+        }
+        _ => unreachable!("V4 extension opcode was filtered above"),
+    };
+    if response.len() > MAX_RUNTIME_WORKER_FRAME_BYTES_V1 {
+        return Err(RuntimeWorkerErrorV1::FrameTooLarge {
+            actual: response.len(),
+            maximum: MAX_RUNTIME_WORKER_FRAME_BYTES_V1,
+        });
+    }
+    Ok(response)
 }
 
 fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
@@ -1120,7 +1514,21 @@ impl<E: std::error::Error + 'static> std::error::Error for RuntimeWorkerBackendE
     }
 }
 
-/// `RuntimeBackendV1` implementation that moves all backend execution into a child process.
+/// `RuntimeBackendV1` implementation for the frozen Runtime Worker V1 protocol.
+///
+/// This type is suitable only when accepted operations do not require a later
+/// explicit progress call. Backends requiring any negotiated V4 extension must
+/// be hosted and opened through [`RuntimeWorkerBackendV4`]. V1 intentionally
+/// does not implement [`RuntimeFlushBackendV1`]:
+///
+/// ```compile_fail
+/// use fe2o3_runtime::{
+///     RuntimeBinaryCodecV1, RuntimeFlushBackendV1, RuntimeWorkerBackendV1,
+/// };
+///
+/// fn require_flush<T: RuntimeFlushBackendV1>() {}
+/// require_flush::<RuntimeWorkerBackendV1<RuntimeBinaryCodecV1>>();
+/// ```
 pub struct RuntimeWorkerBackendV1<C: RuntimeWorkerCodecV1> {
     transport: RuntimeWorkerTransportV1,
     codec: C,
@@ -1218,6 +1626,377 @@ impl<C: RuntimeWorkerCodecV1> RuntimeWorkerBackendV1<C> {
     ) -> Result<T, RuntimeBackendFailureV1<RuntimeWorkerBackendErrorV1<C::Error>>> {
         self.transport.terminate();
         Err(response_mismatch_v1(detail))
+    }
+}
+
+/// Worker backend with the explicitly negotiated V4 extension set.
+///
+/// Standard backend calls retain their V1 codec representation, but the
+/// process must advertise the exact V4 handshake before this value can be
+/// constructed. This type, unlike [`RuntimeWorkerBackendV1`], implements
+/// [`RuntimeFlushBackendV1`], [`RuntimeAsyncCopyBackendV1`], and
+/// [`RuntimeCancellationBackendV1`], and caches exact execution capabilities
+/// for the device roster returned by each successful enumeration. Before
+/// enumeration, after roster substitution, and for unknown handles, capability
+/// queries fail closed to the all-false record. A received replacement roster
+/// clears the prior cache before its capability records are queried, so a
+/// recoverable query failure cannot expose stale or partial records. A flush or
+/// other ordinary call may synchronously block for up to the `request_timeout` supplied to
+/// [`RuntimeWorkerBackendV4::spawn`]; drain instead obeys its caller deadline.
+/// A transport timeout or terminal response seals and reaps the worker.
+/// Runtime Worker V1 remains intentionally incapable of these extensions.
+pub struct RuntimeWorkerBackendV4<C: RuntimeWorkerCodecV4> {
+    inner: RuntimeWorkerBackendV1<C>,
+    execution_capabilities: HashMap<u64, RuntimeExecutionCapabilitiesV1>,
+}
+
+impl<C: RuntimeWorkerCodecV4> RuntimeWorkerBackendV4<C> {
+    pub fn spawn(
+        command: &RuntimeWorkerCommandV1,
+        codec: C,
+        startup_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<Self, RuntimeWorkerErrorV1> {
+        Ok(Self {
+            inner: RuntimeWorkerBackendV1 {
+                transport: RuntimeWorkerTransportV1::spawn_with_handshake_v1(
+                    command,
+                    startup_timeout,
+                    RUNTIME_WORKER_HANDSHAKE_V4,
+                )?,
+                codec,
+                request_timeout,
+            },
+            execution_capabilities: HashMap::new(),
+        })
+    }
+
+    pub const fn is_terminal(&self) -> bool {
+        self.inner.is_terminal()
+    }
+
+    pub fn shutdown(self, timeout: Duration) -> Result<(), RuntimeWorkerErrorV1> {
+        self.inner.shutdown(timeout)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV4> RuntimeBackendV1 for RuntimeWorkerBackendV4<C> {
+    type Error = RuntimeWorkerBackendErrorV1<C::Error>;
+
+    fn execution_capabilities_v1(&self, device: u64) -> RuntimeExecutionCapabilitiesV1 {
+        if self.inner.is_terminal() {
+            return RuntimeExecutionCapabilitiesV1::default();
+        }
+        self.execution_capabilities
+            .get(&device)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn enumerate_devices_v1(
+        &mut self,
+    ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
+        let devices = self.inner.enumerate_devices_v1()?;
+        self.execution_capabilities.clear();
+        let mut capabilities = HashMap::new();
+        capabilities.try_reserve(devices.len()).map_err(|_| {
+            RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Protocol(
+                "execution-capability cache allocation",
+            ))
+        })?;
+        for device in &devices {
+            let request = self
+                .inner
+                .codec
+                .encode_execution_capabilities_request_v4(device.backend_device)
+                .map_err(|error| {
+                    RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+                })?;
+            let response = self
+                .inner
+                .transport
+                .request_owned(request, self.inner.request_timeout)
+                .map_err(|error| {
+                    RuntimeBackendFailureV1::Terminal(RuntimeWorkerBackendErrorV1::Transport(error))
+                })?;
+            let decoded = self
+                .inner
+                .codec
+                .decode_execution_capabilities_response_v4(&response)
+                .map_err(map_codec_failure_v1);
+            if matches!(&decoded, Err(RuntimeBackendFailureV1::Terminal(_))) {
+                self.inner.transport.terminate();
+            }
+            capabilities.insert(device.backend_device, decoded?);
+        }
+        self.execution_capabilities = capabilities;
+        Ok(devices)
+    }
+
+    fn create_stream_v1(
+        &mut self,
+        device: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.create_stream_v1(device)
+    }
+
+    fn destroy_stream_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.destroy_stream_v1(stream)
+    }
+
+    fn allocate_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.allocate_v1(device, kind, byte_len, alignment)
+    }
+
+    fn release_allocation_v1(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.release_allocation_v1(allocation)
+    }
+
+    fn write_allocation_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .write_allocation_v1(allocation, byte_offset, bytes)
+    }
+
+    fn read_allocation_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .read_allocation_v1(allocation, byte_offset, destination)
+    }
+
+    fn load_module_v1(
+        &mut self,
+        device: u64,
+        image: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.load_module_v1(device, image)
+    }
+
+    fn unload_module_v1(
+        &mut self,
+        module: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.unload_module_v1(module)
+    }
+
+    fn resolve_kernel_v1(
+        &mut self,
+        module: u64,
+        name: &str,
+        signature: [u8; 32],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.resolve_kernel_v1(module, name, signature)
+    }
+
+    fn submit_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.submit_v1(launch)
+    }
+
+    fn poll_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.poll_v1(submission)
+    }
+
+    fn wait_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.wait_v1(submission, deadline)
+    }
+
+    fn release_submission_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.release_submission_v1(submission)
+    }
+
+    fn record_event_v1(
+        &mut self,
+        stream: u64,
+        submission: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.record_event_v1(stream, submission)
+    }
+
+    fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.release_event_v1(event)
+    }
+
+    fn peer_copy_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .peer_copy_v1(stream, source, destination, dependencies)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV4> RuntimeFlushBackendV1 for RuntimeWorkerBackendV4<C> {
+    fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        let request = self
+            .inner
+            .codec
+            .encode_flush_stream_request_v4(stream)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+            })?;
+        let response = self
+            .inner
+            .transport
+            .request_owned(request, self.inner.request_timeout)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Terminal(RuntimeWorkerBackendErrorV1::Transport(error))
+            })?;
+        let decoded = self
+            .inner
+            .codec
+            .decode_flush_stream_response_v4(&response)
+            .map_err(map_codec_failure_v1);
+        if matches!(&decoded, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.inner.transport.terminate();
+        }
+        decoded
+    }
+}
+
+impl<C: RuntimeWorkerCodecV4> RuntimeAsyncCopyBackendV1 for RuntimeWorkerBackendV4<C> {
+    fn copy_async_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        let request = self
+            .inner
+            .codec
+            .encode_async_copy_request_v4(stream, source, destination, dependencies)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+            })?;
+        let response = self
+            .inner
+            .transport
+            .request_owned(request, self.inner.request_timeout)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Terminal(RuntimeWorkerBackendErrorV1::Transport(error))
+            })?;
+        let decoded = self
+            .inner
+            .codec
+            .decode_async_copy_response_v4(&response)
+            .map_err(map_codec_failure_v1);
+        if matches!(&decoded, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.inner.transport.terminate();
+        }
+        match decoded? {
+            0 => self.inner.response_mismatch("nonzero async-copy handle"),
+            handle => Ok(handle),
+        }
+    }
+}
+
+impl<C: RuntimeWorkerCodecV4> RuntimeCancellationBackendV1 for RuntimeWorkerBackendV4<C> {
+    fn cancel_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+        let request = self
+            .inner
+            .codec
+            .encode_cancel_request_v4(submission)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+            })?;
+        let response = self
+            .inner
+            .transport
+            .request_owned(request, self.inner.request_timeout)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Terminal(RuntimeWorkerBackendErrorV1::Transport(error))
+            })?;
+        let decoded = self
+            .inner
+            .codec
+            .decode_cancel_response_v4(&response)
+            .map_err(map_codec_failure_v1);
+        if matches!(&decoded, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.inner.transport.terminate();
+        }
+        decoded
+    }
+
+    fn drain_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        if self.inner.transport.is_terminal() {
+            return Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited),
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(BackendPollV1::Pending);
+        }
+        let worker_timeout = remaining.saturating_sub(RUNTIME_WORKER_RESPONSE_GRACE_V1);
+        let request = self
+            .inner
+            .codec
+            .encode_drain_request_v4(submission, worker_timeout)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+            })?;
+        if Instant::now() >= deadline {
+            return Ok(BackendPollV1::Pending);
+        }
+        let response = self
+            .inner
+            .transport
+            .request_owned_until(request, deadline)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Terminal(RuntimeWorkerBackendErrorV1::Transport(error))
+            })?;
+        let decoded = self
+            .inner
+            .codec
+            .decode_drain_response_v4(&response)
+            .map_err(map_codec_failure_v1);
+        if matches!(&decoded, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.inner.transport.terminate();
+        }
+        decoded
     }
 }
 
@@ -1561,6 +2340,14 @@ impl RuntimeWorkerTransportV1 {
         command: &RuntimeWorkerCommandV1,
         startup_timeout: Duration,
     ) -> Result<Self, RuntimeWorkerErrorV1> {
+        Self::spawn_with_handshake_v1(command, startup_timeout, RUNTIME_WORKER_HANDSHAKE_V1)
+    }
+
+    fn spawn_with_handshake_v1(
+        command: &RuntimeWorkerCommandV1,
+        startup_timeout: Duration,
+        expected_handshake: &[u8],
+    ) -> Result<Self, RuntimeWorkerErrorV1> {
         let mut child = Command::new(command.program())
             .args(command.arguments())
             .stdin(Stdio::piped())
@@ -1648,7 +2435,7 @@ impl RuntimeWorkerTransportV1 {
                 return Err(RuntimeWorkerErrorV1::WorkerExited);
             }
         };
-        if handshake != RUNTIME_WORKER_HANDSHAKE_V1 {
+        if handshake != expected_handshake {
             transport.terminate();
             return Err(RuntimeWorkerErrorV1::Protocol("handshake mismatch"));
         }
@@ -1672,9 +2459,13 @@ impl RuntimeWorkerTransportV1 {
         request: Vec<u8>,
         timeout: Duration,
     ) -> Result<Vec<u8>, RuntimeWorkerErrorV1> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(RuntimeWorkerErrorV1::InvalidDeadline)?;
+        if self.terminal {
+            return Err(RuntimeWorkerErrorV1::WorkerExited);
+        }
+        let Some(deadline) = Instant::now().checked_add(timeout) else {
+            self.terminate();
+            return Err(RuntimeWorkerErrorV1::InvalidDeadline);
+        };
         self.request_owned_until(request, deadline)
     }
 
@@ -1818,10 +2609,47 @@ impl Drop for RuntimeWorkerTransportV1 {
     }
 }
 
-/// Runs the worker side of the bounded V1 request/response protocol.
+/// Runs a raw handler over the bounded Runtime Worker V1 framing protocol.
+///
+/// This primitive does not grant canonical backend compatibility or certify
+/// immediate progress. Use [`serve_runtime_backend_worker_v1`] only for a
+/// backend admitted by [`RuntimeWorkerV1ImmediateProgressBackendV1`], or use
+/// [`serve_runtime_backend_worker_v4`] for a backend implementing the complete
+/// negotiated V4 extension set.
 pub fn serve_runtime_worker_v1<R, W, F>(
+    input: R,
+    output: W,
+    handler: F,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    R: Read,
+    W: Write,
+    F: FnMut(&[u8]) -> Result<Vec<u8>, RuntimeWorkerErrorV1>,
+{
+    serve_runtime_worker_with_handshake_v1(input, output, RUNTIME_WORKER_HANDSHAKE_V1, handler)
+}
+
+/// Runs the worker side of the bounded, exact V4 request/response protocol.
+/// The advertised handshake commits the handler to capability, flush,
+/// asynchronous-copy, cancellation, and drain opcodes; use
+/// [`serve_runtime_backend_worker_v4`] for typed backend dispatch.
+pub fn serve_runtime_worker_v4<R, W, F>(
+    input: R,
+    output: W,
+    handler: F,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    R: Read,
+    W: Write,
+    F: FnMut(&[u8]) -> Result<Vec<u8>, RuntimeWorkerErrorV1>,
+{
+    serve_runtime_worker_with_handshake_v1(input, output, RUNTIME_WORKER_HANDSHAKE_V4, handler)
+}
+
+fn serve_runtime_worker_with_handshake_v1<R, W, F>(
     mut input: R,
     mut output: W,
+    handshake: &[u8],
     mut handler: F,
 ) -> Result<(), RuntimeWorkerErrorV1>
 where
@@ -1829,7 +2657,7 @@ where
     W: Write,
     F: FnMut(&[u8]) -> Result<Vec<u8>, RuntimeWorkerErrorV1>,
 {
-    write_frame_v1(&mut output, RUNTIME_WORKER_HANDSHAKE_V1)?;
+    write_frame_v1(&mut output, handshake)?;
     output.flush().map_err(RuntimeWorkerErrorV1::Io)?;
     loop {
         let request = read_frame_v1(&mut input)?;
@@ -2102,6 +2930,23 @@ mod tests {
     impl RuntimeBackendV1 for ProtocolBackendV1 {
         type Error = TestCodecError;
 
+        fn execution_capabilities_v1(&self, device: u64) -> RuntimeExecutionCapabilitiesV1 {
+            if device != 1 {
+                return RuntimeExecutionCapabilitiesV1::default();
+            }
+            RuntimeExecutionCapabilitiesV1 {
+                native_async_copy: true,
+                native_peer_copy: true,
+                concurrent_compute: true,
+                compute_copy_overlap: true,
+                memory_pool: true,
+                profiling: true,
+                cancellation: true,
+                atomics: true,
+                collectives: true,
+            }
+        }
+
         fn enumerate_devices_v1(
             &mut self,
         ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
@@ -2266,6 +3111,94 @@ mod tests {
         }
     }
 
+    impl RuntimeFlushBackendV1 for ProtocolBackendV1 {
+        fn flush_stream_v1(
+            &mut self,
+            stream: u64,
+        ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.calls.push("flush_stream");
+            match stream {
+                2 => Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                    "rejected",
+                ))),
+                3 => Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                    "quiescent",
+                ))),
+                u64::MAX => Err(RuntimeBackendFailureV1::Terminal(TestCodecError(
+                    "terminal",
+                ))),
+                _ => Ok(()),
+            }
+        }
+    }
+
+    impl RuntimeAsyncCopyBackendV1 for ProtocolBackendV1 {
+        fn copy_async_v1(
+            &mut self,
+            stream: u64,
+            _source: BackendMemoryRegionV1,
+            _destination: BackendMemoryRegionV1,
+            _dependencies: &[u64],
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            match stream {
+                2 => Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                    "rejected",
+                ))),
+                3 => Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                    "quiescent",
+                ))),
+                u64::MAX => Err(RuntimeBackendFailureV1::Terminal(TestCodecError(
+                    "terminal",
+                ))),
+                _ => Ok(self.handle("async_copy")),
+            }
+        }
+    }
+
+    impl RuntimeCancellationBackendV1 for ProtocolBackendV1 {
+        fn cancel_v1(
+            &mut self,
+            submission: u64,
+        ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.calls.push("cancel");
+            match submission {
+                1 => Ok(BackendCancellationV1::Cancelled),
+                2 => Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                    "rejected",
+                ))),
+                3 => Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                    "quiescent",
+                ))),
+                u64::MAX => Err(RuntimeBackendFailureV1::Terminal(TestCodecError(
+                    "terminal",
+                ))),
+                _ => Ok(BackendCancellationV1::TooLate),
+            }
+        }
+
+        fn drain_v1(
+            &mut self,
+            submission: u64,
+            _deadline: Instant,
+        ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.calls.push("drain");
+            match submission {
+                2 => Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                    "rejected",
+                ))),
+                3 => Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                    "quiescent",
+                ))),
+                u64::MAX => Err(RuntimeBackendFailureV1::Terminal(TestCodecError(
+                    "terminal",
+                ))),
+                _ => Ok(BackendPollV1::Succeeded),
+            }
+        }
+    }
+
+    impl RuntimeWorkerV1ImmediateProgressBackendV1 for ProtocolBackendV1 {}
+
     fn canonical_call_v1(
         backend: &mut ProtocolBackendV1,
         operation: RuntimeWorkerOperationV1<'_>,
@@ -2275,6 +3208,70 @@ mod tests {
         let request = codec.encode_request_v1(operation).unwrap();
         let response = dispatch_binary_request_v1(backend, &request).unwrap();
         codec.decode_response_v1(expected, &response)
+    }
+
+    fn canonical_flush_call_v4(
+        backend: &mut ProtocolBackendV1,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+        let mut codec = RuntimeBinaryCodecV4;
+        let request = codec.encode_flush_stream_request_v4(stream).unwrap();
+        let response = dispatch_binary_request_v4(backend, &request).unwrap();
+        codec.decode_flush_stream_response_v4(&response)
+    }
+
+    fn canonical_capabilities_call_v4(
+        backend: &mut ProtocolBackendV1,
+        device: u64,
+    ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>>
+    {
+        let mut codec = RuntimeBinaryCodecV4;
+        let request = codec
+            .encode_execution_capabilities_request_v4(device)
+            .unwrap();
+        let response = dispatch_binary_request_v4(backend, &request).unwrap();
+        codec.decode_execution_capabilities_response_v4(&response)
+    }
+
+    fn canonical_async_copy_call_v4(
+        backend: &mut ProtocolBackendV1,
+        stream: u64,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+        let mut codec = RuntimeBinaryCodecV4;
+        let region = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        let request = codec
+            .encode_async_copy_request_v4(stream, region, region, dependencies)
+            .unwrap();
+        let response = dispatch_binary_request_v4(backend, &request).unwrap();
+        codec.decode_async_copy_response_v4(&response)
+    }
+
+    fn canonical_cancel_call_v4(
+        backend: &mut ProtocolBackendV1,
+        submission: u64,
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+        let mut codec = RuntimeBinaryCodecV4;
+        let request = codec.encode_cancel_request_v4(submission).unwrap();
+        let response = dispatch_binary_request_v4(backend, &request).unwrap();
+        codec.decode_cancel_response_v4(&response)
+    }
+
+    fn canonical_drain_call_v4(
+        backend: &mut ProtocolBackendV1,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+        let mut codec = RuntimeBinaryCodecV4;
+        let request = codec
+            .encode_drain_request_v4(submission, Duration::from_millis(1))
+            .unwrap();
+        let response = dispatch_binary_request_v4(backend, &request).unwrap();
+        codec.decode_drain_response_v4(&response)
     }
 
     const TEST_WORKER_SERVER: &str = r#"
@@ -2327,6 +3324,244 @@ while True:
     else:
         sys.exit(6)
     write_frame(response)
+"#;
+
+    const V4_FLUSH_WORKER_SERVER: &str = r#"
+import struct
+import sys
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        part = stdin.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+def read_frame():
+    size = struct.unpack('<I', read_exact(4))[0]
+    return read_exact(size)
+
+write_frame(b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1')
+request = read_frame()
+if request == bytes((18,)) + struct.pack('<Q', 41):
+    write_frame(bytes((0,)))
+elif request == bytes((1,)):
+    name = b'v4-device'
+    target = b'gfx942'
+    response = bytes((0,)) + struct.pack('<I', 1) + struct.pack('<Q', 1)
+    response += struct.pack('<I', len(name)) + name
+    response += struct.pack('<I', len(target)) + target
+    response += struct.pack('<QH', 1 << 30, 2)
+    write_frame(response)
+    if read_frame() != bytes((19,)) + struct.pack('<Q', 1):
+        sys.exit(7)
+    write_frame(bytes((0,)) + struct.pack('<I', 2) + struct.pack('<H', 0x01ff))
+    if read_frame() != bytes((2,)) + struct.pack('<Q', 1):
+        sys.exit(7)
+    write_frame(bytes((0,)) + struct.pack('<Q', 41))
+    if read_frame() != bytes((18,)) + struct.pack('<Q', 41):
+        sys.exit(8)
+    write_frame(bytes((0,)))
+    if read_frame() != bytes((3,)) + struct.pack('<Q', 41):
+        sys.exit(9)
+    write_frame(bytes((0,)))
+else:
+    sys.exit(8)
+request = read_frame()
+sys.exit(0 if not request else 9)
+"#;
+
+    const V4_ADDITIVE_WORKER_SERVER: &str = r#"
+import struct
+import sys
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+enumerations = 0
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        part = stdin.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def read_frame():
+    size = struct.unpack('<I', read_exact(4))[0]
+    return read_exact(size)
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+write_frame(b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1')
+while True:
+    request = read_frame()
+    if not request:
+        sys.exit(0)
+    operation = request[0]
+    if operation == 1:
+        enumerations += 1
+        device = enumerations
+        name = ('v4-device-%d' % device).encode()
+        target = b'gfx942'
+        response = bytes((0,)) + struct.pack('<I', 1) + struct.pack('<Q', device)
+        response += struct.pack('<I', len(name)) + name
+        response += struct.pack('<I', len(target)) + target
+        response += struct.pack('<QH', 1 << 30, 2)
+    elif operation == 19:
+        if len(request) != 9:
+            sys.exit(10)
+        device = struct.unpack('<Q', request[1:9])[0]
+        if device == 3:
+            message = b'backend rejected'
+            response = bytes((1,)) + struct.pack('<I', len(message)) + message
+        else:
+            bits = 0x49 if device == 1 else 0x06 if device == 2 else 0
+            response = bytes((0,)) + struct.pack('<I', 2) + struct.pack('<H', bits)
+    elif operation == 20:
+        if len(request) != 63:
+            sys.exit(11)
+        response = bytes((0,)) + struct.pack('<Q', 101)
+    elif operation == 21:
+        if len(request) != 9:
+            sys.exit(12)
+        submission = struct.unpack('<Q', request[1:9])[0]
+        disposition = 0 if submission == 101 else 1
+        response = bytes((0,)) + struct.pack('<I', 1) + bytes((disposition,))
+    elif operation == 22:
+        if len(request) != 21:
+            sys.exit(13)
+        seconds = struct.unpack('<Q', request[9:17])[0]
+        nanoseconds = struct.unpack('<I', request[17:21])[0]
+        if seconds != 0 or nanoseconds > 350000000:
+            sys.exit(14)
+        response = bytes((0, 1))
+    elif operation == 18:
+        response = bytes((0,))
+    else:
+        sys.exit(15)
+    write_frame(response)
+"#;
+
+    const V4_ZERO_ASYNC_COPY_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+handshake = b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1'
+stdout.write(struct.pack('<I', len(handshake)) + handshake)
+stdout.flush()
+size = struct.unpack('<I', stdin.read(4))[0]
+request = stdin.read(size)
+if not request or request[0] != 20:
+    sys.exit(16)
+stdout.write(struct.pack('<I', 9) + bytes((0,)) + struct.pack('<Q', 0))
+stdout.flush()
+time.sleep(60)
+"#;
+
+    const V4_DELAYED_FLUSH_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+payload = b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1'
+stdout.write(struct.pack('<I', len(payload)) + payload)
+stdout.flush()
+size = struct.unpack('<I', stdin.read(4))[0]
+stdin.read(size)
+time.sleep(60)
+"#;
+
+    const V4_TERMINAL_FLUSH_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+write_frame(b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1')
+size = struct.unpack('<I', stdin.read(4))[0]
+request = stdin.read(size)
+if request != bytes((18,)) + struct.pack('<Q', 1):
+    sys.exit(8)
+message = b'backend terminal'
+write_frame(bytes((3,)) + struct.pack('<I', len(message)) + message)
+time.sleep(60)
+"#;
+
+    const V4_TERMINAL_CAPABILITIES_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        part = stdin.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def read_frame():
+    size = struct.unpack('<I', read_exact(4))[0]
+    return read_exact(size)
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+write_frame(b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1')
+if read_frame() != bytes((1,)):
+    sys.exit(8)
+name = b'v4-device'
+target = b'gfx942'
+response = bytes((0,)) + struct.pack('<I', 1) + struct.pack('<Q', 1)
+response += struct.pack('<I', len(name)) + name
+response += struct.pack('<I', len(target)) + target
+response += struct.pack('<QH', 1 << 30, 2)
+write_frame(response)
+if read_frame() != bytes((19,)) + struct.pack('<Q', 1):
+    sys.exit(9)
+message = b'backend terminal'
+write_frame(bytes((3,)) + struct.pack('<I', len(message)) + message)
+time.sleep(60)
+"#;
+
+    const UNKNOWN_VERSION_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+payload = b'fe2o3-runtime-worker-v5;extensions=flush-v1'
+sys.stdout.buffer.write(struct.pack('<I', len(payload)) + payload)
+sys.stdout.buffer.flush()
+time.sleep(60)
 "#;
 
     const NON_READING_WORKER_SERVER: &str = r#"
@@ -2675,6 +3910,285 @@ time.sleep(60)
     }
 
     #[test]
+    fn v4_flush_codec_is_bounded_and_preserves_failure_classes() {
+        let mut backend = ProtocolBackendV1::default();
+        let mut codec = RuntimeBinaryCodecV4;
+        let request = codec.encode_flush_stream_request_v4(41).unwrap();
+        assert_eq!(
+            request,
+            [OP_FLUSH_STREAM_V4]
+                .into_iter()
+                .chain(41_u64.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        assert!(request.len() <= MAX_RUNTIME_WORKER_FRAME_BYTES_V1);
+        canonical_flush_call_v4(&mut backend, 41).unwrap();
+        assert_eq!(backend.calls, ["flush_stream"]);
+        assert!(matches!(
+            canonical_flush_call_v4(&mut backend, 2),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert!(matches!(
+            canonical_flush_call_v4(&mut backend, 3),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(matches!(
+            canonical_flush_call_v4(&mut backend, u64::MAX),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+    }
+
+    #[test]
+    fn v4_additive_codec_and_dispatcher_preserve_bounds_and_failure_classes() {
+        let mut backend = ProtocolBackendV1::default();
+        let expected = backend.execution_capabilities_v1(1);
+        assert_eq!(
+            canonical_capabilities_call_v4(&mut backend, 1).unwrap(),
+            expected
+        );
+
+        let mut codec = RuntimeBinaryCodecV4;
+        assert_eq!(
+            codec.encode_execution_capabilities_request_v4(1).unwrap(),
+            [OP_EXECUTION_CAPABILITIES_V4]
+                .into_iter()
+                .chain(1_u64.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            codec.encode_cancel_request_v4(1).unwrap(),
+            [OP_CANCEL_V4]
+                .into_iter()
+                .chain(1_u64.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            codec
+                .encode_drain_request_v4(1, Duration::from_millis(1))
+                .unwrap(),
+            [OP_DRAIN_V4]
+                .into_iter()
+                .chain(1_u64.to_le_bytes())
+                .chain(0_u64.to_le_bytes())
+                .chain(1_000_000_u32.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        let source = BackendMemoryRegionV1 {
+            allocation: 2,
+            access: RuntimeAccessV1::Read,
+            byte_offset: 3,
+            byte_len: 5,
+        };
+        let destination = BackendMemoryRegionV1 {
+            allocation: 7,
+            access: RuntimeAccessV1::Write,
+            byte_offset: 11,
+            byte_len: 13,
+        };
+        let dependencies = [17, 19];
+        let mut expected_async = vec![OP_ASYNC_COPY_V4];
+        put_u64_v1(&mut expected_async, 23);
+        put_backend_region_v1(&mut expected_async, source);
+        put_backend_region_v1(&mut expected_async, destination);
+        put_dependencies_v1(&mut expected_async, &dependencies).unwrap();
+        assert_eq!(
+            codec
+                .encode_async_copy_request_v4(23, source, destination, &dependencies)
+                .unwrap(),
+            expected_async
+        );
+        assert!(expected_async.len() <= MAX_RUNTIME_WORKER_FRAME_BYTES_V1);
+        assert!(matches!(
+            codec.decode_execution_capabilities_response_v4(&encode_backend_failure_v1(
+                RuntimeBackendFailureV1::Rejected(TestCodecError("rejected"))
+            )),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert!(matches!(
+            codec.decode_execution_capabilities_response_v4(&encode_backend_failure_v1(
+                RuntimeBackendFailureV1::Quiescent(TestCodecError("quiescent"))
+            )),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(matches!(
+            codec.decode_execution_capabilities_response_v4(&encode_backend_failure_v1(
+                RuntimeBackendFailureV1::Terminal(TestCodecError("terminal"))
+            )),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+
+        assert_ne!(
+            canonical_async_copy_call_v4(&mut backend, 1, &[]).unwrap(),
+            0
+        );
+        assert!(matches!(
+            canonical_async_copy_call_v4(&mut backend, 2, &[]),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert!(matches!(
+            canonical_async_copy_call_v4(&mut backend, 3, &[]),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(matches!(
+            canonical_async_copy_call_v4(&mut backend, u64::MAX, &[]),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+
+        assert_eq!(
+            canonical_cancel_call_v4(&mut backend, 1).unwrap(),
+            BackendCancellationV1::Cancelled
+        );
+        assert_eq!(
+            canonical_cancel_call_v4(&mut backend, 4).unwrap(),
+            BackendCancellationV1::TooLate
+        );
+        assert!(matches!(
+            canonical_cancel_call_v4(&mut backend, 2),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert!(matches!(
+            canonical_cancel_call_v4(&mut backend, 3),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(matches!(
+            canonical_cancel_call_v4(&mut backend, u64::MAX),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+
+        assert_eq!(
+            canonical_drain_call_v4(&mut backend, 1).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert!(matches!(
+            canonical_drain_call_v4(&mut backend, 2),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert!(matches!(
+            canonical_drain_call_v4(&mut backend, 3),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(matches!(
+            canonical_drain_call_v4(&mut backend, u64::MAX),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+
+        let region = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::Read,
+            byte_offset: 0,
+            byte_len: 1,
+        };
+        let dependencies = vec![1; crate::MAX_RUNTIME_DEPENDENCIES_V1 + 1];
+        assert!(matches!(
+            codec.encode_async_copy_request_v4(1, region, region, &dependencies),
+            Err(RuntimeBinaryCodecErrorV1::Limit("async-copy dependencies"))
+        ));
+        assert!(matches!(
+            codec.decode_execution_capabilities_response_v4(&[0, 2, 0, 0, 0, 0, 2]),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(matches!(
+            codec.decode_cancel_response_v4(&[0, 1, 0, 0, 0, 2]),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert!(matches!(
+            codec.decode_drain_response_v4(&[0, 3]),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+    }
+
+    #[test]
+    fn v4_additive_dispatcher_rejects_trailing_and_malformed_requests() {
+        let mut codec = RuntimeBinaryCodecV4;
+        let region = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        let requests = [
+            codec.encode_execution_capabilities_request_v4(1).unwrap(),
+            codec
+                .encode_async_copy_request_v4(1, region, region, &[])
+                .unwrap(),
+            codec.encode_cancel_request_v4(1).unwrap(),
+            codec
+                .encode_drain_request_v4(1, Duration::from_millis(1))
+                .unwrap(),
+        ];
+        for mut request in requests {
+            request.push(0);
+            assert!(matches!(
+                dispatch_binary_request_v4(&mut ProtocolBackendV1::default(), &request),
+                Err(RuntimeWorkerErrorV1::Protocol(
+                    "trailing canonical request bytes"
+                ))
+            ));
+        }
+        for opcode in [
+            OP_EXECUTION_CAPABILITIES_V4,
+            OP_ASYNC_COPY_V4,
+            OP_CANCEL_V4,
+            OP_DRAIN_V4,
+        ] {
+            assert!(matches!(
+                dispatch_binary_request_v4(&mut ProtocolBackendV1::default(), &[opcode]),
+                Err(RuntimeWorkerErrorV1::Protocol(
+                    "truncated canonical request"
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn v1_dispatcher_rejects_v4_extensions_and_v4_rejects_malformed_flush() {
+        let flush_request = [OP_FLUSH_STREAM_V4]
+            .into_iter()
+            .chain(1_u64.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut codec = RuntimeBinaryCodecV4;
+        let region = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        for request in [
+            flush_request.clone(),
+            codec.encode_execution_capabilities_request_v4(1).unwrap(),
+            codec
+                .encode_async_copy_request_v4(1, region, region, &[])
+                .unwrap(),
+            codec.encode_cancel_request_v4(1).unwrap(),
+            codec
+                .encode_drain_request_v4(1, Duration::from_millis(1))
+                .unwrap(),
+        ] {
+            assert!(matches!(
+                dispatch_binary_request_v1(&mut ProtocolBackendV1::default(), &request),
+                Err(RuntimeWorkerErrorV1::Protocol(
+                    "unknown canonical operation"
+                ))
+            ));
+        }
+
+        let mut trailing = flush_request;
+        trailing.push(0);
+        assert!(matches!(
+            dispatch_binary_request_v4(&mut ProtocolBackendV1::default(), &trailing),
+            Err(RuntimeWorkerErrorV1::Protocol(
+                "trailing canonical request bytes"
+            ))
+        ));
+        assert!(matches!(
+            dispatch_binary_request_v4(&mut ProtocolBackendV1::default(), &[OP_FLUSH_STREAM_V4]),
+            Err(RuntimeWorkerErrorV1::Protocol(
+                "truncated canonical request"
+            ))
+        ));
+    }
+
+    #[test]
     fn canonical_byte_response_limit_fits_the_frame_exactly() {
         let mut codec = RuntimeBinaryCodecV1;
         let request = codec
@@ -2727,6 +4241,89 @@ time.sleep(60)
     }
 
     #[test]
+    fn canonical_v1_server_accepts_an_admitted_immediate_progress_backend() {
+        fn assert_admitted<T: RuntimeWorkerV1ImmediateProgressBackendV1>() {}
+        assert_admitted::<ProtocolBackendV1>();
+
+        let mut requests = Vec::new();
+        let mut codec = RuntimeBinaryCodecV1;
+        write_frame_v1(
+            &mut requests,
+            &codec
+                .encode_request_v1(RuntimeWorkerOperationV1::EnumerateDevices)
+                .unwrap(),
+        )
+        .unwrap();
+        write_frame_v1(&mut requests, &[]).unwrap();
+        let mut responses = Vec::new();
+        serve_runtime_backend_worker_v1(
+            ProtocolBackendV1::default(),
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap();
+
+        let mut responses = Cursor::new(responses);
+        assert_eq!(
+            read_frame_v1(&mut responses).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V1
+        );
+        assert!(matches!(
+            codec
+                .decode_response_v1(
+                    RuntimeWorkerOperationKindV1::EnumerateDevices,
+                    &read_frame_v1(&mut responses).unwrap(),
+                )
+                .unwrap(),
+            RuntimeWorkerResponseV1::Devices(devices) if devices.len() == 1
+        ));
+    }
+
+    #[test]
+    fn v4_server_emits_only_the_v4_handshake() {
+        let mut request_bytes = Vec::new();
+        write_frame_v1(&mut request_bytes, &[]).unwrap();
+        let mut responses = Vec::new();
+        serve_runtime_worker_v4(Cursor::new(request_bytes), &mut responses, |_| {
+            panic!("shutdown frame must not reach the handler")
+        })
+        .unwrap();
+        let mut responses = Cursor::new(responses);
+        assert_eq!(
+            read_frame_v1(&mut responses).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V4
+        );
+    }
+
+    #[test]
+    fn v4_backend_server_dispatches_flush_after_exact_handshake() {
+        let mut requests = Vec::new();
+        let mut codec = RuntimeBinaryCodecV4;
+        write_frame_v1(
+            &mut requests,
+            &codec.encode_flush_stream_request_v4(41).unwrap(),
+        )
+        .unwrap();
+        write_frame_v1(&mut requests, &[]).unwrap();
+        let mut responses = Vec::new();
+        serve_runtime_backend_worker_v4(
+            ProtocolBackendV1::default(),
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap();
+
+        let mut responses = Cursor::new(responses);
+        assert_eq!(
+            read_frame_v1(&mut responses).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V4
+        );
+        codec
+            .decode_flush_stream_response_v4(&read_frame_v1(&mut responses).unwrap())
+            .unwrap();
+    }
+
+    #[test]
     fn oversized_and_truncated_frames_fail_closed() {
         let mut oversized = ((MAX_RUNTIME_WORKER_FRAME_BYTES_V1 + 1) as u32)
             .to_le_bytes()
@@ -2752,6 +4349,415 @@ time.sleep(60)
         assert!(matches!(
             error,
             RuntimeWorkerErrorV1::Io(_) | RuntimeWorkerErrorV1::WorkerExited
+        ));
+    }
+
+    #[test]
+    fn v4_backend_rejects_v1_downgrade_and_unknown_version_handshakes() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        for script in [TEST_WORKER_SERVER, UNKNOWN_VERSION_WORKER_SERVER] {
+            let command = RuntimeWorkerCommandV1::new("python3")
+                .argument("-u")
+                .argument("-c")
+                .argument(script);
+            let error = match RuntimeWorkerBackendV4::spawn(
+                &command,
+                RuntimeBinaryCodecV4,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+            ) {
+                Ok(_) => panic!("non-V4 handshake unexpectedly enabled flush"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error,
+                RuntimeWorkerErrorV1::Protocol("handshake mismatch")
+            ));
+        }
+    }
+
+    #[test]
+    fn v1_backend_rejects_v4_handshake() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_FLUSH_WORKER_SERVER);
+        let error = match RuntimeWorkerBackendV1::spawn(
+            &command,
+            RuntimeBinaryCodecV1,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        ) {
+            Ok(_) => panic!("V1 backend unexpectedly accepted a V4 worker"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::Protocol("handshake mismatch")
+        ));
+    }
+
+    #[test]
+    fn v4_backend_flushes_and_shuts_down_over_child_process() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_FLUSH_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        backend.flush_stream_v1(41).unwrap();
+        assert!(!backend.is_terminal());
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v4_backend_exposes_portable_flush_through_runtime_context() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_FLUSH_WORKER_SERVER);
+        let backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let mut context = RuntimeContextV1::open(backend).unwrap();
+        let stream = context.create_stream(context.devices()[0].id()).unwrap();
+        context.flush_stream(stream).unwrap();
+        let backend = context.shutdown().unwrap();
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v4_backend_preserves_additive_surfaces_over_child_process() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_ADDITIVE_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            backend.execution_capabilities_v1(1),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+
+        let first = backend.enumerate_devices_v1().unwrap();
+        assert_eq!(first[0].backend_device, 1);
+        assert_eq!(
+            backend.execution_capabilities_v1(1),
+            RuntimeExecutionCapabilitiesV1 {
+                native_async_copy: true,
+                compute_copy_overlap: true,
+                cancellation: true,
+                ..RuntimeExecutionCapabilitiesV1::default()
+            }
+        );
+        assert_eq!(
+            backend.execution_capabilities_v1(99),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+
+        let second = backend.enumerate_devices_v1().unwrap();
+        assert_eq!(second[0].backend_device, 2);
+        assert_eq!(
+            backend.execution_capabilities_v1(1),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        assert_eq!(
+            backend.execution_capabilities_v1(2),
+            RuntimeExecutionCapabilitiesV1 {
+                native_peer_copy: true,
+                concurrent_compute: true,
+                ..RuntimeExecutionCapabilitiesV1::default()
+            }
+        );
+
+        let source = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::Read,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        let destination = BackendMemoryRegionV1 {
+            allocation: 2,
+            access: RuntimeAccessV1::Write,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        let submission = backend.copy_async_v1(1, source, destination, &[]).unwrap();
+        assert_eq!(submission, 101);
+        assert_eq!(
+            backend.cancel_v1(submission).unwrap(),
+            BackendCancellationV1::Cancelled
+        );
+        assert_eq!(
+            backend.cancel_v1(999).unwrap(),
+            BackendCancellationV1::TooLate
+        );
+        let deadline = Instant::now() + Duration::from_millis(400);
+        assert_eq!(
+            backend.drain_v1(submission, deadline).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert!(Instant::now() < deadline);
+        backend.flush_stream_v1(1).unwrap();
+        assert!(matches!(
+            backend.enumerate_devices_v1(),
+            Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Remote(_))
+            ))
+        ));
+        assert!(!backend.is_terminal());
+        assert_eq!(
+            backend.execution_capabilities_v1(2),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        assert_eq!(
+            backend.execution_capabilities_v1(3),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v4_terminal_capability_response_reaps_and_preserves_fail_closed_cache() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_TERMINAL_CAPABILITIES_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            backend.execution_capabilities_v1(1),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        assert!(matches!(
+            backend.enumerate_devices_v1(),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Remote(_))
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(backend.inner.transport.child.try_wait().unwrap().is_some());
+        assert_eq!(
+            backend.execution_capabilities_v1(1),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        assert!(matches!(
+            backend.flush_stream_v1(1),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v4_zero_async_copy_handle_reaps_and_seals_the_worker() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_ZERO_ASYNC_COPY_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let region = BackendMemoryRegionV1 {
+            allocation: 1,
+            access: RuntimeAccessV1::ReadWrite,
+            byte_offset: 0,
+            byte_len: 8,
+        };
+        assert!(matches!(
+            backend.copy_async_v1(1, region, region, &[]),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Protocol("nonzero async-copy handle")
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(backend.inner.transport.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            backend.cancel_v1(1),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v4_flush_deadline_failure_reaps_and_seals_the_worker() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_DELAYED_FLUSH_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            TEST_WAIT_DEADLINE,
+        )
+        .unwrap();
+        let deadline = Instant::now() + TEST_WAIT_DEADLINE;
+        assert!(matches!(
+            backend.flush_stream_v1(1),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::ResponseTimeout)
+            ))
+        ));
+        assert_deadline_returned_with_scheduler_tolerance(deadline);
+        assert!(backend.is_terminal());
+        assert!(backend.inner.transport.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            backend.flush_stream_v1(1),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v4_invalid_request_deadline_reaps_and_seals_the_worker() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_FLUSH_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::MAX,
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.flush_stream_v1(41),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::InvalidDeadline)
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(backend.inner.transport.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            backend.flush_stream_v1(41),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v4_decoded_terminal_flush_failure_reaps_and_seals_the_worker() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_TERMINAL_FLUSH_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.flush_stream_v1(1),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Remote(_))
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(backend.inner.transport.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            backend.flush_stream_v1(1),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
         ));
     }
 

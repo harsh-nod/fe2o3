@@ -30,9 +30,9 @@ virtual-memory remapping, IPC, and multi-host transport are outside V1. A
 backend must report these as unsupported; it must not emulate them silently or
 advertise their capability.
 
-## Current R12 Status
+## Current R13 Status
 
-R12 retains the backend-neutral typed completion state, exact-once callbacks,
+R13 retains the backend-neutral typed completion state, exact-once callbacks,
 aggregate stream query, and bounded synchronization introduced in R11. It also
 retains typed atomic and collective wrappers that match operation, scope,
 success ordering, optional failure ordering, weak mode, geometry, and
@@ -47,8 +47,9 @@ authority claim: current KFD backends advertise both stable and
 execution-detail atomic/collective capabilities as false, so the wrappers
 reject before KFD submission.
 
-The direct single-device KFD backend now assigns the first two live logical
-streams to two persistent native compute queue lanes. Each lane has distinct
+The direct single-device KFD backend now admits at most 65,536 logical streams
+and multiplexes their compute work over exactly two persistent native compute
+queue lanes. Logical stream creation does not consume a native lane. Each lane has distinct
 ring, doorbell, completion, exception-event, CWSR, dispatch, and recyclable
 queue-local custody under one shared VM session. Public lane handles bind the
 exact session occurrence, ordinal, and generation; destroyed slots advance
@@ -58,19 +59,34 @@ event, payload, runtime, and resource teardown order as the primary queue. The
 lane callback surface exposes only admitted fixed-dispatch and observation
 operations, not session-global SDMA or lifecycle control.
 
-At most one dispatch per lane may be in flight, and the two lanes may publish
-concurrently only when their allocation sets are disjoint. A third live stream
-is rejected with capacity before native queue creation; after an owning stream
-is quiescent and destroyed, its logical lane can be reassigned. A pending
-compute event dependency rejects as busy before publication, so the caller must
-poll or wait for the dependency and retry the launch. R12 does not provide
-native queue-side dependency scheduling, arbitrary stream counts, multiple
-queued dispatches per stream, or overlapping-memory compute concurrency. The
-`concurrent_compute` capability therefore means this exact two-lane profile,
-not general HIP/HSA stream parity. When the exact native profile is available,
-the direct backend also reports only its implemented native async-copy,
-compute-copy-overlap, memory-pool, and cancellation surfaces; native peer copy
-remains a separate backend, and atomic and collective execution remain false.
+At most one dispatch per lane may be in flight. Accepted compute work retains
+owned kernarg, binding, dependency, module, allocation, submission, and stream
+custody in a bounded per-stream FIFO until it can lease the lowest available
+lane. Compute and copy operations on one logical stream gain an implicit tail
+dependency; cross-stream overlapping allocation use still requires an explicit
+event dependency. Publication requires a FIFO head whose dependencies
+succeeded, an available lane, and allocation disjointness from active native
+work. Dependency count and transitive unpublished depth are capped at 256.
+Prepublication cancellation removes owned work and restores the prior stream
+tail; published work remains too late to cancel.
+
+Poll remains observation-only and never performs deferred compute preparation.
+Submit may publish immediately ready work. `wait` is likewise observation-only
+and does not publish deferred work. The additive in-process `flush_stream`
+operation may drive a dependency-ready FIFO head through potentially blocking
+dirty-buffer reconciliation and native publication. Frozen Runtime Worker V1
+has no flush request and is not a conforming KFD deployment; negotiated Runtime
+Worker V4 exposes execution-capability discovery, flush, same-device async copy,
+cancellation, and deadline-bounded drain under one exact handshake. Its
+capability cache is bound to the latest successfully enumerated roster and
+otherwise fails closed. Runtime transport versioning is separate from
+compiler/proof Worker V3. There is no background progress thread, queue-side dependency packet,
+or more than one in-flight dispatch per native lane. Consequently the new
+logical-stream surface removes the third-stream capacity failure but is not
+general HIP/HSA stream scheduling parity. The
+`concurrent_compute` capability still means exact two-lane, disjoint-allocation
+execution. Native peer copy remains a separate backend, and atomic and
+collective execution remain false.
 
 The exact two-device XGMI copy-only backend retains successful peer mappings
 until host access or allocation release and publishes directional copies from a
@@ -80,36 +96,56 @@ selection is O(log batch), independent of the total active set. It remains
 separate from the single-device compute owner; there is no unified native
 multi-device compute backend.
 
-The additive in-process `flush_stream` extension publishes one complete ready
-XGMI directional batch before returning, so later host work can overlap that DMA
-without waiting for the first poll. A ready set larger than the 63-ticket ring
-admission rejects before publication. Poll and wait remain the fallback and the
-only completion-progress operations; there is no background progress thread and
-Worker V3 carries no flush request. The XGMI benchmark labels queued work as
+The additive in-process `flush_stream` extension snapshots the complete ready
+XGMI directional set and publishes it in FIFO prefixes of at most 63. It
+synchronously completes every non-final prefix, then returns with the final
+prefix published so later host work can overlap DMA. First-prefix allocation
+failure is a prepublication rejection; recoverable failure after a completed
+prefix is quiescent and preserves retryable custody. Poll and wait remain the
+only completion-observation operations; neither publishes deferred work. There
+is no background progress thread. Runtime Worker V4 provides the portable
+capability, flush, async-copy, cancellation, and drain profile; Runtime Worker V1
+does not. The XGMI benchmark labels queued work as
 `outstanding_depth`; the native route uses one ordered SDMA engine per direction
 and does not claim that depth as engine concurrency.
 
-Worker V3 now has a public, move-only application execution binding on the
-generated KFD invocation path. The production transition retains the exact
-authenticated executable and current-publication token and binds compiler and
-proof evidence, target and code object, generated argument packing, kernel and
-dispatch identities, launch geometry, and one checked device. Its fields and
-constructor remain private, currentness is revalidated, and the synthetic test
-verifier path retains qualification custody that cannot execute as production.
-This is the application-side binding and release transition, not the missing
-semantic or machine-refinement verifier. A reviewed production producer for the
-required semantic-to-machine proof and protected verifier decision remains
-absent, so ordinary compiler-produced applications still cannot use this path
-to manufacture production execution authority.
+Worker V3 now requires a second, move-only semantic-to-machine refinement
+receipt before either the generated KFD application transition or deprecated
+HSA lifecycle can gain execution custody. The inspect-only receipt has private
+state but no production constructor or producer wiring. It binds one exact
+executable publication occurrence across the KIR, final LLVM module, selected
+ISA range, machine-effect evidence, refinement-proof identity, final artifact,
+compiler current-record and rollback chain, Worker challenge and lineage, and
+durable publication. Its machine-effect contract is universal over checked
+invocations rather than bound to one dispatch geometry. Admission consumes the
+receipt and matches every coordinate. Deprecated HSA retains its custody with a
+loaded executable across repeated checked invocations; direct KFD consumes it
+into a one-shot application binding. Protected
+backend provenance and matching digests are only necessary inputs and cannot
+replace this receipt. The existing protected adapter and every synthetic path
+produce no receipt, so production application execution remains deliberately
+unavailable until a reviewed proof producer is implemented.
 
 The low-level KFD clock-correlation observation is one currentness-bracketed
 GPU/CPU/system counter sample for calibration. It does not mark dispatch
 publication, start, or completion and is not a per-dispatch device timestamp.
+An additive Dispatch Timestamp Capture V1 schema can structurally join bounded
+producer-claimed CPU publication ticks, device start/end ticks, and before/after
+correlation brackets to exact runtime-profile, dispatch, queue, device, kernel,
+artifact, producer-evidence, and configuration bytes. The public decoder cannot
+mint records, and partial, lost, truncated, reordered, substituted, or stale
+captures reject or remain unavailable as appropriate. No trusted producer
+adapter is wired, raw ticks have no admitted frequency or global synchronization,
+and the semantic query therefore continues to report authenticated per-dispatch
+device timestamps as unavailable.
+
 The current Rust device-language addition remains a bounded
 volatile-load/store bridge rather than broad Rust support. The R12 executable
 model and Verus development cover bounded abstract multi-queue custody,
 generation, dependency, cancellation, drain, and currentness properties only;
-the model's larger configurable queue bound is not a runtime capability. These
+the model's larger configurable queue bound is not a runtime capability. R13
+adds a separate abstract logical-stream leasing model; it likewise is not a
+Rust-to-Verus refinement of the concrete scheduler. These
 proofs are not a refinement proof of the Rust KFD implementation and make no
 Rust-to-Verus, compiler-to-ISA, firmware, or hardware refinement claim. The
 runtime therefore remains below this parity profile.
@@ -131,6 +167,16 @@ dispatch. Copy and compute can overlap when the admitted device exposes the
 required queues. Dependencies are explicit events; submission is nonblocking;
 poll never blocks; wait observes a monotonic deadline. Progress storage is
 bounded by declared queue, submission, dependency, and staging limits.
+After a backend accepts a nonblocking submission, every dependency-ready stream
+head must be able to reach native publication and completion through a declared,
+portable progress mechanism, without an undocumented backend-specific call. A
+backend may use native queue-side dependencies, an owned background progress
+mechanism, or an explicit portable flush operation. If flush is required, every
+advertised transport must expose it with bounded blocking and failure semantics
+defined by this profile and exercised by parity tests. Poll remains nonblocking;
+wait may drive progress only within its deadline. Tests must cover more logical
+streams than physical lanes and multiple queued mixed compute/copy operations
+per stream.
 Submission and event observation share one typed completion state. Completion
 callbacks discharge exactly once on the first conclusive transition, and
 aggregate stream synchronization applies one shared deadline without obscuring

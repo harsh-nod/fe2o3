@@ -2,8 +2,8 @@
 
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
-execution-composition, R11 runtime-semantics, and R12 native-concurrency models.
-The authenticated runner proves 142 obligations and rejects 92
+execution-composition, R11 runtime-semantics, R12 native-concurrency, and R13
+logical-scheduler models. The authenticated runner proves 162 obligations and rejects 103
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -439,6 +439,60 @@ quarantine, occurrence-bound drain, and drained-queue occurrence advance.
 | Native KFD multi-queue creation, scheduling, completion, reset, and quiescence | **Not established** | A native adapter must authenticate capabilities, queue occurrences, resources, terminal observations, and currentness. Model values grant no native authority. |
 | HSA/HIP parity, progress, fairness, overlap, and performance | **Not established** | These are implementation and matched-hardware measurement obligations, not consequences of the R12 model. |
 
+`r13_logical_scheduler_v1.rs` proves twenty abstract logical-stream scheduler
+obligations:
+
+1. a valid scheduler state contains between one and 64 distinct per-stream
+   head/tail records while exposing exactly two physical lanes, and three or
+   more represented logical streams therefore exceed the physical-lane count;
+2. valid submission dependency count and depth remain bounded at 32, and a
+   represented stream predecessor is included in the effective dependency set;
+3. only the head of the exact registered logical-stream record may publish,
+   including when compute and copy operation classes alternate in one FIFO;
+4. an incomplete dependency frontier or any overlap with the aggregate
+   retained resources of active lanes blocks publication;
+5. a ready head deterministically leases one free lane numbered zero or one,
+   takes resource custody, and preserves distinct lane owners;
+6. a terminal observation must name the submission's exact leased lane and that
+   lane must still name the submission as owner; the transition returns that
+   lane and retains resources until release;
+7. cancellation applies only to an unpublished tail and restores its exact
+   predecessor as the prior tail; non-tail and published cancellation are
+   no-ops;
+8. a queued dependent, including a represented implicit stream successor,
+   retains its terminal producer's resources, while an unreferenced terminal
+   may release them; and
+9. currentness loss cancels queued work and converts published or terminal
+   custody into unreleasable quarantine, retaining the submission's recorded
+   lane coordinate.
+
+The numbering groups related theorems; Verus reports twenty proof
+obligations. The independent executable `r13_logical_scheduler.rs` model is
+bounded to 64 logical streams, exactly two lanes, 4,096 submissions, 32
+dependencies and dependency depth per submission, 64 resources per submission,
+and 8,192 registered resources. Its effective dependency set includes the
+implicit same-stream predecessor, so predecessor failure, terminal custody, and
+depth accounting use the same bounded edge as explicit dependencies. Active
+resource conflict ownership is separate from lifetime retention: an ordered
+successor can take active ownership after terminal producer observation while
+older terminal submissions retain the resource identity. Lifetime retainers do
+not act as active-conflict owners, and releasing one retainer does not discard
+the others. Its Rust tests exercise more logical streams than lanes,
+mixed compute/copy FIFO order, successful, failed, and implicit dependencies,
+dependency bounds, ordered same-resource progress, active and terminal resource
+conflicts, lane-bound terminal events, tail restoration, dependent release
+retention, device-bound identities, and currentness quarantine.
+
+## R13 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract per-stream FIFO-record selection, dependency, resource-conflict, lane-lease, terminal, cancellation, release, and currentness relations | **Proved** | Twenty theorems in `r13_logical_scheduler_v1.rs`; finite mathematical state only. Active resource occupancy is supplied as an aggregate mathematical set. The model proves preservation properties of admitted states, not a stream-registration transition. |
+| Executable bounded R13 model | **Checked** | Rust unit tests exercise an independently implemented finite state machine with caller-constructible identities and observations. |
+| Executable Rust to Verus correspondence | **Not established** | No theorem connects `src/r13_logical_scheduler.rs` to the Verus structures or transitions. |
+| Native KFD scheduler, AQL/SDMA publication, completion, currentness, or quiescence | **Not established** | A sealed adapter must authenticate every concrete transition before the model can support runtime authority. |
+| Fairness, progress, arbitrary stream counts, HSA/HIP parity, or performance | **Not established** | The executable model is bounded, the proofs are safety-only, and no matched-hardware result follows from them. |
+
 Run the proofs and all expected-negative mutations with the exact Verus
 release whose executable, complete release closure, version, proof sources,
 source checker, transcript, and mutations are pinned under `verus/pins`:
@@ -500,7 +554,12 @@ bypass, cross-queue terminal observation, published cancellation or release
 dropping custody, currentness loss dropping rather than quarantining published
 custody, drain of indeterminate work, terminal release despite a reserved
 dependent, slot recycle without generation advance, stale-occurrence drain, and
-queue recreation without occurrence advance. The launcher
+queue recreation without occurrence advance; R13 admission of a third physical
+lane, a dependency count above its bound, non-head FIFO or dependency bypass,
+publication despite an active resource overlap, duplicate lane ownership, a
+terminal event from a foreign lane or same-numbered lane with a foreign owner,
+non-tail cancellation, terminal release
+despite a queued dependent, and currentness loss without quarantine. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -512,7 +571,7 @@ implements that relation, nor that the adapter observed truthful kernel data.
 The lifecycle, memory, and queue files prove abstract transition relations, not
 refinement of `src/model.rs`, `src/device_identity.rs`,
 `src/memory_lifecycle.rs`, `src/queue_lifecycle.rs`, or
-`src/r12_native_concurrency.rs`. All
+`src/r12_native_concurrency.rs`, or `src/r13_logical_scheduler.rs`. All
 receipts remain model-only and are not production device authority. A later
 sealed adapter refinement must
 authenticate the KFD topology, DRM render, partition, schema, and process XNACK

@@ -1,4 +1,5 @@
 use crate::generated_argument_plan::validate_worker_v3_argument_packing;
+use crate::worker_v3_verification_admission::AdmittedWorkerV3SemanticMachineRefinementV1;
 use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
     CompilerGeneratedKernelExpectationV1, DeviceIdentity, GeneratedArgumentPackingError,
@@ -696,6 +697,7 @@ impl HsaImplicitKernargInitializationObservationV1 {
 /// native state retirement.
 pub struct AuthorizedWorkerV3HsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    semantic_machine_refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
@@ -705,19 +707,16 @@ pub(crate) fn authorize_worker_v3_hsa_load_v1<
     K: CompilerGeneratedKernelExpectationV1,
     A: ReviewedHsaExecutableLifecycleAdapterV1,
 >(
-    authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    mut authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
     observed: ObservedContext,
     mut adapter: A,
 ) -> Result<AuthorizedWorkerV3HsaLoadV1<K, A>, WorkerV3HsaLoadAuthorizationErrorV1<A::Error>> {
     authenticated
         .revalidate_currentness()
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication)?;
-    if !authenticated
-        .verification()
-        .retains_protected_application_execution_evidence()
-    {
-        return Err(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable);
-    }
+    let semantic_machine_refinement = authenticated
+        .take_application_semantic_machine_refinement()
+        .ok_or(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable)?;
     // SAFETY: only an unsafe reviewed adapter can enter this migration boundary. Its complete
     // observation is checked against the artifact target and separately supplied HIP context
     // before load authority is returned.
@@ -727,6 +726,7 @@ pub(crate) fn authorize_worker_v3_hsa_load_v1<
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::Environment)?;
     Ok(AuthorizedWorkerV3HsaLoadV1 {
         authenticated,
+        semantic_machine_refinement,
         observed,
         adapter,
         environment,
@@ -815,6 +815,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 
         Ok(LoadedWorkerV3HsaExecutableV1 {
             authenticated: self.authenticated,
+            _semantic_machine_refinement: self.semantic_machine_refinement,
             observed: self.observed,
             adapter: self.adapter,
             environment: self.environment,
@@ -856,7 +857,7 @@ impl<E: fmt::Display> fmt::Display for WorkerV3HsaLoadAuthorizationErrorV1<E> {
                 )
             }
             Self::ProtectedProductionEvidenceUnavailable => formatter.write_str(
-                "protected Worker V3 production provenance and currentness evidence are unavailable",
+                "an admitted Worker V3 semantic-to-machine refinement receipt is unavailable",
             ),
             Self::Adapter(error) => write!(formatter, "reviewed HSA adapter failed: {error}"),
             Self::Environment(error) => write!(formatter, "HSA environment mismatch: {error}"),
@@ -944,6 +945,7 @@ pub enum WorkerV3GeneratedDispatchErrorV1<E> {
 /// only through a compiler-generated typed argument implementation and a linear prepared value.
 pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    _semantic_machine_refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,

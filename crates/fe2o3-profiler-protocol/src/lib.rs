@@ -13,6 +13,9 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
+mod dispatch_timestamps_v1;
+pub use dispatch_timestamps_v1::*;
+
 pub const KFD_RUNTIME_PROFILE_SCHEMA_VERSION_V1: u16 = 1;
 pub const KFD_RUNTIME_PROFILE_SCHEMA_V1: &str = "fe2o3-kfd-runtime-profile-v1";
 pub const AGENT_KFD_PROFILER_REQUEST_SCHEMA_V1: &str = "fe2o3-agent-kfd-profiler-request-v1";
@@ -786,6 +789,13 @@ pub fn encode_kfd_runtime_profile_v1(
 pub fn decode_kfd_runtime_profile_v1(
     bytes: &[u8],
 ) -> Result<KfdRuntimeProfileV1, KfdRuntimeProfileErrorV1> {
+    decode_kfd_runtime_profile_with_content_identity_v1(bytes).map(|(capture, _)| capture)
+}
+
+/// Decodes one canonical runtime profile and derives its content identity in the same pass.
+pub fn decode_kfd_runtime_profile_with_content_identity_v1(
+    bytes: &[u8],
+) -> Result<(KfdRuntimeProfileV1, ProfileContentIdentityV1), KfdRuntimeProfileErrorV1> {
     validate_size(bytes.len())?;
     let capture: KfdRuntimeProfileV1 =
         serde_json::from_slice(bytes).map_err(|_| KfdRuntimeProfileErrorV1::JsonDecode)?;
@@ -793,17 +803,17 @@ pub fn decode_kfd_runtime_profile_v1(
     if serde_json::to_vec(&capture).map_err(|_| KfdRuntimeProfileErrorV1::JsonEncode)? != bytes {
         return Err(KfdRuntimeProfileErrorV1::NonCanonicalEncoding);
     }
-    Ok(capture)
+    let content_identity = ProfileContentIdentityV1 {
+        digest: domain_identity(PROFILE_CONTENT_IDENTITY_DOMAIN_V1, &[bytes])?,
+        byte_len: u64::try_from(bytes.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)?,
+    };
+    Ok((capture, content_identity))
 }
 
 pub fn kfd_runtime_profile_content_identity_v1(
     bytes: &[u8],
 ) -> Result<ProfileContentIdentityV1, KfdRuntimeProfileErrorV1> {
-    let _ = decode_kfd_runtime_profile_v1(bytes)?;
-    Ok(ProfileContentIdentityV1 {
-        digest: domain_identity(PROFILE_CONTENT_IDENTITY_DOMAIN_V1, &[bytes])?,
-        byte_len: u64::try_from(bytes.len()).map_err(|_| KfdRuntimeProfileErrorV1::SizeOverflow)?,
-    })
+    decode_kfd_runtime_profile_with_content_identity_v1(bytes).map(|(_, identity)| identity)
 }
 
 fn validate_size(len: usize) -> Result<(), KfdRuntimeProfileErrorV1> {

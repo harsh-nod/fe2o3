@@ -127,6 +127,18 @@ joins remain unavailable. Its local opaque collector ticks and loss status are
 preserved where represented. Details and remaining producer dependencies are in
 [`../../docs/runtime-causality-v1.md`](../../docs/runtime-causality-v1.md).
 
+The library-only `report_dispatch_timestamps_v1` surface separately validates
+Dispatch Timestamp Capture V1 bytes against their exact runtime profile,
+producer-declared evidence bytes, and collection configuration. It exposes bounded raw
+producer-claimed ticks and correlation brackets for inspection. Those values
+retain their explicit producer-declared origin and are never promoted to an
+authenticated observed fact. Structural
+admission is reported as a declared producer claim; authenticated per-dispatch
+device timestamps remain unavailable until a real collector adapter supplies
+complete, loss-free observations. CPU publication is never relabeled as a
+device timestamp, and opaque ticks are never normalized to nanoseconds or a
+global clock.
+
 ## Profiler capture queries
 
 The same crate provides the read-only `CaptureQuerySessionV1` protocol and

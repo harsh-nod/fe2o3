@@ -429,8 +429,14 @@ pub enum RuntimeBackendFailureV1<E> {
 pub trait RuntimeBackendV1 {
     type Error: Error + Send + Sync + 'static;
 
-    /// Reports execution details that are not representable in Worker V3's
-    /// stable capability bitset. Implementations inherit a fail-closed default.
+    /// Reports execution details that are not representable in
+    /// `RuntimeCapabilitiesV1` or the frozen Runtime Worker V1 capability
+    /// bitset. A backend may report capabilities only for a
+    /// currently admitted device handle; unknown or superseded handles must
+    /// return the all-false record. Worker-backed implementations bind admitted
+    /// handles to their most recent successful enumeration, while an in-process
+    /// backend may know its fixed admitted roster at construction.
+    /// Implementations inherit the fail-closed default.
     fn execution_capabilities_v1(&self, _device: u64) -> RuntimeExecutionCapabilitiesV1 {
         RuntimeExecutionCapabilitiesV1::default()
     }
@@ -539,12 +545,13 @@ pub trait RuntimeBackendV1 {
 /// Optional nonblocking same-device copy SPI.
 ///
 /// This extension makes the operation explicit at the backend type boundary
-/// without silently changing the Worker V3 wire contract. Worker V3 has no
-/// per-device same-device-copy capability bit, so implementations may reject
-/// the operation as unsupported. They may use a native copy engine or bounded
-/// cooperative host progress, but must document which. Successful submission
-/// retains source and destination against mutation until conclusive completion;
-/// the submission handle remains retained until
+/// without silently changing the Runtime Worker V1 wire contract. Runtime
+/// Worker V1 has no per-device same-device-copy capability bit, so
+/// implementations may reject the operation as unsupported. Negotiated Runtime
+/// Worker V4 encodes this SPI explicitly. Implementations may use a native copy
+/// engine or bounded cooperative host progress, but must document which.
+/// Successful submission retains source and destination against mutation until
+/// conclusive completion; the submission handle remains retained until
 /// [`RuntimeBackendV1::release_submission_v1`].
 pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
     fn copy_async_v1(
@@ -556,14 +563,18 @@ pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
 }
 
-/// Additive explicit-publication SPI outside the Worker V3 wire contract.
+/// Additive explicit-progress SPI encoded only by negotiated Runtime Worker V4.
 ///
-/// A successful call establishes that every dependency-ready operation in the
-/// backend scheduling domain selected by `stream` at method entry was
-/// published. Recoverable prepublication failure must be returned as an error,
-/// not hidden behind success. This operation does not wait for completion or
-/// provide background progress. A backend whose bounded publication window
-/// cannot hold that complete ready set must reject before mutation.
+/// For native work, a successful call establishes that every dependency-ready
+/// operation in the backend scheduling domain selected by `stream` at method
+/// entry was published. A cooperative backend with no native publication point
+/// may instead drive its retained, explicitly bounded host operation to a
+/// conclusive state; it must document the work bound and blocking behavior.
+/// Recoverable prepublication or cooperative-progress failure must be returned
+/// as an error, not hidden behind success. This operation does not wait for
+/// completion of native work or provide background progress. A backend whose
+/// bounded publication window cannot hold the complete ready native set must
+/// reject before mutation.
 pub trait RuntimeFlushBackendV1: RuntimeBackendV1 {
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
 }
@@ -577,7 +588,7 @@ pub enum BackendCancellationV1 {
     TooLate,
 }
 
-/// Additive cancellation and drain SPI outside the Worker V3 wire contract.
+/// Additive cancellation and drain SPI encoded only by negotiated Runtime Worker V4.
 pub trait RuntimeCancellationBackendV1: RuntimeBackendV1 {
     fn cancel_v1(
         &mut self,
@@ -2038,13 +2049,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.stream_observation(stream)
     }
 
-    /// Explicitly publishes dependency-ready work in this stream's backend
-    /// scheduling domain without waiting for completion.
+    /// Explicitly publishes dependency-ready native work, or drives a bounded
+    /// cooperative host operation, in this stream's backend scheduling domain.
     ///
-    /// This additive in-process operation is not encoded by Worker V3. It lets
-    /// batching backends begin device work before a later poll or wait, but it
-    /// does not create a progress thread or otherwise promise background host
-    /// progress.
+    /// Runtime Worker V1 does not encode this operation; negotiated Runtime
+    /// Worker V4 does. It lets batching backends begin device work before a later poll or wait. A
+    /// cooperative backend may complete bounded host work in the call; native
+    /// completion remains observation-only. The call does not create a progress
+    /// thread or otherwise promise background host progress.
     pub fn flush_stream(
         &mut self,
         stream: RuntimeStreamIdV1,

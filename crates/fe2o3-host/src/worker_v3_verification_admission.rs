@@ -35,6 +35,8 @@ const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
 const WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-verification-roster.v1\0";
 const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-roster-verification-challenge.v1\0";
+const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1: &[u8] =
+    b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v1\0";
 
 mod verifier_seal {
     pub trait Sealed<K> {}
@@ -401,8 +403,9 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// generated ABI, effect, alias, initialization, and launch contracts.
 /// This is a universally quantified kernel theorem: the later safe composition boundary may
 /// instantiate it only with compiler-generated capabilities and independently checked physical
-/// runtime inputs. The inert V3 receipts do not establish these claims by themselves. A false
-/// implementation can later authorize native code loading from safe generated code.
+/// runtime inputs. The inert V3 receipts do not establish these claims by themselves. This trait
+/// cannot construct the separate semantic-to-machine receipt and therefore cannot currently
+/// authorize native application loading even when these obligations hold.
 pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
     verifier_seal::Sealed<K>
 {
@@ -421,13 +424,263 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
 }
 
+/// Opaque, move-only proof receipt for one exact Worker V3 executable publication occurrence.
+///
+/// The receipt coordinates a semantic Kernel IR, final LLVM module, selected machine-code byte
+/// range, authenticated machine-effect result, finalized artifact, compiler-currentness record,
+/// and durable publication occurrence. Its machine-effect theorem is universal over concrete
+/// invocations satisfying the generated contracts; it does not bind one dispatch geometry or
+/// dispatch identity. It grants no authority on its own. Application admission must consume it
+/// while the matching current-publication token is retained. The deprecated HSA lifecycle retains
+/// that custody with the loaded executable across repeated checked invocations; the direct-KFD
+/// application path consumes it into its one-shot invocation binding.
+///
+/// There is deliberately no production constructor or producer wiring, and the current protected-
+/// verifier adapter does not produce this receipt. A future proof producer must establish the
+/// missing semantic-to-final-machine refinement before it may be introduced through a reviewed,
+/// crate-owned construction boundary. Consequently, production application execution remains
+/// unavailable today rather than treating backend provenance or digest equality as proof.
+///
+/// ```compile_fail
+/// use fe2o3_host::WorkerV3SemanticMachineRefinementReceiptV1;
+///
+/// fn replay(receipt: WorkerV3SemanticMachineRefinementReceiptV1) {
+///     drop(receipt);
+///     drop(receipt);
+/// }
+/// ```
+///
+/// The type is inspectable, but cannot be fabricated by downstream code:
+///
+/// ```compile_fail
+/// use fe2o3_host::WorkerV3SemanticMachineRefinementReceiptV1;
+/// let _ = WorkerV3SemanticMachineRefinementReceiptV1::new;
+/// ```
+#[must_use = "dropping the receipt abandons semantic-to-machine refinement custody"]
+pub struct WorkerV3SemanticMachineRefinementReceiptV1 {
+    host: WorkerV3SemanticMachineHostCoordinatesV1,
+    machine_effect_evidence_sha256: [u8; 32],
+    machine_effect_evidence_bytes: u64,
+    refinement_proof_sha256: [u8; 32],
+    refinement_proof_bytes: u64,
+    identity: [u8; 32],
+}
+
+impl fmt::Debug for WorkerV3SemanticMachineRefinementReceiptV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3SemanticMachineRefinementReceiptV1")
+            .field("identity", &self.identity)
+            .field("kir_sha256", &self.host.kir_sha256)
+            .field("llvm_sha256", &self.host.llvm_sha256)
+            .field("isa_sha256", &self.host.isa_sha256)
+            .field(
+                "machine_effect_evidence_sha256",
+                &self.machine_effect_evidence_sha256,
+            )
+            .field("artifact_sha256", &self.host.artifact_sha256)
+            .field("publication_identity", &self.host.publication_identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WorkerV3SemanticMachineRefinementReceiptV1 {
+    /// Returns the domain-separated identity of the complete receipt coordinates.
+    pub const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+
+    /// Returns the exact canonical Kernel IR identity covered by the refinement.
+    pub const fn kir_identity(&self) -> (&[u8; 32], u64) {
+        (&self.host.kir_sha256, self.host.kir_bytes)
+    }
+
+    /// Returns the exact final LLVM module identity covered by the refinement.
+    pub const fn llvm_identity(&self) -> (&[u8; 32], u64) {
+        (&self.host.llvm_sha256, self.host.llvm_bytes)
+    }
+
+    /// Returns the exact selected ISA byte-range identity covered by the refinement.
+    pub const fn isa_identity(&self) -> (&[u8; 32], u64) {
+        (&self.host.isa_sha256, self.host.isa_bytes)
+    }
+
+    /// Returns the exact authenticated machine-effect evidence identity covered by the proof.
+    pub const fn machine_effect_evidence_identity(&self) -> (&[u8; 32], u64) {
+        (
+            &self.machine_effect_evidence_sha256,
+            self.machine_effect_evidence_bytes,
+        )
+    }
+
+    /// Returns the exact proof-artifact identity retained by this receipt.
+    pub const fn refinement_proof_identity(&self) -> (&[u8; 32], u64) {
+        (&self.refinement_proof_sha256, self.refinement_proof_bytes)
+    }
+
+    /// Returns the exact finalized artifact identity covered by the refinement.
+    pub const fn artifact_identity(&self) -> (&[u8; 32], u64) {
+        (&self.host.artifact_sha256, self.host.artifact_bytes)
+    }
+
+    /// A receipt alone never grants load or launch authority.
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+
+    fn admit(
+        self,
+        expected: &WorkerV3SemanticMachineHostCoordinatesV1,
+    ) -> Option<AdmittedWorkerV3SemanticMachineRefinementV1> {
+        if self.host != *expected
+            || self.machine_effect_evidence_sha256 == [0; 32]
+            || self.machine_effect_evidence_bytes == 0
+            || self.refinement_proof_sha256 == [0; 32]
+            || self.refinement_proof_bytes == 0
+            || self.identity != semantic_machine_refinement_receipt_identity(&self)
+        {
+            return None;
+        }
+        Some(AdmittedWorkerV3SemanticMachineRefinementV1 { receipt: self })
+    }
+
+    #[cfg(test)]
+    fn new_for_test_only(
+        host: WorkerV3SemanticMachineHostCoordinatesV1,
+        machine_effect_evidence_sha256: [u8; 32],
+        machine_effect_evidence_bytes: u64,
+        refinement_proof_sha256: [u8; 32],
+        refinement_proof_bytes: u64,
+    ) -> Self {
+        let mut receipt = Self {
+            host,
+            machine_effect_evidence_sha256,
+            machine_effect_evidence_bytes,
+            refinement_proof_sha256,
+            refinement_proof_bytes,
+            identity: [0; 32],
+        };
+        receipt.identity = semantic_machine_refinement_receipt_identity(&receipt);
+        receipt
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkerV3SemanticMachineHostCoordinatesV1 {
+    kir_sha256: [u8; 32],
+    kir_bytes: u64,
+    llvm_sha256: [u8; 32],
+    llvm_bytes: u64,
+    isa_sha256: [u8; 32],
+    isa_bytes: u64,
+    artifact_sha256: [u8; 32],
+    artifact_bytes: u64,
+    worker_challenge_identity: [u8; 32],
+    worker_lineage_identity: [u8; 32],
+    compiler_execution_subject_identity: [u8; 32],
+    compiler_execution_carriage_identity: [u8; 32],
+    compiler_execution_policy_identity: [u8; 32],
+    compiler_execution_issuer_journal_identity: [u8; 32],
+    compiler_execution_occurrence_identity: [u8; 32],
+    compiler_execution_receipt_identity: [u8; 32],
+    compiler_execution_publication_identity: [u8; 32],
+    compiler_execution_acknowledgment_identity: [u8; 32],
+    compiler_execution_worker_ledger_record_identity: [u8; 32],
+    compiler_current_record_verification_identity: [u8; 32],
+    compiler_current_record_attestation_identity: [u8; 32],
+    protected_compiler_policy_verification_identity: [u8; 32],
+    protected_worker_ledger_verification_identity: [u8; 32],
+    external_rollback_verification_identity: [u8; 32],
+    compiler_prior_rollback_anchor: [u8; 32],
+    compiler_current_rollback_anchor: [u8; 32],
+    compiler_execution_sequence: u64,
+    publication_generation: u64,
+    publication_session: [u8; 16],
+    publication_invocation: [u8; 32],
+    publication_package_identity: [u8; 32],
+    publication_kernel_set_identity: [u8; 32],
+    publication_target_identity: [u8; 32],
+    publication_identity: [u8; 32],
+}
+
+pub(crate) struct AdmittedWorkerV3SemanticMachineRefinementV1 {
+    receipt: WorkerV3SemanticMachineRefinementReceiptV1,
+}
+
+impl AdmittedWorkerV3SemanticMachineRefinementV1 {
+    pub(crate) const fn receipt(&self) -> &WorkerV3SemanticMachineRefinementReceiptV1 {
+        &self.receipt
+    }
+}
+
+fn semantic_machine_refinement_receipt_identity(
+    receipt: &WorkerV3SemanticMachineRefinementReceiptV1,
+) -> [u8; 32] {
+    let host = &receipt.host;
+    let mut digest = Sha256::new();
+    digest.update(WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1);
+    for (sha256, byte_len) in [
+        (host.kir_sha256, host.kir_bytes),
+        (host.llvm_sha256, host.llvm_bytes),
+        (host.isa_sha256, host.isa_bytes),
+        (
+            receipt.machine_effect_evidence_sha256,
+            receipt.machine_effect_evidence_bytes,
+        ),
+        (
+            receipt.refinement_proof_sha256,
+            receipt.refinement_proof_bytes,
+        ),
+        (host.artifact_sha256, host.artifact_bytes),
+    ] {
+        digest.update(sha256);
+        digest.update(byte_len.to_le_bytes());
+    }
+    for identity in [
+        host.worker_challenge_identity,
+        host.worker_lineage_identity,
+        host.compiler_execution_subject_identity,
+        host.compiler_execution_carriage_identity,
+        host.compiler_execution_policy_identity,
+        host.compiler_execution_issuer_journal_identity,
+        host.compiler_execution_occurrence_identity,
+        host.compiler_execution_receipt_identity,
+        host.compiler_execution_publication_identity,
+        host.compiler_execution_acknowledgment_identity,
+        host.compiler_execution_worker_ledger_record_identity,
+        host.compiler_current_record_verification_identity,
+        host.compiler_current_record_attestation_identity,
+        host.protected_compiler_policy_verification_identity,
+        host.protected_worker_ledger_verification_identity,
+        host.external_rollback_verification_identity,
+        host.compiler_prior_rollback_anchor,
+        host.compiler_current_rollback_anchor,
+    ] {
+        digest.update(identity);
+    }
+    digest.update(host.compiler_execution_sequence.to_le_bytes());
+    digest.update(host.publication_generation.to_le_bytes());
+    digest.update(host.publication_session);
+    digest.update(host.publication_invocation);
+    for identity in [
+        host.publication_package_identity,
+        host.publication_kernel_set_identity,
+        host.publication_target_identity,
+        host.publication_identity,
+    ] {
+        digest.update(identity);
+    }
+    digest.finalize().into()
+}
+
 /// Independently authenticated result returned by a protected verifier backend.
 ///
 /// This value is consumed only by [`WorkerV3ProtectedVerifierAdapterV1`]. It carries the
 /// move-only V4 proof inputs, including the imported signed aggregate Verus evidence, plus the
-/// identities and universally quantified safety properties that cannot be derived by host
-/// admission. The sealed adapter supplies every request-coordinate field directly from the exact
-/// pinned host request and the existing promotion boundary compares the complete decision again.
+/// identities and reported safety properties that cannot be derived by host admission. It does
+/// not carry the separate semantic-to-machine refinement receipt. The sealed adapter supplies
+/// every request-coordinate field directly from the exact pinned host request and the existing
+/// promotion boundary compares the complete decision again.
 pub struct WorkerV3ProtectedVerificationEvidenceV1 {
     finalizer_derivation: RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
@@ -487,7 +740,8 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
 /// reacquire the exact protected Worker ledger record, enforce external rollback currentness, and
 /// authenticate the proof-to-executable, Rust layout, Rust effect, and universal safety results.
 /// Returned evidence must bind the exact borrowed request and may not be synthesized from request
-/// fields. An invalid implementation can authorize native code loading from safe generated code.
+/// fields. This backend does not produce the separate semantic-to-machine receipt, so its
+/// provenance and returned digests alone cannot authorize native application loading.
 pub unsafe trait WorkerV3ProtectedVerifierBackendV1<K: CompilerGeneratedKernelExpectationV1> {
     type Error;
 
@@ -1002,6 +1256,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     rust_effect_contract_sha256: [u8; 32],
     safety_properties: WorkerV3SafetyPropertiesV1,
     authority_evidence: WorkerV3VerifierAuthorityEvidenceV1,
+    semantic_machine_refinement: Option<WorkerV3SemanticMachineRefinementReceiptV1>,
 }
 
 #[derive(Debug)]
@@ -1012,9 +1267,15 @@ enum WorkerV3VerifierAuthorityEvidenceV1 {
 }
 
 impl WorkerV3VerifierAuthorityEvidenceV1 {
-    const fn admits_production_application(&self, retained_evidence_is_current: bool) -> bool {
+    const fn admits_production_application(
+        &self,
+        retained_evidence_is_current: bool,
+        retains_semantic_machine_refinement: bool,
+    ) -> bool {
         match self {
-            Self::ProtectedBackend => retained_evidence_is_current,
+            Self::ProtectedBackend => {
+                retained_evidence_is_current && retains_semantic_machine_refinement
+            }
             #[cfg(any(test, feature = "worker-v3-verifier-test-support"))]
             Self::Synthetic => false,
         }
@@ -1089,6 +1350,7 @@ impl WorkerV3VerificationDecisionV1 {
             rust_effect_contract_sha256,
             safety_properties,
             WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend,
+            None,
         )
     }
 
@@ -1117,6 +1379,7 @@ impl WorkerV3VerificationDecisionV1 {
         rust_effect_contract_sha256: [u8; 32],
         safety_properties: WorkerV3SafetyPropertiesV1,
         authority_evidence: WorkerV3VerifierAuthorityEvidenceV1,
+        semantic_machine_refinement: Option<WorkerV3SemanticMachineRefinementReceiptV1>,
     ) -> Self {
         Self {
             challenge,
@@ -1142,6 +1405,7 @@ impl WorkerV3VerificationDecisionV1 {
             rust_effect_contract_sha256,
             safety_properties,
             authority_evidence,
+            semantic_machine_refinement,
         }
     }
 
@@ -1195,6 +1459,7 @@ impl WorkerV3VerificationDecisionV1 {
             rust_effect_contract_sha256,
             safety_properties,
             WorkerV3VerifierAuthorityEvidenceV1::Synthetic,
+            None,
         )
     }
 
@@ -1303,15 +1568,15 @@ impl WorkerV3VerificationDecisionV1 {
         }
     }
 
-    /// Reports that the sealed production adapter retained its unsafe protected-backend provenance
-    /// together with the currently authenticated compiler and signed-Verus evidence.
+    /// Reports custody of every prerequisite for the consuming application transition.
     ///
-    /// This is a provenance gate for the application transition. It does not synthesize or claim
-    /// the still-missing semantic-to-machine refinement proofs; those remain obligations of the
-    /// explicit unsafe protected-verifier boundary.
+    /// Protected-backend provenance and current compiler/Verus evidence are insufficient without
+    /// the separate opaque semantic-to-machine receipt. The current adapter has no producer for
+    /// that receipt, so this remains false in production builds today.
     pub(crate) const fn retains_protected_application_execution_evidence(&self) -> bool {
         self.authority_evidence.admits_production_application(
             self.retains_current_compiler_and_signed_verus_evidence(),
+            self.semantic_machine_refinement.is_some(),
         )
     }
 }
@@ -1419,6 +1684,80 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 
     pub(crate) const fn current_publication_token(&self) -> &DurableCurrentLinkPublicationTokenV1 {
         &self.current
+    }
+
+    /// Consumes the unique refinement receipt into application custody after matching every
+    /// host-observable coordinate under the retained current-publication token.
+    pub(crate) fn take_application_semantic_machine_refinement(
+        &mut self,
+    ) -> Option<AdmittedWorkerV3SemanticMachineRefinementV1> {
+        if !self
+            .verification
+            .retains_protected_application_execution_evidence()
+        {
+            return None;
+        }
+        let proof = self.verification.validated_compiler_proof_inputs()?;
+        let target_lineage = self.verification.validated_compiler_target_lineage()?;
+        let kir = proof.kernel_ir().identity();
+        let llvm = target_lineage.final_llvm_identity();
+        let exact_artifact = self.current.exact_artifact_bytes();
+        let binding = self.admission.descriptor_binding();
+        let isa_start = usize::try_from(binding.entry_file_offset()).ok()?;
+        let isa_bytes = usize::try_from(binding.entry_size()).ok()?;
+        let isa_end = isa_start.checked_add(isa_bytes)?;
+        let exact_isa = exact_artifact.get(isa_start..isa_end)?;
+        let compiler = self.verification.compiler_execution();
+        let compiler_subject = self.admission.compiler_execution_subject().identity();
+        let published = self.admission.published();
+        let attempt = published.attempt();
+        let scope = published.scope();
+        let expected = WorkerV3SemanticMachineHostCoordinatesV1 {
+            kir_sha256: *kir.digest(),
+            kir_bytes: kir.canonical_length(),
+            llvm_sha256: llvm.sha256(),
+            llvm_bytes: llvm.byte_len(),
+            isa_sha256: Sha256::digest(exact_isa).into(),
+            isa_bytes: u64::try_from(exact_isa.len()).ok()?,
+            artifact_sha256: self.verification.finalized_hsaco_sha256(),
+            artifact_bytes: self.verification.finalized_hsaco_length(),
+            worker_challenge_identity: *self.verification.challenge_identity().as_bytes(),
+            worker_lineage_identity: *self.verification.lineage_identity().as_bytes(),
+            compiler_execution_subject_identity: *compiler_subject.sha256(),
+            compiler_execution_carriage_identity: compiler.carriage_sha256(),
+            compiler_execution_policy_identity: compiler.policy_sha256(),
+            compiler_execution_issuer_journal_identity: compiler.issuer_journal_sha256(),
+            compiler_execution_occurrence_identity: compiler.compiler_occurrence_sha256(),
+            compiler_execution_receipt_identity: compiler.receipt_sha256(),
+            compiler_execution_publication_identity: compiler.publication_sha256(),
+            compiler_execution_acknowledgment_identity: compiler.acknowledgment_sha256(),
+            compiler_execution_worker_ledger_record_identity: compiler
+                .worker_ledger_record_sha256(),
+            compiler_current_record_verification_identity: compiler
+                .current_record_verification_sha256(),
+            compiler_current_record_attestation_identity: compiler
+                .current_record_attestation_sha256(),
+            protected_compiler_policy_verification_identity: compiler
+                .protected_policy_verification_sha256(),
+            protected_worker_ledger_verification_identity: compiler
+                .protected_worker_ledger_verification_sha256(),
+            external_rollback_verification_identity: compiler
+                .external_rollback_verification_sha256(),
+            compiler_prior_rollback_anchor: compiler.prior_rollback_anchor(),
+            compiler_current_rollback_anchor: compiler.current_rollback_anchor(),
+            compiler_execution_sequence: compiler.sequence(),
+            publication_generation: attempt.generation(),
+            publication_session: *attempt.session().as_bytes(),
+            publication_invocation: *attempt.invocation().as_bytes(),
+            publication_package_identity: *scope.package().as_bytes(),
+            publication_kernel_set_identity: *scope.kernel_set().as_bytes(),
+            publication_target_identity: *scope.target().as_bytes(),
+            publication_identity: *published.publication().as_bytes(),
+        };
+        self.verification
+            .semantic_machine_refinement
+            .take()?
+            .admit(&expected)
     }
 }
 
@@ -3667,15 +4006,163 @@ mod tests {
     #[test]
     fn protected_application_provenance_rejects_synthetic_and_failed_currentness() {
         assert!(
+            !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
+                .admits_production_application(true, false)
+        );
+        assert!(
             WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(true)
+                .admits_production_application(true, true)
         );
         assert!(
             !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(false)
+                .admits_production_application(false, true)
         );
         assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::Synthetic.admits_production_application(true)
+            !WorkerV3VerifierAuthorityEvidenceV1::Synthetic
+                .admits_production_application(true, true)
         );
+    }
+
+    fn refinement_host_coordinates() -> WorkerV3SemanticMachineHostCoordinatesV1 {
+        WorkerV3SemanticMachineHostCoordinatesV1 {
+            kir_sha256: [1; 32],
+            kir_bytes: 101,
+            llvm_sha256: [2; 32],
+            llvm_bytes: 102,
+            isa_sha256: [3; 32],
+            isa_bytes: 103,
+            artifact_sha256: [4; 32],
+            artifact_bytes: 104,
+            worker_challenge_identity: [5; 32],
+            worker_lineage_identity: [6; 32],
+            compiler_execution_subject_identity: [21; 32],
+            compiler_execution_carriage_identity: [22; 32],
+            compiler_execution_policy_identity: [23; 32],
+            compiler_execution_issuer_journal_identity: [24; 32],
+            compiler_execution_occurrence_identity: [25; 32],
+            compiler_execution_receipt_identity: [26; 32],
+            compiler_execution_publication_identity: [27; 32],
+            compiler_execution_acknowledgment_identity: [28; 32],
+            compiler_execution_worker_ledger_record_identity: [29; 32],
+            compiler_current_record_verification_identity: [7; 32],
+            compiler_current_record_attestation_identity: [8; 32],
+            protected_compiler_policy_verification_identity: [30; 32],
+            protected_worker_ledger_verification_identity: [31; 32],
+            external_rollback_verification_identity: [9; 32],
+            compiler_prior_rollback_anchor: [32; 32],
+            compiler_current_rollback_anchor: [10; 32],
+            compiler_execution_sequence: 11,
+            publication_generation: 12,
+            publication_session: [13; 16],
+            publication_invocation: [14; 32],
+            publication_package_identity: [15; 32],
+            publication_kernel_set_identity: [16; 32],
+            publication_target_identity: [17; 32],
+            publication_identity: [18; 32],
+        }
+    }
+
+    fn refinement_receipt(
+        host: WorkerV3SemanticMachineHostCoordinatesV1,
+    ) -> WorkerV3SemanticMachineRefinementReceiptV1 {
+        WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
+            host, [19; 32], 119, [20; 32], 120,
+        )
+    }
+
+    #[test]
+    fn semantic_machine_refinement_receipt_admits_only_exact_host_coordinates() {
+        let expected = refinement_host_coordinates();
+        let admitted = refinement_receipt(expected.clone())
+            .admit(&expected)
+            .unwrap();
+        assert_ne!(admitted.receipt().identity(), &[0; 32]);
+        assert_eq!(admitted.receipt().kir_identity(), (&[1; 32], 101));
+        assert_eq!(admitted.receipt().llvm_identity(), (&[2; 32], 102));
+        assert_eq!(admitted.receipt().isa_identity(), (&[3; 32], 103));
+        assert_eq!(
+            admitted.receipt().machine_effect_evidence_identity(),
+            (&[19; 32], 119)
+        );
+        assert_eq!(
+            admitted.receipt().refinement_proof_identity(),
+            (&[20; 32], 120)
+        );
+        assert_eq!(admitted.receipt().artifact_identity(), (&[4; 32], 104));
+        assert!(!admitted.receipt().grants_runtime_authority());
+    }
+
+    #[test]
+    fn semantic_machine_refinement_rejects_every_host_coordinate_substitution() {
+        let expected = refinement_host_coordinates();
+        for axis in 0..34 {
+            let mut substituted = expected.clone();
+            match axis {
+                0 => substituted.kir_sha256[0] ^= 1,
+                1 => substituted.kir_bytes += 1,
+                2 => substituted.llvm_sha256[0] ^= 1,
+                3 => substituted.llvm_bytes += 1,
+                4 => substituted.isa_sha256[0] ^= 1,
+                5 => substituted.isa_bytes += 1,
+                6 => substituted.artifact_sha256[0] ^= 1,
+                7 => substituted.artifact_bytes += 1,
+                8 => substituted.worker_challenge_identity[0] ^= 1,
+                9 => substituted.worker_lineage_identity[0] ^= 1,
+                10 => substituted.compiler_execution_subject_identity[0] ^= 1,
+                11 => substituted.compiler_execution_carriage_identity[0] ^= 1,
+                12 => substituted.compiler_execution_policy_identity[0] ^= 1,
+                13 => substituted.compiler_execution_issuer_journal_identity[0] ^= 1,
+                14 => substituted.compiler_execution_occurrence_identity[0] ^= 1,
+                15 => substituted.compiler_execution_receipt_identity[0] ^= 1,
+                16 => substituted.compiler_execution_publication_identity[0] ^= 1,
+                17 => substituted.compiler_execution_acknowledgment_identity[0] ^= 1,
+                18 => substituted.compiler_execution_worker_ledger_record_identity[0] ^= 1,
+                19 => substituted.compiler_current_record_verification_identity[0] ^= 1,
+                20 => substituted.compiler_current_record_attestation_identity[0] ^= 1,
+                21 => substituted.protected_compiler_policy_verification_identity[0] ^= 1,
+                22 => substituted.protected_worker_ledger_verification_identity[0] ^= 1,
+                23 => substituted.external_rollback_verification_identity[0] ^= 1,
+                24 => substituted.compiler_prior_rollback_anchor[0] ^= 1,
+                25 => substituted.compiler_current_rollback_anchor[0] ^= 1,
+                26 => substituted.compiler_execution_sequence += 1,
+                27 => substituted.publication_generation += 1,
+                28 => substituted.publication_session[0] ^= 1,
+                29 => substituted.publication_invocation[0] ^= 1,
+                30 => substituted.publication_package_identity[0] ^= 1,
+                31 => substituted.publication_kernel_set_identity[0] ^= 1,
+                32 => substituted.publication_target_identity[0] ^= 1,
+                33 => substituted.publication_identity[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                refinement_receipt(substituted).admit(&expected).is_none(),
+                "substituted host coordinate {axis} was admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_machine_refinement_rejects_internal_evidence_substitution() {
+        let expected = refinement_host_coordinates();
+        let mut machine_effect = refinement_receipt(expected.clone());
+        machine_effect.machine_effect_evidence_sha256[0] ^= 1;
+        assert!(machine_effect.admit(&expected).is_none());
+
+        let mut proof = refinement_receipt(expected.clone());
+        proof.refinement_proof_bytes += 1;
+        assert!(proof.admit(&expected).is_none());
+
+        let zero_effect = WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
+            expected.clone(),
+            [0; 32],
+            119,
+            [20; 32],
+            120,
+        );
+        assert!(zero_effect.admit(&expected).is_none());
+        let empty_proof = WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
+            expected, [19; 32], 119, [20; 32], 0,
+        );
+        assert!(empty_proof.admit(&refinement_host_coordinates()).is_none());
     }
 }

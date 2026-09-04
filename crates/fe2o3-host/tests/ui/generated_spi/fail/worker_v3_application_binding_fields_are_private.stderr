@@ -17,7 +17,7 @@ error: type `fe2o3_host::generated_kfd_invocation::WorkerV3ApplicationExecutionC
   |         ^^^^^^^^^^^ private type
 
 error: type `fe2o3_host::generated_kfd_invocation::WorkerV3ApplicationExecutionCoordinatesV1` is private
- --> tests/ui/generated_spi/fail/worker_v3_application_binding_fields_are_private.rs:9:13
-  |
-9 |     let _ = (authenticated, coordinates, packing);
-  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type
+  --> tests/ui/generated_spi/fail/worker_v3_application_binding_fields_are_private.rs:10:13
+   |
+10 |     let _ = (authenticated, coordinates, packing);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type

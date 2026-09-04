@@ -17,6 +17,7 @@ r9_native_evidence_proof="$script_dir/r9_native_evidence_v1.rs"
 r10_closed_execution_proof="$script_dir/r10_closed_execution_v1.rs"
 r11_runtime_semantics_proof="$script_dir/r11_runtime_semantics_v1.rs"
 r12_native_concurrency_proof="$script_dir/r12_native_concurrency_v1.rs"
+r13_logical_scheduler_proof="$script_dir/r13_logical_scheduler_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -109,6 +110,17 @@ negative_r12_queue_occurrence="$script_dir/negative/r12_native_concurrency_v1_qu
 negative_r12_slot_recycle="$script_dir/negative/r12_native_concurrency_v1_slot_recycle.rs"
 negative_r12_slot_generation="$script_dir/negative/r12_native_concurrency_v1_slot_generation.rs"
 negative_r12_stale_drain="$script_dir/negative/r12_native_concurrency_v1_stale_drain.rs"
+negative_r13_currentness_quarantine="$script_dir/negative/r13_logical_scheduler_v1_currentness_quarantine.rs"
+negative_r13_dependency_bound="$script_dir/negative/r13_logical_scheduler_v1_dependency_bound.rs"
+negative_r13_dependency_bypass="$script_dir/negative/r13_logical_scheduler_v1_dependency_bypass.rs"
+negative_r13_dependent_release="$script_dir/negative/r13_logical_scheduler_v1_dependent_release.rs"
+negative_r13_fifo_bypass="$script_dir/negative/r13_logical_scheduler_v1_fifo_bypass.rs"
+negative_r13_foreign_owner="$script_dir/negative/r13_logical_scheduler_v1_foreign_owner.rs"
+negative_r13_foreign_terminal="$script_dir/negative/r13_logical_scheduler_v1_foreign_terminal.rs"
+negative_r13_lane_collision="$script_dir/negative/r13_logical_scheduler_v1_lane_collision.rs"
+negative_r13_non_tail_cancel="$script_dir/negative/r13_logical_scheduler_v1_non_tail_cancel.rs"
+negative_r13_resource_overlap="$script_dir/negative/r13_logical_scheduler_v1_resource_overlap.rs"
+negative_r13_third_lane="$script_dir/negative/r13_logical_scheduler_v1_third_lane.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -147,6 +159,7 @@ expected_r9_native_evidence=$(read_pin "$pin_dir/R9_NATIVE_EVIDENCE_SHA256")
 expected_r10_closed_execution=$(read_pin "$pin_dir/R10_CLOSED_EXECUTION_SHA256")
 expected_r11_runtime_semantics=$(read_pin "$pin_dir/R11_RUNTIME_SEMANTICS_SHA256")
 expected_r12_native_concurrency=$(read_pin "$pin_dir/R12_NATIVE_CONCURRENCY_SHA256")
+expected_r13_logical_scheduler=$(read_pin "$pin_dir/R13_LOGICAL_SCHEDULER_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -239,6 +252,17 @@ expected_negative_r12_queue_occurrence=$(read_pin "$pin_dir/NEGATIVE_R12_QUEUE_O
 expected_negative_r12_slot_recycle=$(read_pin "$pin_dir/NEGATIVE_R12_SLOT_RECYCLE_SHA256")
 expected_negative_r12_slot_generation=$(read_pin "$pin_dir/NEGATIVE_R12_SLOT_GENERATION_SHA256")
 expected_negative_r12_stale_drain=$(read_pin "$pin_dir/NEGATIVE_R12_STALE_DRAIN_SHA256")
+expected_negative_r13_currentness_quarantine=$(read_pin "$pin_dir/NEGATIVE_R13_CURRENTNESS_QUARANTINE_SHA256")
+expected_negative_r13_dependency_bound=$(read_pin "$pin_dir/NEGATIVE_R13_DEPENDENCY_BOUND_SHA256")
+expected_negative_r13_dependency_bypass=$(read_pin "$pin_dir/NEGATIVE_R13_DEPENDENCY_BYPASS_SHA256")
+expected_negative_r13_dependent_release=$(read_pin "$pin_dir/NEGATIVE_R13_DEPENDENT_RELEASE_SHA256")
+expected_negative_r13_fifo_bypass=$(read_pin "$pin_dir/NEGATIVE_R13_FIFO_BYPASS_SHA256")
+expected_negative_r13_foreign_owner=$(read_pin "$pin_dir/NEGATIVE_R13_FOREIGN_OWNER_SHA256")
+expected_negative_r13_foreign_terminal=$(read_pin "$pin_dir/NEGATIVE_R13_FOREIGN_TERMINAL_SHA256")
+expected_negative_r13_lane_collision=$(read_pin "$pin_dir/NEGATIVE_R13_LANE_COLLISION_SHA256")
+expected_negative_r13_non_tail_cancel=$(read_pin "$pin_dir/NEGATIVE_R13_NON_TAIL_CANCEL_SHA256")
+expected_negative_r13_resource_overlap=$(read_pin "$pin_dir/NEGATIVE_R13_RESOURCE_OVERLAP_SHA256")
+expected_negative_r13_third_lane=$(read_pin "$pin_dir/NEGATIVE_R13_THIRD_LANE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -280,6 +304,7 @@ check_sources() {
     check_digest "$expected_r10_closed_execution" "$r10_closed_execution_proof"
     check_digest "$expected_r11_runtime_semantics" "$r11_runtime_semantics_proof"
     check_digest "$expected_r12_native_concurrency" "$r12_native_concurrency_proof"
+    check_digest "$expected_r13_logical_scheduler" "$r13_logical_scheduler_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -372,6 +397,17 @@ check_sources() {
     check_digest "$expected_negative_r12_slot_recycle" "$negative_r12_slot_recycle"
     check_digest "$expected_negative_r12_slot_generation" "$negative_r12_slot_generation"
     check_digest "$expected_negative_r12_stale_drain" "$negative_r12_stale_drain"
+    check_digest "$expected_negative_r13_currentness_quarantine" "$negative_r13_currentness_quarantine"
+    check_digest "$expected_negative_r13_dependency_bound" "$negative_r13_dependency_bound"
+    check_digest "$expected_negative_r13_dependency_bypass" "$negative_r13_dependency_bypass"
+    check_digest "$expected_negative_r13_dependent_release" "$negative_r13_dependent_release"
+    check_digest "$expected_negative_r13_fifo_bypass" "$negative_r13_fifo_bypass"
+    check_digest "$expected_negative_r13_foreign_owner" "$negative_r13_foreign_owner"
+    check_digest "$expected_negative_r13_foreign_terminal" "$negative_r13_foreign_terminal"
+    check_digest "$expected_negative_r13_lane_collision" "$negative_r13_lane_collision"
+    check_digest "$expected_negative_r13_non_tail_cancel" "$negative_r13_non_tail_cancel"
+    check_digest "$expected_negative_r13_resource_overlap" "$negative_r13_resource_overlap"
+    check_digest "$expected_negative_r13_third_lane" "$negative_r13_third_lane"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -394,6 +430,7 @@ check_sources
     "$r10_closed_execution_proof" \
     "$r11_runtime_semantics_proof" \
     "$r12_native_concurrency_proof" \
+    "$r13_logical_scheduler_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -482,7 +519,18 @@ check_sources
     "$negative_r12_queue_occurrence" \
     "$negative_r12_slot_recycle" \
     "$negative_r12_slot_generation" \
-    "$negative_r12_stale_drain"
+    "$negative_r12_stale_drain" \
+    "$negative_r13_currentness_quarantine" \
+    "$negative_r13_dependency_bound" \
+    "$negative_r13_dependency_bypass" \
+    "$negative_r13_dependent_release" \
+    "$negative_r13_fifo_bypass" \
+    "$negative_r13_foreign_owner" \
+    "$negative_r13_foreign_terminal" \
+    "$negative_r13_lane_collision" \
+    "$negative_r13_non_tail_cancel" \
+    "$negative_r13_resource_overlap" \
+    "$negative_r13_third_lane"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -595,6 +643,7 @@ check_positive "$r9_native_evidence_proof" 'verification results:: 14 verified, 
 check_positive "$r10_closed_execution_proof" 'verification results:: 20 verified, 0 errors' r10-closed-execution
 check_positive "$r11_runtime_semantics_proof" 'verification results:: 18 verified, 0 errors' r11-runtime-semantics
 check_positive "$r12_native_concurrency_proof" 'verification results:: 23 verified, 0 errors' r12-native-concurrency
+check_positive "$r13_logical_scheduler_proof" 'verification results:: 20 verified, 0 errors' r13-logical-scheduler
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -687,13 +736,24 @@ check_negative "$negative_r12_queue_occurrence" mutated_queue_occurrence_substit
 check_negative "$negative_r12_slot_recycle" mutated_cancel_advances_live_slot_generation_v1 r12-slot-recycle
 check_negative "$negative_r12_slot_generation" mutated_slot_generation_substitution_is_rejected_v1 r12-slot-generation
 check_negative "$negative_r12_stale_drain" mutated_stale_queue_occurrence_cannot_be_drained_v1 r12-stale-drain
+check_negative "$negative_r13_currentness_quarantine" mutated_currentness_loss_quarantines_published_v1 r13-currentness-quarantine
+check_negative "$negative_r13_dependency_bound" mutated_dependency_count_above_bound_is_admitted_v1 r13-dependency-bound
+check_negative "$negative_r13_dependency_bypass" mutated_unready_dependency_blocks_publication_v1 r13-dependency-bypass
+check_negative "$negative_r13_dependent_release" mutated_queued_dependent_retains_terminal_resources_v1 r13-dependent-release
+check_negative "$negative_r13_fifo_bypass" mutated_non_head_cannot_publish_v1 r13-fifo-bypass
+check_negative "$negative_r13_foreign_owner" mutated_foreign_lane_owner_cannot_complete_v1 r13-foreign-owner
+check_negative "$negative_r13_foreign_terminal" mutated_foreign_lane_cannot_complete_v1 r13-foreign-terminal
+check_negative "$negative_r13_lane_collision" mutated_publication_preserves_unique_lane_owners_v1 r13-lane-collision
+check_negative "$negative_r13_non_tail_cancel" mutated_non_tail_cancel_is_rejected_v1 r13-non-tail-cancel
+check_negative "$negative_r13_resource_overlap" mutated_resource_overlap_blocks_publication_v1 r13-resource-overlap
+check_negative "$negative_r13_third_lane" mutated_third_physical_lane_is_supported_v1 r13-third-lane
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 mutations=92'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 mutations=103'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

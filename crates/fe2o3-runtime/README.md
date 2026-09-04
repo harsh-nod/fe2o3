@@ -12,8 +12,11 @@ build host.
 
 `RuntimeBackendV1` is the base backend SPI. `RuntimeAsyncCopyBackendV1`,
 `RuntimeFlushBackendV1`, and `RuntimeCancellationBackendV1` are additive
-in-process copy, explicit-publication, and cancellation/drain extensions that
-leave the Worker V3 wire contract unchanged.
+in-process copy, explicit-progress, and cancellation/drain extensions that
+leave the frozen Runtime Worker V1 wire contract unchanged. Negotiated Runtime
+Worker V4 carries one exact extension profile: execution-capability discovery,
+flush, same-device asynchronous copy, cancellation, and deadline-bounded drain.
+This transport versioning is separate from compiler/proof Worker V3.
 All carry only numeric sealed handles,
 address-free argument images, allocation-relative bindings, explicit event
 dependencies, and monotonic deadlines. The direct-KFD and worker-backed
@@ -30,9 +33,18 @@ memory effects. Direct KFD execution requires an unsafe launch authority. The
 deprecated HSA qualification adapter separately requires its caller to uphold
 an unsafe artifact, ABI, and effect contract; it is not a production fallback.
 
-`RuntimeWorkerTransportV1` is the preferred community-facing deployment for
-native GPU backends. It verifies protocol compatibility with a fixed handshake,
-uses bounded request and response frames, enforces response deadlines, and
+`RuntimeWorkerTransportV1` is the subprocess owner shared by both transport
+versions. Native GPU backends requiring the additive runtime SPIs should use
+`RuntimeWorkerBackendV4<RuntimeBinaryCodecV4>` with a child served by
+`serve_runtime_backend_worker_v4`; V4 requires its exact handshake before any
+request. Its canonical server requires the backend to implement flush,
+same-device async copy, and cancellation/drain; direct, multi-device, and native
+XGMI KFD owners satisfy that complete type bound. Execution capabilities are
+cached only for the latest successfully enumerated device roster and otherwise
+fail closed. The frozen `RuntimeWorkerBackendV1<RuntimeBinaryCodecV1>` remains
+for backends that explicitly opt into the immediate-progress marker and rejects
+a V4 peer. Both verify protocol compatibility with an exact handshake, use
+bounded request and response frames, enforce response deadlines, and
 terminates a worker that becomes unresponsive or violates the protocol. The
 parent caps each worker-backed completion wait at the caller's monotonic
 deadline and sends only a relative child duration, so no cross-process clock
@@ -44,12 +56,13 @@ KFD code, or deprecated HSA qualification code, may preserve its fail-closed
 abort policy inside that child; the
 application receives terminal backend loss without being terminated itself.
 
-The parent uses `RuntimeWorkerBackendV1<RuntimeBinaryCodecV1>` and the child
-calls `serve_runtime_backend_worker_v1` with its concrete backend. The repository
-provides the transport, canonical codec, and server loop, but does not yet ship
-a standalone KFD worker executable. Shut down the context first, then
-shut down the returned worker backend so the transport can send its empty-frame
-termination and reap the child.
+The repository provides both bounded canonical codecs and server loops, but does
+not yet ship a standalone KFD worker executable. Shut down the context first,
+then shut down the returned worker backend so the transport can send its
+empty-frame termination and reap the child. V4 flush and ordinary extension
+calls may synchronously block up to the configured request timeout; drain obeys
+the caller's earlier deadline. Timeout, malformed terminal response, or terminal
+backend failure seals and reaps the worker.
 
 Observe each submission to a conclusive `RuntimeCompletionStatusV1`: `Succeeded`,
 a typed backend-code or cancellation failure, or `QuiescentWithoutResult` when
@@ -70,22 +83,36 @@ Direct KFD backend drop may abort when live or ambiguous native custody remains,
 so explicit shutdown is required for predictable teardown. The deprecated HSA
 qualification adapter retains the same conservative cleanup rule.
 
-The current single-device KFD adapter admits one gfx942 device and serializes
-logical compute streams over one AQL queue. Live logical allocations retain
-native host or HBM SDMA storage, while bounded host images remain the current
-compute authority. Same-device `copy_async` uses the native directional SDMA
-queues, splits logical ranges larger than one linear packet into sequential
-packets, and retains explicit event dependencies until publication. Cancellation
-before publication quiesces the submission; cancellation after a doorbell is
-explicitly `TooLate`. One compute dispatch and SDMA work may overlap when every
-referenced allocation is disjoint. An overlapping copy may remain unpublished
-behind an explicit event for the active compute dispatch; a compute launch that
-overlaps pending SDMA is rejected, as is a compute dependency on a pending copy.
-Same-device concurrent compute remains unsupported. Persistent SDMA allocations
-and transient staging use the queue-owned best-fit memory pool; device-local
-buffers are initialized before publication and scrubbed before recycle, and
-explicit shutdown trims the pool. Persistent SDMA buffers are not yet shared
-with fixed-dispatch compute storage, so device-local compute input remains
+The current single-device KFD adapter admits one gfx942 device and at most
+65,536 logical streams, multiplexed over exactly two persistent native compute
+lanes. Logical stream creation does not lease a lane. Accepted compute launches
+own their kernarg, bindings, dependencies, and retained resources in bounded
+per-stream FIFOs until the lowest available lane can publish the FIFO head.
+At most one dispatch occupies each lane, and concurrent native work must use
+disjoint allocations. This is bounded two-lane concurrency, not arbitrary
+same-device compute concurrency.
+
+Compute and same-device copy operations on one logical stream gain an implicit
+tail dependency. Cross-stream overlapping allocation use requires an explicit
+event dependency, and dependency count and transitive unpublished depth are
+capped at 256. Prepublication cancellation removes owned work and restores the
+prior stream tail; cancellation after a doorbell is explicitly `TooLate`.
+`poll` observes state without preparing deferred compute. Submit may publish
+immediately ready work. `wait` is likewise observation-only and does not publish
+deferred work. The additive in-process `flush_stream` operation may drive a
+dependency-ready FIFO head through potentially blocking dirty-buffer
+reconciliation and native publication. There is no background progress thread
+or native queue-side dependency packet. Runtime Worker V1 has no flush request;
+negotiated Runtime Worker V4 exposes the same bounded progress operation.
+
+Same-device `copy_async` uses the native directional SDMA queues and splits
+logical ranges larger than one linear packet into sequential packets. Live
+logical allocations retain native host or HBM SDMA storage, while bounded host
+images remain the current compute authority. Persistent SDMA allocations and
+transient staging use the queue-owned best-fit memory pool; device-local buffers
+are initialized before publication and scrubbed before recycle, and explicit
+shutdown trims the pool. Persistent SDMA buffers are not yet shared with
+fixed-dispatch compute storage, so device-local compute input remains
 materialized per launch and read-only.
 
 Logical KFD allocations are capped at 256 MiB each and 1 GiB per backend
@@ -93,9 +120,10 @@ context; budget and allocator exhaustion return `Capacity` before native
 publication. `KfdMultiDeviceRuntimeBackendV1` admits every selected physical
 device before any queue exists and routes independent child backends. A live
 same-device copy uses that child's native SDMA path. Peer copy in this generic
-router remains bounded host staging: each `poll` performs at most one 64 KiB
-child range request, pending staging is capped at 1 GiB, and fairness requires
-the caller to poll or wait. It is not background DMA or native XGMI.
+router remains bounded host staging: poll and wait are observation-only, while
+`flush_stream` drives retained child range operations in 64 KiB chunks to a
+conclusive state. Pending staging is capped at 1 GiB. Flush is potentially
+blocking cooperative host progress, not background DMA or native XGMI.
 
 `KfdNativeXgmiRuntimeBackendV1` is the separate exact two-device, copy-only
 native peer backend. It admits both gfx942 devices and both directional topology
@@ -108,13 +136,18 @@ device owns the public stream. Every copy is limited to one admitted linear
 packet and one copy per logical stream may be pending. Ready copies in one
 direction are selected by a deterministic FIFO readiness queue and published in one
 native reservation and doorbell store, capped at 63 so the 64-slot ring retains
-one empty slot. Polling or waiting for work beyond the current batch advances a
-published predecessor, providing bounded caller-driven fairness without
-claiming background progress. After enqueueing a complete ready batch of at most
-63 copies, `flush_stream` explicitly publishes it before returning, allowing
-host work after the flush to overlap DMA. An oversized ready set rejects before
-publication; poll or wait remains the bounded fallback. Flush does not progress
-dependencies, observe completion, or create a background thread. It exposes no
+one empty slot. Polling or waiting for work beyond the current batch may observe
+a published predecessor, providing bounded caller-driven completion observation
+without claiming background progress. `flush_stream` snapshots the
+dependency-ready directional set at entry and publishes it in FIFO prefixes of
+at most 63. When more than one prefix is needed, flush synchronously drains each
+earlier prefix before publishing the next; the final prefix remains outstanding
+so host work after the flush can overlap DMA. A first-prefix allocation or
+admission failure rejects before native mutation. A recoverable later-prefix
+failure is quiescent because every earlier published prefix has completed, and
+the remaining ready custody can be retried. Poll and wait observe
+already-published completion and terminal dependencies but never publish
+deferred copies. Flush creates no background thread. It exposes no
 compute, same-device copy, memory
 pool, profiling, atomics, or collectives. Capability detail is
 available through `RuntimeContextV1::execution_capabilities` so applications can
@@ -128,10 +161,10 @@ engine-concurrency claim.
 Applications must explicitly shut down either multi-device KFD owner after
 releasing submissions, events, allocations, and streams. Ambiguous native
 failure retains custody and latches terminal state. The HSA adapter admits one
-correlated gfx942 or gfx950 device and host-visible memory. Per-device
-concurrent KFD compute remains unsupported, and native peer copy is available
-only through the separate copy-only XGMI owner. There is no unified native
-multi-device compute owner. A separate
+correlated gfx942 or gfx950 device and host-visible memory. Direct KFD compute
+concurrency is limited to two disjoint-allocation lanes per device, and native
+peer copy is available only through the separate copy-only XGMI owner. There is
+no unified native multi-device compute owner. A separate
 authority-free gfx942 model checks the reviewed integer-atomic and collective
 semantic declarations against exact runtime resources. The facade's
 `launch_atomic` and `launch_collective` wrappers match typed operation, scope,
@@ -156,8 +189,12 @@ This is not HIP/HSA parity. See
 The additive R11 executable model covers the shared completion/event state,
 exact-once callback discharge, atomic and compare-exchange order/weak contract
 matching, collective geometry/membership gating, and persistent-batch mapping
-custody. Its pinned Verus obligations prove the corresponding abstract model properties only; they
-are not a Rust-to-Verus refinement or native execution proof.
+custody. R12 adds 23 obligations and 13 expected-negative mutations for abstract
+multi-queue custody, bringing the cumulative totals to 142 and 92. R13 adds 20
+obligations and 11 mutations for the bounded logical-stream scheduler, bringing
+the totals to 162 and 103. These pinned Verus obligations prove only the
+corresponding abstract models; they are not a Rust-to-Verus refinement or native
+execution proof.
 
 The direct-KFD backend also exposes an opt-in bounded profiler. It records
 address-free logical resource lifecycle, host staging read/write ranges, native
@@ -189,9 +226,20 @@ Worker V3 path. It joins the bounded AMDHSA COV6 loader, selected descriptor and
 resource facts, complete implicit kernarg initialization, and the
 address-sealed KFD request.
 
-The safe production API now has one consuming execution transition, but it is
-unreachable without an implementation of the unsafe
-`WorkerV3Gfx942ExecutionAuthorityV1` boundary. The transition independently
+The safe production API now has one consuming execution transition and one
+private implementation of the unsafe `WorkerV3Gfx942ExecutionAuthorityV1`
+boundary. That implementation remains unreachable without admission of a
+move-only `WorkerV3SemanticMachineRefinementReceiptV1`. The inspect-only receipt
+has private state but no production constructor or producer wiring. It binds one
+exact executable publication occurrence across the KIR, final LLVM, selected ISA
+range, machine-effect evidence, refinement proof, final artifact,
+compiler-currentness and rollback chain, Worker challenge and lineage, and
+durable publication. Its machine-effect contract is universal over checked
+invocations, not bound to one dispatch geometry. The deprecated HSA lifecycle
+retains receipt custody with a loaded executable across repeated checked
+invocations; direct KFD consumes it into a one-shot application binding.
+Existing protected and synthetic adapters produce no such receipt.
+The transition independently
 matches the exact finalized object and length, selected kernel, complete
 address-free invocation contract, and checked KFD GPU unique ID. That invocation
 identity binds the KFD mechanics manifest, materialized image, descriptor,
@@ -231,7 +279,8 @@ wire or lifecycle and grants no queue or packet authority.
 `fe2o3-host` now has one private implementation of the unsafe authority trait.
 It is constructible only by consuming an authenticated Worker V3 executable,
 compiler-generated host-memory arguments, retained current-publication custody,
-runtime preparation, and one checked KFD device into a move-only invocation.
+an admitted semantic-to-machine refinement receipt, runtime preparation, and one
+checked KFD device into a move-only invocation.
 The joined scalar-GEMM lane passes on MI300X with an explicitly synthetic test
 verifier. No reviewed production verifier exists yet. Successful parsing,
 materialization, request construction, synthetic verification, or descriptive

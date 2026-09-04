@@ -11,6 +11,7 @@ use fe2o3_runtime::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::worker_v3_verification_admission::AdmittedWorkerV3SemanticMachineRefinementV1;
 use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
     CompilerGeneratedKfdArguments, GeneratedKfdCompletion, GeneratedKfdCompletionError,
@@ -303,10 +304,9 @@ impl GeneratedWorkerV3KfdDifferentialObservationV1 {
 /// currentness check never relies on a copied digest. Public code can inspect this owner only
 /// through a prepared invocation and cannot extract it or construct runtime authority from it.
 ///
-/// This is the application side of the release transition. Its private provenance records that the
-/// decision came through the existing unsafe protected-verifier boundary; the binding is not
-/// itself a semantic-refinement or LLVM-to-machine-refinement proof and must not be cited as
-/// closing either verification gap.
+/// This is the application side of the release transition. It owns the unique admitted
+/// semantic-to-machine receipt in addition to the authenticated decision and current-publication
+/// token. The binding does not produce that proof; no production proof producer is wired today.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3ApplicationExecutionBindingV1;
@@ -316,6 +316,7 @@ impl GeneratedWorkerV3KfdDifferentialObservationV1 {
 #[must_use = "dropping the binding abandons exact Worker V3 application custody"]
 pub struct WorkerV3ApplicationExecutionBindingV1<K> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    semantic_machine_refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
     coordinates: WorkerV3ApplicationExecutionCoordinatesV1,
     packing: GeneratedKfdPackingObservationV1,
 }
@@ -394,6 +395,16 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3ApplicationExecutionBindin
         &self.coordinates.rust_effect_contract_sha256
     }
 
+    /// Returns the unique semantic-to-machine receipt identity consumed into this binding.
+    pub const fn semantic_machine_refinement_receipt_identity(&self) -> &[u8; 32] {
+        self.semantic_machine_refinement.receipt().identity()
+    }
+
+    /// Reports ownership of the unique receipt consumed by this application occurrence.
+    pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
+        true
+    }
+
     pub const fn dispatch_contract_sha256(&self) -> &[u8; 32] {
         &self.coordinates.dispatch_contract_sha256
     }
@@ -431,9 +442,13 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3ApplicationExecutionBindin
         self.authenticated.revalidate_currentness()
     }
 
-    /// The binding consumes authenticated evidence but is not the missing refinement verifier.
+    /// Reports custody of the exact refinement established by the consumed proof receipt.
+    ///
+    /// This does not claim a proof producer exists: no production producer is wired today, so a
+    /// production binding remains unreachable. Nor does it extend the receipt beyond its exact
+    /// KIR, LLVM, selected ISA, machine-effect, artifact, and currentness coordinates.
     pub const fn establishes_semantic_or_machine_refinement(&self) -> bool {
-        false
+        true
     }
 
     /// The binding has no public unchecked load, queue, or launch operation.
@@ -494,6 +509,7 @@ struct WorkerV3ApplicationExecutionCoordinatesV1 {
     proof_executable_binding_sha256: [u8; 32],
     rust_type_layout_contract_sha256: [u8; 32],
     rust_effect_contract_sha256: [u8; 32],
+    semantic_machine_refinement_receipt_identity: [u8; 32],
     safety_properties: u8,
     dispatch_contract_sha256: [u8; 32],
     grid: [u32; 3],
@@ -600,7 +616,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     /// Joins this authenticated executable with one generated host-memory invocation and checked
     /// gfx942 device. No caller-created digest or raw pointer enters the transition.
     pub fn prepare_generated_kfd_invocation<'allocation, Arguments>(
-        self,
+        mut self,
         arguments: Arguments,
         mut device: CheckedGfx942XnackMinusDevice,
         geometry: AqlDispatchGeometryV1,
@@ -654,8 +670,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .revalidate_retained_currentness_token(self.current_publication_token())
             .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
 
-        let application_coordinates = application_execution_coordinates::<K>(
-            &self,
+        let application_admission = application_execution_admission::<K>(
+            &mut self,
             &device,
             packed_kernel_id,
             &packing,
@@ -664,13 +680,14 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             timeout_milliseconds,
             prepared.dispatch_contract_sha256(),
         );
-        let authority = match application_coordinates {
-            Some(coordinates) => GeneratedWorkerV3KfdInvocationAuthorityV1 {
+        let authority = match application_admission {
+            Some(application) => GeneratedWorkerV3KfdInvocationAuthorityV1 {
                 custody: ProductionExecutionCustodyV1::Production(
                     GeneratedWorkerV3KfdExecutionAuthority {
                         binding: Box::new(WorkerV3ApplicationExecutionBindingV1 {
                             authenticated: self,
-                            coordinates,
+                            semantic_machine_refinement: application.refinement,
+                            coordinates: application.coordinates,
                             packing,
                         }),
                         dispatch_contract_sha256: prepared.dispatch_contract_sha256(),
@@ -704,8 +721,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 }
 
 #[allow(clippy::too_many_arguments)]
-fn application_execution_coordinates<K: CompilerGeneratedKernelExpectationV1>(
-    authenticated: &AuthenticatedWorkerV3ExecutableV1<K>,
+fn application_execution_admission<K: CompilerGeneratedKernelExpectationV1>(
+    authenticated: &mut AuthenticatedWorkerV3ExecutableV1<K>,
     device: &CheckedGfx942XnackMinusDevice,
     packed_kernel_id: crate::KernelId,
     packing: &GeneratedKfdPackingObservationV1,
@@ -713,11 +730,9 @@ fn application_execution_coordinates<K: CompilerGeneratedKernelExpectationV1>(
     dynamic_group_segment_bytes: u32,
     timeout_milliseconds: u32,
     dispatch_contract_sha256: [u8; 32],
-) -> Option<WorkerV3ApplicationExecutionCoordinatesV1> {
+) -> Option<WorkerV3ApplicationExecutionAdmissionV1> {
+    let refinement = authenticated.take_application_semantic_machine_refinement()?;
     let verification = authenticated.verification();
-    if !verification.retains_protected_application_execution_evidence() {
-        return None;
-    }
     let proof = verification.validated_compiler_proof_inputs()?;
     let target_lineage = verification.validated_compiler_target_lineage()?;
     let proof_binding = proof.receipt_identity();
@@ -789,6 +804,7 @@ fn application_execution_coordinates<K: CompilerGeneratedKernelExpectationV1>(
         proof_executable_binding_sha256: verification.proof_executable_binding_sha256(),
         rust_type_layout_contract_sha256: verification.rust_type_layout_contract_sha256(),
         rust_effect_contract_sha256: verification.rust_effect_contract_sha256(),
+        semantic_machine_refinement_receipt_identity: *refinement.receipt().identity(),
         safety_properties: verification.safety_properties().bits(),
         dispatch_contract_sha256,
         grid: geometry.grid(),
@@ -800,7 +816,15 @@ fn application_execution_coordinates<K: CompilerGeneratedKernelExpectationV1>(
         packing_identity: *packing.identity(),
     };
     coordinates.identity = application_execution_binding_identity(&coordinates);
-    Some(coordinates)
+    Some(WorkerV3ApplicationExecutionAdmissionV1 {
+        coordinates,
+        refinement,
+    })
+}
+
+struct WorkerV3ApplicationExecutionAdmissionV1 {
+    coordinates: WorkerV3ApplicationExecutionCoordinatesV1,
+    refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
 }
 
 fn application_execution_binding_identity(
@@ -884,6 +908,7 @@ fn application_execution_binding_identity(
     hasher.update(coordinates.proof_executable_binding_sha256);
     hasher.update(coordinates.rust_type_layout_contract_sha256);
     hasher.update(coordinates.rust_effect_contract_sha256);
+    hasher.update(coordinates.semantic_machine_refinement_receipt_identity);
     hasher.update([coordinates.safety_properties]);
     hasher.update(coordinates.dispatch_contract_sha256);
     for value in coordinates.grid {
@@ -1093,7 +1118,7 @@ impl fmt::Display for GeneratedWorkerV3KfdInvocationError {
                 write!(formatter, "pure-KFD runtime preparation failed: {error}")
             }
             Self::ProtectedProductionEvidenceUnavailable => formatter.write_str(
-                "protected Worker V3 compiler/currentness proof inputs are unavailable for application release",
+                "an admitted Worker V3 semantic-to-machine refinement receipt is unavailable for application release",
             ),
             Self::ArtifactIdentityMismatch => {
                 formatter.write_str("runtime prepared a different finalized HSACO")
@@ -1216,6 +1241,7 @@ mod tests {
             proof_executable_binding_sha256: [42; 32],
             rust_type_layout_contract_sha256: [43; 32],
             rust_effect_contract_sha256: [44; 32],
+            semantic_machine_refinement_receipt_identity: [49; 32],
             safety_properties: u8::MAX,
             dispatch_contract_sha256: [45; 32],
             grid: [64, 2, 1],
@@ -1321,6 +1347,10 @@ mod tests {
         assert_substitution_changes_identity!(proof_executable_binding_sha256, [60; 32]);
         assert_substitution_changes_identity!(rust_type_layout_contract_sha256, [61; 32]);
         assert_substitution_changes_identity!(rust_effect_contract_sha256, [62; 32]);
+        assert_substitution_changes_identity!(
+            semantic_machine_refinement_receipt_identity,
+            [67; 32]
+        );
         assert_substitution_changes_identity!(safety_properties, 0x7f);
         assert_substitution_changes_identity!(dispatch_contract_sha256, [63; 32]);
         assert_substitution_changes_identity!(grid, [65, 2, 1]);

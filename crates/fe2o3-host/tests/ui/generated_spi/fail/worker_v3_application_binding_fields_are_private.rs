@@ -5,6 +5,7 @@ fn expose<K>(binding: WorkerV3ApplicationExecutionBindingV1<K>) {
         authenticated,
         coordinates,
         packing,
+        ..
     } = binding;
     let _ = (authenticated, coordinates, packing);
 }
