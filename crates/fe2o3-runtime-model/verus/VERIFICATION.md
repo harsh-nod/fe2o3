@@ -6,7 +6,8 @@ execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
 logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
 persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
 directional-persistent-local-SDMA-adapter, and R20 runtime-facade directional
-chunking models. The authenticated runner proves 336 obligations and rejects 194
+chunking, and R21 runtime scripted-failure-seam models. The authenticated runner
+proves 373 obligations and rejects 209
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -895,6 +896,52 @@ HIP/HSA parity, or performance claim.
 | Independent executable facade over R19 lifecycle | **Checked** | Fourteen focused Rust tests; direct executable composition without a Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Fifteen pinned expected-negative files fail only at their named postconditions. |
 | Executable-Rust, runtime/KFD, native hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R20 proof boundary. |
+
+## R21 runtime scripted failure seam
+
+`r21_runtime_scripted_failure_seam_v1.rs` proves 37 obligations for an
+independent abstract facade failure seam with exactly one native authority.
+Promotion retry preserves exact host custody. Demotion retry before native
+demotion preserves exact device custody; only a recovered owner after successful
+demotion followed by recycle failure enters cleanup-only demoted-device custody.
+Retryable hidden cleanup preserves that recovered authority, and teardown from
+promotion, demotion, submission, polling, retirement, recycle, or hidden cleanup
+moves the sole authority into opaque process-teardown custody.
+
+Dependency-pending submission is separate from published polling and is
+observation-only. An initial retryable submission becomes retained conclusive
+failure code `-1`; the same classification after completed progress becomes an
+exact quiescent-without-result record without erasing progress. In particular,
+a completed D2H chunk records exact host-dirty progress, and a later retryable
+submission preserves that host mutation and upgrades to quiescence. Published poll
+pending, retry, and timeout preserve exact state and custody. Terminal metadata
+mismatch and frontier/recycle mismatch fail closed. Exact completion must pass
+through terminal custody, retirement, and slot recycle before a continuation or
+terminal result is visible; successful recycle advances the exact slot
+generation. Exact terminal release restores device-ready custody, foreign
+release is atomic, and teardown blocks both submission and allocation release.
+
+The executable R21 model has 17 focused Rust tests. It structurally owns one
+private custody enum with no `Clone` or `Copy` implementation, reuses R20 request
+and endpoint types and the R18 packet cap, and can derive its immutable binding
+from an idle R19 snapshot. Fifteen pinned expected-negative mutations cover the
+promotion, corrected demotion/recovered-cleanup distinction, initial/partial
+submission, dependency pending, poll retry, timeout, completion metadata,
+retirement, recycle, early continuation, hidden cleanup, and teardown release.
+
+R21 is a standalone mathematical and executable test model. It does not prove a
+correspondence with R20, concrete runtime/KFD code, a native failure injector,
+or real failures. It proves no syscall, DMA/completion truth, device-memory
+visibility, cleanup liveness, hardware behavior, HIP/HSA parity, or performance.
+
+## R21 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Promotion/demotion/recovered cleanup, initial/partial submit and partial-host-mutation classification, dependency/poll observation, completion/retirement/recycle identity, timeout custody, terminal release, and teardown relations | **Proved** | Thirty-seven obligations in `r21_runtime_scripted_failure_seam_v1.rs`. |
+| Independent move-only executable failure model | **Checked** | Seventeen focused Rust tests; request-type reuse and snapshot binding without a Verus or concrete-runtime correspondence theorem. |
+| Boundary countermodels | **Rejected** | Fifteen pinned expected-negative files fail only at their named postconditions. |
+| R20, executable runtime/KFD, native fault injection, hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R21 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

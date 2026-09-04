@@ -518,7 +518,30 @@ R20 still does not establish HIP/HSA parity or a speedup. Direct KFD remains
 thread-affine; only a Send-capable worker adapter can use the background async
 engine. The single-flight allocation still requires 65 publication/completion/
 retirement cycles for 256 MiB, and H2H, D2D, batched local SDMA, persistent
-compute/XGMI sharing, and a unified native multi-device owner remain open. A
-scripted runtime-layer move-only failure driver is also required before claiming
-that the concrete glue has exhaustive failure-atomic coverage. No MI300X or
-matched HIP/HSA performance measurement is attached to this tranche.
+compute/XGMI sharing, and a unified native multi-device owner remain open. No
+MI300X or matched HIP/HSA performance measurement is attached to this tranche.
+
+## Runtime R21 Status
+
+R21 places a private scripted transition driver behind the same move-only
+directional SDMA facade used by the native backend. Production builds retain a
+type-preserving native branch; test builds can supply exact FIFO results and
+opaque, driver-bound owners. Sixteen concrete tests cover promotion, demotion,
+publication, dependency pending, poll/wait, completion metadata, retirement,
+recycle, hidden cleanup, multi-chunk H2D/D2H/zero/shadow work, scrub, orderly
+shutdown, and abort-on-live-custody Drop. Mixed and cross-driver owners fail
+closed before consuming script state.
+
+This coverage found a concrete D2H continuation defect. Once an earlier chunk
+has changed host-visible bytes, a later retryable publication can no longer
+return a retryable rejection; it releases retained ownership and records the
+same exact quiescent-without-result class used for partial device mutation. The
+independent executable model represents host and device mutation separately
+with 17 focused tests. Its pinned Verus artifact adds 37 obligations and 15
+rejected mutations, bringing authenticated totals to 373 and 209.
+
+R21 closes the scripted facade-failure coverage item, not native refinement.
+The seam does not inject kernel-driver failures, prove correspondence between
+the Rust and Verus state machines, or establish cleanup liveness, hardware
+correctness, HIP/HSA parity, or performance. Batched large-copy publication is
+the next local-SDMA throughput requirement.

@@ -249,11 +249,31 @@ for synchronous copy, zero, scrub, and dirty-shadow reconciliation.
 The independent R20 executable model has 14 focused tests, and its abstract
 Verus summary adds 31 obligations and 15 rejected mutations for pinned totals
 of 336 and 194. No theorem connects the model to the Rust facade or native KFD
-execution. Runtime-layer scripted failure injection for every move-only R19
-custody result remains open. R20 also lacks H2H, D2D, batched local publication,
-shared persistent compute/XGMI storage, direct-backend background progress,
-hardware correctness, and matched performance evidence. It therefore does not
-satisfy this parity profile.
+execution. R20 also lacks H2H, D2D, batched local publication, shared persistent
+compute/XGMI storage, direct-backend background progress, hardware correctness,
+and matched performance evidence. It therefore does not satisfy this parity
+profile.
+
+## Current R21 Status
+
+R21 adds a private runtime-layer scripted driver for the facade's complete
+move-only directional SDMA transition boundary. Sixteen concrete tests cover
+retryable and teardown custody, dependency and observation states, exact
+direction/length completion metadata, retirement-failure handling, partial H2D
+and D2H progress, cleanup, scrub, and abort-on-live-owner behavior. Driver
+identity is checked before FIFO consumption, and mixed native/scripted custody
+fails closed. This testing found and fixed a D2H classification error:
+retryable continuation after an earlier host mutation now becomes quiescent
+without result rather than retryable.
+
+The independent R21 model has 17 focused tests and distinguishes host-dirty
+from device-dirty progress. Its Verus artifact adds 37 obligations and 15
+rejected mutations for pinned totals of 373 and 209. There is still no theorem
+connecting that model to the Rust facade or native KFD behavior, and the seam
+does not perform native fault injection. R21 therefore improves failure-atomic
+facade evidence but does not satisfy this parity profile. H2H, D2D, batched
+local publication, unified persistent compute/XGMI storage, hardware
+correctness, and matched performance evidence remain open.
 
 ## Required Gates
 

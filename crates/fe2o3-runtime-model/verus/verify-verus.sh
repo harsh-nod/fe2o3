@@ -24,6 +24,7 @@ r17_persistent_native_allocation_proof="$script_dir/r17_persistent_native_alloca
 r18_persistent_local_sdma_adapter_proof="$script_dir/r18_persistent_local_sdma_adapter_v1.rs"
 r19_directional_persistent_local_sdma_adapter_proof="$script_dir/r19_directional_persistent_local_sdma_adapter_v1.rs"
 r20_runtime_facade_directional_chunking_proof="$script_dir/r20_runtime_facade_directional_chunking_v1.rs"
+r21_runtime_scripted_failure_seam_proof="$script_dir/r21_runtime_scripted_failure_seam_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -218,6 +219,21 @@ negative_r20_retirement="$script_dir/negative/r20_runtime_facade_directional_chu
 negative_r20_pool_aba="$script_dir/negative/r20_runtime_facade_directional_chunking_v1_pool_aba.rs"
 negative_r20_currentness="$script_dir/negative/r20_runtime_facade_directional_chunking_v1_currentness.rs"
 negative_r20_packet_count="$script_dir/negative/r20_runtime_facade_directional_chunking_v1_packet_count.rs"
+negative_r21_promotion_retry="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_promotion_retry.rs"
+negative_r21_promotion_teardown="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_promotion_teardown.rs"
+negative_r21_demotion_retry="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_demotion_retry.rs"
+negative_r21_demoted_recovery="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_demoted_recovery.rs"
+negative_r21_submit_initial="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_submit_initial.rs"
+negative_r21_submit_partial="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_submit_partial.rs"
+negative_r21_dependency_pending="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_dependency_pending.rs"
+negative_r21_poll_retry="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_poll_retry.rs"
+negative_r21_timeout="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_timeout.rs"
+negative_r21_completion_metadata="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_completion_metadata.rs"
+negative_r21_retirement="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_retirement.rs"
+negative_r21_recycle="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_recycle.rs"
+negative_r21_continuation="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_continuation.rs"
+negative_r21_hidden_cleanup="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_hidden_cleanup.rs"
+negative_r21_teardown_release="$script_dir/negative/r21_runtime_scripted_failure_seam_v1_teardown_release.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -263,6 +279,7 @@ expected_r17_persistent_native_allocation=$(read_pin "$pin_dir/R17_PERSISTENT_NA
 expected_r18_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R18_PERSISTENT_LOCAL_SDMA_ADAPTER_SHA256")
 expected_r19_directional_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R19_DIRECTIONAL_PERSISTENT_LOCAL_SDMA_ADAPTER_SHA256")
 expected_r20_runtime_facade_directional_chunking=$(read_pin "$pin_dir/R20_RUNTIME_FACADE_DIRECTIONAL_CHUNKING_SHA256")
+expected_r21_runtime_scripted_failure_seam=$(read_pin "$pin_dir/R21_RUNTIME_SCRIPTED_FAILURE_SEAM_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -457,6 +474,21 @@ expected_negative_r20_retirement=$(read_pin "$pin_dir/NEGATIVE_R20_RETIREMENT_SH
 expected_negative_r20_pool_aba=$(read_pin "$pin_dir/NEGATIVE_R20_POOL_ABA_SHA256")
 expected_negative_r20_currentness=$(read_pin "$pin_dir/NEGATIVE_R20_CURRENTNESS_SHA256")
 expected_negative_r20_packet_count=$(read_pin "$pin_dir/NEGATIVE_R20_PACKET_COUNT_SHA256")
+expected_negative_r21_promotion_retry=$(read_pin "$pin_dir/NEGATIVE_R21_PROMOTION_RETRY_SHA256")
+expected_negative_r21_promotion_teardown=$(read_pin "$pin_dir/NEGATIVE_R21_PROMOTION_TEARDOWN_SHA256")
+expected_negative_r21_demotion_retry=$(read_pin "$pin_dir/NEGATIVE_R21_DEMOTION_RETRY_SHA256")
+expected_negative_r21_demoted_recovery=$(read_pin "$pin_dir/NEGATIVE_R21_DEMOTED_RECOVERY_SHA256")
+expected_negative_r21_submit_initial=$(read_pin "$pin_dir/NEGATIVE_R21_SUBMIT_INITIAL_SHA256")
+expected_negative_r21_submit_partial=$(read_pin "$pin_dir/NEGATIVE_R21_SUBMIT_PARTIAL_SHA256")
+expected_negative_r21_dependency_pending=$(read_pin "$pin_dir/NEGATIVE_R21_DEPENDENCY_PENDING_SHA256")
+expected_negative_r21_poll_retry=$(read_pin "$pin_dir/NEGATIVE_R21_POLL_RETRY_SHA256")
+expected_negative_r21_timeout=$(read_pin "$pin_dir/NEGATIVE_R21_TIMEOUT_SHA256")
+expected_negative_r21_completion_metadata=$(read_pin "$pin_dir/NEGATIVE_R21_COMPLETION_METADATA_SHA256")
+expected_negative_r21_retirement=$(read_pin "$pin_dir/NEGATIVE_R21_RETIREMENT_SHA256")
+expected_negative_r21_recycle=$(read_pin "$pin_dir/NEGATIVE_R21_RECYCLE_SHA256")
+expected_negative_r21_continuation=$(read_pin "$pin_dir/NEGATIVE_R21_CONTINUATION_SHA256")
+expected_negative_r21_hidden_cleanup=$(read_pin "$pin_dir/NEGATIVE_R21_HIDDEN_CLEANUP_SHA256")
+expected_negative_r21_teardown_release=$(read_pin "$pin_dir/NEGATIVE_R21_TEARDOWN_RELEASE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -505,6 +537,7 @@ check_sources() {
     check_digest "$expected_r18_persistent_local_sdma_adapter" "$r18_persistent_local_sdma_adapter_proof"
     check_digest "$expected_r19_directional_persistent_local_sdma_adapter" "$r19_directional_persistent_local_sdma_adapter_proof"
     check_digest "$expected_r20_runtime_facade_directional_chunking" "$r20_runtime_facade_directional_chunking_proof"
+    check_digest "$expected_r21_runtime_scripted_failure_seam" "$r21_runtime_scripted_failure_seam_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -699,6 +732,21 @@ check_sources() {
     check_digest "$expected_negative_r20_pool_aba" "$negative_r20_pool_aba"
     check_digest "$expected_negative_r20_currentness" "$negative_r20_currentness"
     check_digest "$expected_negative_r20_packet_count" "$negative_r20_packet_count"
+    check_digest "$expected_negative_r21_promotion_retry" "$negative_r21_promotion_retry"
+    check_digest "$expected_negative_r21_promotion_teardown" "$negative_r21_promotion_teardown"
+    check_digest "$expected_negative_r21_demotion_retry" "$negative_r21_demotion_retry"
+    check_digest "$expected_negative_r21_demoted_recovery" "$negative_r21_demoted_recovery"
+    check_digest "$expected_negative_r21_submit_initial" "$negative_r21_submit_initial"
+    check_digest "$expected_negative_r21_submit_partial" "$negative_r21_submit_partial"
+    check_digest "$expected_negative_r21_dependency_pending" "$negative_r21_dependency_pending"
+    check_digest "$expected_negative_r21_poll_retry" "$negative_r21_poll_retry"
+    check_digest "$expected_negative_r21_timeout" "$negative_r21_timeout"
+    check_digest "$expected_negative_r21_completion_metadata" "$negative_r21_completion_metadata"
+    check_digest "$expected_negative_r21_retirement" "$negative_r21_retirement"
+    check_digest "$expected_negative_r21_recycle" "$negative_r21_recycle"
+    check_digest "$expected_negative_r21_continuation" "$negative_r21_continuation"
+    check_digest "$expected_negative_r21_hidden_cleanup" "$negative_r21_hidden_cleanup"
+    check_digest "$expected_negative_r21_teardown_release" "$negative_r21_teardown_release"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -728,6 +776,7 @@ check_sources
     "$r18_persistent_local_sdma_adapter_proof" \
     "$r19_directional_persistent_local_sdma_adapter_proof" \
     "$r20_runtime_facade_directional_chunking_proof" \
+    "$r21_runtime_scripted_failure_seam_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -918,7 +967,22 @@ check_sources
     "$negative_r20_retirement" \
     "$negative_r20_pool_aba" \
     "$negative_r20_currentness" \
-    "$negative_r20_packet_count"
+    "$negative_r20_packet_count" \
+    "$negative_r21_promotion_retry" \
+    "$negative_r21_promotion_teardown" \
+    "$negative_r21_demotion_retry" \
+    "$negative_r21_demoted_recovery" \
+    "$negative_r21_submit_initial" \
+    "$negative_r21_submit_partial" \
+    "$negative_r21_dependency_pending" \
+    "$negative_r21_poll_retry" \
+    "$negative_r21_timeout" \
+    "$negative_r21_completion_metadata" \
+    "$negative_r21_retirement" \
+    "$negative_r21_recycle" \
+    "$negative_r21_continuation" \
+    "$negative_r21_hidden_cleanup" \
+    "$negative_r21_teardown_release"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1038,6 +1102,7 @@ check_positive "$r17_persistent_native_allocation_proof" 'verification results::
 check_positive "$r18_persistent_local_sdma_adapter_proof" 'verification results:: 34 verified, 0 errors' r18-persistent-local-sdma-adapter
 check_positive "$r19_directional_persistent_local_sdma_adapter_proof" 'verification results:: 46 verified, 0 errors' r19-directional-persistent-local-sdma-adapter
 check_positive "$r20_runtime_facade_directional_chunking_proof" 'verification results:: 31 verified, 0 errors' r20-runtime-facade-directional-chunking
+check_positive "$r21_runtime_scripted_failure_seam_proof" 'verification results:: 37 verified, 0 errors' r21-runtime-scripted-failure-seam
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1232,13 +1297,28 @@ check_negative "$negative_r20_retirement" mutated_stale_frontier_retirement_is_a
 check_negative "$negative_r20_pool_aba" mutated_pool_generation_aba_is_rejected_v1 r20-pool-aba
 check_negative "$negative_r20_currentness" mutated_currentness_loss_enters_teardown_v1 r20-currentness
 check_negative "$negative_r20_packet_count" mutated_256_mib_requires_65_packets_v1 r20-packet-count
+check_negative "$negative_r21_promotion_retry" mutated_promotion_retry_is_atomic_v1 r21-promotion-retry
+check_negative "$negative_r21_promotion_teardown" mutated_promotion_teardown_retains_authority_v1 r21-promotion-teardown
+check_negative "$negative_r21_demotion_retry" mutated_demotion_retry_restores_device_v1 r21-demotion-retry
+check_negative "$negative_r21_demoted_recovery" mutated_recovered_demoted_owner_enters_cleanup_v1 r21-demoted-recovery
+check_negative "$negative_r21_submit_initial" mutated_initial_retry_is_conclusive_failure_v1 r21-submit-initial
+check_negative "$negative_r21_submit_partial" mutated_partial_host_mutation_retry_preserves_exact_progress_v1 r21-submit-partial
+check_negative "$negative_r21_dependency_pending" mutated_dependency_pending_is_observation_only_v1 r21-dependency-pending
+check_negative "$negative_r21_poll_retry" mutated_poll_retry_is_observation_only_v1 r21-poll-retry
+check_negative "$negative_r21_timeout" mutated_timeout_retains_published_authority_v1 r21-timeout
+check_negative "$negative_r21_completion_metadata" mutated_completion_metadata_mismatch_tears_down_v1 r21-completion-metadata
+check_negative "$negative_r21_retirement" mutated_retirement_retry_retains_exact_authority_v1 r21-retirement
+check_negative "$negative_r21_recycle" mutated_successful_recycle_advances_generation_v1 r21-recycle
+check_negative "$negative_r21_continuation" mutated_continuation_waits_for_recycle_v1 r21-continuation
+check_negative "$negative_r21_hidden_cleanup" mutated_hidden_cleanup_retry_retains_authority_v1 r21-hidden-cleanup
+check_negative "$negative_r21_teardown_release" mutated_teardown_blocks_release_v1 r21-teardown-release
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 mutations=194'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 mutations=209'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

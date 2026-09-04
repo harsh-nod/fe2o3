@@ -325,8 +325,25 @@ summary adds 31 obligations and 15 expected-negative mutations, bringing the
 authenticated totals to 336 and 194. The proof covers the abstract facade state
 machine only. The direct backend remains thread-affine and cannot use
 `RuntimeAsyncEngineV1` background progress directly; Send-capable Worker V4/V5
-adapters can. R20 has no facade-level scripted move-only failure driver, H2H or
-D2D path, batched large-copy publication, native hardware result, Rust-to-Verus
+adapters can.
+
+R21 adds a private, test-only scripted adapter at every move-only directional
+SDMA transition while preserving a direct, type-preserving native forwarding
+branch. Its exact FIFO and opaque owner ledger exercise promotion, demotion,
+submission, polling, waiting, completion metadata, retirement, recycle, hidden
+cleanup, dependency, scrub, shutdown, and Drop paths without constructing KFD
+objects. Cross-driver and mixed native/scripted owners fail closed without
+consuming the next script step or losing custody; terminal and live-owner Drop
+tests require `SIGABRT`. The seam exposed and fixed a concrete D2H chunking bug:
+after an earlier host mutation, a later retryable submission is now classified
+as quiescent without result instead of a retryable rejection.
+
+The concrete seam has 16 focused tests. The independent R21 executable model
+has 17 tests, and its pinned Verus summary adds 37 obligations and 15 rejected
+mutations, bringing the authenticated totals to 373 and 209. The model records
+device-dirty and host-dirty progress separately. It is not a correspondence
+proof for the Rust seam or native KFD execution. R21 still has no H2H or D2D
+path, batched large-copy publication, native hardware result, Rust-to-Verus
 refinement theorem, or comparative HIP/HSA performance evidence.
 
 The direct-KFD backend also exposes an opt-in bounded profiler. It records

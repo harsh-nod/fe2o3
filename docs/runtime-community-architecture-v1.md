@@ -527,8 +527,20 @@ partial device mutation releases all native and scheduler retains and installs
 a pre-reserved exact quiescent-without-result marker. Worker V4/V5 child tests
 exercise three complete marker/release cycles. The independent executable model
 and Verus summary add 31 obligations and 15 rejected mutations, bringing the
-pinned abstract totals to 336 and 194. A scripted runtime-layer transition
-driver and a Rust/native refinement theorem remain open.
+pinned abstract totals to 336 and 194.
+
+R21 introduces a private directional-SDMA operations seam inside
+`KfdRuntimeBackendV1`. Its production branch forwards native move-only types and
+custody results one-for-one. The test-only branch owns driver-bound opaque
+tokens and consumes an exact FIFO only after driver/type validation, enabling
+deterministic coverage of retryable, teardown, partial-progress, cleanup, and
+Drop behavior without fabricating native KFD owners. Sixteen concrete tests
+cover this boundary. They found a D2H partial-mutation classification defect,
+which now converts a later retryable submission into the quiescent failure
+class.
+The independent R21 model has 17 tests and adds 37 Verus obligations plus 15
+rejected mutations, bringing the pinned abstract totals to 373 and 209. It is
+not a Rust/native correspondence theorem or hardware evidence.
 
 The remaining community-launch blockers are material. Direct KFD owns exactly
 two compute lanes per child, but has no background native-publication scheduler,

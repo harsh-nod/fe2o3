@@ -38,6 +38,7 @@ mod r17_persistent_native_allocation;
 mod r18_persistent_local_sdma_adapter;
 mod r19_directional_persistent_local_sdma_adapter;
 mod r20_runtime_facade_directional_chunking;
+mod r21_runtime_scripted_failure_seam;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -63,6 +64,7 @@ pub use r17_persistent_native_allocation::*;
 pub use r18_persistent_local_sdma_adapter::*;
 pub use r19_directional_persistent_local_sdma_adapter::*;
 pub use r20_runtime_facade_directional_chunking::*;
+pub use r21_runtime_scripted_failure_seam::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -103,6 +105,8 @@ mod r18_persistent_local_sdma_adapter_tests;
 mod r19_directional_persistent_local_sdma_adapter_tests;
 #[cfg(test)]
 mod r20_runtime_facade_directional_chunking_tests;
+#[cfg(test)]
+mod r21_runtime_scripted_failure_seam_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]
