@@ -9,8 +9,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
     SemanticLayoutIdentityV1, SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1,
     SemanticMemoryStoreV1, SemanticMonomorphizationIdentityV1, SemanticNonBodyCallableBindingV1,
-    SemanticProjectionV1, SemanticRvalueV1, SemanticStatementV1, SemanticTerminatorV1,
-    SemanticTypeIdentityV1, SemanticTypeLayoutV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticProjectionV1, SemanticRvalueV1, SemanticStatementV1, SemanticSwitchTargetV1,
+    SemanticSwitchTargetsV1, SemanticTerminatorV1, SemanticTypeIdentityV1, SemanticTypeLayoutV1,
+    SemanticUnwindActionV1, SemanticVolatilityV1,
 };
 
 fn test_bytes(tag: u8) -> [u8; 32] {
@@ -402,13 +403,324 @@ fn test_storage_dead(local: u32) -> SemanticStatementV1 {
     )
 }
 
+fn test_discriminant(destination: u32, option: u32) -> SemanticStatementV1 {
+    SemanticStatementV1::new(
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1::new(
+                test_typed_place(destination, 2),
+                SemanticRvalueV1::new(
+                    SemanticTypeIdV1::from_index(2),
+                    SemanticRvalueKindV1::Discriminant(test_typed_place(option, 2)),
+                ),
+            ),
+        ),
+    )
+}
+
+fn test_option_switch(discriminant: u32, some: u32, otherwise: u32) -> SemanticTerminatorKindV1 {
+    SemanticTerminatorKindV1::SwitchInt {
+        discriminant: SemanticOperandV1::Copy(test_typed_place(discriminant, 2)),
+        targets: SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                1,
+                test_edge(SemanticEdgeRoleV1::SwitchValue, some),
+            )],
+            test_edge(SemanticEdgeRoleV1::SwitchOtherwise, otherwise),
+        )
+        .unwrap(),
+    }
+}
+
+fn test_elided_grid_leader_case(
+    source_type: u32,
+    borrow_in_some: bool,
+    ambiguous_producers: bool,
+    kill_source: bool,
+    extra_source_use: bool,
+) -> (
+    Vec<SemanticTypeDeclV1>,
+    SemanticFunctionDeclV1,
+    Vec<SemanticCallableDeclV1>,
+) {
+    let mut borrow_statements = Vec::new();
+    if kill_source {
+        borrow_statements.push(test_storage_dead(1));
+    }
+    if extra_source_use {
+        borrow_statements.push(test_assign_to(
+            test_typed_place(7, source_type),
+            SemanticOperandV1::Copy(test_typed_place(1, source_type)),
+        ));
+    }
+    borrow_statements.push(test_typed_borrow(4, 2, 1, source_type));
+    let consumer = |continuation| {
+        test_call(
+            1,
+            vec![
+                SemanticOperandV1::Copy(test_typed_place(2, 2)),
+                SemanticOperandV1::Copy(test_typed_place(4, 2)),
+            ],
+            Some(SemanticCallDestinationV1::new(
+                test_typed_place(8, 2),
+                test_edge(SemanticEdgeRoleV1::CallReturn, continuation),
+            )),
+        )
+    };
+
+    let blocks = if ambiguous_producers {
+        vec![
+            test_block(
+                112,
+                vec![],
+                test_call(
+                    0,
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        test_typed_place(2, 2),
+                        test_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                    )),
+                ),
+            ),
+            test_block(
+                113,
+                vec![test_discriminant(3, 2)],
+                test_option_switch(3, 2, 7),
+            ),
+            test_block(
+                114,
+                vec![],
+                test_call(
+                    0,
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        test_typed_place(5, 2),
+                        test_edge(SemanticEdgeRoleV1::CallReturn, 3),
+                    )),
+                ),
+            ),
+            test_block(
+                115,
+                vec![test_discriminant(6, 5)],
+                test_option_switch(6, 4, 7),
+            ),
+            test_block(116, borrow_statements, consumer(5)),
+            test_block(
+                117,
+                vec![test_discriminant(9, 8)],
+                test_option_switch(9, 6, 7),
+            ),
+            test_block(118, vec![], SemanticTerminatorKindV1::Return),
+            test_block(119, vec![], SemanticTerminatorKindV1::Return),
+        ]
+    } else {
+        let (some_block, otherwise_block) = if borrow_in_some {
+            (
+                test_block(120, borrow_statements, consumer(4)),
+                test_block(121, vec![], SemanticTerminatorKindV1::Return),
+            )
+        } else {
+            (
+                test_block(120, vec![], SemanticTerminatorKindV1::Return),
+                test_block(121, borrow_statements, consumer(4)),
+            )
+        };
+        let mut blocks = vec![
+            test_block(
+                118,
+                vec![],
+                test_call(
+                    0,
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        test_typed_place(2, 2),
+                        test_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                    )),
+                ),
+            ),
+            test_block(
+                119,
+                vec![test_discriminant(3, 2)],
+                test_option_switch(3, 2, 3),
+            ),
+        ];
+        blocks.push(some_block);
+        blocks.push(otherwise_block);
+        blocks.push(test_block(
+            122,
+            vec![test_discriminant(9, 8)],
+            test_option_switch(9, 5, 6),
+        ));
+        blocks.push(test_block(123, vec![], SemanticTerminatorKindV1::Return));
+        blocks.push(test_block(124, vec![], SemanticTerminatorKindV1::Return));
+        blocks
+    };
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(test_bytes(122)),
+        SemanticLayoutIdentityV1::from_sha256(test_bytes(123)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(
+            SemanticTypeIdV1::from_index(2),
+            SemanticAbiPassModeV1::Ignore,
+        ),
+    )
+    .unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(test_bytes(124)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(test_bytes(125)),
+        SemanticMonomorphizationIdentityV1::from_sha256(test_bytes(126)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(test_bytes(127)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(test_bytes(128)),
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+        abi,
+        vec![
+            test_local(129, 2, SemanticLocalRoleV1::Return),
+            test_local(130, source_type, SemanticLocalRoleV1::Temporary),
+            test_local(131, 2, SemanticLocalRoleV1::Temporary),
+            test_local(132, 2, SemanticLocalRoleV1::Temporary),
+            test_local(133, 2, SemanticLocalRoleV1::Temporary),
+            test_local(134, 2, SemanticLocalRoleV1::Temporary),
+            test_local(135, 2, SemanticLocalRoleV1::Temporary),
+            test_local(136, source_type, SemanticLocalRoleV1::Temporary),
+            test_local(137, 2, SemanticLocalRoleV1::Temporary),
+            test_local(138, 2, SemanticLocalRoleV1::Temporary),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        blocks,
+    )
+    .unwrap();
+    let callables = vec![
+        test_operation_callable(
+            function.abi().clone(),
+            SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent {
+                grid_leader: SemanticTypeIdV1::from_index(0),
+            },
+            139,
+        ),
+        test_operation_callable(
+            function.abi().clone(),
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                disjoint_slice: SemanticTypeIdV1::from_index(2),
+                grid_leader: SemanticTypeIdV1::from_index(source_type),
+                element: SemanticTypeIdV1::from_index(2),
+                raw_index: SemanticTypeIdV1::from_index(2),
+            },
+            145,
+        ),
+    ];
+    (implicit_scope_types(), function, callables)
+}
+
 fn implicit_scope_ssa_input(
     function: &SemanticFunctionDeclV1,
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
-) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>) {
+) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize) {
     let transparent_borrows = transparent_borrow_sites_v1(function, callables);
     semantic_function_ssa_input_v1(function, Some(types), callables, &transparent_borrows)
+}
+
+#[test]
+fn authenticated_elided_grid_leader_borrow_omits_only_the_zero_bit_source_use() {
+    let (types, function, callables) = test_elided_grid_leader_case(0, true, false, false, false);
+    let transparent_borrows = transparent_borrow_sites_v1(&function, &callables);
+    assert_eq!(transparent_borrows.len(), 1);
+
+    let (input, implicit, analysis_work) =
+        semantic_function_ssa_input_v1(&function, Some(&types), &callables, &transparent_borrows);
+    assert_eq!(
+        input.blocks()[2].events(),
+        [
+            SsaEventV1::Define(SsaVariableIdV1::new(4)),
+            SsaEventV1::Use(SsaVariableIdV1::new(2)),
+            SsaEventV1::Use(SsaVariableIdV1::new(4)),
+        ]
+    );
+    assert!(implicit.is_empty());
+    assert_ne!(analysis_work, 0);
+
+    let plan = plan_semantic_function_ssa_with_module_v1(
+        SemanticFunctionIdV1::from_index(0),
+        &function,
+        &types,
+        &callables,
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    assert!(plan.implicit_entry_variables().is_empty());
+    assert!(plan.auxiliary_resources.work_units >= analysis_work);
+
+    let total_work = plan
+        .resources()
+        .work_units()
+        .checked_add(plan.auxiliary_resources.work_units)
+        .and_then(|work| work.checked_add(plan.partial_moves.work_units()))
+        .unwrap();
+    let defaults = SsaPlannerLimitsV1::default();
+    let one_work_unit_short = ProductionSemanticSsaLimitsV1::new(
+        SsaPlannerLimitsV1::try_new(
+            defaults.max_variables(),
+            defaults.max_blocks(),
+            defaults.max_edges(),
+            defaults.max_events(),
+            defaults.max_edge_definitions(),
+            defaults.max_output_items(),
+            defaults.max_storage_words(),
+            total_work - 1,
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        plan_semantic_function_ssa_with_module_v1(
+            SemanticFunctionIdV1::from_index(0),
+            &function,
+            &types,
+            &callables,
+            one_work_unit_short,
+        ),
+        Err(ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {
+            resource: SsaPlannerResourceV1::WorkUnits,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn elided_grid_leader_borrow_authentication_fails_closed() {
+    for (source_type, borrow_in_some, ambiguous, kill_source, extra_source_use) in [
+        (0, false, false, false, false),
+        (0, true, true, false, false),
+        (1, true, false, false, false),
+        (0, true, false, true, false),
+        (0, true, false, false, true),
+    ] {
+        let (types, function, callables) = test_elided_grid_leader_case(
+            source_type,
+            borrow_in_some,
+            ambiguous,
+            kill_source,
+            extra_source_use,
+        );
+        assert!(matches!(
+            plan_semantic_function_ssa_with_module_v1(
+                SemanticFunctionIdV1::from_index(0),
+                &function,
+                &types,
+                &callables,
+                ProductionSemanticSsaLimitsV1::default(),
+            ),
+            Err(ProductionSemanticSsaErrorV1::Planner {
+                error: SsaPlannerErrorV1::UndefinedAtUse { variable, .. },
+                ..
+            }) if variable == SsaVariableIdV1::new(1)
+        ));
+    }
 }
 
 fn plan_test_function(
@@ -461,7 +773,7 @@ fn store_move_events_precede_aliasing_destination_uses() {
         )],
         SemanticTerminatorKindV1::Return,
     )]);
-    let (input, _) = semantic_function_ssa_input_v1(&function, None, &[], &BTreeSet::new());
+    let (input, _, _) = semantic_function_ssa_input_v1(&function, None, &[], &BTreeSet::new());
 
     assert_eq!(
         input.blocks()[0].events(),
@@ -499,7 +811,7 @@ fn store_move_events_preserve_a_nonaliasing_destination() {
         ],
         SemanticTerminatorKindV1::Return,
     )]);
-    let (input, _) = semantic_function_ssa_input_v1(&function, None, &[], &BTreeSet::new());
+    let (input, _, _) = semantic_function_ssa_input_v1(&function, None, &[], &BTreeSet::new());
 
     assert_eq!(
         input.blocks()[0].events(),
@@ -696,7 +1008,7 @@ fn implicit_workgroup_lds_scope_rejects_ordinary_and_nontransparent_extra_uses()
         )],
     );
     let ordinary_callables = [test_intrinsic_callable(ordinary_use.abi().clone())];
-    let (ordinary_input, ordinary_implicit) =
+    let (ordinary_input, ordinary_implicit, _) =
         implicit_scope_ssa_input(&ordinary_use, &types, &ordinary_callables);
     assert!(ordinary_implicit.is_empty());
     assert!(ordinary_input.promotable()[1]);
@@ -727,7 +1039,7 @@ fn implicit_workgroup_lds_scope_rejects_ordinary_and_nontransparent_extra_uses()
         )],
     );
     let nontransparent_callables = [test_intrinsic_callable(nontransparent_use.abi().clone())];
-    let (nontransparent_input, nontransparent_implicit) =
+    let (nontransparent_input, nontransparent_implicit, _) =
         implicit_scope_ssa_input(&nontransparent_use, &types, &nontransparent_callables);
     assert!(nontransparent_implicit.is_empty());
     assert!(!nontransparent_input.promotable()[1]);
@@ -834,7 +1146,7 @@ fn implicit_workgroup_lds_scope_rejects_an_unnamed_same_shaped_zst() {
         &callables,
         SemanticTypeIdV1::from_index(1),
     ));
-    let (input, implicit) = implicit_scope_ssa_input(&function, &types, &callables);
+    let (input, implicit, _) = implicit_scope_ssa_input(&function, &types, &callables);
     assert!(input.promotable()[1]);
     assert!(implicit.is_empty());
     assert!(matches!(

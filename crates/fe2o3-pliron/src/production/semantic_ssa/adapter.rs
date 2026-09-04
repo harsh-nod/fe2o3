@@ -476,9 +476,16 @@ pub(super) fn semantic_function_ssa_input_v1(
     types: Option<&[SemanticTypeDeclV1]>,
     callables: &[SemanticCallableDeclV1],
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
-) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>) {
+) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize) {
     let mut promotable = vec![true; function.locals().len()];
     classify_storage_observable_locals_v1(function, transparent_borrows, &mut promotable);
+    let (elided_grid_leader_borrows, adapter_analysis_work) =
+        authenticated_elided_grid_leader_borrow_sites_v1(
+            function,
+            types,
+            callables,
+            transparent_borrows,
+        );
     let return_local = (!matches!(
         function.abi().return_value().mode(),
         SemanticAbiPassModeV1::Ignore,
@@ -493,10 +500,22 @@ pub(super) fn semantic_function_ssa_input_v1(
     let blocks = function
         .blocks()
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(block_index, block)| {
             let mut events = Vec::new();
-            for statement in block.statements() {
-                append_statement_events_v1(statement.kind(), &mut events);
+            for (statement_index, statement) in block.statements().iter().enumerate() {
+                let site = SemanticTransparentBorrowSiteV1 {
+                    block: block_index as u32,
+                    statement: statement_index as u32,
+                };
+                if elided_grid_leader_borrows.contains(&site) {
+                    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                        unreachable!("authenticated borrow site must be an assignment");
+                    };
+                    append_place_definition_v1(assignment.destination(), &mut events);
+                } else {
+                    append_statement_events_v1(statement.kind(), &mut events);
+                }
             }
             append_terminator_events_v1(block.terminator().kind(), return_local, &mut events);
             let mut edges = Vec::with_capacity(block.terminator().kind().edge_count());
@@ -547,7 +566,127 @@ pub(super) fn semantic_function_ssa_input_v1(
             blocks,
         ),
         implicit_entry_variables,
+        adapter_analysis_work,
     )
+}
+
+fn authenticated_elided_grid_leader_borrow_sites_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    callables: &[SemanticCallableDeclV1],
+    transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+) -> (BTreeSet<SemanticTransparentBorrowSiteV1>, usize) {
+    let Some(types) = types else {
+        return (BTreeSet::new(), 0);
+    };
+    let candidates = transparent_borrows
+        .iter()
+        .filter_map(|site| {
+            let SemanticStatementKindV1::Assign(assignment) = function
+                .blocks()
+                .get(site.block as usize)?
+                .statements()
+                .get(site.statement as usize)?
+                .kind()
+            else {
+                return None;
+            };
+            let SemanticRvalueKindV1::Borrow { place, .. } = assignment.value().kind() else {
+                return None;
+            };
+            if !place.projections().is_empty() {
+                return None;
+            }
+            let declaration = function.locals().get(place.local().index() as usize)?;
+            let ty = types.get(place.ty().index() as usize)?;
+            if declaration.role() != SemanticLocalRoleV1::Temporary
+                || declaration.ty() != place.ty()
+                || ty.layout().size_bytes() != Some(0)
+                || ty.layout().is_uninhabited()
+                || local_has_direct_definition_or_lifetime_event_v1(function, place.local())
+            {
+                return None;
+            }
+            Some((*site, place.ty()))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return (BTreeSet::new(), 0);
+    }
+
+    let Ok(option_producers) = semantic_option_producers_v1(function, callables) else {
+        return (BTreeSet::new(), 0);
+    };
+    let Ok(option_dominance) = SemanticOptionDominanceV1::analyze(function, &option_producers)
+    else {
+        return (BTreeSet::new(), 0);
+    };
+    let grid_leader_producers = function
+        .blocks()
+        .iter()
+        .filter_map(|block| {
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                return None;
+            };
+            let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader },
+                ..
+            }) = callables.get(call.callee().index() as usize)
+            else {
+                return None;
+            };
+            let destination = call.destination()?;
+            let availability = option_dominance.availability(destination.place().local())?;
+            Some((*grid_leader, availability))
+        })
+        .collect::<Vec<_>>();
+    let sites = candidates
+        .into_iter()
+        .filter_map(|(site, ty)| {
+            let block = SemanticBlockIdV1::from_index(site.block);
+            let mut matching =
+                grid_leader_producers
+                    .iter()
+                    .filter_map(|(grid_leader, availability)| {
+                        (*grid_leader == ty && option_dominance.allows(*availability, block))
+                            .then_some(*availability)
+                    });
+            matching.next()?;
+            matching.next().is_none().then_some(site)
+        })
+        .collect();
+    (sites, option_dominance.work_units())
+}
+
+fn local_has_direct_definition_or_lifetime_event_v1(
+    function: &SemanticFunctionDeclV1,
+    local: SemanticLocalIdV1,
+) -> bool {
+    let is_direct =
+        |place: &SemanticPlaceV1| place.local() == local && place.projections().is_empty();
+    function.blocks().iter().any(|block| {
+        block
+            .statements()
+            .iter()
+            .any(|statement| match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => is_direct(assignment.destination()),
+                SemanticStatementKindV1::Store(store) => is_direct(store.destination()),
+                SemanticStatementKindV1::AtomicRmw(atomic) => is_direct(atomic.destination()),
+                SemanticStatementKindV1::AtomicCompareExchange(atomic) => {
+                    is_direct(atomic.destination())
+                }
+                SemanticStatementKindV1::SetDiscriminant { place, .. }
+                | SemanticStatementKindV1::Deinitialize(place) => is_direct(place),
+                SemanticStatementKindV1::StorageLive(candidate)
+                | SemanticStatementKindV1::StorageDead(candidate) => *candidate == local,
+                SemanticStatementKindV1::Assume(_) | SemanticStatementKindV1::Nop => false,
+            })
+            || matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Call(call)
+                    if call.destination().is_some_and(|destination| is_direct(destination.place()))
+            )
+    })
 }
 
 fn authenticated_implicit_entry_variables_v1(

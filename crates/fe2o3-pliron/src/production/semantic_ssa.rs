@@ -12,18 +12,21 @@ use std::{
 };
 
 use fe2o3_mir_model::{
-    SsaBlockIdV1, SsaBlockInputV1, SsaConstructionInputV1, SsaConstructionPlanV1, SsaEdgeInputV1,
-    SsaEdgeRoleV1, SsaEventV1, SsaPlannerErrorV1, SsaPlannerLimitsV1, SsaPlannerResourceReportV1,
-    SsaPlannerResourceV1, SsaVariableIdV1, plan_ssa_with_limits_v1,
+    SemanticOptionDominanceV1, SsaBlockIdV1, SsaBlockInputV1, SsaConstructionInputV1,
+    SsaConstructionPlanV1, SsaEdgeInputV1, SsaEdgeRoleV1, SsaEventV1, SsaPlannerErrorV1,
+    SsaPlannerLimitsV1, SsaPlannerResourceReportV1, SsaPlannerResourceV1, SsaVariableIdV1,
+    plan_ssa_with_limits_v1,
     semantic_mir_v1::{
         AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticAssertMessageV1,
-        SemanticBackendReprV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
-        SemanticControlFlowEdgeV1, SemanticEdgeRoleV1, SemanticFunctionDeclV1,
-        SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticLocalRoleV1, SemanticOperandV1,
-        SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
+        SemanticBackendReprV1, SemanticBlockIdV1, SemanticCallableDeclV1,
+        SemanticCompilerIntrinsicOperationV1, SemanticControlFlowEdgeV1, SemanticEdgeRoleV1,
+        SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+        SemanticLocalIdV1, SemanticLocalRoleV1, SemanticOperandV1, SemanticPlaceV1,
+        SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
         SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
         SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
     },
+    semantic_option_producers_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -550,9 +553,13 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
     limits: ProductionSemanticSsaLimitsV1,
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
 ) -> Result<ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaErrorV1> {
-    let (input, implicit_entry_variables) =
+    let (input, implicit_entry_variables, adapter_analysis_work) =
         semantic_function_ssa_input_v1(function, types, callables, transparent_borrows);
-    let auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
+    let mut auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
+    auxiliary_resources.work_units = auxiliary_resources
+        .work_units
+        .checked_add(adapter_analysis_work)
+        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
     enforce_function_resource_limit_v1(function_id, auxiliary_resources, limits)?;
     let plan = plan_ssa_with_limits_v1(&input, limits.planner()).map_err(|error| {
         ProductionSemanticSsaErrorV1::Planner {
@@ -625,8 +632,8 @@ fn semantic_ssa_auxiliary_resources_v1(
     )?;
     let (projected_moves, maximum_projection_depth) = projected_local_move_metrics_v1(function)?;
 
-    // Logical words conservatively cover adapter rows, borrow/implicit-entry
-    // indices, retained-local scratch, and every persistent partial-move state.
+    // Logical words conservatively cover adapter rows, Option-dominance scratch,
+    // borrow/implicit-entry indices, retained-local scratch, and every persistent partial-move state.
     // Each move-path entry reserves eight tree/header words plus its full path.
     let adapter_items = variables
         .checked_mul(8)
