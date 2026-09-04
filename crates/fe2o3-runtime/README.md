@@ -83,6 +83,18 @@ Direct KFD backend drop may abort when live or ambiguous native custody remains,
 so explicit shutdown is required for predictable teardown. The deprecated HSA
 qualification adapter retains the same conservative cleanup rule.
 
+`RuntimeAsyncEngineV1` adds executor-neutral background completion observation
+for any `Send` backend context. One thread-affine engine owner retains the
+context; cloneable handles can cross threads to enqueue bounded context calls or
+obtain standard `Future` values for exact event identities. Commands and event
+polls have independent per-tick budgets, events are visited in stable cyclic
+identity order, executor-waker and context-command panics are contained, and
+worker-thread reentry is rejected. Dropping a future abandons only observation
+and never cancels or releases runtime work. Consuming shutdown wakes retained
+futures as stopped and returns the context. This engine observes completion; it
+does not publish deferred backend work, replace explicit `flush_stream`, or
+provide native asynchronous execution by itself.
+
 The current single-device KFD adapter admits one gfx942 device and at most
 65,536 logical streams, multiplexed over exactly two persistent native compute
 lanes. Logical stream creation does not lease a lane. Accepted compute launches
@@ -101,8 +113,9 @@ prior stream tail; cancellation after a doorbell is explicitly `TooLate`.
 immediately ready work. `wait` is likewise observation-only and does not publish
 deferred work. The additive in-process `flush_stream` operation may drive a
 dependency-ready FIFO head through potentially blocking dirty-buffer
-reconciliation and native publication. There is no background progress thread
-or native queue-side dependency packet. Runtime Worker V1 has no flush request;
+reconciliation and native publication. There is no background native
+publication scheduler or native queue-side dependency packet. The optional
+async engine observes completion only. Runtime Worker V1 has no flush request;
 negotiated Runtime Worker V4 exposes the same bounded progress operation.
 
 Same-device `copy_async` uses the native directional SDMA queues and splits
@@ -177,13 +190,21 @@ and divide exactly by that workgroup shape; partial tail workgroups reject
 before submission.
 Atomic launches retain base geometry validation and may use a partial final
 workgroup. The wrappers require both stable and execution-detail backend
-capabilities and then
-use the ordinary admitted typed kernel launch path. They do not synthesize
-native operations or grant artifact, Worker V3, or machine-semantic authority.
-Current KFD backends advertise both
-atomic and collective capability layers as false, so these calls reject before
-native submission. There is still no authenticated code-object refinement.
-This is not HIP/HSA parity. See
+capabilities and an additive contract-preserving backend SPI. Direct and
+multi-device KFD carry that exact contract through pending custody,
+recycled-dispatch identity, and final invocation authorization. Ordinary and
+qualification constructors still advertise both capability layers as false.
+Separate semantic-authority constructors advertise only non-System atomic and
+workgroup-collective profiles enumerated by an unsafe authority; unlisted
+profiles and invalid contracts reject before scheduler custody. The authority
+must independently bind authenticated source-to-machine and native semantic
+evidence. A later final invocation-authority denial occurs during preparation;
+the accepted unpublished submission is settled as failed and its scheduler
+custody is released before native publication. Authority panics are contained
+as fail-closed denials under the same prepublication settlement. The runtime
+does not provide a concrete production authority, synthesize instructions, or
+claim formal compiler, firmware, or hardware refinement. Runtime Worker V4 has
+no semantic-launch wire operation yet. This is not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
 The additive R11 executable model covers the shared completion/event state,
@@ -192,7 +213,9 @@ matching, collective geometry/membership gating, and persistent-batch mapping
 custody. R12 adds 23 obligations and 13 expected-negative mutations for abstract
 multi-queue custody, bringing the cumulative totals to 142 and 92. R13 adds 20
 obligations and 11 mutations for the bounded logical-stream scheduler, bringing
-the totals to 162 and 103. These pinned Verus obligations prove only the
+the totals to 162 and 103. R14 adds 10 obligations and 8 mutations for bounded
+event observation, bringing the totals to 172 and 111. These pinned Verus
+obligations prove only the
 corresponding abstract models; they are not a Rust-to-Verus refinement or native
 execution proof.
 
@@ -210,6 +233,19 @@ clock-domain calibration input only: it does not identify a dispatch
 publication, start, or completion boundary. Collection begins before context
 construction and finishes only after logical cleanup and native shutdown. See
 [`docs/kfd-native-profiler-v1.md`](../../docs/kfd-native-profiler-v1.md).
+Atomic and collective contracts affect the opaque dispatch-shape identity but
+are not yet exposed as typed profiler fields, so profiler/query consumers cannot
+independently report their operation, scope, order, or participants.
+
+The profiler also records process-local monotonic points immediately after an
+AQL publication is accepted and when runtime completion processing finishes.
+These points are committed only when the exact profile event is retained and
+are returned through an opaque runtime-owned custody bundle. Each recorder owns
+a fresh `getrandom` occurrence bound into its clock-domain identity, making
+accidental aliasing across reused caller capture scopes and process-local
+`Instant` epochs cryptographically negligible. They delimit host observations,
+not GPU execution: packet start/end, a device clock domain, and global clock
+synchronization remain unavailable.
 
 Feature `hardware-qualification` exposes a repository-owned, SHA-pinned gfx942
 vecadd fixture and an exact KFD qualification constructor. That constructor

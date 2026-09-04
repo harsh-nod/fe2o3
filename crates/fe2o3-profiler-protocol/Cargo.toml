@@ -12,7 +12,7 @@ description = "Bounded, authority-free direct-KFD runtime profiling records and 
 serde.workspace = true
 serde_json = "1"
 sha2.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["rand"] }
 
 [lib]
 name = "fe2o3_profiler_protocol"

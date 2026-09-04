@@ -697,10 +697,24 @@ impl HsaImplicitKernargInitializationObservationV1 {
 /// native state retirement.
 pub struct AuthorizedWorkerV3HsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
-    semantic_machine_refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
+    semantic_machine_refinement: WorkerV3HsaSemanticMachineRefinementCustodyV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
+}
+
+struct WorkerV3HsaSemanticMachineRefinementCustodyV1 {
+    refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
+}
+
+impl WorkerV3HsaSemanticMachineRefinementCustodyV1 {
+    const fn new(refinement: AdmittedWorkerV3SemanticMachineRefinementV1) -> Self {
+        Self { refinement }
+    }
+
+    const fn receipt_identity(&self) -> &[u8; 32] {
+        self.refinement.receipt().identity()
+    }
 }
 
 pub(crate) fn authorize_worker_v3_hsa_load_v1<
@@ -714,9 +728,11 @@ pub(crate) fn authorize_worker_v3_hsa_load_v1<
     authenticated
         .revalidate_currentness()
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication)?;
-    let semantic_machine_refinement = authenticated
-        .take_application_semantic_machine_refinement()
-        .ok_or(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable)?;
+    let semantic_machine_refinement = WorkerV3HsaSemanticMachineRefinementCustodyV1::new(
+        authenticated
+            .take_application_semantic_machine_refinement()
+            .ok_or(WorkerV3HsaLoadAuthorizationErrorV1::ProtectedProductionEvidenceUnavailable)?,
+    );
     // SAFETY: only an unsafe reviewed adapter can enter this migration boundary. Its complete
     // observation is checked against the artifact target and separately supplied HIP context
     // before load authority is returned.
@@ -744,6 +760,16 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedWorkerV3HsaLoadV1<
 
     pub const fn environment(&self) -> &HsaEnvironmentObservationV1 {
         &self.environment
+    }
+
+    /// Returns the unique semantic-to-machine receipt identity consumed into HSA custody.
+    pub const fn semantic_machine_refinement_receipt_identity(&self) -> &[u8; 32] {
+        self.semantic_machine_refinement.receipt_identity()
+    }
+
+    /// Reports ownership of the unique receipt consumed by this HSA lifecycle.
+    pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
+        true
     }
 }
 
@@ -815,7 +841,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 
         Ok(LoadedWorkerV3HsaExecutableV1 {
             authenticated: self.authenticated,
-            _semantic_machine_refinement: self.semantic_machine_refinement,
+            semantic_machine_refinement: self.semantic_machine_refinement,
             observed: self.observed,
             adapter: self.adapter,
             environment: self.environment,
@@ -945,7 +971,7 @@ pub enum WorkerV3GeneratedDispatchErrorV1<E> {
 /// only through a compiler-generated typed argument implementation and a linear prepared value.
 pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
-    _semantic_machine_refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
+    semantic_machine_refinement: WorkerV3HsaSemanticMachineRefinementCustodyV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
@@ -975,6 +1001,16 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleAdapterV1>
     LoadedWorkerV3HsaExecutableV1<K, A>
 {
+    /// Returns the unique semantic-to-machine receipt identity retained through HSA unload.
+    pub const fn semantic_machine_refinement_receipt_identity(&self) -> &[u8; 32] {
+        self.semantic_machine_refinement.receipt_identity()
+    }
+
+    /// Reports ownership of the unique receipt retained by this loaded HSA lifecycle.
+    pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
+        true
+    }
+
     pub const fn grants_load_authority(&self) -> bool {
         false
     }
@@ -1737,6 +1773,7 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker_v3_verification_admission::admitted_semantic_machine_refinement_for_test_v1;
     use fe2o3_kernel_descriptor::{
         BuildEvidenceV1, DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1,
         LaunchConstraintsV1, ValidName,
@@ -1745,6 +1782,16 @@ mod tests {
 
     const VECADD_HSACO: &[u8] =
         include_bytes!("../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
+
+    #[test]
+    fn qualified_hsa_owner_retains_the_consumed_refinement_receipt() {
+        let refinement = admitted_semantic_machine_refinement_for_test_v1();
+        let expected = *refinement.receipt().identity();
+
+        let custody = WorkerV3HsaSemanticMachineRefinementCustodyV1::new(refinement);
+
+        assert_eq!(custody.receipt_identity(), &expected);
+    }
 
     fn environment(target: &str, ordinal: i32) -> HsaEnvironmentObservationV1 {
         let target = AmdTargetId::parse(target).unwrap();

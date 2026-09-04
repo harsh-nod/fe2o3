@@ -78,7 +78,7 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The direct backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. At most one dispatch occupies each lane, and concurrent native work must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. | Background progress, queue-side dependency packets, more than two in-flight compute dispatches, unified compute plus native XGMI, authenticated per-dispatch device timestamps, native-authorized atomic/collective execution |
+| KFD | The direct backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. At most one dispatch occupies each lane, and concurrent native work must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. Exact atomic/collective contracts can use a separate unsafe semantic-authority constructor; ordinary constructors remain fail-closed. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. | Background native publication, queue-side dependency packets, more than two in-flight compute dispatches, unified compute plus native XGMI, a concrete production semantic authority, semantic Worker transport, broader atomic/collective profiles, formal native refinement |
 | HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy through host
@@ -89,11 +89,17 @@ adapter do not advertise peer copy. The V1 facade has typed atomic and
 collective launch wrappers with explicit operation, scope, ordering, geometry,
 and collective-participation contracts. Compare-exchange additionally binds
 weak/strong mode and a legal failure ordering distinct from its success
-ordering. They submit an already admitted typed
-kernel through the ordinary backend launch SPI; they neither synthesize a
-native operation nor grant artifact or execution authority. Both the stable and
-execution-detail KFD atomic/collective capability bits remain false, so those
-wrappers reject before KFD submission. These rows are not HIP/HSA parity.
+ordering. They submit through additive contract-preserving backend SPIs; they
+do not synthesize a native operation. Direct and multi-device KFD retain the
+contract through scheduling and present it to final invocation authority.
+Ordinary and qualification KFD constructors keep both capability layers false.
+A separate unsafe semantic-authority constructor advertises only its enumerated
+non-System-atomic and workgroup-collective profiles, and mismatches reject
+before custody. Final invocation authorization still occurs during preparation;
+a denial settles the accepted unpublished submission and releases its custody
+before native publication. No concrete production authority or Worker wire
+operation is provided, and structural machine evidence alone is insufficient.
+These rows are not HIP/HSA parity.
 
 The KFD adapter validates and owns a module once at load, caches selected
 kernel metadata at resolution, and shares those immutable bytes and descriptors
@@ -157,6 +163,17 @@ event observation, cancel, drain, cleanup, or release. Callback panics are
 contained and counted. Terminal backend ambiguity is not completion and does
 not discharge callbacks.
 
+An optional executor-neutral async engine owns one context on exactly one
+thread and provides cloneable cross-thread handles plus standard event futures.
+Command and waiter capacity, commands per tick, event polls per tick, and poll
+interval are bounded. Polling uses a stable cyclic event-identity cursor;
+dropping a future abandons observation without cancellation or release.
+Command and executor-waker panics are contained, worker-thread reentry rejects,
+and consuming shutdown returns the context while waking retained futures as
+stopped. The owner is deliberately thread-affine. This is background
+completion observation only; it does not publish deferred work or remove the
+portable explicit-flush obligation.
+
 `query_stream` aggregates every retained submission by typed status and reports
 the first failure deterministically by submission identity. `synchronize_stream`
 waits once for each pending submission using one shared monotonic deadline and
@@ -178,11 +195,13 @@ at least its workgroup dimension and divide exactly by it; partial tail
 workgroups reject before submission. Atomic launches retain base geometry
 validation and may use a partial final workgroup. System scope is rejected
 because one stream does not identify a cross-device membership set. Both
-wrappers require
-the stable and execution-detail backend capabilities and then use the ordinary
-typed-kernel launch path. This is executable facade validation, not proof of
-the kernel semantics, a native intrinsic, or Worker V3 authority; current KFD
-backends advertise neither capability.
+wrappers require the stable and execution-detail backend capabilities and an
+additive semantic submission SPI. KFD can advertise an exact profile only when
+constructed with a separate unsafe semantic authority, and carries the
+contract into final authorization. This is executable admission and custody,
+not proof of kernel semantics, compiler preservation, firmware behavior, or
+native hardware refinement. Ordinary KFD constructors advertise neither
+capability, and Runtime Worker V4 does not encode this semantic launch yet.
 
 `RuntimeLaunchGeometryV1::grid` is the global work-item extent published in the
 AQL grid-size fields. `workgroup` is the per-group extent. For COV6 implicit
@@ -303,6 +322,15 @@ performs no host allocation access between timed repetitions, and validates
 payloads and canaries only after the timed sequence. Mapping-reuse conclusions
 must use that row rather than the remap row.
 
+The native runtime profiler also samples process-local monotonic time after an
+accepted AQL publication and after runtime completion processing. Samples
+commit only with exact retained runtime events and are returned through an
+opaque runtime-owned bundle. A fresh `getrandom` occurrence is part of every
+clock identity, making accidental aliasing across reused caller scope bytes and
+distinct `Instant` epochs cryptographically negligible. Empty captures report
+no observed intervals. This provides host observation bounds, not GPU
+start/end or device time.
+
 The low-level KFD queue can sample GPU, CPU, and system counters with one
 `GET_CLOCK_COUNTERS` observation bracketed by currentness checks. That sample
 is a clock-domain calibration input only. It does not identify dispatch
@@ -406,15 +434,20 @@ logical-stream scheduler with exactly two lanes, effective implicit and explicit
 dependencies, FIFO publication, resource custody, lane-bound terminal events,
 tail cancellation, dependent retention, and currentness quarantine. Twenty
 additional obligations and eleven mutations bring the totals to 162 and 103.
-Both tranches prove only their abstract finite models; neither establishes a
-Rust-to-Verus refinement, native behavior, progress, or performance.
+R14 adds ten obligations and eight mutations for bounded event observation,
+exact outcome preservation, abandonment/stop custody, and stable identity
+ordering, bringing the totals to 172 and 111. These tranches prove only their
+abstract finite models; none establishes a Rust-to-Verus refinement, native
+behavior, progress, or performance.
 
 The remaining community-launch blockers are material. Direct KFD owns exactly
-two compute lanes per child, but has no background scheduler, queue-side
+two compute lanes per child, but has no background native-publication scheduler, queue-side
 dependency packets, or more than two in-flight compute dispatches. Native XGMI is owned by a separate
 exact two-device, copy-only backend; there is no unified native multi-device
-compute owner. The repository has no reviewed production producer for the
-required Worker V3 semantic-to-machine refinement receipt, and the Rust
+compute owner. The host exposes a typed unsafe boundary and sealed adapter for
+a separately reviewed producer of the required Worker V3 semantic-to-machine
+refinement receipt, but the repository ships no concrete issue #214 proof
+backend or authenticated scalar proof artifact. The Rust
 device-language path includes a bounded volatile-load/store bridge rather than
 broad Rust language support. Consequently, the runtime is not at HIP/HSA
 parity.

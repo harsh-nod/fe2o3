@@ -1784,6 +1784,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-profiler-protocol",
+ "fe2o3-runtime",
  "fe2o3-semantic-import",
  "fe2o3-semantic-trace",
  "fe2o3-source-isa-observation",

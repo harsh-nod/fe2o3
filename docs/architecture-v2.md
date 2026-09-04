@@ -322,9 +322,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   is formal semantic preservation. The signature does not authenticate compiler
   origin by itself and grants no machine, load, or launch authority. In default builds the
   verifier trait is sealed against external implementations and the decision
-  constructor is crate-private. No reviewed concrete production verifier
-  exists yet, so ordinary generated application execution remains fail-closed
-  rather than accepting caller-asserted hashes or safety bits.
+  constructor is crate-private. A second sealed adapter can join a reviewed
+  protected verifier to an independent unsafe semantic-machine proof backend
+  using exact final LLVM, selected ISA, HSACO, currentness, entry, and
+  publication inputs. No reviewed concrete production verifier or issue #214
+  proof backend/artifact exists yet, so ordinary generated application
+  execution remains fail-closed rather than accepting caller-asserted hashes
+  or safety bits.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
@@ -903,6 +907,10 @@ general memory-safety, or race-freedom claim.
 - `#[kernel]` to generate stable metadata and cooperate with erased contracts;
 - host async APIs so Rust lifetimes cover queued device execution;
 - build caching around complete source/proof/target/toolchain identities.
+
+The runtime's R14 event future is a bounded completion observer and preserves
+runtime custody when abandoned. It is not the generated borrow-retaining launch
+API named above and does not close this redesign item.
 
 The production backend has one structured compiler route. Frozen wire versions
 and qualification-only oracles remain for compatibility and evidence, but they

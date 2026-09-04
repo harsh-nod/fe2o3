@@ -2,8 +2,9 @@
 
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
-execution-composition, R11 runtime-semantics, R12 native-concurrency, and R13
-logical-scheduler models. The authenticated runner proves 162 obligations and rejects 103
+execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
+logical-scheduler, and R14 async-observer models. The authenticated runner
+proves 172 obligations and rejects 111
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -565,13 +566,33 @@ constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
 verification.
 
+`r14_async_observer_v1.rs` proves ten abstract obligations for the bounded
+event-observation layer: the waiter bound is 65,536; invalid, duplicate, and
+over-capacity registration leave the waiter count unchanged; a pending
+observation preserves the exact registration; terminal status and runtime error
+outcomes are not substituted; abandonment and engine stop preserve submission
+and event custody without cancellation or release; and event-key ordering is
+lexicographic in context generation and event identity. Eight expected-negative
+mutations demonstrate rejection when those properties are reversed. The
+independent executable `src/r14_async_observer.rs` model additionally tests
+stable ordering, out-of-order completion, immediate terminal registration, and
+shutdown outcomes.
+
+The R14 proof does not refine `src/r14_async_observer.rs` or the production Rust
+async engine. It proves no property of threads, channels, locks, wakers, backend
+polling, progress, fairness, latency, KFD, HSA, HIP, or hardware. In particular,
+observation neither publishes deferred work nor provides asynchronous device
+execution by itself; the runtime's declared progress operation remains a
+separate obligation.
+
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
 implements that relation, nor that the adapter observed truthful kernel data.
 The lifecycle, memory, and queue files prove abstract transition relations, not
 refinement of `src/model.rs`, `src/device_identity.rs`,
 `src/memory_lifecycle.rs`, `src/queue_lifecycle.rs`, or
-`src/r12_native_concurrency.rs`, or `src/r13_logical_scheduler.rs`. All
+`src/r12_native_concurrency.rs`, `src/r13_logical_scheduler.rs`, or
+`src/r14_async_observer.rs`. All
 receipts remain model-only and are not production device authority. A later
 sealed adapter refinement must
 authenticate the KFD topology, DRM render, partition, schema, and process XNACK

@@ -499,6 +499,12 @@ earlier authority transition.
    exact workgroup dimensions to the admitted descriptor. Multi-root target
    lineage, semantic preservation, LLVM-to-machine refinement, and
    dynamic-launch refinement remain separate open joins.
+   The host now provides the missing typed join for singleton machine
+   refinement: a sealed composing adapter validates protected compiler evidence,
+   presents exact MIR/KIR, final LLVM, selected ISA, HSACO, currentness, entry,
+   and publication coordinates to a separate reviewed unsafe backend, and alone
+   seals its owned proof artifacts into the move-only receipt. This is consumer
+   and producer SPI, not a proof implementation; issue #214 remains open.
 8. **Implemented bounded foundation: authenticated physical-machine bundle.**
    The sole supported `gfx942` LLVM Object/MC analysis path runs from a sealed
    worker image under an immutable measured runtime closure. One canonical
@@ -523,9 +529,9 @@ earlier authority transition.
    capsule receipt coordinate, owns exact KIR-to-LLVM replay, binds final LLVM
    to handoff and finalizer state, and rejects valid-but-foreign target-side
    splices. Multi-root target-binding custody remains open. It must still
-   establish formal KIR-to-LLVM semantic
-   preservation and LLVM-to-machine semantic
-   refinement, then bind the machine receipt into Worker V3 runtime authority.
+   establish formal KIR-to-LLVM semantic preservation and LLVM-to-machine
+   semantic refinement. The runtime binding for a resulting exact receipt is
+   implemented, but no concrete proof backend or scalar proof artifact ships.
    Hardware success remains an independent evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
@@ -533,9 +539,11 @@ earlier authority transition.
    operational semantics, establish compiler/machine refinement, or bind
    production proof authority to the final payload.
 10. **Production verification authentication.** Implement the crate-owned
-   concrete `WorkerV3VerifierV1` behind the existing sealed boundary only from
+   concrete protected backend behind the existing sealed boundary only from
    reviewed immutable compiler,
    Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
+   Implement issue #214's independent semantic-machine proof backend against
+   the typed refinement request before selecting the sealed composing adapter.
    Every digest, identity, mutation, and stale-replay edge must fail closed.
 11. **Implemented API foundation: split mutable views.** Safe two-way and
    guarded three-way splits yield simultaneous non-overlapping mutable views
@@ -733,6 +741,13 @@ G2 passes when:
 - Retain resources through completion, cancellation, callback failure, and
   stream error paths.
 - Add deterministic cache keys and local clean behavior.
+
+R14 implements the executor-neutral observation half of the async objective:
+one thread-affine context owner, cloneable cross-thread handles, bounded command
+and waiter admission, independently budgeted stable event polling, standard
+event futures, panic/reentry containment, and custody-preserving abandon/stop.
+It does not yet generate borrow-retaining application launch futures, publish
+deferred backend work, or provide an operation graph.
 
 ### G3.1: General typed multi-kernel dispatch
 

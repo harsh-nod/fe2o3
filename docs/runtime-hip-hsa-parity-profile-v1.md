@@ -30,9 +30,9 @@ virtual-memory remapping, IPC, and multi-host transport are outside V1. A
 backend must report these as unsupported; it must not emulate them silently or
 advertise their capability.
 
-## Current R13 Status
+## Current R14 Status
 
-R13 retains the backend-neutral typed completion state, exact-once callbacks,
+R14 retains the backend-neutral typed completion state, exact-once callbacks,
 aggregate stream query, and bounded synchronization introduced in R11. It also
 retains typed atomic and collective wrappers that match operation, scope,
 success ordering, optional failure ordering, weak mode, geometry, and
@@ -42,10 +42,14 @@ stronger than success; non-CAS operations require no failure order and
 `weak = false`. Collective grids must contain only complete workgroups: every
 grid dimension is at least and exactly divisible by its workgroup dimension.
 Atomic launch admission retains base geometry validation and permits a partial
-final workgroup. These are facade semantics, not a native-operation or
-authority claim: current KFD backends advertise both stable and
-execution-detail atomic/collective capabilities as false, so the wrappers
-reject before KFD submission.
+final workgroup. Additive backend SPIs preserve each exact contract. Ordinary
+and qualification KFD constructors advertise both capability layers as false.
+Separate constructors accept an unsafe semantic authority and advertise only
+its enumerated non-System atomic and workgroup-collective profiles; the contract
+is retained through scheduler custody, recycled-dispatch identity, and final
+invocation authorization. No concrete production authority, semantic Worker
+transport, native litmus evidence, or formal compiler/hardware refinement is
+shipped.
 
 The direct single-device KFD backend now admits at most 65,536 logical streams
 and multiplexes their compute work over exactly two persistent native compute
@@ -80,13 +84,24 @@ Worker V4 exposes execution-capability discovery, flush, same-device async copy,
 cancellation, and deadline-bounded drain under one exact handshake. Its
 capability cache is bound to the latest successfully enumerated roster and
 otherwise fails closed. Runtime transport versioning is separate from
-compiler/proof Worker V3. There is no background progress thread, queue-side dependency packet,
+compiler/proof Worker V3. There is no background native-publication scheduler,
+queue-side dependency packet,
 or more than one in-flight dispatch per native lane. Consequently the new
 logical-stream surface removes the third-stream capacity failure but is not
 general HIP/HSA stream scheduling parity. The
 `concurrent_compute` capability still means exact two-lane, disjoint-allocation
-execution. Native peer copy remains a separate backend, and atomic and
-collective execution remain false.
+execution. Native peer copy remains a separate backend. Ordinary KFD atomic and
+collective capabilities remain false; the unsafe semantic-authority SPI does
+not supply the missing production authority.
+
+An optional executor-neutral observer owns a runtime context on one
+thread-affine engine and provides cloneable cross-thread handles plus standard
+event futures. Command/waiter capacity and command/poll counts per tick are
+bounded, polling follows a stable cyclic event order, and context-command and
+executor-waker panics are contained. Worker-thread reentry rejects, future drop
+abandons only observation, and consuming shutdown returns the context while
+waking pending futures as stopped. This is completion observation only: it does
+not publish deferred native work or replace explicit `flush_stream`.
 
 The exact two-device XGMI copy-only backend retains successful peer mappings
 until host access or allocation release and publishes directional copies from a
@@ -103,7 +118,7 @@ prefix published so later host work can overlap DMA. First-prefix allocation
 failure is a prepublication rejection; recoverable failure after a completed
 prefix is quiescent and preserves retryable custody. Poll and wait remain the
 only completion-observation operations; neither publishes deferred work. There
-is no background progress thread. Runtime Worker V4 provides the portable
+is no background native-publication thread. Runtime Worker V4 provides the portable
 capability, flush, async-copy, cancellation, and drain profile; Runtime Worker V1
 does not. The XGMI benchmark labels queued work as
 `outstanding_depth`; the native route uses one ordered SDMA engine per direction
@@ -112,32 +127,44 @@ and does not claim that depth as engine concurrency.
 Worker V3 now requires a second, move-only semantic-to-machine refinement
 receipt before either the generated KFD application transition or deprecated
 HSA lifecycle can gain execution custody. The inspect-only receipt has private
-state but no production constructor or producer wiring. It binds one exact
-executable publication occurrence across the KIR, final LLVM module, selected
-ISA range, machine-effect evidence, refinement-proof identity, final artifact,
-compiler current-record and rollback chain, Worker challenge and lineage, and
-durable publication. Its machine-effect contract is universal over checked
-invocations rather than bound to one dispatch geometry. Admission consumes the
+state and no public constructor. A sealed composing adapter now exposes a typed
+unsafe boundary for a separately reviewed proof backend. Its request carries
+the exact semantic MIR/KIR owners, final LLVM bytes, selected ISA range, final
+HSACO bytes, compiler-currentness evidence, physical entry binding, and durable
+publication occurrence. Only exact owned machine-effect and refinement-proof
+artifacts returned by that backend can be sealed into the receipt. The receipt
+binds one exact executable publication occurrence across the KIR, final LLVM
+module, selected ISA range, machine-effect evidence, refinement-proof identity,
+final artifact, compiler current-record and rollback chain, Worker challenge
+and lineage, durable publication, proof-producer measurement, and transcript.
+Its machine-effect contract is universal over checked invocations rather than
+bound to one dispatch geometry. Admission consumes the
 receipt and matches every coordinate. Deprecated HSA retains its custody with a
 loaded executable across repeated checked invocations; direct KFD consumes it
 into a one-shot application binding. Protected
 backend provenance and matching digests are only necessary inputs and cannot
 replace this receipt. The existing protected adapter and every synthetic path
-produce no receipt, so production application execution remains deliberately
-unavailable until a reviewed proof producer is implemented.
+produce no receipt. No concrete backend implementing the scalar gfx942 proof
+obligations in issue #214 or corresponding authenticated proof artifact ships,
+so production application execution remains deliberately unavailable by
+default.
 
-The low-level KFD clock-correlation observation is one currentness-bracketed
-GPU/CPU/system counter sample for calibration. It does not mark dispatch
-publication, start, or completion and is not a per-dispatch device timestamp.
-An additive Dispatch Timestamp Capture V1 schema can structurally join bounded
-producer-claimed CPU publication ticks, device start/end ticks, and before/after
-correlation brackets to exact runtime-profile, dispatch, queue, device, kernel,
-artifact, producer-evidence, and configuration bytes. The public decoder cannot
-mint records, and partial, lost, truncated, reordered, substituted, or stale
-captures reject or remain unavailable as appropriate. No trusted producer
-adapter is wired, raw ticks have no admitted frequency or global synchronization,
-and the semantic query therefore continues to report authenticated per-dispatch
-device timestamps as unavailable.
+The native runtime now records process-local monotonic points immediately after
+accepted AQL publication and after runtime completion processing. A fresh
+`getrandom` recorder occurrence makes accidental aliasing between `Instant`
+epochs cryptographically negligible, samples commit only with their exact
+retained runtime-profile event, and only the live KFD finish path returns the
+opaque runtime-authenticated custody bundle. Empty,
+partial, lost, substituted, or stale captures do not advertise complete host
+intervals. These are host observations, not GPU dispatch start/end timestamps.
+
+Separately, the low-level KFD clock-correlation observation is one
+currentness-bracketed GPU/CPU/system counter sample for calibration. It does not
+mark dispatch publication, start, or completion. The generic Dispatch Timestamp
+Capture V1 schema can structurally join producer-claimed CPU and device ticks,
+but has no trusted producer adapter. The semantic query therefore continues to
+report authenticated per-dispatch device timestamps, device clock domains, and
+globally synchronized time as unavailable.
 
 The current Rust device-language addition remains a bounded
 volatile-load/store bridge rather than broad Rust support. The R12 executable

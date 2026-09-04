@@ -1,7 +1,12 @@
-use std::{error::Error, fmt, marker::PhantomData};
+use std::{
+    error::Error,
+    fmt,
+    marker::PhantomData,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use fe2o3_artifact_transaction::{
-    DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1,
+    DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1, PublishedLinkArtifactV1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{
@@ -37,6 +42,11 @@ const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-roster-verification-challenge.v1\0";
 const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v1\0";
+
+/// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.
+pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024;
+/// Maximum exact proof artifact retained by one Worker V3 refinement receipt.
+pub const MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1: usize = 64 * 1024 * 1024;
 
 mod verifier_seal {
     pub trait Sealed<K> {}
@@ -118,6 +128,8 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     finalized_hsaco: &'admission [u8],
     descriptor: &'admission KernelDescriptorV1,
+    descriptor_binding: KernelDescriptorBinding,
+    publication: PublishedLinkArtifactV1,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
     generated_host_contract: [u8; 32],
@@ -263,6 +275,19 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
         self.descriptor
     }
 
+    /// Returns the inspected ELF binding for the exact selected kernel.
+    ///
+    /// The binding is descriptive. It identifies the selected machine-code byte range inside
+    /// [`Self::finalized_hsaco_bytes`] but grants no executable authority.
+    pub const fn descriptor_binding(&self) -> KernelDescriptorBinding {
+        self.descriptor_binding
+    }
+
+    /// Returns the exact durable publication occurrence retained by host admission.
+    pub const fn publication(&self) -> PublishedLinkArtifactV1 {
+        self.publication
+    }
+
     /// Returns the exact canonical compiler handoff retained by host admission.
     ///
     /// The handoff is inert content, not compiler or proof authority. A reviewed verifier uses it
@@ -336,6 +361,11 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
     /// caller-supplied path or digest projection, for executable inspection and machine refinement.
     pub const fn finalized_hsaco_bytes(&self) -> &[u8] {
         self.finalized_hsaco
+    }
+
+    /// Returns the exact final LLVM module bytes retained by the compiler handoff.
+    pub fn final_llvm_bytes(&self) -> &[u8] {
+        self.handoff.module_handoff().module_bytes()
     }
 
     pub const fn capsule_sha256(&self) -> [u8; 32] {
@@ -424,6 +454,130 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error>;
 }
 
+/// Exact owned output of one reviewed semantic-to-final-machine proof execution.
+///
+/// This value is descriptive until it is returned by an implementation of
+/// [`WorkerV3SemanticMachineRefinementBackendV1`] for the exact typed request supplied by the
+/// crate-owned adapter. Construction validates representation invariants only. It does not
+/// authenticate the producer or establish that either byte string is a valid proof.
+#[must_use = "dropping the evidence abandons the exact refinement proof artifacts"]
+pub struct WorkerV3ProtectedSemanticMachineRefinementEvidenceV1 {
+    machine_effect_evidence: Box<[u8]>,
+    machine_effect_evidence_sha256: [u8; 32],
+    refinement_proof: Box<[u8]>,
+    refinement_proof_sha256: [u8; 32],
+    producer_measurement_sha256: [u8; 32],
+    verification_transcript_sha256: [u8; 32],
+}
+
+impl fmt::Debug for WorkerV3ProtectedSemanticMachineRefinementEvidenceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3ProtectedSemanticMachineRefinementEvidenceV1")
+            .field(
+                "machine_effect_evidence_sha256",
+                &self.machine_effect_evidence_sha256,
+            )
+            .field("refinement_proof_sha256", &self.refinement_proof_sha256)
+            .field(
+                "producer_measurement_sha256",
+                &self.producer_measurement_sha256,
+            )
+            .field(
+                "verification_transcript_sha256",
+                &self.verification_transcript_sha256,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl WorkerV3ProtectedSemanticMachineRefinementEvidenceV1 {
+    /// Retains the exact proof artifacts reported by a reviewed backend execution.
+    ///
+    /// This safe constructor grants no authority. Only the unsafe backend contract and the
+    /// crate-owned exact-coordinate join can turn this value into an opaque receipt.
+    pub fn new(
+        machine_effect_evidence: Box<[u8]>,
+        refinement_proof: Box<[u8]>,
+        producer_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+    ) -> Result<Self, WorkerV3SemanticMachineRefinementEvidenceErrorV1> {
+        validate_semantic_machine_refinement_evidence_fields(
+            machine_effect_evidence.len(),
+            refinement_proof.len(),
+            producer_measurement_sha256,
+            verification_transcript_sha256,
+        )?;
+        Ok(Self {
+            machine_effect_evidence_sha256: Sha256::digest(&machine_effect_evidence).into(),
+            refinement_proof_sha256: Sha256::digest(&refinement_proof).into(),
+            machine_effect_evidence,
+            refinement_proof,
+            producer_measurement_sha256,
+            verification_transcript_sha256,
+        })
+    }
+
+    /// Returns the exact authenticated machine-effect artifact bytes.
+    pub fn machine_effect_evidence_bytes(&self) -> &[u8] {
+        &self.machine_effect_evidence
+    }
+
+    /// Returns the exact semantic-to-final-machine proof artifact bytes.
+    pub fn refinement_proof_bytes(&self) -> &[u8] {
+        &self.refinement_proof
+    }
+}
+
+/// Representation error in a reviewed semantic-to-machine backend result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkerV3SemanticMachineRefinementEvidenceErrorV1 {
+    EmptyMachineEffectEvidence,
+    MachineEffectEvidenceTooLarge { actual: usize, max: usize },
+    EmptyRefinementProof,
+    RefinementProofTooLarge { actual: usize, max: usize },
+    ZeroProducerMeasurement,
+    ZeroVerificationTranscript,
+}
+
+fn validate_semantic_machine_refinement_evidence_fields(
+    machine_effect_evidence_bytes: usize,
+    refinement_proof_bytes: usize,
+    producer_measurement_sha256: [u8; 32],
+    verification_transcript_sha256: [u8; 32],
+) -> Result<(), WorkerV3SemanticMachineRefinementEvidenceErrorV1> {
+    if machine_effect_evidence_bytes == 0 {
+        return Err(WorkerV3SemanticMachineRefinementEvidenceErrorV1::EmptyMachineEffectEvidence);
+    }
+    if machine_effect_evidence_bytes > MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1 {
+        return Err(
+            WorkerV3SemanticMachineRefinementEvidenceErrorV1::MachineEffectEvidenceTooLarge {
+                actual: machine_effect_evidence_bytes,
+                max: MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1,
+            },
+        );
+    }
+    if refinement_proof_bytes == 0 {
+        return Err(WorkerV3SemanticMachineRefinementEvidenceErrorV1::EmptyRefinementProof);
+    }
+    if refinement_proof_bytes > MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1 {
+        return Err(
+            WorkerV3SemanticMachineRefinementEvidenceErrorV1::RefinementProofTooLarge {
+                actual: refinement_proof_bytes,
+                max: MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1,
+            },
+        );
+    }
+    if producer_measurement_sha256 == [0; 32] {
+        return Err(WorkerV3SemanticMachineRefinementEvidenceErrorV1::ZeroProducerMeasurement);
+    }
+    if verification_transcript_sha256 == [0; 32] {
+        return Err(WorkerV3SemanticMachineRefinementEvidenceErrorV1::ZeroVerificationTranscript);
+    }
+    Ok(())
+}
+
 /// Opaque, move-only proof receipt for one exact Worker V3 executable publication occurrence.
 ///
 /// The receipt coordinates a semantic Kernel IR, final LLVM module, selected machine-code byte
@@ -435,11 +589,11 @@ pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
 /// that custody with the loaded executable across repeated checked invocations; the direct-KFD
 /// application path consumes it into its one-shot invocation binding.
 ///
-/// There is deliberately no production constructor or producer wiring, and the current protected-
-/// verifier adapter does not produce this receipt. A future proof producer must establish the
-/// missing semantic-to-final-machine refinement before it may be introduced through a reviewed,
-/// crate-owned construction boundary. Consequently, production application execution remains
-/// unavailable today rather than treating backend provenance or digest equality as proof.
+/// There is deliberately no public constructor. The current protected-verifier adapter does not
+/// produce this receipt. [`WorkerV3RefiningProtectedVerifierAdapterV1`] can construct it only from
+/// exact owned proof artifacts returned through the unsafe reviewed refinement-backend contract.
+/// No concrete production backend or proof artifact is currently shipped, so application
+/// execution remains unavailable unless a deployment supplies that missing trusted component.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3SemanticMachineRefinementReceiptV1;
@@ -463,6 +617,9 @@ pub struct WorkerV3SemanticMachineRefinementReceiptV1 {
     machine_effect_evidence_bytes: u64,
     refinement_proof_sha256: [u8; 32],
     refinement_proof_bytes: u64,
+    producer_measurement_sha256: [u8; 32],
+    verification_transcript_sha256: [u8; 32],
+    evidence: WorkerV3ProtectedSemanticMachineRefinementEvidenceV1,
     identity: [u8; 32],
 }
 
@@ -479,6 +636,10 @@ impl fmt::Debug for WorkerV3SemanticMachineRefinementReceiptV1 {
                 &self.machine_effect_evidence_sha256,
             )
             .field("artifact_sha256", &self.host.artifact_sha256)
+            .field(
+                "producer_measurement_sha256",
+                &self.producer_measurement_sha256,
+            )
             .field("publication_identity", &self.host.publication_identity)
             .finish_non_exhaustive()
     }
@@ -518,6 +679,26 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
         (&self.refinement_proof_sha256, self.refinement_proof_bytes)
     }
 
+    /// Returns the reviewed proof producer's measured implementation identity.
+    pub const fn producer_measurement_sha256(&self) -> &[u8; 32] {
+        &self.producer_measurement_sha256
+    }
+
+    /// Returns the identity of the producer's exact verification transcript.
+    pub const fn verification_transcript_sha256(&self) -> &[u8; 32] {
+        &self.verification_transcript_sha256
+    }
+
+    /// Returns the exact retained authenticated machine-effect artifact.
+    pub fn machine_effect_evidence_bytes(&self) -> &[u8] {
+        self.evidence.machine_effect_evidence_bytes()
+    }
+
+    /// Returns the exact retained semantic-to-final-machine proof artifact.
+    pub fn refinement_proof_bytes(&self) -> &[u8] {
+        self.evidence.refinement_proof_bytes()
+    }
+
     /// Returns the exact finalized artifact identity covered by the refinement.
     pub const fn artifact_identity(&self) -> (&[u8; 32], u64) {
         (&self.host.artifact_sha256, self.host.artifact_bytes)
@@ -537,6 +718,18 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
             || self.machine_effect_evidence_bytes == 0
             || self.refinement_proof_sha256 == [0; 32]
             || self.refinement_proof_bytes == 0
+            || self.producer_measurement_sha256 == [0; 32]
+            || self.verification_transcript_sha256 == [0; 32]
+            || self.machine_effect_evidence_sha256.as_slice()
+                != Sha256::digest(self.evidence.machine_effect_evidence_bytes()).as_slice()
+            || self.machine_effect_evidence_bytes
+                != u64::try_from(self.evidence.machine_effect_evidence_bytes().len()).ok()?
+            || self.refinement_proof_sha256.as_slice()
+                != Sha256::digest(self.evidence.refinement_proof_bytes()).as_slice()
+            || self.refinement_proof_bytes
+                != u64::try_from(self.evidence.refinement_proof_bytes().len()).ok()?
+            || self.producer_measurement_sha256 != self.evidence.producer_measurement_sha256
+            || self.verification_transcript_sha256 != self.evidence.verification_transcript_sha256
             || self.identity != semantic_machine_refinement_receipt_identity(&self)
         {
             return None;
@@ -544,24 +737,43 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
         Some(AdmittedWorkerV3SemanticMachineRefinementV1 { receipt: self })
     }
 
-    #[cfg(test)]
-    fn new_for_test_only(
+    fn from_protected_evidence(
         host: WorkerV3SemanticMachineHostCoordinatesV1,
-        machine_effect_evidence_sha256: [u8; 32],
-        machine_effect_evidence_bytes: u64,
-        refinement_proof_sha256: [u8; 32],
-        refinement_proof_bytes: u64,
+        evidence: WorkerV3ProtectedSemanticMachineRefinementEvidenceV1,
     ) -> Self {
+        let machine_effect_evidence_bytes =
+            u64::try_from(evidence.machine_effect_evidence.len()).expect("bounded evidence length");
+        let refinement_proof_bytes =
+            u64::try_from(evidence.refinement_proof.len()).expect("bounded proof length");
         let mut receipt = Self {
             host,
-            machine_effect_evidence_sha256,
+            machine_effect_evidence_sha256: evidence.machine_effect_evidence_sha256,
             machine_effect_evidence_bytes,
-            refinement_proof_sha256,
+            refinement_proof_sha256: evidence.refinement_proof_sha256,
             refinement_proof_bytes,
+            producer_measurement_sha256: evidence.producer_measurement_sha256,
+            verification_transcript_sha256: evidence.verification_transcript_sha256,
+            evidence,
             identity: [0; 32],
         };
         receipt.identity = semantic_machine_refinement_receipt_identity(&receipt);
         receipt
+    }
+
+    #[cfg(test)]
+    fn new_for_test_only(
+        host: WorkerV3SemanticMachineHostCoordinatesV1,
+        machine_effect_evidence: Box<[u8]>,
+        refinement_proof: Box<[u8]>,
+    ) -> Self {
+        let evidence = WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+            machine_effect_evidence,
+            refinement_proof,
+            [40; 32],
+            [41; 32],
+        )
+        .expect("test refinement evidence is nonempty");
+        Self::from_protected_evidence(host, evidence)
     }
 }
 
@@ -603,6 +815,63 @@ struct WorkerV3SemanticMachineHostCoordinatesV1 {
     publication_identity: [u8; 32],
 }
 
+/// Exact borrowed inputs presented to a reviewed semantic-to-final-machine proof backend.
+///
+/// The request joins the already validated source-side proof owner and compiler currentness to
+/// exact final LLVM, selected ISA, final HSACO, and durable publication bytes. These inputs remain
+/// non-authoritative: only an independently authenticated proof execution may return evidence.
+pub struct WorkerV3SemanticMachineRefinementRequestV1<'verification, 'admission, K> {
+    verification_request: &'verification WorkerV3VerificationRequestV1<'admission, K>,
+    compiler_execution: &'verification WorkerV3CompilerExecutionVerificationV1,
+    proof_inputs: &'verification ValidatedCompilerProofInputsV4,
+    target_lineage: &'verification ValidatedCompilerTargetLineageV1,
+    selected_isa: &'verification [u8],
+    host: WorkerV3SemanticMachineHostCoordinatesV1,
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1>
+    WorkerV3SemanticMachineRefinementRequestV1<'_, '_, K>
+{
+    /// Returns the complete pinned Worker verification request.
+    pub const fn verification_request(&self) -> &WorkerV3VerificationRequestV1<'_, K> {
+        self.verification_request
+    }
+
+    /// Returns authenticated compiler occurrence and current-record evidence.
+    pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
+        self.compiler_execution
+    }
+
+    /// Returns the exact independently decoded source-side proof owner.
+    pub const fn proof_inputs(&self) -> &ValidatedCompilerProofInputsV4 {
+        self.proof_inputs
+    }
+
+    /// Returns the exact independently replayed target-lineage owner.
+    pub const fn target_lineage(&self) -> &ValidatedCompilerTargetLineageV1 {
+        self.target_lineage
+    }
+
+    /// Returns the exact final LLVM module bytes covered by target lineage.
+    pub fn final_llvm_bytes(&self) -> &[u8] {
+        self.verification_request.final_llvm_bytes()
+    }
+
+    /// Returns the exact selected kernel ISA bytes inside the finalized artifact.
+    pub const fn selected_isa_bytes(&self) -> &[u8] {
+        self.selected_isa
+    }
+
+    /// Returns the exact finalized HSACO bytes retained under the publication token.
+    pub const fn finalized_hsaco_bytes(&self) -> &[u8] {
+        self.verification_request.finalized_hsaco_bytes()
+    }
+
+    fn into_host_coordinates(self) -> WorkerV3SemanticMachineHostCoordinatesV1 {
+        self.host
+    }
+}
+
 pub(crate) struct AdmittedWorkerV3SemanticMachineRefinementV1 {
     receipt: WorkerV3SemanticMachineRefinementReceiptV1,
 }
@@ -610,6 +879,59 @@ pub(crate) struct AdmittedWorkerV3SemanticMachineRefinementV1 {
 impl AdmittedWorkerV3SemanticMachineRefinementV1 {
     pub(crate) const fn receipt(&self) -> &WorkerV3SemanticMachineRefinementReceiptV1 {
         &self.receipt
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn admitted_semantic_machine_refinement_for_test_v1()
+-> AdmittedWorkerV3SemanticMachineRefinementV1 {
+    let host = refinement_host_coordinates_for_test_v1();
+    WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
+        host.clone(),
+        vec![19; 119].into_boxed_slice(),
+        vec![20; 120].into_boxed_slice(),
+    )
+    .admit(&host)
+    .expect("exact test refinement coordinates admit")
+}
+
+#[cfg(test)]
+fn refinement_host_coordinates_for_test_v1() -> WorkerV3SemanticMachineHostCoordinatesV1 {
+    WorkerV3SemanticMachineHostCoordinatesV1 {
+        kir_sha256: [1; 32],
+        kir_bytes: 101,
+        llvm_sha256: [2; 32],
+        llvm_bytes: 102,
+        isa_sha256: [3; 32],
+        isa_bytes: 103,
+        artifact_sha256: [4; 32],
+        artifact_bytes: 104,
+        worker_challenge_identity: [5; 32],
+        worker_lineage_identity: [6; 32],
+        compiler_execution_subject_identity: [21; 32],
+        compiler_execution_carriage_identity: [22; 32],
+        compiler_execution_policy_identity: [23; 32],
+        compiler_execution_issuer_journal_identity: [24; 32],
+        compiler_execution_occurrence_identity: [25; 32],
+        compiler_execution_receipt_identity: [26; 32],
+        compiler_execution_publication_identity: [27; 32],
+        compiler_execution_acknowledgment_identity: [28; 32],
+        compiler_execution_worker_ledger_record_identity: [29; 32],
+        compiler_current_record_verification_identity: [7; 32],
+        compiler_current_record_attestation_identity: [8; 32],
+        protected_compiler_policy_verification_identity: [30; 32],
+        protected_worker_ledger_verification_identity: [31; 32],
+        external_rollback_verification_identity: [9; 32],
+        compiler_prior_rollback_anchor: [32; 32],
+        compiler_current_rollback_anchor: [10; 32],
+        compiler_execution_sequence: 11,
+        publication_generation: 12,
+        publication_session: [13; 16],
+        publication_invocation: [14; 32],
+        publication_package_identity: [15; 32],
+        publication_kernel_set_identity: [16; 32],
+        publication_target_identity: [17; 32],
+        publication_identity: [18; 32],
     }
 }
 
@@ -637,6 +959,8 @@ fn semantic_machine_refinement_receipt_identity(
         digest.update(byte_len.to_le_bytes());
     }
     for identity in [
+        receipt.producer_measurement_sha256,
+        receipt.verification_transcript_sha256,
         host.worker_challenge_identity,
         host.worker_lineage_identity,
         host.compiler_execution_subject_identity,
@@ -756,6 +1080,37 @@ pub unsafe trait WorkerV3ProtectedVerifierBackendV1<K: CompilerGeneratedKernelEx
     ) -> Result<WorkerV3ProtectedVerificationEvidenceV1, Self::Error>;
 }
 
+/// External authority boundary for one independently reviewed semantic-to-final-machine proof.
+///
+/// This is intentionally separate from [`WorkerV3ProtectedVerifierBackendV1`]. Compiler origin,
+/// currentness, deterministic lowering, artifact structure, and digest equality do not prove that
+/// final machine execution refines the source semantics.
+///
+/// # Safety
+///
+/// Implementations must authenticate a proof producer approved by deployment policy and verify a
+/// theorem over the exact request inputs. The theorem must relate the retained semantic MIR and
+/// canonical KIR through the exact final LLVM bytes, selected ISA range, linked HSACO, ABI,
+/// control flow, addresses, executable memory effects, and required numerical semantics. It must
+/// bind the exact compiler-currentness and publication coordinates carried by the request. The
+/// returned machine-effect and proof bytes must be the authentic outputs of that execution;
+/// request fields, hashes, structural lineage, opcode inventories, or testing fixtures alone are
+/// not evidence. Implementations must not unwind.
+pub unsafe trait WorkerV3SemanticMachineRefinementBackendV1<K: CompilerGeneratedKernelExpectationV1>
+{
+    type Error;
+
+    /// Verifies semantic-to-final-machine refinement for one exact pinned request.
+    ///
+    /// # Safety
+    ///
+    /// The implementation obligations are those of the unsafe trait.
+    unsafe fn verify_semantic_machine_refinement(
+        &mut self,
+        request: &WorkerV3SemanticMachineRefinementRequestV1<'_, '_, K>,
+    ) -> Result<WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, Self::Error>;
+}
+
 /// Crate-owned sealed verifier that delegates only independent protected checks.
 ///
 /// Construction is safe because it grants no authority by itself. Authentication remains gated by
@@ -800,31 +1155,150 @@ where
     ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
         // SAFETY: `B` owns the independent protected checks required by its unsafe trait.
         let evidence = unsafe { self.backend.verify_protected(request)? };
-        Ok(WorkerV3VerificationDecisionV1::new(
-            request.challenge_identity(),
-            request.lineage_identity(),
-            request.descriptor().kernel_id(),
-            request.marker_binding_identity(),
-            request.generated_host_contract_identity(),
-            request.capsule_sha256(),
-            request.formal_memory_receipt_sha256(),
-            request.proof_binding_receipt_sha256(),
-            request.finalized_hsaco_sha256(),
-            request.finalized_hsaco_length(),
-            request.target(),
-            request.code_object_version(),
-            evidence.finalizer_derivation,
-            evidence.compiler_execution,
-            evidence.proof_inputs,
-            evidence.target_lineage,
-            evidence.verifier_measurement_sha256,
-            evidence.verification_transcript_sha256,
-            evidence.proof_executable_binding_sha256,
-            evidence.rust_type_layout_contract_sha256,
-            evidence.rust_effect_contract_sha256,
-            evidence.safety_properties,
-        ))
+        Ok(protected_decision_from_evidence(request, evidence))
     }
+}
+
+/// Crate-owned sealed verifier that joins protected compiler evidence to an independent machine
+/// refinement proof.
+///
+/// Neither backend can construct the opaque receipt. The adapter first validates the complete
+/// protected-verifier decision against the pinned host request, then presents that exact joined
+/// state to the separate refinement backend. Only owned proof artifacts returned through both
+/// unsafe contracts are sealed into application-consumable custody.
+pub struct WorkerV3RefiningProtectedVerifierAdapterV1<B, R> {
+    protected_backend: B,
+    refinement_backend: R,
+}
+
+impl<B, R> WorkerV3RefiningProtectedVerifierAdapterV1<B, R> {
+    /// Joins reviewed protected-verifier and semantic-machine-refinement backends.
+    pub const fn new(protected_backend: B, refinement_backend: R) -> Self {
+        Self {
+            protected_backend,
+            refinement_backend,
+        }
+    }
+
+    /// Returns both retained backends after the adapter is no longer needed.
+    pub fn into_inner(self) -> (B, R) {
+        (self.protected_backend, self.refinement_backend)
+    }
+}
+
+impl<K, B, R> verifier_seal::Sealed<K> for WorkerV3RefiningProtectedVerifierAdapterV1<B, R>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    B: WorkerV3ProtectedVerifierBackendV1<K>,
+    R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+{
+}
+
+// SAFETY: both authority boundaries are explicit unsafe traits. The crate-owned adapter validates
+// the first decision against the pinned request before exposing it to the refinement backend and
+// constructs the otherwise-unforgeable receipt from exact host coordinates itself.
+unsafe impl<K, B, R> WorkerV3VerifierV1<K> for WorkerV3RefiningProtectedVerifierAdapterV1<B, R>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    B: WorkerV3ProtectedVerifierBackendV1<K>,
+    R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+{
+    type Error = WorkerV3RefiningProtectedVerifierErrorV1<B::Error, R::Error>;
+
+    unsafe fn verify(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        let protected = match catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `B` owns the independent protected checks required by its unsafe trait.
+            unsafe { self.protected_backend.verify_protected(request) }
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                // A hostile verifier can panic with a payload whose destructor also panics.
+                // Forget it while this boundary is already unwinding so denial stays fail-closed.
+                core::mem::forget(payload);
+                return Err(WorkerV3RefiningProtectedVerifierErrorV1::ProtectedVerifierPanicked);
+            }
+        }
+        .map_err(WorkerV3RefiningProtectedVerifierErrorV1::ProtectedVerifier)?;
+        let mut decision = protected_decision_from_evidence(request, protected);
+        validate_decision::<K>(request, &decision)
+            .map_err(WorkerV3RefiningProtectedVerifierErrorV1::ProtectedDecision)?;
+        if !decision.retains_current_compiler_and_signed_verus_evidence() {
+            return Err(
+                WorkerV3RefiningProtectedVerifierErrorV1::ProtectedPrerequisitesUnavailable,
+            );
+        }
+        let refinement_request = semantic_machine_refinement_request(request, &decision)
+            .ok_or(WorkerV3RefiningProtectedVerifierErrorV1::RefinementCoordinatesUnavailable)?;
+        let refinement = match catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `R` owns the independent proof execution required by its unsafe trait. The
+            // request borrows only exact state already checked above.
+            unsafe {
+                self.refinement_backend
+                    .verify_semantic_machine_refinement(&refinement_request)
+            }
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                // Keep a second panic from a hostile payload destructor outside this boundary.
+                core::mem::forget(payload);
+                return Err(
+                    WorkerV3RefiningProtectedVerifierErrorV1::SemanticMachineRefinementPanicked,
+                );
+            }
+        }
+        .map_err(WorkerV3RefiningProtectedVerifierErrorV1::SemanticMachineRefinement)?;
+        let host = refinement_request.into_host_coordinates();
+        let receipt =
+            WorkerV3SemanticMachineRefinementReceiptV1::from_protected_evidence(host, refinement);
+        decision.semantic_machine_refinement = Some(receipt);
+        Ok(decision)
+    }
+}
+
+fn protected_decision_from_evidence<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    evidence: WorkerV3ProtectedVerificationEvidenceV1,
+) -> WorkerV3VerificationDecisionV1 {
+    WorkerV3VerificationDecisionV1::new(
+        request.challenge_identity(),
+        request.lineage_identity(),
+        request.descriptor().kernel_id(),
+        request.marker_binding_identity(),
+        request.generated_host_contract_identity(),
+        request.capsule_sha256(),
+        request.formal_memory_receipt_sha256(),
+        request.proof_binding_receipt_sha256(),
+        request.finalized_hsaco_sha256(),
+        request.finalized_hsaco_length(),
+        request.target(),
+        request.code_object_version(),
+        evidence.finalizer_derivation,
+        evidence.compiler_execution,
+        evidence.proof_inputs,
+        evidence.target_lineage,
+        evidence.verifier_measurement_sha256,
+        evidence.verification_transcript_sha256,
+        evidence.proof_executable_binding_sha256,
+        evidence.rust_type_layout_contract_sha256,
+        evidence.rust_effect_contract_sha256,
+        evidence.safety_properties,
+    )
+}
+
+/// Failure while joining protected compiler evidence to semantic-machine refinement.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum WorkerV3RefiningProtectedVerifierErrorV1<ProtectedError, RefinementError> {
+    ProtectedVerifier(ProtectedError),
+    ProtectedVerifierPanicked,
+    ProtectedDecision(WorkerV3VerificationDecisionErrorV1),
+    ProtectedPrerequisitesUnavailable,
+    RefinementCoordinatesUnavailable,
+    SemanticMachineRefinement(RefinementError),
+    SemanticMachineRefinementPanicked,
 }
 
 /// Explicit synthetic-verifier hook for the receipt-bearing integration harness.
@@ -947,9 +1421,11 @@ pub struct WorkerV3CompilerExecutionVerificationV1 {
 #[derive(Debug)]
 enum WorkerV3CompilerExecutionEvidenceV1 {
     #[cfg(target_os = "linux")]
-    CurrentRecord(WorkerV3CompilerCurrentRecordAuditV1),
+    CurrentRecord(Box<WorkerV3CompilerCurrentRecordAuditV1>),
     #[cfg(feature = "worker-v3-verifier-test-support")]
     Synthetic,
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    SyntheticAuthenticatedRefiningAdapterTest,
 }
 
 impl WorkerV3CompilerExecutionVerificationV1 {
@@ -1073,7 +1549,7 @@ impl WorkerV3CompilerExecutionVerificationV1 {
                 .protected_worker_ledger_verification_identity(),
             external_rollback_verification_sha256: evidence
                 .external_rollback_verification_identity(),
-            _evidence: WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence),
+            _evidence: WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(Box::new(evidence)),
         })
     }
 
@@ -1119,6 +1595,62 @@ impl WorkerV3CompilerExecutionVerificationV1 {
             protected_worker_ledger_verification_sha256,
             external_rollback_verification_sha256,
             _evidence: WorkerV3CompilerExecutionEvidenceV1::Synthetic,
+        }
+    }
+
+    /// Constructs synthetic currentness coordinates for refining-adapter integration tests only.
+    ///
+    /// Unlike [`Self::synthetic_for_test_only`], this value satisfies the adapter's currentness
+    /// prerequisite so the test harness can exercise the exact semantic-machine request join and
+    /// receipt-consumption transition. It does not represent signed evidence and must never be
+    /// used to make a production authority claim.
+    ///
+    /// # Safety
+    ///
+    /// The caller must confine the result to a test-only build and must not represent it as
+    /// protected compiler, ledger, rollback, load, or launch authority.
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub const unsafe fn synthetic_authenticated_refining_adapter_test_only(
+        subject_sha256: [u8; 32],
+        carriage_sha256: [u8; 32],
+        policy_sha256: [u8; 32],
+        issuer_journal_sha256: [u8; 32],
+        compiler_occurrence_sha256: [u8; 32],
+        receipt_sha256: [u8; 32],
+        publication_sha256: [u8; 32],
+        acknowledgment_sha256: [u8; 32],
+        worker_ledger_record_sha256: [u8; 32],
+        sequence: u64,
+        prior_rollback_anchor: [u8; 32],
+        current_rollback_anchor: [u8; 32],
+        current_record_verification_sha256: [u8; 32],
+        current_record_attestation_sha256: [u8; 32],
+        protected_policy_verification_sha256: [u8; 32],
+        protected_worker_ledger_verification_sha256: [u8; 32],
+        external_rollback_verification_sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            subject_sha256,
+            carriage_sha256,
+            policy_sha256,
+            issuer_journal_sha256,
+            compiler_occurrence_sha256,
+            receipt_sha256,
+            publication_sha256,
+            acknowledgment_sha256,
+            worker_ledger_record_sha256,
+            sequence,
+            prior_rollback_anchor,
+            current_rollback_anchor,
+            current_record_verification_sha256,
+            current_record_attestation_sha256,
+            protected_policy_verification_sha256,
+            protected_worker_ledger_verification_sha256,
+            external_rollback_verification_sha256,
+            _evidence:
+                WorkerV3CompilerExecutionEvidenceV1::SyntheticAuthenticatedRefiningAdapterTest,
         }
     }
 
@@ -1206,6 +1738,10 @@ impl WorkerV3CompilerExecutionVerificationV1 {
                 }
                 #[cfg(feature = "worker-v3-verifier-test-support")]
                 WorkerV3CompilerExecutionEvidenceV1::Synthetic => false,
+                #[cfg(feature = "worker-v3-verifier-test-support")]
+                WorkerV3CompilerExecutionEvidenceV1::SyntheticAuthenticatedRefiningAdapterTest => {
+                    true
+                }
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -1284,7 +1820,7 @@ impl WorkerV3VerifierAuthorityEvidenceV1 {
 
 #[derive(Debug)]
 enum WorkerV3ProofInputEvidenceV1 {
-    Validated(ValidatedCompilerProofInputsV4),
+    Validated(Box<ValidatedCompilerProofInputsV4>),
     #[cfg(feature = "worker-v3-verifier-test-support")]
     Synthetic,
 }
@@ -1341,7 +1877,7 @@ impl WorkerV3VerificationDecisionV1 {
             code_object_version,
             finalizer_derivation,
             compiler_execution,
-            WorkerV3ProofInputEvidenceV1::Validated(proof_inputs),
+            WorkerV3ProofInputEvidenceV1::Validated(Box::new(proof_inputs)),
             WorkerV3TargetLineageEvidenceV1::Validated(Box::new(target_lineage)),
             verifier_measurement_sha256,
             verification_transcript_sha256,
@@ -1571,14 +2107,98 @@ impl WorkerV3VerificationDecisionV1 {
     /// Reports custody of every prerequisite for the consuming application transition.
     ///
     /// Protected-backend provenance and current compiler/Verus evidence are insufficient without
-    /// the separate opaque semantic-to-machine receipt. The current adapter has no producer for
-    /// that receipt, so this remains false in production builds today.
+    /// the separate opaque semantic-to-machine receipt. The basic protected adapter has no
+    /// producer for that receipt; the refining adapter can retain one only when a deployment
+    /// supplies its separately reviewed unsafe backend.
     pub(crate) const fn retains_protected_application_execution_evidence(&self) -> bool {
         self.authority_evidence.admits_production_application(
             self.retains_current_compiler_and_signed_verus_evidence(),
             self.semantic_machine_refinement.is_some(),
         )
     }
+}
+
+fn semantic_machine_refinement_request<'verification, 'admission, K>(
+    request: &'verification WorkerV3VerificationRequestV1<'admission, K>,
+    decision: &'verification WorkerV3VerificationDecisionV1,
+) -> Option<WorkerV3SemanticMachineRefinementRequestV1<'verification, 'admission, K>>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    let (host, selected_isa) = semantic_machine_host_coordinates(request, decision)?;
+    Some(WorkerV3SemanticMachineRefinementRequestV1 {
+        verification_request: request,
+        compiler_execution: decision.compiler_execution(),
+        proof_inputs: decision.validated_compiler_proof_inputs()?,
+        target_lineage: decision.validated_compiler_target_lineage()?,
+        selected_isa,
+        host,
+    })
+}
+
+fn semantic_machine_host_coordinates<'verification, K>(
+    request: &'verification WorkerV3VerificationRequestV1<'_, K>,
+    decision: &WorkerV3VerificationDecisionV1,
+) -> Option<(
+    WorkerV3SemanticMachineHostCoordinatesV1,
+    &'verification [u8],
+)>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    let proof = decision.validated_compiler_proof_inputs()?;
+    let target_lineage = decision.validated_compiler_target_lineage()?;
+    let kir = proof.kernel_ir().identity();
+    let llvm = target_lineage.final_llvm_identity();
+    let binding = request.descriptor_binding();
+    let isa_start = usize::try_from(binding.entry_file_offset()).ok()?;
+    let isa_bytes = usize::try_from(binding.entry_size()).ok()?;
+    let isa_end = isa_start.checked_add(isa_bytes)?;
+    let exact_isa = request.finalized_hsaco_bytes().get(isa_start..isa_end)?;
+    let compiler = decision.compiler_execution();
+    let published = request.publication();
+    let attempt = published.attempt();
+    let scope = published.scope();
+    let coordinates = WorkerV3SemanticMachineHostCoordinatesV1 {
+        kir_sha256: *kir.digest(),
+        kir_bytes: kir.canonical_length(),
+        llvm_sha256: llvm.sha256(),
+        llvm_bytes: llvm.byte_len(),
+        isa_sha256: Sha256::digest(exact_isa).into(),
+        isa_bytes: u64::try_from(exact_isa.len()).ok()?,
+        artifact_sha256: decision.finalized_hsaco_sha256(),
+        artifact_bytes: decision.finalized_hsaco_length(),
+        worker_challenge_identity: *decision.challenge_identity().as_bytes(),
+        worker_lineage_identity: *decision.lineage_identity().as_bytes(),
+        compiler_execution_subject_identity: request.compiler_execution_subject_sha256(),
+        compiler_execution_carriage_identity: compiler.carriage_sha256(),
+        compiler_execution_policy_identity: compiler.policy_sha256(),
+        compiler_execution_issuer_journal_identity: compiler.issuer_journal_sha256(),
+        compiler_execution_occurrence_identity: compiler.compiler_occurrence_sha256(),
+        compiler_execution_receipt_identity: compiler.receipt_sha256(),
+        compiler_execution_publication_identity: compiler.publication_sha256(),
+        compiler_execution_acknowledgment_identity: compiler.acknowledgment_sha256(),
+        compiler_execution_worker_ledger_record_identity: compiler.worker_ledger_record_sha256(),
+        compiler_current_record_verification_identity: compiler
+            .current_record_verification_sha256(),
+        compiler_current_record_attestation_identity: compiler.current_record_attestation_sha256(),
+        protected_compiler_policy_verification_identity: compiler
+            .protected_policy_verification_sha256(),
+        protected_worker_ledger_verification_identity: compiler
+            .protected_worker_ledger_verification_sha256(),
+        external_rollback_verification_identity: compiler.external_rollback_verification_sha256(),
+        compiler_prior_rollback_anchor: compiler.prior_rollback_anchor(),
+        compiler_current_rollback_anchor: compiler.current_rollback_anchor(),
+        compiler_execution_sequence: compiler.sequence(),
+        publication_generation: attempt.generation(),
+        publication_session: *attempt.session().as_bytes(),
+        publication_invocation: *attempt.invocation().as_bytes(),
+        publication_package_identity: *scope.package().as_bytes(),
+        publication_kernel_set_identity: *scope.kernel_set().as_bytes(),
+        publication_target_identity: *scope.target().as_bytes(),
+        publication_identity: *published.publication().as_bytes(),
+    };
+    Some((coordinates, exact_isa))
 }
 
 /// Authenticated compiler/Verus state for one exact V3 executable.
@@ -1697,63 +2317,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         {
             return None;
         }
-        let proof = self.verification.validated_compiler_proof_inputs()?;
-        let target_lineage = self.verification.validated_compiler_target_lineage()?;
-        let kir = proof.kernel_ir().identity();
-        let llvm = target_lineage.final_llvm_identity();
-        let exact_artifact = self.current.exact_artifact_bytes();
-        let binding = self.admission.descriptor_binding();
-        let isa_start = usize::try_from(binding.entry_file_offset()).ok()?;
-        let isa_bytes = usize::try_from(binding.entry_size()).ok()?;
-        let isa_end = isa_start.checked_add(isa_bytes)?;
-        let exact_isa = exact_artifact.get(isa_start..isa_end)?;
-        let compiler = self.verification.compiler_execution();
-        let compiler_subject = self.admission.compiler_execution_subject().identity();
-        let published = self.admission.published();
-        let attempt = published.attempt();
-        let scope = published.scope();
-        let expected = WorkerV3SemanticMachineHostCoordinatesV1 {
-            kir_sha256: *kir.digest(),
-            kir_bytes: kir.canonical_length(),
-            llvm_sha256: llvm.sha256(),
-            llvm_bytes: llvm.byte_len(),
-            isa_sha256: Sha256::digest(exact_isa).into(),
-            isa_bytes: u64::try_from(exact_isa.len()).ok()?,
-            artifact_sha256: self.verification.finalized_hsaco_sha256(),
-            artifact_bytes: self.verification.finalized_hsaco_length(),
-            worker_challenge_identity: *self.verification.challenge_identity().as_bytes(),
-            worker_lineage_identity: *self.verification.lineage_identity().as_bytes(),
-            compiler_execution_subject_identity: *compiler_subject.sha256(),
-            compiler_execution_carriage_identity: compiler.carriage_sha256(),
-            compiler_execution_policy_identity: compiler.policy_sha256(),
-            compiler_execution_issuer_journal_identity: compiler.issuer_journal_sha256(),
-            compiler_execution_occurrence_identity: compiler.compiler_occurrence_sha256(),
-            compiler_execution_receipt_identity: compiler.receipt_sha256(),
-            compiler_execution_publication_identity: compiler.publication_sha256(),
-            compiler_execution_acknowledgment_identity: compiler.acknowledgment_sha256(),
-            compiler_execution_worker_ledger_record_identity: compiler
-                .worker_ledger_record_sha256(),
-            compiler_current_record_verification_identity: compiler
-                .current_record_verification_sha256(),
-            compiler_current_record_attestation_identity: compiler
-                .current_record_attestation_sha256(),
-            protected_compiler_policy_verification_identity: compiler
-                .protected_policy_verification_sha256(),
-            protected_worker_ledger_verification_identity: compiler
-                .protected_worker_ledger_verification_sha256(),
-            external_rollback_verification_identity: compiler
-                .external_rollback_verification_sha256(),
-            compiler_prior_rollback_anchor: compiler.prior_rollback_anchor(),
-            compiler_current_rollback_anchor: compiler.current_rollback_anchor(),
-            compiler_execution_sequence: compiler.sequence(),
-            publication_generation: attempt.generation(),
-            publication_session: *attempt.session().as_bytes(),
-            publication_invocation: *attempt.invocation().as_bytes(),
-            publication_package_identity: *scope.package().as_bytes(),
-            publication_kernel_set_identity: *scope.kernel_set().as_bytes(),
-            publication_target_identity: *scope.target().as_bytes(),
-            publication_identity: *published.publication().as_bytes(),
-        };
+        let request = prepare_request::<K>(&self.admission, &self.current).ok()?;
+        let (expected, _) = semantic_machine_host_coordinates(&request, &self.verification)?;
         self.verification
             .semantic_machine_refinement
             .take()?
@@ -2168,7 +2733,7 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
         Self {
             finalizer_derivation,
             compiler_execution,
-            proof_inputs: WorkerV3RosterProofInputEvidenceV1::Validated(proof_inputs),
+            proof_inputs: WorkerV3RosterProofInputEvidenceV1::Validated(Box::new(proof_inputs)),
             target_lineage: WorkerV3RosterTargetLineageEvidenceV1::Validated(Box::new(
                 target_lineage,
             )),
@@ -2201,7 +2766,7 @@ impl WorkerV3ProtectedRosterVerificationEvidenceV1 {
 }
 
 enum WorkerV3RosterProofInputEvidenceV1 {
-    Validated(ValidatedCompilerMultiRootProofInputsV1),
+    Validated(Box<ValidatedCompilerMultiRootProofInputsV1>),
     #[cfg(feature = "worker-v3-verifier-test-support")]
     Synthetic,
 }
@@ -3421,6 +3986,8 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
         handoff: admission.outer_handoff(),
         finalized_hsaco: current.exact_artifact_bytes(),
         descriptor: admission.descriptor(),
+        descriptor_binding: admission.descriptor_binding(),
+        publication: admission.published(),
         target: admission.target(),
         code_object_version: admission.code_object_version(),
         generated_host_contract,
@@ -3931,6 +4498,65 @@ impl fmt::Display for WorkerV3CompilerExecutionEvidenceErrorV1 {
     }
 }
 
+impl fmt::Display for WorkerV3SemanticMachineRefinementEvidenceErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyMachineEffectEvidence => {
+                formatter.write_str("machine-effect evidence is empty")
+            }
+            Self::MachineEffectEvidenceTooLarge { actual, max } => write!(
+                formatter,
+                "machine-effect evidence is {actual} bytes; maximum is {max}"
+            ),
+            Self::EmptyRefinementProof => {
+                formatter.write_str("semantic-to-machine refinement proof is empty")
+            }
+            Self::RefinementProofTooLarge { actual, max } => write!(
+                formatter,
+                "semantic-to-machine refinement proof is {actual} bytes; maximum is {max}"
+            ),
+            Self::ZeroProducerMeasurement => {
+                formatter.write_str("refinement producer measurement is zero")
+            }
+            Self::ZeroVerificationTranscript => {
+                formatter.write_str("refinement verification transcript is zero")
+            }
+        }
+    }
+}
+
+impl<ProtectedError: fmt::Display, RefinementError: fmt::Display> fmt::Display
+    for WorkerV3RefiningProtectedVerifierErrorV1<ProtectedError, RefinementError>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProtectedVerifier(error) => {
+                write!(formatter, "protected Worker V3 verifier failed: {error}")
+            }
+            Self::ProtectedVerifierPanicked => {
+                formatter.write_str("protected Worker V3 verifier panicked")
+            }
+            Self::ProtectedDecision(error) => {
+                write!(
+                    formatter,
+                    "protected Worker V3 decision is invalid: {error}"
+                )
+            }
+            Self::ProtectedPrerequisitesUnavailable => formatter
+                .write_str("current compiler execution and signed Verus evidence are unavailable"),
+            Self::RefinementCoordinatesUnavailable => formatter.write_str(
+                "exact Worker V3 semantic-machine refinement coordinates are unavailable",
+            ),
+            Self::SemanticMachineRefinement(error) => {
+                write!(formatter, "semantic-to-machine refinement failed: {error}")
+            }
+            Self::SemanticMachineRefinementPanicked => {
+                formatter.write_str("semantic-to-machine refinement backend panicked")
+            }
+        }
+    }
+}
+
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuditErrorV1<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -3966,6 +4592,27 @@ where
 impl Error for WorkerV3VerificationDecisionErrorV1 {}
 
 impl Error for WorkerV3CompilerExecutionEvidenceErrorV1 {}
+
+impl Error for WorkerV3SemanticMachineRefinementEvidenceErrorV1 {}
+
+impl<ProtectedError, RefinementError> Error
+    for WorkerV3RefiningProtectedVerifierErrorV1<ProtectedError, RefinementError>
+where
+    ProtectedError: Error + 'static,
+    RefinementError: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ProtectedVerifier(error) => Some(error),
+            Self::ProtectedDecision(error) => Some(error),
+            Self::SemanticMachineRefinement(error) => Some(error),
+            Self::ProtectedVerifierPanicked
+            | Self::ProtectedPrerequisitesUnavailable
+            | Self::RefinementCoordinatesUnavailable
+            | Self::SemanticMachineRefinementPanicked => None,
+        }
+    }
+}
 
 impl<E> Error for WorkerV3VerificationAuditErrorV1<E>
 where
@@ -4024,49 +4671,16 @@ mod tests {
     }
 
     fn refinement_host_coordinates() -> WorkerV3SemanticMachineHostCoordinatesV1 {
-        WorkerV3SemanticMachineHostCoordinatesV1 {
-            kir_sha256: [1; 32],
-            kir_bytes: 101,
-            llvm_sha256: [2; 32],
-            llvm_bytes: 102,
-            isa_sha256: [3; 32],
-            isa_bytes: 103,
-            artifact_sha256: [4; 32],
-            artifact_bytes: 104,
-            worker_challenge_identity: [5; 32],
-            worker_lineage_identity: [6; 32],
-            compiler_execution_subject_identity: [21; 32],
-            compiler_execution_carriage_identity: [22; 32],
-            compiler_execution_policy_identity: [23; 32],
-            compiler_execution_issuer_journal_identity: [24; 32],
-            compiler_execution_occurrence_identity: [25; 32],
-            compiler_execution_receipt_identity: [26; 32],
-            compiler_execution_publication_identity: [27; 32],
-            compiler_execution_acknowledgment_identity: [28; 32],
-            compiler_execution_worker_ledger_record_identity: [29; 32],
-            compiler_current_record_verification_identity: [7; 32],
-            compiler_current_record_attestation_identity: [8; 32],
-            protected_compiler_policy_verification_identity: [30; 32],
-            protected_worker_ledger_verification_identity: [31; 32],
-            external_rollback_verification_identity: [9; 32],
-            compiler_prior_rollback_anchor: [32; 32],
-            compiler_current_rollback_anchor: [10; 32],
-            compiler_execution_sequence: 11,
-            publication_generation: 12,
-            publication_session: [13; 16],
-            publication_invocation: [14; 32],
-            publication_package_identity: [15; 32],
-            publication_kernel_set_identity: [16; 32],
-            publication_target_identity: [17; 32],
-            publication_identity: [18; 32],
-        }
+        refinement_host_coordinates_for_test_v1()
     }
 
     fn refinement_receipt(
         host: WorkerV3SemanticMachineHostCoordinatesV1,
     ) -> WorkerV3SemanticMachineRefinementReceiptV1 {
         WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
-            host, [19; 32], 119, [20; 32], 120,
+            host,
+            vec![19; 119].into_boxed_slice(),
+            vec![20; 120].into_boxed_slice(),
         )
     }
 
@@ -4076,17 +4690,29 @@ mod tests {
         let admitted = refinement_receipt(expected.clone())
             .admit(&expected)
             .unwrap();
+        let machine_effect_sha256: [u8; 32] = Sha256::digest([19; 119]).into();
+        let refinement_proof_sha256: [u8; 32] = Sha256::digest([20; 120]).into();
         assert_ne!(admitted.receipt().identity(), &[0; 32]);
         assert_eq!(admitted.receipt().kir_identity(), (&[1; 32], 101));
         assert_eq!(admitted.receipt().llvm_identity(), (&[2; 32], 102));
         assert_eq!(admitted.receipt().isa_identity(), (&[3; 32], 103));
         assert_eq!(
             admitted.receipt().machine_effect_evidence_identity(),
-            (&[19; 32], 119)
+            (&machine_effect_sha256, 119)
         );
         assert_eq!(
             admitted.receipt().refinement_proof_identity(),
-            (&[20; 32], 120)
+            (&refinement_proof_sha256, 120)
+        );
+        assert_eq!(
+            admitted.receipt().machine_effect_evidence_bytes(),
+            &[19; 119]
+        );
+        assert_eq!(admitted.receipt().refinement_proof_bytes(), &[20; 120]);
+        assert_eq!(admitted.receipt().producer_measurement_sha256(), &[40; 32]);
+        assert_eq!(
+            admitted.receipt().verification_transcript_sha256(),
+            &[41; 32]
         );
         assert_eq!(admitted.receipt().artifact_identity(), (&[4; 32], 104));
         assert!(!admitted.receipt().grants_runtime_authority());
@@ -4152,17 +4778,108 @@ mod tests {
         proof.refinement_proof_bytes += 1;
         assert!(proof.admit(&expected).is_none());
 
-        let zero_effect = WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
-            expected.clone(),
-            [0; 32],
-            119,
-            [20; 32],
-            120,
-        );
+        let mut effect_bytes = refinement_receipt(expected.clone());
+        effect_bytes.evidence.machine_effect_evidence[0] ^= 1;
+        assert!(effect_bytes.admit(&expected).is_none());
+
+        let mut proof_bytes = refinement_receipt(expected.clone());
+        proof_bytes.evidence.refinement_proof[0] ^= 1;
+        assert!(proof_bytes.admit(&expected).is_none());
+
+        let mut producer = refinement_receipt(expected.clone());
+        producer.producer_measurement_sha256[0] ^= 1;
+        assert!(producer.admit(&expected).is_none());
+
+        let mut transcript = refinement_receipt(expected.clone());
+        transcript.verification_transcript_sha256[0] ^= 1;
+        assert!(transcript.admit(&expected).is_none());
+
+        let mut zero_effect = refinement_receipt(expected.clone());
+        zero_effect.machine_effect_evidence_sha256 = [0; 32];
         assert!(zero_effect.admit(&expected).is_none());
-        let empty_proof = WorkerV3SemanticMachineRefinementReceiptV1::new_for_test_only(
-            expected, [19; 32], 119, [20; 32], 0,
-        );
+        let mut empty_proof = refinement_receipt(expected);
+        empty_proof.refinement_proof_bytes = 0;
         assert!(empty_proof.admit(&refinement_host_coordinates()).is_none());
+    }
+
+    #[test]
+    fn refinement_evidence_requires_owned_nonempty_artifacts_and_producer_identities() {
+        let valid = || {
+            WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+                vec![1].into_boxed_slice(),
+                vec![2].into_boxed_slice(),
+                [3; 32],
+                [4; 32],
+            )
+        };
+        assert!(valid().is_ok());
+        assert_eq!(
+            WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+                Box::new([]),
+                vec![2].into_boxed_slice(),
+                [3; 32],
+                [4; 32],
+            )
+            .unwrap_err(),
+            WorkerV3SemanticMachineRefinementEvidenceErrorV1::EmptyMachineEffectEvidence
+        );
+        assert_eq!(
+            WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+                vec![1].into_boxed_slice(),
+                Box::new([]),
+                [3; 32],
+                [4; 32],
+            )
+            .unwrap_err(),
+            WorkerV3SemanticMachineRefinementEvidenceErrorV1::EmptyRefinementProof
+        );
+        assert_eq!(
+            WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+                vec![1].into_boxed_slice(),
+                vec![2].into_boxed_slice(),
+                [0; 32],
+                [4; 32],
+            )
+            .unwrap_err(),
+            WorkerV3SemanticMachineRefinementEvidenceErrorV1::ZeroProducerMeasurement
+        );
+        assert_eq!(
+            WorkerV3ProtectedSemanticMachineRefinementEvidenceV1::new(
+                vec![1].into_boxed_slice(),
+                vec![2].into_boxed_slice(),
+                [3; 32],
+                [0; 32],
+            )
+            .unwrap_err(),
+            WorkerV3SemanticMachineRefinementEvidenceErrorV1::ZeroVerificationTranscript
+        );
+        assert_eq!(
+            validate_semantic_machine_refinement_evidence_fields(
+                MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1 + 1,
+                1,
+                [3; 32],
+                [4; 32],
+            ),
+            Err(
+                WorkerV3SemanticMachineRefinementEvidenceErrorV1::MachineEffectEvidenceTooLarge {
+                    actual: MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1 + 1,
+                    max: MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1,
+                }
+            )
+        );
+        assert_eq!(
+            validate_semantic_machine_refinement_evidence_fields(
+                1,
+                MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1 + 1,
+                [3; 32],
+                [4; 32],
+            ),
+            Err(
+                WorkerV3SemanticMachineRefinementEvidenceErrorV1::RefinementProofTooLarge {
+                    actual: MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1 + 1,
+                    max: MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1,
+                }
+            )
+        );
     }
 }

@@ -1248,6 +1248,7 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
                 bindings: &bindings,
                 dependencies: &dependencies,
                 geometry,
+                semantic_launch: crate::BackendSemanticLaunchV1::Ordinary,
             }))?
         }
         OP_POLL_V1 => {
@@ -2142,6 +2143,13 @@ impl<C: RuntimeWorkerCodecV1> RuntimeBackendV1 for RuntimeWorkerBackendV1<C> {
         &mut self,
         launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        if launch.semantic_launch != crate::BackendSemanticLaunchV1::Ordinary {
+            return Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol(
+                    "semantic launch requires an exact negotiated worker operation",
+                ),
+            ));
+        }
         self.handle_call(RuntimeWorkerOperationV1::Submit {
             stream: launch.stream,
             kernel: launch.kernel,

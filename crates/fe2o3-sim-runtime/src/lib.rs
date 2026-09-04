@@ -23,11 +23,11 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 use fe2o3_runtime::{
     BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
-    BackendPollV1, MAX_RUNTIME_ALLOCATIONS_V1, MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1,
-    MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1, MAX_RUNTIME_KERNEL_NAME_BYTES_V1,
-    MAX_RUNTIME_KERNELS_V1, MAX_RUNTIME_MODULES_V1, MAX_RUNTIME_STREAMS_V1,
-    MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeBackendFailureV1, RuntimeBackendV1,
-    RuntimeCapabilitiesV1, RuntimeMemoryKindV1,
+    BackendPollV1, BackendSemanticLaunchV1, MAX_RUNTIME_ALLOCATIONS_V1,
+    MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
+    MAX_RUNTIME_KERNEL_NAME_BYTES_V1, MAX_RUNTIME_KERNELS_V1, MAX_RUNTIME_MODULES_V1,
+    MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeBackendFailureV1,
+    RuntimeBackendV1, RuntimeCapabilitiesV1, RuntimeMemoryKindV1,
 };
 use fe2o3_runtime_model::IdentityDigestV1;
 use fe2o3_virtual_runtime::{
@@ -777,6 +777,9 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if launch.semantic_launch != BackendSemanticLaunchV1::Ordinary {
+            return Err(rejected_arguments("semantic launch"));
+        }
         require_capacity(self.submissions.len(), MAX_RUNTIME_SUBMISSIONS_V1)?;
         if launch.dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
             return Err(rejected_arguments("dependency count"));
@@ -4298,6 +4301,34 @@ mod tests {
                 SimRuntimeBackendErrorV1::InvalidHandle("allocation")
             ))
         ));
+        let geometry = fe2o3_runtime::RuntimeLaunchGeometryV1 {
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        };
+        assert!(matches!(
+            backend.submit_v1(BackendLaunchV1 {
+                stream: 77,
+                kernel: 88,
+                explicit_kernarg: &[],
+                bindings: &[],
+                dependencies: &[],
+                geometry,
+                semantic_launch: BackendSemanticLaunchV1::Collective(
+                    fe2o3_runtime::RuntimeCollectiveLaunchContractV1 {
+                        operation: fe2o3_runtime::RuntimeCollectiveOperationV1::ReduceSum,
+                        scope: fe2o3_runtime::RuntimeMemoryScopeV1::Workgroup,
+                        order: fe2o3_runtime::RuntimeMemoryOrderV1::AcquireRelease,
+                        participants: 64,
+                        geometry,
+                    },
+                ),
+            }),
+            Err(RuntimeBackendFailureV1::Rejected(
+                SimRuntimeBackendErrorV1::InvalidArguments(detail)
+            )) if detail == "semantic launch"
+        ));
+        assert!(backend.submissions.is_empty());
         assert!(matches!(
             backend.peer_copy_v1(
                 1,

@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 
 mod dispatch_timestamps_v1;
 pub use dispatch_timestamps_v1::*;
+mod native_runtime_timestamps_v1;
+pub use native_runtime_timestamps_v1::*;
 
 pub const KFD_RUNTIME_PROFILE_SCHEMA_VERSION_V1: u16 = 1;
 pub const KFD_RUNTIME_PROFILE_SCHEMA_V1: &str = "fe2o3-kfd-runtime-profile-v1";

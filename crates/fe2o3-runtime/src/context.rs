@@ -285,9 +285,9 @@ pub enum RuntimeAtomicOperationV1 {
 /// Explicit semantic and launch-shape contract for an atomic kernel.
 ///
 /// The runtime validates this value against [`RuntimeAtomicArgumentsV1`] and
-/// submits the already admitted typed kernel through [`RuntimeBackendV1::submit_v1`].
-/// This contract does not imply a backend-native intrinsic or prove that the
-/// kernel implementation satisfies the declaration.
+/// preserves it through [`RuntimeAtomicBackendV1`]. This contract does not
+/// imply a backend-native intrinsic or prove that the kernel implementation
+/// satisfies the declaration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeAtomicLaunchContractV1 {
     pub operation: RuntimeAtomicOperationV1,
@@ -327,7 +327,7 @@ pub enum RuntimeCollectiveOperationV1 {
 /// `participants` must equal the workgroup size for workgroup scope and the
 /// complete grid size for device scope. System scope is rejected because a
 /// single-stream launch cannot identify a cross-device participant set.
-/// Execution is an ordinary admitted typed launch; the runtime does not
+/// Execution requires [`RuntimeCollectiveBackendV1`]; the runtime does not
 /// synthesize a collective.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeCollectiveLaunchContractV1 {
@@ -351,7 +351,16 @@ pub struct RuntimeAtomicLaunchV1<A>(PhantomData<fn(A) -> A>);
 /// Marker identifying a collective submission while preserving its argument type.
 pub struct RuntimeCollectiveLaunchV1<A>(PhantomData<fn(A) -> A>);
 
+/// Semantic class retained across the backend launch boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendSemanticLaunchV1 {
+    Ordinary,
+    Atomic(RuntimeAtomicLaunchContractV1),
+    Collective(RuntimeCollectiveLaunchContractV1),
+}
+
 /// Backend launch description after all context-local validation.
+#[derive(Clone, Copy, Debug)]
 pub struct BackendLaunchV1<'a> {
     pub stream: u64,
     pub kernel: u64,
@@ -359,6 +368,7 @@ pub struct BackendLaunchV1<'a> {
     pub bindings: &'a [BackendBindingV1],
     pub dependencies: &'a [u64],
     pub geometry: RuntimeLaunchGeometryV1,
+    pub semantic_launch: BackendSemanticLaunchV1,
 }
 
 /// Backend allocation-relative region translated from a stable runtime handle.
@@ -415,6 +425,12 @@ pub enum RuntimeBackendFailureV1<E> {
 /// `release_submission_v1` is valid only after such quiescence (or after a
 /// successful stream destroy established it) and must not invalidate events
 /// that still retain the completion state.
+///
+/// Implementations must never silently ignore [`BackendLaunchV1::semantic_launch`].
+/// A backend without the corresponding additive atomic or collective SPI must
+/// reject a non-[`BackendSemanticLaunchV1::Ordinary`] launch before accepting
+/// custody. A supporting backend must preserve the exact semantic contract;
+/// its additive SPI must reject the wrong semantic variant.
 ///
 /// Failure classes are part of the safety contract:
 ///
@@ -560,6 +576,32 @@ pub trait RuntimeAsyncCopyBackendV1: RuntimeBackendV1 {
         source: BackendMemoryRegionV1,
         destination: BackendMemoryRegionV1,
         dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Optional atomic-kernel submission SPI.
+///
+/// The launch must carry [`BackendSemanticLaunchV1::Atomic`] with the validated
+/// operation, scope, ordering, compare-exchange mode, and geometry.
+/// Implementations must reject the wrong variant or a contract that is not
+/// covered by their native execution authority before accepting custody.
+pub trait RuntimeAtomicBackendV1: RuntimeBackendV1 {
+    fn submit_atomic_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
+/// Optional collective-kernel submission SPI.
+///
+/// The launch must carry [`BackendSemanticLaunchV1::Collective`] with the
+/// validated operation, scope, ordering, participation, and geometry.
+/// Implementations must reject the wrong variant or an unsupported contract
+/// before accepting custody.
+pub trait RuntimeCollectiveBackendV1: RuntimeBackendV1 {
+    fn submit_collective_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
 }
 
@@ -853,6 +895,20 @@ struct SubmissionRecordV1 {
 type RuntimeCompletionCallbackV1 =
     Box<dyn FnOnce(RuntimeCompletionStatusV1) + Send + UnwindSafe + 'static>;
 
+fn completion_callback_panicked_v1(
+    callback: impl FnOnce(RuntimeCompletionStatusV1),
+    status: RuntimeCompletionStatusV1,
+) -> bool {
+    match catch_unwind(AssertUnwindSafe(|| callback(status))) {
+        Ok(()) => false,
+        Err(payload) => {
+            // A callback can panic with a payload whose destructor also panics.
+            core::mem::forget(payload);
+            true
+        }
+    }
+}
+
 /// One independently owned runtime backend and all of its context-local handles.
 ///
 /// Before normal shutdown, observe every submission to a terminal result,
@@ -883,6 +939,15 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     completion_callback_panic_count: u64,
     next_identity: u64,
     terminal: bool,
+}
+
+struct ContextLaunchRequestV1<'a, A: RuntimeArgumentsV1> {
+    stream: RuntimeStreamIdV1,
+    kernel: &'a TypedRuntimeKernelV1<A>,
+    arguments: &'a A,
+    geometry: RuntimeLaunchGeometryV1,
+    dependencies: &'a [RuntimeEventIdV1],
+    semantic_launch: BackendSemanticLaunchV1,
 }
 
 /// A failed consuming shutdown retaining the context and every unreleased handle.
@@ -1275,7 +1340,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .checked_sub(callbacks.len())
             .expect("callback count tracks retained callbacks");
         for callback in callbacks {
-            if catch_unwind(AssertUnwindSafe(|| callback(status))).is_err() {
+            if completion_callback_panicked_v1(callback, status) {
                 self.completion_callback_panic_count =
                     self.completion_callback_panic_count.saturating_add(1);
             }
@@ -1729,6 +1794,39 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         geometry: RuntimeLaunchGeometryV1,
         dependencies: &[RuntimeEventIdV1],
     ) -> Result<RuntimeSubmissionV1<A>, RuntimeErrorV1<B::Error>> {
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments,
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Ordinary,
+            },
+            |backend, launch| backend.submit_v1(launch),
+        )
+    }
+
+    fn launch_with_backend_submit<A, M, F>(
+        &mut self,
+        request: ContextLaunchRequestV1<'_, A>,
+        submit: F,
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
+    where
+        A: RuntimeArgumentsV1,
+        F: for<'launch> FnOnce(
+            &mut B,
+            BackendLaunchV1<'launch>,
+        ) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
+    {
+        let ContextLaunchRequestV1 {
+            stream,
+            kernel,
+            arguments,
+            geometry,
+            dependencies,
+            semantic_launch,
+        } = request;
         self.require_live()?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
@@ -1838,14 +1936,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_dependencies.push(event.backend_event);
         }
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let result = self.backend.submit_v1(BackendLaunchV1 {
-            stream: stream_record.backend_stream,
-            kernel: kernel.backend_kernel,
-            explicit_kernarg: &explicit_kernarg,
-            bindings: &backend_bindings,
-            dependencies: &backend_dependencies,
-            geometry,
-        });
+        let result = submit(
+            &mut self.backend,
+            BackendLaunchV1 {
+                stream: stream_record.backend_stream,
+                kernel: kernel.backend_kernel,
+                explicit_kernarg: &explicit_kernarg,
+                bindings: &backend_bindings,
+                dependencies: &backend_dependencies,
+                geometry,
+                semantic_launch,
+            },
+        );
         let backend_submission = self.backend_result(result)?;
         let protocol_error = self.backend_handle_protocol_error(
             RuntimeBackendResourceKindV1::Submission,
@@ -1878,9 +1980,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     /// Submits an admitted typed kernel under an explicit atomic contract.
     ///
-    /// Both stable and execution-detail atomic capabilities must be advertised.
-    /// The operation is submitted through the ordinary backend launch SPI; this
-    /// API does not claim that the backend provides a native atomic primitive.
+    /// Both stable and execution-detail atomic capabilities must be advertised,
+    /// and the backend must implement the contract-preserving atomic SPI.
     pub fn launch_atomic<A: RuntimeAtomicArgumentsV1>(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -1888,7 +1989,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         arguments: &A,
         contract: RuntimeAtomicLaunchContractV1,
         dependencies: &[RuntimeEventIdV1],
-    ) -> Result<RuntimeSubmissionV1<RuntimeAtomicLaunchV1<A>>, RuntimeErrorV1<B::Error>> {
+    ) -> Result<RuntimeSubmissionV1<RuntimeAtomicLaunchV1<A>>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAtomicBackendV1,
+    {
         self.require_live()?;
         let geometry = contract
             .geometry
@@ -1916,20 +2020,25 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(RuntimeValidationErrorV1::Unsupported.into());
         }
-        Ok(retag_submission(self.launch(
-            stream,
-            kernel,
-            arguments,
-            geometry,
-            dependencies,
-        )?))
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments,
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Atomic(contract),
+            },
+            |backend, launch| backend.submit_atomic_v1(launch),
+        )
     }
 
     /// Submits an admitted typed kernel under an explicit collective contract.
     ///
-    /// The participant count is checked against geometry before the ordinary
-    /// typed launch SPI is entered. System-wide collectives are rejected because
-    /// one stream launch cannot establish a cross-device participant set.
+    /// The participant count is checked against geometry before the
+    /// contract-preserving collective SPI is entered. System-wide collectives
+    /// are rejected because one stream launch cannot establish a cross-device
+    /// participant set.
     pub fn launch_collective<A: RuntimeCollectiveArgumentsV1>(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -1937,7 +2046,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         arguments: &A,
         contract: RuntimeCollectiveLaunchContractV1,
         dependencies: &[RuntimeEventIdV1],
-    ) -> Result<RuntimeSubmissionV1<RuntimeCollectiveLaunchV1<A>>, RuntimeErrorV1<B::Error>> {
+    ) -> Result<RuntimeSubmissionV1<RuntimeCollectiveLaunchV1<A>>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeCollectiveBackendV1,
+    {
         self.require_live()?;
         let geometry = contract
             .geometry
@@ -1988,13 +2100,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(RuntimeValidationErrorV1::Unsupported.into());
         }
-        Ok(retag_submission(self.launch(
-            stream,
-            kernel,
-            arguments,
-            geometry,
-            dependencies,
-        )?))
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments,
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Collective(contract),
+            },
+            |backend, launch| backend.submit_collective_v1(launch),
+        )
     }
 
     pub fn poll<A>(
@@ -2143,7 +2259,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.require_live()?;
         let record = self.submission_record(submission)?;
         if record.status.is_terminal() {
-            if catch_unwind(AssertUnwindSafe(|| callback(record.status))).is_err() {
+            if completion_callback_panicked_v1(callback, record.status) {
                 self.completion_callback_panic_count =
                     self.completion_callback_panic_count.saturating_add(1);
             }
@@ -2671,18 +2787,6 @@ fn validate_byte_range(
     Ok(())
 }
 
-fn retag_submission<A, T>(submission: RuntimeSubmissionV1<A>) -> RuntimeSubmissionV1<T> {
-    RuntimeSubmissionV1 {
-        id: submission.id,
-        backend_submission: submission.backend_submission,
-        stream: submission.stream,
-        device: submission.device,
-        completion: submission.completion,
-        peer_transfer: submission.peer_transfer,
-        marker: PhantomData,
-    }
-}
-
 const fn atomic_contract_is_legal(contract: RuntimeAtomicLaunchContractV1) -> bool {
     match (contract.operation, contract.failure_order) {
         (RuntimeAtomicOperationV1::CompareExchange, Some(failure)) => {
@@ -2946,6 +3050,8 @@ mod tests {
         last_flushed_stream: Option<u64>,
         flush_failure: MockFlushFailure,
         last_launch_geometry: Option<RuntimeLaunchGeometryV1>,
+        last_atomic_contract: Option<RuntimeAtomicLaunchContractV1>,
+        last_collective_contract: Option<RuntimeCollectiveLaunchContractV1>,
         wait_observation: Option<BackendPollV1>,
         first_wait_failure: MockWaitFailure,
         wait_deadlines: Vec<Instant>,
@@ -3245,6 +3351,34 @@ mod tests {
             let identity = self.handle(MockHandleKind::Submission);
             self.polls.insert(identity, 0);
             Ok(identity)
+        }
+    }
+
+    impl RuntimeAtomicBackendV1 for MockBackend {
+        fn submit_atomic_v1(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let BackendSemanticLaunchV1::Atomic(contract) = launch.semantic_launch else {
+                return Err(RuntimeBackendFailureV1::Rejected(MockError("not atomic")));
+            };
+            self.last_atomic_contract = Some(contract);
+            self.submit_v1(launch)
+        }
+    }
+
+    impl RuntimeCollectiveBackendV1 for MockBackend {
+        fn submit_collective_v1(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let BackendSemanticLaunchV1::Collective(contract) = launch.semantic_launch else {
+                return Err(RuntimeBackendFailureV1::Rejected(MockError(
+                    "not collective",
+                )));
+            };
+            self.last_collective_contract = Some(contract);
+            self.submit_v1(launch)
         }
     }
 
@@ -5007,6 +5141,14 @@ mod tests {
     fn callback_panics_are_contained_and_stream_quiescence_has_typed_status() {
         use std::sync::{Arc, Mutex};
 
+        struct PanickingDropPayload;
+
+        impl Drop for PanickingDropPayload {
+            fn drop(&mut self) {
+                panic!("completion callback panic payload destructor");
+            }
+        }
+
         let (mut context, stream, allocation, kernel) = context_with_launch_prerequisites();
         let submission = context
             .launch(
@@ -5028,7 +5170,7 @@ mod tests {
             })
             .unwrap();
         context
-            .on_completion(&submission, |_| panic!("contained callback panic"))
+            .on_completion(&submission, |_| std::panic::panic_any(PanickingDropPayload))
             .unwrap();
 
         context.destroy_stream(stream).unwrap();
@@ -5041,6 +5183,10 @@ mod tests {
             [RuntimeCompletionStatusV1::QuiescentWithoutResult]
         );
         assert_eq!(context.completion_callback_panic_count(), 1);
+        context
+            .on_completion(&submission, |_| std::panic::panic_any(PanickingDropPayload))
+            .unwrap();
+        assert_eq!(context.completion_callback_panic_count(), 2);
         context.release_submission(submission).unwrap();
     }
 
@@ -5423,6 +5569,10 @@ mod tests {
             .unwrap();
         assert_eq!(context.backend().submit_count, 1);
         assert_eq!(context.backend().last_launch_geometry, Some(geometry()));
+        assert_eq!(
+            context.backend().last_atomic_contract,
+            Some(atomic_contract)
+        );
         context.wait(&mut atomic, Duration::from_secs(1)).unwrap();
         context.release_submission(atomic).unwrap();
 
@@ -5464,6 +5614,10 @@ mod tests {
             .launch_collective(stream, &kernel, &arguments, collective_contract, &[])
             .unwrap();
         assert_eq!(context.backend().submit_count, 3);
+        assert_eq!(
+            context.backend().last_collective_contract,
+            Some(collective_contract)
+        );
         context
             .wait(&mut collective, Duration::from_secs(1))
             .unwrap();

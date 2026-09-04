@@ -923,6 +923,7 @@ fn execute_scalar_slice_bundle_v5_through_sim_runtime(
                 workgroup: [64, 1, 1],
                 dynamic_shared_bytes: 0,
             },
+            semantic_launch: fe2o3_runtime::BackendSemanticLaunchV1::Ordinary,
         })
         .unwrap();
     assert_eq!(
@@ -2717,6 +2718,7 @@ fn execute_aggregate_bundle_v5_through_sim_runtime(
                 workgroup: [64, 1, 1],
                 dynamic_shared_bytes: 0,
             },
+            semantic_launch: fe2o3_runtime::BackendSemanticLaunchV1::Ordinary,
         })
         .unwrap();
     assert_eq!(

@@ -139,6 +139,15 @@ complete, loss-free observations. CPU publication is never relabeled as a
 device timestamp, and opaque ticks are never normalized to nanoseconds or a
 global clock.
 
+`report_authenticated_native_runtime_dispatch_timestamps_v1` consumes only the
+direct-KFD runtime's opaque custody bundle. It reports exact host-monotonic
+publication and completion observation points and their loss/completeness
+coverage. Empty captures report no observed intervals, and a fresh recorder
+occurrence distinguishes each process-local clock epoch. It does not infer GPU begin/end from those points, reuse the low-level
+clock-correlation sample, or advertise a device/global clock domain. Persisted
+timestamp JSON can be revalidated structurally but cannot recreate this
+authenticated query input.
+
 ## Profiler capture queries
 
 The same crate provides the read-only `CaptureQuerySessionV1` protocol and

@@ -28,3 +28,15 @@ frequency/nanosecond conversion, global synchronization, and authenticated
 producer provenance unavailable. Every tick and bracket is explicitly labeled
 as a producer-declared observation, never as an authenticated `Observed` fact.
 No production collector adapter currently mints authenticated records.
+
+Native Runtime Dispatch Timestamps V1 is a separate host-only schema produced
+inside the direct-KFD runtime profiler. Its clock is monotonic nanoseconds since
+that recorder started. Each recorder obtains a fresh Linux `getrandom`
+occurrence and binds it into the clock-domain identity, making accidental
+aliasing across reused caller scopes and process-local epochs cryptographically
+negligible. Every publication/completion point binds the exact retained runtime
+event identity and sequence plus dispatch, queue, device, kernel, artifact,
+capture-scope, and runtime-profile identity. Decoding its
+canonical bytes validates structure and currentness only; native-runtime
+provenance remains available solely through the non-constructible runtime
+custody bundle. This schema has no GPU begin/end or device-clock fields.

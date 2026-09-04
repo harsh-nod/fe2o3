@@ -3,8 +3,9 @@
 //! The admitted gfx942 KFD surface owns explicit process VMs and native queues.
 //! The single-device adapter owns a bounded set of independent compute queues
 //! and directional SDMA queues. The separate two-device adapter retains exact
-//! directional XGMI routes for copy-only peer execution. Neither adapter
-//! advertises atomic or collective execution.
+//! directional XGMI routes for copy-only peer execution. Atomic and collective
+//! execution is fail-closed unless a separate unsafe authority enumerates and
+//! authorizes the exact semantic contract carried by each launch.
 
 use core::fmt;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -42,12 +43,15 @@ use fe2o3_profiler_protocol::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
-    BackendPollV1, KfdRuntimeProfileRecorderV1, KfdRuntimeProfilerConfigV1,
-    MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
-    MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
-    RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
-    RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1, RuntimeMemoryKindV1,
+    AuthenticatedKfdRuntimeDispatchTimestampsV1, BackendBindingV1, BackendDeviceDescriptionV1,
+    BackendLaunchV1, BackendMemoryRegionV1, BackendPollV1, BackendSemanticLaunchV1,
+    KfdRuntimeProfileRecorderV1, KfdRuntimeProfilerConfigV1, MAX_RUNTIME_DEPENDENCIES_V1,
+    MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1, MAX_RUNTIME_STREAMS_V1,
+    MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1, RuntimeAtomicBackendV1,
+    RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1, RuntimeBackendFailureV1,
+    RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
+    RuntimeCollectiveBackendV1, RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1,
+    RuntimeFlushBackendV1, RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
 };
 
 const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
@@ -55,6 +59,8 @@ const KFD_RUNTIME_RING_BYTES_V1: u32 = 64 * 1024;
 pub const KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1: usize = 2;
 /// Reviewed V1 bound for logical streams multiplexed over the native queues.
 pub const KFD_RUNTIME_MAX_LOGICAL_STREAMS_V1: usize = MAX_RUNTIME_STREAMS_V1;
+/// Maximum exact atomic or collective profiles inspected per launch.
+pub const KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1: usize = 64;
 const COV6_IMPLICIT_KERNARG_BYTES_V1: usize = 256;
 const WAIT_SPINS_V1: u32 = 32;
 const WAIT_YIELDS_V1: u32 = 8;
@@ -199,6 +205,45 @@ pub struct KfdRuntimeAuthorityGlobalBufferV1<'a> {
     pub access: ArgumentAccess,
 }
 
+/// Exact, geometry-independent atomic profile admitted by semantic authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdRuntimeAtomicExecutionProfileV1 {
+    pub operation: RuntimeAtomicOperationV1,
+    pub scope: RuntimeMemoryScopeV1,
+    pub order: RuntimeMemoryOrderV1,
+    pub failure_order: Option<RuntimeMemoryOrderV1>,
+    pub weak: bool,
+}
+
+impl KfdRuntimeAtomicExecutionProfileV1 {
+    fn matches_v1(self, contract: RuntimeAtomicLaunchContractV1) -> bool {
+        self.operation == contract.operation
+            && self.scope == contract.scope
+            && self.order == contract.order
+            && self.failure_order == contract.failure_order
+            && self.weak == contract.weak
+    }
+}
+
+/// Exact, geometry-independent collective profile admitted by semantic authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdRuntimeCollectiveExecutionProfileV1 {
+    pub operation: crate::RuntimeCollectiveOperationV1,
+    pub scope: RuntimeMemoryScopeV1,
+    pub order: RuntimeMemoryOrderV1,
+}
+
+impl KfdRuntimeCollectiveExecutionProfileV1 {
+    fn matches_v1(self, contract: RuntimeCollectiveLaunchContractV1) -> bool {
+        self.operation == contract.operation
+            && self.scope == contract.scope
+            && self.order == contract.order
+    }
+}
+
+/// KFD name for the semantic class carried into final native authorization.
+pub type KfdRuntimeSemanticLaunchV1 = BackendSemanticLaunchV1;
+
 /// Exact address-free invocation presented before any direct KFD mutation.
 #[derive(Clone, Copy, Debug)]
 pub struct KfdRuntimeAuthorityRequestV1<'a> {
@@ -212,6 +257,7 @@ pub struct KfdRuntimeAuthorityRequestV1<'a> {
     pub dispatch_abi: &'a [KfdRuntimeAuthorityGlobalBufferV1<'a>],
     pub allocations: &'a [KfdRuntimeAuthorityAllocationV1<'a>],
     pub geometry: crate::RuntimeLaunchGeometryV1,
+    pub semantic_launch: KfdRuntimeSemanticLaunchV1,
 }
 
 /// Invocation-specific authority for the in-process direct-KFD backend.
@@ -238,13 +284,38 @@ pub struct KfdRuntimeAuthorityRequestV1<'a> {
 /// compiler lineage and an invocation-specific proof of all device memory
 /// effects. It must also establish that completion observation is sufficient
 /// for host reuse of every referenced allocation. Descriptive hashes or
-/// structural AMDHSA validation alone do not satisfy this contract.
+/// structural AMDHSA validation alone do not satisfy this contract. A panic is
+/// contained and treated as a fail-closed denial before native publication.
 pub unsafe trait KfdRuntimeLaunchAuthorityV1: fmt::Debug {
     fn authorize_launch_v1(&self, request: KfdRuntimeAuthorityRequestV1<'_>) -> bool;
 }
 
+/// Additive authority for exact atomic and collective native launches.
+///
+/// Profiles are an admission filter, not evidence by themselves. The final
+/// invocation request still carries the exact contract and must be authorized
+/// after its complete kernarg, allocation windows, and geometry are known.
+/// Empty or over-bound profile slices advertise no semantic capability.
+///
+/// # Safety
+///
+/// Every returned profile must be backed by authenticated compiler-to-machine
+/// lineage and native evidence for its operation, address space, width, return
+/// value, ordering, scope, fences, and instruction sequence. Collective
+/// profiles additionally require authenticated convergence, participant mask,
+/// LDS, barrier, and result-layout evidence. Implementations must reject any
+/// final request outside that evidence in [`Self::authorize_launch_v1`].
+/// Both slices and their contents must remain immutable for the lifetime of
+/// the backend so stable capability enumeration cannot become stale.
+pub unsafe trait KfdRuntimeSemanticLaunchAuthorityV1: KfdRuntimeLaunchAuthorityV1 {
+    fn atomic_profiles_v1(&self) -> &[KfdRuntimeAtomicExecutionProfileV1];
+
+    fn collective_profiles_v1(&self) -> &[KfdRuntimeCollectiveExecutionProfileV1];
+}
+
 enum KfdRuntimeLaunchGateV1 {
     Production(Box<dyn KfdRuntimeLaunchAuthorityV1>),
+    Semantic(Box<dyn KfdRuntimeSemanticLaunchAuthorityV1>),
     #[cfg(feature = "hardware-qualification")]
     ExactGfx942Vecadd(crate::qualification_gfx942_vecadd_v1::AdmittedGfx942VecaddQualificationV1),
 }
@@ -256,6 +327,9 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
                 .debug_tuple("Production")
                 .field(authority)
                 .finish(),
+            Self::Semantic(authority) => {
+                formatter.debug_tuple("Semantic").field(authority).finish()
+            }
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
         }
@@ -264,10 +338,79 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
 
 impl KfdRuntimeLaunchGateV1 {
     fn authorize_launch_v1(&self, request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
-        match self {
+        catch_authority_callback_v1(|| match self {
             Self::Production(authority) => authority.authorize_launch_v1(request),
+            Self::Semantic(authority) => authority.authorize_launch_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
+        })
+        .unwrap_or(false)
+    }
+
+    fn supports_atomic_v1(&self, contract: RuntimeAtomicLaunchContractV1) -> bool {
+        let Self::Semantic(authority) = self else {
+            return false;
+        };
+        let Some(profiles) = catch_authority_callback_v1(|| authority.atomic_profiles_v1()) else {
+            return false;
+        };
+        profiles.len() <= KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1
+            && profiles.iter().any(|profile| {
+                atomic_profile_is_admissible_v1(*profile) && profile.matches_v1(contract)
+            })
+    }
+
+    fn supports_collective_v1(&self, contract: RuntimeCollectiveLaunchContractV1) -> bool {
+        let Self::Semantic(authority) = self else {
+            return false;
+        };
+        let Some(profiles) = catch_authority_callback_v1(|| authority.collective_profiles_v1())
+        else {
+            return false;
+        };
+        profiles.len() <= KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1
+            && profiles.iter().any(|profile| {
+                collective_profile_is_admissible_v1(*profile) && profile.matches_v1(contract)
+            })
+    }
+
+    fn advertises_atomics_v1(&self) -> bool {
+        let Self::Semantic(authority) = self else {
+            return false;
+        };
+        let Some(profiles) = catch_authority_callback_v1(|| authority.atomic_profiles_v1()) else {
+            return false;
+        };
+        profiles.len() <= KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1
+            && profiles
+                .iter()
+                .copied()
+                .any(atomic_profile_is_admissible_v1)
+    }
+
+    fn advertises_collectives_v1(&self) -> bool {
+        let Self::Semantic(authority) = self else {
+            return false;
+        };
+        let Some(profiles) = catch_authority_callback_v1(|| authority.collective_profiles_v1())
+        else {
+            return false;
+        };
+        profiles.len() <= KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1
+            && profiles
+                .iter()
+                .copied()
+                .any(collective_profile_is_admissible_v1)
+    }
+}
+
+fn catch_authority_callback_v1<T>(operation: impl FnOnce() -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            // An unsafe authority may supply a payload whose destructor also panics.
+            core::mem::forget(payload);
+            None
         }
     }
 }
@@ -371,6 +514,7 @@ struct OwnedComputeLaunchV1 {
     explicit_kernarg: Box<[u8]>,
     bindings: Box<[BackendBindingV1]>,
     geometry: crate::RuntimeLaunchGeometryV1,
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
 }
 
 impl OwnedComputeLaunchV1 {
@@ -382,6 +526,7 @@ impl OwnedComputeLaunchV1 {
             bindings: &self.bindings,
             dependencies: &[],
             geometry: self.geometry,
+            semantic_launch: self.semantic_launch,
         }
     }
 }
@@ -689,7 +834,9 @@ struct OwnedAbiRowV1 {
 /// pool is trimmed during explicit shutdown. Compute still materializes separate
 /// fixed-dispatch storage from the bounded logical host image, so persistent
 /// copy storage is not yet a shared compute allocation. The adapter exposes one
-/// gfx942 device and no peer copy, multi-device, atomic, or collective operations.
+/// gfx942 device and no peer copy or multi-device operations. Atomic and
+/// collective profiles remain unavailable unless an unsafe semantic authority
+/// explicitly enumerates and authorizes their exact contracts.
 #[must_use = "direct KFD backends must remain owned through quiescence"]
 pub struct KfdRuntimeBackendV1 {
     description: BackendDeviceDescriptionV1,
@@ -815,6 +962,21 @@ impl KfdRuntimeBackendV1 {
         )
     }
 
+    /// Opens a direct backend whose exact semantic profiles are supplied by a
+    /// separate unsafe authority.
+    pub fn open_default_with_semantic_authority_v1<A>(
+        device_unique_id: u64,
+        authority: A,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1>
+    where
+        A: KfdRuntimeSemanticLaunchAuthorityV1 + 'static,
+    {
+        Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::Semantic(Box::new(authority)),
+        )
+    }
+
     #[cfg(feature = "hardware-qualification")]
     /// Opens the exact repository-owned gfx942 vecadd qualification backend.
     ///
@@ -877,6 +1039,20 @@ impl KfdRuntimeBackendV1 {
         )
     }
 
+    /// Wraps a checked device with exact semantic launch authority.
+    pub fn from_checked_device_with_semantic_authority_v1<A>(
+        device: CheckedGfx942XnackMinusDevice,
+        authority: A,
+    ) -> Self
+    where
+        A: KfdRuntimeSemanticLaunchAuthorityV1 + 'static,
+    {
+        Self::from_checked_device_with_gate(
+            device,
+            KfdRuntimeLaunchGateV1::Semantic(Box::new(authority)),
+        )
+    }
+
     fn from_checked_device_with_gate(
         device: CheckedGfx942XnackMinusDevice,
         launch_gate: KfdRuntimeLaunchGateV1,
@@ -922,12 +1098,14 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn new_with_staging_budgets(
-        description: BackendDeviceDescriptionV1,
+        mut description: BackendDeviceDescriptionV1,
         admitted_device: Option<CheckedGfx942XnackMinusDevice>,
         launch_gate: KfdRuntimeLaunchGateV1,
         staging_budgets: StagingBudgetsV1,
     ) -> Self {
         let native_available = admitted_device.is_some();
+        description.capabilities.atomics = launch_gate.advertises_atomics_v1();
+        description.capabilities.collectives = launch_gate.advertises_collectives_v1();
         Self {
             description,
             admitted_device,
@@ -1013,6 +1191,28 @@ impl KfdRuntimeBackendV1 {
     pub fn finish_profiler_v1(
         &mut self,
     ) -> Result<KfdRuntimeProfileV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.take_finished_profiler_recorder_v1()?
+            .finish()
+            .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
+    }
+
+    /// Finishes profiling with runtime-authenticated host dispatch timestamps
+    /// after all logical and native KFD custody is closed.
+    pub fn finish_profiler_with_dispatch_timestamps_v1(
+        &mut self,
+    ) -> Result<
+        AuthenticatedKfdRuntimeDispatchTimestampsV1,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        self.take_finished_profiler_recorder_v1()?
+            .finish_with_dispatch_timestamps()
+            .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
+    }
+
+    fn take_finished_profiler_recorder_v1(
+        &mut self,
+    ) -> Result<KfdRuntimeProfileRecorderV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
         self.require_live()?;
         if !self.queue_retired
             || !self.streams.is_empty()
@@ -1028,15 +1228,12 @@ impl KfdRuntimeBackendV1 {
                 "direct-KFD profiling can finish only after logical cleanup and native shutdown",
             ));
         }
-        let recorder = self.profiler.take().ok_or_else(|| {
+        self.profiler.take().ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
                 "direct-KFD profiling was not enabled",
             )
-        })?;
-        recorder
-            .finish()
-            .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
+        })
     }
 
     fn profile_resource_v1(
@@ -2789,7 +2986,7 @@ impl KfdRuntimeBackendV1 {
         launch: BackendLaunchV1<'_>,
     ) -> Result<PreparedLaunchV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let preparation_started = Instant::now();
-        let dispatch_shape_sha256 = dispatch_shape_sha256_v1(&launch);
+        let dispatch_shape_sha256 = dispatch_shape_sha256_v1(&launch, launch.semantic_launch);
         let profile_launch = KfdProfileLaunchV1 {
             grid: launch.geometry.grid,
             workgroup: launch.geometry.workgroup,
@@ -3010,6 +3207,7 @@ impl KfdRuntimeBackendV1 {
                 dispatch_abi: &authority_abi,
                 allocations: &authority_allocations,
                 geometry: launch.geometry,
+                semantic_launch: launch.semantic_launch,
             });
         let authority = authority_started.elapsed();
         if !authorized {
@@ -3880,6 +4078,37 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
+    fn validate_semantic_launch_v1(
+        &self,
+        semantic_launch: KfdRuntimeSemanticLaunchV1,
+        geometry: crate::RuntimeLaunchGeometryV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let supported = match semantic_launch {
+            KfdRuntimeSemanticLaunchV1::Ordinary => return Ok(()),
+            KfdRuntimeSemanticLaunchV1::Atomic(contract) => {
+                contract.geometry == geometry
+                    && contract.scope != RuntimeMemoryScopeV1::System
+                    && atomic_contract_is_legal_v1(contract)
+                    && self.launch_gate.supports_atomic_v1(contract)
+            }
+            KfdRuntimeSemanticLaunchV1::Collective(contract) => {
+                contract.geometry == geometry
+                    && contract.scope == RuntimeMemoryScopeV1::Workgroup
+                    && complete_workgroup_geometry_v1(geometry)
+                    && workgroup_participants_v1(geometry) == Some(contract.participants)
+                    && self.launch_gate.supports_collective_v1(contract)
+            }
+        };
+        if supported {
+            Ok(())
+        } else {
+            Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "semantic launch contract is not covered by direct KFD authority",
+            ))
+        }
+    }
+
     #[cfg(test)]
     fn mock() -> Self {
         Self::mock_with_staging_budgets(StagingBudgetsV1 {
@@ -3903,6 +4132,44 @@ impl KfdRuntimeBackendV1 {
             staging_budgets,
         )
     }
+
+    #[cfg(test)]
+    fn mock_with_semantic_authority_v1() -> Self {
+        Self::new_with_staging_budgets(
+            BackendDeviceDescriptionV1 {
+                backend_device: 7,
+                name: "mock semantic gfx942".to_owned(),
+                target: "gfx942:xnack-".to_owned(),
+                global_memory_bytes: 0,
+                capabilities: kfd_capabilities_v1(),
+            },
+            None,
+            KfdRuntimeLaunchGateV1::Semantic(Box::new(TestSemanticAuthorityV1)),
+            StagingBudgetsV1 {
+                max_allocation_bytes: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
+                max_context_bytes: KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn mock_with_panicking_authority_v1() -> Self {
+        Self::new_with_staging_budgets(
+            BackendDeviceDescriptionV1 {
+                backend_device: 7,
+                name: "mock panicking-authority gfx942".to_owned(),
+                target: "gfx942:xnack-".to_owned(),
+                global_memory_bytes: 0,
+                capabilities: kfd_capabilities_v1(),
+            },
+            None,
+            KfdRuntimeLaunchGateV1::Production(Box::new(TestPanickingAuthorityV1)),
+            StagingBudgetsV1 {
+                max_allocation_bytes: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
+                max_context_bytes: KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1,
+            },
+        )
+    }
 }
 
 #[cfg(test)]
@@ -3913,6 +4180,124 @@ struct TestAuthorityV1;
 unsafe impl KfdRuntimeLaunchAuthorityV1 for TestAuthorityV1 {
     fn authorize_launch_v1(&self, _request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct TestPanickingAuthorityV1;
+
+#[cfg(test)]
+struct TestPanickingAuthorityPayloadV1;
+
+#[cfg(test)]
+impl Drop for TestPanickingAuthorityPayloadV1 {
+    fn drop(&mut self) {
+        panic!("requested KFD authority payload-drop panic");
+    }
+}
+
+#[cfg(test)]
+unsafe impl KfdRuntimeLaunchAuthorityV1 for TestPanickingAuthorityV1 {
+    fn authorize_launch_v1(&self, _request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+        std::panic::panic_any(TestPanickingAuthorityPayloadV1);
+    }
+}
+
+#[cfg(test)]
+const TEST_ATOMIC_PROFILE_V1: KfdRuntimeAtomicExecutionProfileV1 =
+    KfdRuntimeAtomicExecutionProfileV1 {
+        operation: RuntimeAtomicOperationV1::Add,
+        scope: RuntimeMemoryScopeV1::Workgroup,
+        order: RuntimeMemoryOrderV1::Relaxed,
+        failure_order: None,
+        weak: false,
+    };
+
+#[cfg(test)]
+const TEST_COLLECTIVE_PROFILE_V1: KfdRuntimeCollectiveExecutionProfileV1 =
+    KfdRuntimeCollectiveExecutionProfileV1 {
+        operation: crate::RuntimeCollectiveOperationV1::ReduceSum,
+        scope: RuntimeMemoryScopeV1::Workgroup,
+        order: RuntimeMemoryOrderV1::AcquireRelease,
+    };
+
+#[cfg(test)]
+#[derive(Debug)]
+struct TestSemanticAuthorityV1;
+
+#[cfg(test)]
+unsafe impl KfdRuntimeLaunchAuthorityV1 for TestSemanticAuthorityV1 {
+    fn authorize_launch_v1(&self, request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+        match request.semantic_launch {
+            KfdRuntimeSemanticLaunchV1::Ordinary => true,
+            KfdRuntimeSemanticLaunchV1::Atomic(contract) => {
+                TEST_ATOMIC_PROFILE_V1.matches_v1(contract)
+            }
+            KfdRuntimeSemanticLaunchV1::Collective(contract) => {
+                TEST_COLLECTIVE_PROFILE_V1.matches_v1(contract)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+unsafe impl KfdRuntimeSemanticLaunchAuthorityV1 for TestSemanticAuthorityV1 {
+    fn atomic_profiles_v1(&self) -> &[KfdRuntimeAtomicExecutionProfileV1] {
+        core::slice::from_ref(&TEST_ATOMIC_PROFILE_V1)
+    }
+
+    fn collective_profiles_v1(&self) -> &[KfdRuntimeCollectiveExecutionProfileV1] {
+        core::slice::from_ref(&TEST_COLLECTIVE_PROFILE_V1)
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct TestPanickingSemanticProfileAuthorityV1;
+
+#[cfg(test)]
+unsafe impl KfdRuntimeLaunchAuthorityV1 for TestPanickingSemanticProfileAuthorityV1 {
+    fn authorize_launch_v1(&self, _request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+unsafe impl KfdRuntimeSemanticLaunchAuthorityV1 for TestPanickingSemanticProfileAuthorityV1 {
+    fn atomic_profiles_v1(&self) -> &[KfdRuntimeAtomicExecutionProfileV1] {
+        std::panic::panic_any(TestPanickingAuthorityPayloadV1);
+    }
+
+    fn collective_profiles_v1(&self) -> &[KfdRuntimeCollectiveExecutionProfileV1] {
+        std::panic::panic_any(TestPanickingAuthorityPayloadV1);
+    }
+}
+
+#[cfg(test)]
+static TEST_OVERBOUND_ATOMIC_PROFILES_V1: [KfdRuntimeAtomicExecutionProfileV1;
+    KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1 + 1] =
+    [TEST_ATOMIC_PROFILE_V1; KFD_RUNTIME_MAX_SEMANTIC_PROFILES_V1 + 1];
+
+#[cfg(test)]
+#[derive(Debug)]
+struct TestOverboundSemanticAuthorityV1;
+
+#[cfg(test)]
+unsafe impl KfdRuntimeLaunchAuthorityV1 for TestOverboundSemanticAuthorityV1 {
+    fn authorize_launch_v1(&self, _request: KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+unsafe impl KfdRuntimeSemanticLaunchAuthorityV1 for TestOverboundSemanticAuthorityV1 {
+    fn atomic_profiles_v1(&self) -> &[KfdRuntimeAtomicExecutionProfileV1] {
+        &TEST_OVERBOUND_ATOMIC_PROFILES_V1
+    }
+
+    fn collective_profiles_v1(&self) -> &[KfdRuntimeCollectiveExecutionProfileV1] {
+        &[]
     }
 }
 
@@ -3938,7 +4323,10 @@ fn map_access_v1(access: RuntimeAccessV1) -> ArgumentAccess {
     }
 }
 
-fn dispatch_shape_sha256_v1(launch: &BackendLaunchV1<'_>) -> [u8; 32] {
+fn dispatch_shape_sha256_v1(
+    launch: &BackendLaunchV1<'_>,
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
+) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"fe2o3.runtime.kfd.recycled-dispatch-shape.v1\0");
     digest.update(launch.kernel.to_le_bytes());
@@ -3963,7 +4351,142 @@ fn dispatch_shape_sha256_v1(launch: &BackendLaunchV1<'_>) -> [u8; 32] {
         digest.update(binding.region.byte_len.to_le_bytes());
         digest.update(binding.kernarg_byte_offset.to_le_bytes());
     }
+    match semantic_launch {
+        KfdRuntimeSemanticLaunchV1::Ordinary => digest.update([0]),
+        KfdRuntimeSemanticLaunchV1::Atomic(contract) => {
+            digest.update([1, atomic_operation_tag_v1(contract.operation)]);
+            digest.update([memory_scope_tag_v1(contract.scope)]);
+            digest.update([memory_order_tag_v1(contract.order)]);
+            digest.update([contract
+                .failure_order
+                .map_or(0, |order| memory_order_tag_v1(order).saturating_add(1))]);
+            digest.update([u8::from(contract.weak)]);
+        }
+        KfdRuntimeSemanticLaunchV1::Collective(contract) => {
+            digest.update([2, collective_operation_tag_v1(contract.operation)]);
+            digest.update([memory_scope_tag_v1(contract.scope)]);
+            digest.update([memory_order_tag_v1(contract.order)]);
+            digest.update(contract.participants.to_le_bytes());
+        }
+    }
     digest.finalize().into()
+}
+
+const fn atomic_operation_tag_v1(operation: RuntimeAtomicOperationV1) -> u8 {
+    match operation {
+        RuntimeAtomicOperationV1::Add => 0,
+        RuntimeAtomicOperationV1::Minimum => 1,
+        RuntimeAtomicOperationV1::Maximum => 2,
+        RuntimeAtomicOperationV1::BitwiseAnd => 3,
+        RuntimeAtomicOperationV1::BitwiseOr => 4,
+        RuntimeAtomicOperationV1::BitwiseXor => 5,
+        RuntimeAtomicOperationV1::Exchange => 6,
+        RuntimeAtomicOperationV1::CompareExchange => 7,
+    }
+}
+
+const fn collective_operation_tag_v1(operation: crate::RuntimeCollectiveOperationV1) -> u8 {
+    match operation {
+        crate::RuntimeCollectiveOperationV1::Barrier => 0,
+        crate::RuntimeCollectiveOperationV1::Broadcast => 1,
+        crate::RuntimeCollectiveOperationV1::ReduceSum => 2,
+        crate::RuntimeCollectiveOperationV1::ReduceMinimum => 3,
+        crate::RuntimeCollectiveOperationV1::ReduceMaximum => 4,
+        crate::RuntimeCollectiveOperationV1::AllReduceSum => 5,
+        crate::RuntimeCollectiveOperationV1::InclusiveScanSum => 6,
+    }
+}
+
+const fn memory_scope_tag_v1(scope: RuntimeMemoryScopeV1) -> u8 {
+    match scope {
+        RuntimeMemoryScopeV1::Workgroup => 0,
+        RuntimeMemoryScopeV1::Device => 1,
+        RuntimeMemoryScopeV1::System => 2,
+    }
+}
+
+const fn memory_order_tag_v1(order: RuntimeMemoryOrderV1) -> u8 {
+    match order {
+        RuntimeMemoryOrderV1::Relaxed => 0,
+        RuntimeMemoryOrderV1::Acquire => 1,
+        RuntimeMemoryOrderV1::Release => 2,
+        RuntimeMemoryOrderV1::AcquireRelease => 3,
+        RuntimeMemoryOrderV1::SequentiallyConsistent => 4,
+    }
+}
+
+const fn atomic_contract_is_legal_v1(contract: RuntimeAtomicLaunchContractV1) -> bool {
+    match (contract.operation, contract.failure_order) {
+        (RuntimeAtomicOperationV1::CompareExchange, Some(failure)) => {
+            compare_exchange_orders_are_legal_v1(contract.order, failure)
+        }
+        (RuntimeAtomicOperationV1::CompareExchange, None) => false,
+        (_, None) => !contract.weak,
+        (_, Some(_)) => false,
+    }
+}
+
+const fn compare_exchange_orders_are_legal_v1(
+    success: RuntimeMemoryOrderV1,
+    failure: RuntimeMemoryOrderV1,
+) -> bool {
+    match success {
+        RuntimeMemoryOrderV1::Relaxed => matches!(failure, RuntimeMemoryOrderV1::Relaxed),
+        RuntimeMemoryOrderV1::Acquire => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed | RuntimeMemoryOrderV1::Acquire
+        ),
+        RuntimeMemoryOrderV1::Release => matches!(failure, RuntimeMemoryOrderV1::Relaxed),
+        RuntimeMemoryOrderV1::AcquireRelease => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed | RuntimeMemoryOrderV1::Acquire
+        ),
+        RuntimeMemoryOrderV1::SequentiallyConsistent => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed
+                | RuntimeMemoryOrderV1::Acquire
+                | RuntimeMemoryOrderV1::SequentiallyConsistent
+        ),
+    }
+}
+
+fn complete_workgroup_geometry_v1(geometry: crate::RuntimeLaunchGeometryV1) -> bool {
+    geometry
+        .grid
+        .into_iter()
+        .zip(geometry.workgroup)
+        .all(|(grid, workgroup)| {
+            workgroup != 0 && grid >= workgroup && grid.is_multiple_of(workgroup)
+        })
+}
+
+fn workgroup_participants_v1(geometry: crate::RuntimeLaunchGeometryV1) -> Option<u64> {
+    geometry
+        .workgroup
+        .into_iter()
+        .try_fold(1_u64, |product, value| {
+            product.checked_mul(u64::from(value))
+        })
+}
+
+const fn atomic_profile_is_admissible_v1(profile: KfdRuntimeAtomicExecutionProfileV1) -> bool {
+    if matches!(profile.scope, RuntimeMemoryScopeV1::System) {
+        return false;
+    }
+    match (profile.operation, profile.failure_order) {
+        (RuntimeAtomicOperationV1::CompareExchange, Some(failure)) => {
+            compare_exchange_orders_are_legal_v1(profile.order, failure)
+        }
+        (RuntimeAtomicOperationV1::CompareExchange, None) => false,
+        (_, None) => !profile.weak,
+        (_, Some(_)) => false,
+    }
+}
+
+const fn collective_profile_is_admissible_v1(
+    profile: KfdRuntimeCollectiveExecutionProfileV1,
+) -> bool {
+    matches!(profile.scope, RuntimeMemoryScopeV1::Workgroup)
 }
 
 fn try_copy_vec_v1(
@@ -4364,6 +4887,8 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             compute_copy_overlap: true,
             memory_pool: true,
             cancellation: true,
+            atomics: self.launch_gate.advertises_atomics_v1(),
+            collectives: self.launch_gate.advertises_collectives_v1(),
             ..RuntimeExecutionCapabilitiesV1::default()
         }
     }
@@ -5017,6 +5542,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "the admitted KFD queue lifecycle has already retired",
             ));
         }
+        self.validate_semantic_launch_v1(launch.semantic_launch, launch.geometry)?;
         self.require_submission_capacity_v1()?;
         let prior_stream_submission = self.stream_submission_tails.get(&launch.stream).copied();
         let dependencies =
@@ -5176,6 +5702,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                     explicit_kernarg,
                     bindings: bindings.into_boxed_slice(),
                     geometry: launch.geometry,
+                    semantic_launch: launch.semantic_launch,
                 },
                 retained_allocations: retained_allocations.into_boxed_slice(),
                 prior_stream_submission,
@@ -6249,6 +6776,43 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     pub fn open_default(
         devices: Vec<(u64, Box<dyn KfdRuntimeLaunchAuthorityV1>)>,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let mut gated = Vec::new();
+        gated.try_reserve_exact(devices.len()).map_err(|_| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "multi-device authority roster allocation failed",
+            )
+        })?;
+        gated.extend(
+            devices
+                .into_iter()
+                .map(|(device, authority)| (device, KfdRuntimeLaunchGateV1::Production(authority))),
+        );
+        Self::open_default_with_gates_v1(gated)
+    }
+
+    /// Admits multiple devices with exact semantic launch authorities.
+    pub fn open_default_with_semantic_authorities_v1(
+        devices: Vec<(u64, Box<dyn KfdRuntimeSemanticLaunchAuthorityV1>)>,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let mut gated = Vec::new();
+        gated.try_reserve_exact(devices.len()).map_err(|_| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "multi-device semantic-authority roster allocation failed",
+            )
+        })?;
+        gated.extend(
+            devices
+                .into_iter()
+                .map(|(device, authority)| (device, KfdRuntimeLaunchGateV1::Semantic(authority))),
+        );
+        Self::open_default_with_gates_v1(gated)
+    }
+
+    fn open_default_with_gates_v1(
+        devices: Vec<(u64, KfdRuntimeLaunchGateV1)>,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         if devices.len() < 2 {
             return Err(KfdRuntimeBackendErrorV1::new(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -6269,7 +6833,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "multi-device identity-set allocation failed",
             )
         })?;
-        for (unique_id, authority) in devices {
+        for (unique_id, gate) in devices {
             if unique_id == 0 || !seen.insert(unique_id) {
                 return Err(KfdRuntimeBackendErrorV1::new(
                     KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -6296,7 +6860,7 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                         error.to_string(),
                     )
                 })?;
-            checked.push((device, authority));
+            checked.push((device, gate));
         }
         let mut children = Vec::new();
         children.try_reserve_exact(checked.len()).map_err(|_| {
@@ -6305,10 +6869,9 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 "multi-device child roster allocation failed",
             )
         })?;
-        for (device, authority) in checked {
+        for (device, gate) in checked {
             children.push(KfdRuntimeBackendV1::from_checked_device_with_gate(
-                device,
-                KfdRuntimeLaunchGateV1::Production(authority),
+                device, gate,
             ));
         }
         Self::from_backends(children)
@@ -9740,6 +10303,7 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
             bindings: &bindings,
             dependencies: &dependencies,
             geometry: launch.geometry,
+            semantic_launch: launch.semantic_launch,
         });
         let local = self.latch(result)?;
         self.submissions.insert(
@@ -9997,6 +10561,42 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.submit_cooperative_copy(stream, source, destination, dependencies, true)
+    }
+}
+
+impl RuntimeAtomicBackendV1 for KfdRuntimeBackendV1 {
+    fn submit_atomic_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        if !matches!(
+            launch.semantic_launch,
+            KfdRuntimeSemanticLaunchV1::Atomic(_)
+        ) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "atomic SPI requires an atomic semantic launch contract",
+            ));
+        }
+        self.submit_v1(launch)
+    }
+}
+
+impl RuntimeCollectiveBackendV1 for KfdRuntimeBackendV1 {
+    fn submit_collective_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        if !matches!(
+            launch.semantic_launch,
+            KfdRuntimeSemanticLaunchV1::Collective(_)
+        ) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "collective SPI requires a collective semantic launch contract",
+            ));
+        }
+        self.submit_v1(launch)
     }
 }
 
@@ -10453,6 +11053,42 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
     }
 }
 
+impl RuntimeAtomicBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    fn submit_atomic_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        if !matches!(
+            launch.semantic_launch,
+            KfdRuntimeSemanticLaunchV1::Atomic(_)
+        ) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "atomic SPI requires an atomic semantic launch contract",
+            ));
+        }
+        self.submit_v1(launch)
+    }
+}
+
+impl RuntimeCollectiveBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    fn submit_collective_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        if !matches!(
+            launch.semantic_launch,
+            KfdRuntimeSemanticLaunchV1::Collective(_)
+        ) {
+            return Err(KfdRuntimeBackendV1::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "collective SPI requires a collective semantic launch contract",
+            ));
+        }
+        self.submit_v1(launch)
+    }
+}
+
 impl RuntimeAsyncCopyBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     fn copy_async_v1(
         &mut self,
@@ -10717,6 +11353,169 @@ mod tests {
 
     mod synthetic_cov6;
 
+    fn semantic_geometry_v1() -> crate::RuntimeLaunchGeometryV1 {
+        crate::RuntimeLaunchGeometryV1 {
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        }
+    }
+
+    fn atomic_contract_v1() -> RuntimeAtomicLaunchContractV1 {
+        RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::Add,
+            scope: RuntimeMemoryScopeV1::Workgroup,
+            order: RuntimeMemoryOrderV1::Relaxed,
+            failure_order: None,
+            weak: false,
+            geometry: semantic_geometry_v1(),
+        }
+    }
+
+    fn collective_contract_v1() -> RuntimeCollectiveLaunchContractV1 {
+        RuntimeCollectiveLaunchContractV1 {
+            operation: crate::RuntimeCollectiveOperationV1::ReduceSum,
+            scope: RuntimeMemoryScopeV1::Workgroup,
+            order: RuntimeMemoryOrderV1::AcquireRelease,
+            participants: 64,
+            geometry: semantic_geometry_v1(),
+        }
+    }
+
+    #[test]
+    fn semantic_profiles_control_both_capability_layers_fail_closed() {
+        let overbound =
+            KfdRuntimeLaunchGateV1::Semantic(Box::new(TestOverboundSemanticAuthorityV1));
+        assert!(!overbound.advertises_atomics_v1());
+        assert!(!overbound.supports_atomic_v1(atomic_contract_v1()));
+
+        let panicking =
+            KfdRuntimeLaunchGateV1::Semantic(Box::new(TestPanickingSemanticProfileAuthorityV1));
+        assert!(!panicking.advertises_atomics_v1());
+        assert!(!panicking.advertises_collectives_v1());
+        assert!(!panicking.supports_atomic_v1(atomic_contract_v1()));
+        assert!(!panicking.supports_collective_v1(collective_contract_v1()));
+
+        let mut ordinary = KfdRuntimeBackendV1::mock();
+        assert!(!ordinary.description.capabilities.atomics);
+        assert!(!ordinary.description.capabilities.collectives);
+        ordinary.native_available = true;
+        assert!(!ordinary.execution_capabilities_v1(7).atomics);
+        assert!(!ordinary.execution_capabilities_v1(7).collectives);
+
+        let mut semantic = KfdRuntimeBackendV1::mock_with_semantic_authority_v1();
+        assert!(semantic.description.capabilities.atomics);
+        assert!(semantic.description.capabilities.collectives);
+        assert_eq!(
+            semantic.execution_capabilities_v1(7),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        semantic.native_available = true;
+        assert!(semantic.execution_capabilities_v1(7).atomics);
+        assert!(semantic.execution_capabilities_v1(7).collectives);
+        assert_eq!(
+            semantic.execution_capabilities_v1(8),
+            RuntimeExecutionCapabilitiesV1::default()
+        );
+        semantic.native_available = false;
+        semantic.shutdown_native_v1().unwrap();
+        ordinary.native_available = false;
+        ordinary.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn semantic_rejections_precede_scheduler_custody_and_handle_allocation() {
+        let mut backend = KfdRuntimeBackendV1::mock_with_semantic_authority_v1();
+        let stream = backend.create_stream_v1(7).unwrap();
+        backend.native_available = true;
+        let before_handle = backend.next_handle;
+        let unsupported_atomic = RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::Exchange,
+            ..atomic_contract_v1()
+        };
+        let launch = |semantic_launch| BackendLaunchV1 {
+            stream,
+            kernel: 999,
+            explicit_kernarg: &[],
+            bindings: &[],
+            dependencies: &[],
+            geometry: semantic_geometry_v1(),
+            semantic_launch,
+        };
+        assert!(matches!(
+            backend.submit_atomic_v1(launch(KfdRuntimeSemanticLaunchV1::Atomic(
+                unsupported_atomic,
+            ))),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+        ));
+        let system_atomic = RuntimeAtomicLaunchContractV1 {
+            scope: RuntimeMemoryScopeV1::System,
+            ..atomic_contract_v1()
+        };
+        assert!(matches!(
+            backend.submit_atomic_v1(launch(KfdRuntimeSemanticLaunchV1::Atomic(system_atomic))),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+        ));
+        let bad_collective = RuntimeCollectiveLaunchContractV1 {
+            participants: 63,
+            ..collective_contract_v1()
+        };
+        assert!(matches!(
+            backend.submit_collective_v1(launch(KfdRuntimeSemanticLaunchV1::Collective(
+                bad_collective,
+            ))),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+        ));
+        assert!(matches!(
+            backend.submit_atomic_v1(launch(KfdRuntimeSemanticLaunchV1::Collective(
+                collective_contract_v1(),
+            ))),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+        ));
+        assert_eq!(backend.next_handle, before_handle);
+        assert!(backend.pending_compute.is_empty());
+        assert!(backend.allocation_custody.is_empty());
+        assert!(backend.compute_module_retain_counts.is_empty());
+        assert_eq!(backend.compute_completion_reservations, 0);
+        backend.native_available = false;
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn semantic_contract_is_part_of_recycled_dispatch_identity() {
+        let geometry = semantic_geometry_v1();
+        let ordinary = BackendLaunchV1 {
+            stream: 1,
+            kernel: 2,
+            explicit_kernarg: &[3],
+            bindings: &[],
+            dependencies: &[],
+            geometry,
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+        };
+        let atomic = BackendLaunchV1 {
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Atomic(atomic_contract_v1()),
+            ..ordinary
+        };
+        let collective = BackendLaunchV1 {
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Collective(collective_contract_v1()),
+            ..ordinary
+        };
+        assert_ne!(
+            dispatch_shape_sha256_v1(&ordinary, ordinary.semantic_launch),
+            dispatch_shape_sha256_v1(&atomic, atomic.semantic_launch)
+        );
+        assert_ne!(
+            dispatch_shape_sha256_v1(&atomic, atomic.semantic_launch),
+            dispatch_shape_sha256_v1(&collective, collective.semantic_launch)
+        );
+    }
+
     #[test]
     fn later_chunk_rejection_is_quiescent_after_prior_device_publication() {
         let rejected = || {
@@ -10764,6 +11563,7 @@ mod tests {
                     workgroup: [1, 1, 1],
                     dynamic_shared_bytes: 0,
                 },
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
             },
             retained_allocations: vec![allocation].into_boxed_slice(),
             prior_stream_submission: dependencies.last().copied(),
@@ -11987,6 +12787,38 @@ mod tests {
     }
 
     #[test]
+    fn profiler_timestamp_retrieval_requires_cleanup_and_preserves_runtime_custody() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend
+            .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([24; 32], 16).unwrap())
+            .unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        assert!(matches!(
+            backend.finish_profiler_with_dispatch_timestamps_v1(),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+        let evidence = backend
+            .finish_profiler_with_dispatch_timestamps_v1()
+            .unwrap();
+        assert!(
+            evidence
+                .runtime_profile()
+                .coverage
+                .complete_runtime_operation_history
+        );
+        assert!(
+            evidence
+                .dispatch_timestamps()
+                .coverage()
+                .complete_runtime_operation_history
+        );
+        assert!(evidence.dispatch_timestamps().records().is_empty());
+    }
+
+    #[test]
     fn profiler_loss_is_bounded_and_freezes_a_valid_prefix() {
         let mut backend = KfdRuntimeBackendV1::mock();
         backend
@@ -12177,7 +13009,7 @@ mod tests {
     #[test]
     fn valid_cov6_module_reaches_cached_launch_and_native_acquisition_boundary() {
         let image = synthetic_cov6::module();
-        let mut backend = KfdRuntimeBackendV1::mock();
+        let mut backend = KfdRuntimeBackendV1::mock_with_semantic_authority_v1();
         let stream = backend.create_stream_v1(7).unwrap();
         let module = backend.load_module_v1(7, &image).unwrap();
         assert_eq!(backend.modules[&module].validated.validation_passes(), 1);
@@ -12220,6 +13052,7 @@ mod tests {
                 bindings: &bindings,
                 dependencies: &[],
                 geometry,
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Atomic(atomic_contract_v1()),
             })
             .unwrap();
         assert_eq!(prepared.data.len(), 1);
@@ -12239,6 +13072,7 @@ mod tests {
                 bindings: &bindings,
                 dependencies: &[],
                 geometry,
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
             }),
             Err(RuntimeBackendFailureV1::Rejected(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
@@ -12248,6 +13082,78 @@ mod tests {
         backend.release_allocation_v1(allocation).unwrap();
         backend.unload_module_v1(module).unwrap();
         backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn launch_authority_panic_fails_before_publication_and_releases_custody() {
+        let image = synthetic_cov6::module();
+        let mut backend = KfdRuntimeBackendV1::mock_with_panicking_authority_v1();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let module = backend.load_module_v1(7, &image).unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+        let allocation = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 64, 8)
+            .unwrap();
+        {
+            let record = backend.allocations.get_mut(&allocation).unwrap();
+            record.sdma_backed = true;
+            record.sdma_initialized = true;
+        }
+        backend.native_available = true;
+        let mut explicit_kernarg = [0_u8; 16];
+        explicit_kernarg[8..].copy_from_slice(&13_u64.to_le_bytes());
+        let bindings = [BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 11,
+                byte_len: 13,
+            },
+            kernarg_byte_offset: 0,
+        }];
+        let submission = backend
+            .submit_v1(BackendLaunchV1 {
+                stream,
+                kernel,
+                explicit_kernarg: &explicit_kernarg,
+                bindings: &bindings,
+                dependencies: &[],
+                geometry: crate::RuntimeLaunchGeometryV1 {
+                    grid: [64, 1, 1],
+                    workgroup: [64, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+            })
+            .unwrap();
+
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Failed { code: -1 }
+        );
+        assert!(backend.pending_compute.is_empty());
+        assert!(backend.pending_compute_streams.is_empty());
+        assert!(backend.stream_compute_lanes.is_empty());
+        assert!(backend.allocation_custody.is_empty());
+        assert!(backend.compute_module_retain_counts.is_empty());
+        assert!(backend.compute_dependency_retain_counts.is_empty());
+        assert_eq!(backend.compute_completion_reservations, 0);
+        assert!(backend.active.is_none());
+        assert!(
+            backend
+                .auxiliary_compute_lanes
+                .iter()
+                .all(|lane| lane.active.is_none() && lane.owner_stream.is_none())
+        );
+
+        backend.release_submission_v1(submission).unwrap();
+        backend.release_allocation_v1(allocation).unwrap();
+        backend.unload_module_v1(module).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.native_available = false;
         backend.shutdown_native_v1().unwrap();
     }
 
@@ -12270,6 +13176,7 @@ mod tests {
                 bindings: &[],
                 dependencies: &[],
                 geometry,
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
             }),
             Err(RuntimeBackendFailureV1::Rejected(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
@@ -12292,6 +13199,7 @@ mod tests {
                 bindings: &oversized_bindings,
                 dependencies: &[],
                 geometry,
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
             }),
             Err(RuntimeBackendFailureV1::Rejected(error))
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity

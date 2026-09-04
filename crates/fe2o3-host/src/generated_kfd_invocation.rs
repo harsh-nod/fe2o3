@@ -306,7 +306,8 @@ impl GeneratedWorkerV3KfdDifferentialObservationV1 {
 ///
 /// This is the application side of the release transition. It owns the unique admitted
 /// semantic-to-machine receipt in addition to the authenticated decision and current-publication
-/// token. The binding does not produce that proof; no production proof producer is wired today.
+/// token. The binding does not produce that proof; no concrete production proof backend is
+/// shipped today.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3ApplicationExecutionBindingV1;
@@ -444,9 +445,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3ApplicationExecutionBindin
 
     /// Reports custody of the exact refinement established by the consumed proof receipt.
     ///
-    /// This does not claim a proof producer exists: no production producer is wired today, so a
-    /// production binding remains unreachable. Nor does it extend the receipt beyond its exact
-    /// KIR, LLVM, selected ISA, machine-effect, artifact, and currentness coordinates.
+    /// This does not claim a proof producer exists: no concrete production proof backend or
+    /// authenticated proof artifact ships today, so a production binding remains unreachable to
+    /// the repository alone. Nor does it extend the receipt beyond its exact KIR, LLVM, selected
+    /// ISA, machine-effect, artifact, and currentness coordinates.
     pub const fn establishes_semantic_or_machine_refinement(&self) -> bool {
         true
     }
@@ -816,15 +818,31 @@ fn application_execution_admission<K: CompilerGeneratedKernelExpectationV1>(
         packing_identity: *packing.identity(),
     };
     coordinates.identity = application_execution_binding_identity(&coordinates);
-    Some(WorkerV3ApplicationExecutionAdmissionV1 {
+    Some(WorkerV3ApplicationExecutionAdmissionV1::new(
         coordinates,
         refinement,
-    })
+    ))
 }
 
 struct WorkerV3ApplicationExecutionAdmissionV1 {
     coordinates: WorkerV3ApplicationExecutionCoordinatesV1,
     refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
+}
+
+impl WorkerV3ApplicationExecutionAdmissionV1 {
+    fn new(
+        coordinates: WorkerV3ApplicationExecutionCoordinatesV1,
+        refinement: AdmittedWorkerV3SemanticMachineRefinementV1,
+    ) -> Self {
+        debug_assert_eq!(
+            coordinates.semantic_machine_refinement_receipt_identity,
+            *refinement.receipt().identity()
+        );
+        Self {
+            coordinates,
+            refinement,
+        }
+    }
 }
 
 fn application_execution_binding_identity(
@@ -1188,6 +1206,7 @@ impl Error for GeneratedWorkerV3KfdExecutionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker_v3_verification_admission::admitted_semantic_machine_refinement_for_test_v1;
 
     fn application_coordinates_fixture() -> WorkerV3ApplicationExecutionCoordinatesV1 {
         WorkerV3ApplicationExecutionCoordinatesV1 {
@@ -1261,6 +1280,25 @@ mod tests {
 
         let qualification = ProductionExecutionCustodyV1::<u32, u32>::Qualification(29);
         assert_eq!(qualification.into_production(), Err(29));
+    }
+
+    #[test]
+    fn direct_kfd_application_owner_retains_the_consumed_refinement_receipt() {
+        let refinement = admitted_semantic_machine_refinement_for_test_v1();
+        let expected = *refinement.receipt().identity();
+        let mut coordinates = application_coordinates_fixture();
+        coordinates.semantic_machine_refinement_receipt_identity = expected;
+        coordinates.identity = application_execution_binding_identity(&coordinates);
+
+        let admitted = WorkerV3ApplicationExecutionAdmissionV1::new(coordinates, refinement);
+
+        assert_eq!(admitted.refinement.receipt().identity(), &expected);
+        assert_eq!(
+            admitted
+                .coordinates
+                .semantic_machine_refinement_receipt_identity,
+            expected
+        );
     }
 
     #[test]

@@ -21,11 +21,17 @@ API stabilizes. Developer-preview versions may make breaking changes.
   completion indexing.
 - Exact Runtime Worker V4 negotiation for execution capabilities, flush,
   asynchronous copy, cancellation, and deadline-bounded drain.
-- Inspect-only Worker V3 semantic-to-machine refinement receipts and strict
-  dispatch-timestamp evidence schemas that fail closed until trusted
-  production producers are available.
-- Executable and Verus models for the bounded logical scheduler, including
-  pinned expected-negative proofs.
+- Inspect-only Worker V3 semantic-to-machine refinement receipts, an exact
+  typed backend request, and a sealed protected-verifier join that remains
+  fail-closed until a concrete trusted proof producer is available.
+- Runtime-authenticated, process-local host publication/completion timestamp
+  observations with fresh clock occurrences and explicit GPU/device-time
+  unavailability.
+- A bounded, executor-neutral completion-observation engine with one
+  thread-affine owner, a cross-thread handle, stable budgeted polling, and
+  contained command and executor-waker panics.
+- Executable and Verus models for the bounded logical scheduler and async
+  observer, including pinned expected-negative proofs.
 - Bundle V5 source simulation in the quick start and an 18-entry ordinary-Rust
   workgroup scan matrix covering inclusive/exclusive `u32`, `i32`, and `f32`
   scans at 3, 65, and 255 lanes.
