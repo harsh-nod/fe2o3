@@ -12506,29 +12506,30 @@ impl<'a> SemanticAssertProofsV1<'a> {
                             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                                 "assertion proof upper-bound stability generation overflowed",
                             ))?;
-                        if self.local_is_stable_between_edge_and_use(
-                            state.local,
-                            true_target,
-                            state.use_block,
-                            &state.can_reach_use,
-                            &mut state.stability_visited,
-                            &mut state.stability_pending,
-                            state.stability_generation,
-                        )? {
-                            let mut edge = HashSet::new();
-                            edge.try_reserve(1).map_err(|_| {
-                                ProductionRankedProjectionErrorV1::Unsupported(
-                                    "assertion proof upper-bound edge storage cannot be reserved",
-                                )
-                            })?;
-                            edge.insert((switch_block, true_target));
-                            if self.edge_set_dominates(&edge, state.use_block)? {
-                                state.proven_upper_bound = Some(
-                                    state
-                                        .proven_upper_bound
-                                        .map_or(candidate, |current| current.min(candidate)),
-                                );
-                            }
+                        let mut edge = HashSet::new();
+                        edge.try_reserve(1).map_err(|_| {
+                            ProductionRankedProjectionErrorV1::Unsupported(
+                                "assertion proof upper-bound edge storage cannot be reserved",
+                            )
+                        })?;
+                        edge.insert((switch_block, true_target));
+                        if self.edge_set_dominates(&edge, state.use_block)?
+                            && self.local_is_stable_from_revalidating_edge_to_use(
+                                state.local,
+                                switch_block,
+                                true_target,
+                                state.use_block,
+                                &state.can_reach_use,
+                                &mut state.stability_visited,
+                                &mut state.stability_pending,
+                                state.stability_generation,
+                            )?
+                        {
+                            state.proven_upper_bound = Some(
+                                state
+                                    .proven_upper_bound
+                                    .map_or(candidate, |current| current.min(candidate)),
+                            );
                         }
                     }
                     push_assertion_range_frame_v1(
@@ -13876,6 +13877,96 @@ impl<'a> SemanticAssertProofsV1<'a> {
             for successor in &self.graph.successors[block] {
                 if can_reach_use[*successor] && visited[*successor] != generation {
                     visited[*successor] = generation;
+                    pending.push_back(*successor);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Checks the value segment governed by a dominating conditional edge.
+    ///
+    /// A loop latch may redefine the tested local and return to the same
+    /// conditional. Crossing that conditional's success edge authenticates a
+    /// fresh value, so definitions which can reach the use only by crossing
+    /// the guard again do not invalidate its range. Definitions on any path
+    /// from the latest success edge to the use still reject the proof.
+    #[allow(clippy::too_many_arguments)]
+    fn local_is_stable_from_revalidating_edge_to_use(
+        &mut self,
+        local: usize,
+        guard_source: usize,
+        guard_target: usize,
+        use_block: usize,
+        can_reach_use: &[bool],
+        visited: &mut [usize],
+        pending: &mut VecDeque<usize>,
+        generation: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        let block_count = self.function.blocks().len();
+        if local >= self.function.locals().len()
+            || guard_source >= block_count
+            || guard_target >= block_count
+            || use_block >= block_count
+            || guard_source == guard_target
+            || can_reach_use.len() != block_count
+            || visited.len() != block_count
+        {
+            return Ok(false);
+        }
+
+        let reverse_generation =
+            generation
+                .checked_mul(2)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "assertion proof revalidating-edge generation overflowed",
+                ))?;
+        let forward_generation = reverse_generation.checked_add(1).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "assertion proof revalidating-edge generation overflowed",
+            ),
+        )?;
+
+        // Mark exactly the blocks that can reach the use without first
+        // returning to the guard. This excludes latch-side definitions whose
+        // only route back to the use crosses a fresh successful guard edge.
+        pending.clear();
+        pending.push_back(use_block);
+        visited[use_block] = reverse_generation;
+        while let Some(block) = pending.pop_front() {
+            self.charge(1)?;
+            self.charge(self.graph.predecessors[block].len())?;
+            for predecessor in &self.graph.predecessors[block] {
+                if *predecessor == guard_source
+                    || !can_reach_use[*predecessor]
+                    || visited[*predecessor] == reverse_generation
+                    || visited[*predecessor] == forward_generation
+                {
+                    continue;
+                }
+                visited[*predecessor] = reverse_generation;
+                pending.push_back(*predecessor);
+            }
+        }
+        if visited[guard_target] != reverse_generation {
+            return Ok(true);
+        }
+
+        pending.clear();
+        pending.push_back(guard_target);
+        visited[guard_target] = forward_generation;
+        while let Some(block) = pending.pop_front() {
+            self.charge(1)?;
+            if self.block_defines_local(block, local) {
+                return Ok(false);
+            }
+            if block == use_block {
+                continue;
+            }
+            self.charge(self.graph.successors[block].len())?;
+            for successor in &self.graph.successors[block] {
+                if visited[*successor] == reverse_generation {
+                    visited[*successor] = forward_generation;
                     pending.push_back(*successor);
                 }
             }
@@ -34148,6 +34239,96 @@ mod tests {
             Some(UnsignedRangeProofV1 {
                 minimum: 0,
                 maximum: u128::from(u32::MAX),
+            })
+        );
+    }
+
+    fn revalidated_guard_with_optional_direct_redefinition(
+        redefine_after_guard: bool,
+    ) -> SemanticFunctionDeclV1 {
+        let body_statements = redefine_after_guard
+            .then(|| {
+                vec![typed_assignment(
+                    1,
+                    U64_TYPE,
+                    SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 200, 8)),
+                )]
+            })
+            .unwrap_or_default();
+        projection_function_with_locals(
+            vec![
+                block(
+                    228,
+                    vec![typed_assignment(
+                        1,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    229,
+                    vec![typed_assignment(
+                        2,
+                        BOOL_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 64, 8),
+                        },
+                    )],
+                    zero_switch(2, BOOL_TYPE, 5, 2),
+                ),
+                block(230, body_statements, zero_switch(3, BOOL_TYPE, 3, 4)),
+                block(
+                    231,
+                    vec![typed_assignment(
+                        1,
+                        U64_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: typed_operand(1, U64_TYPE),
+                            right: typed_constant(U64_TYPE, 1, 8),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(232, vec![], SemanticTerminatorKindV1::Return),
+                block(233, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(228, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(229, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(230, BOOL_TYPE, SemanticLocalRoleV1::Temporary),
+                local(231, BOOL_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
+    #[test]
+    fn strict_loop_guard_revalidates_after_latch_paths_but_not_direct_writes() {
+        let types = assertion_proof_types();
+        let guarded = revalidated_guard_with_optional_direct_redefinition(false);
+        let mut proof = SemanticAssertProofsV1::new(&types, &guarded).unwrap();
+        assert_eq!(
+            proof
+                .range_at_operand(&typed_operand(1, U64_TYPE), 4, 0)
+                .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: 63,
+            })
+        );
+
+        let redefined = revalidated_guard_with_optional_direct_redefinition(true);
+        let mut proof = SemanticAssertProofsV1::new(&types, &redefined).unwrap();
+        assert_eq!(
+            proof
+                .range_at_operand(&typed_operand(1, U64_TYPE), 4, 0)
+                .unwrap(),
+            Some(UnsignedRangeProofV1 {
+                minimum: 0,
+                maximum: u128::from(u64::MAX),
             })
         );
     }

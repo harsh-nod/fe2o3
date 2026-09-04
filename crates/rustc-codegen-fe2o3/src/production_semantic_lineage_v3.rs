@@ -849,6 +849,7 @@ impl PreparedProductionSemanticLineageV3 {
         ranked_verification: AuthenticatedRankedVerificationRosterV1,
         admitted: &ProductionFormalMemoryOwnerV1,
         target_module: &Module,
+        target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
         pre_descriptor_llvm: &str,
         semantic_debug_inputs: crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1,
     ) -> Result<Self, ProductionSemanticLineageErrorV3> {
@@ -895,9 +896,10 @@ impl PreparedProductionSemanticLineageV3 {
         let bound_kir_identity = TargetLineageIdentityV3::new(bound_kir_digest, bound_kir_length)?;
         let kernel_ir = InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir)?;
         let amdgpu_lowering_replay =
-            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs(
+            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
                 neutral_kir,
                 target_module,
+                target_optimization,
                 rustc_target.profile(),
                 pre_descriptor_llvm,
             )?;
@@ -2035,7 +2037,13 @@ mod layout_tests {
     #[test]
     fn production_capsule_requires_shared_independent_kir_to_llvm_replay() {
         let source = include_str!("production_semantic_lineage_v3.rs");
-        assert!(source.contains("CanonicalProductionKirToLlvmReplayEvidenceV1::from_live_inputs"));
+        assert!(source.contains(
+            "CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4"
+        ));
+        assert!(source.contains(
+            "target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2"
+        ));
+        assert!(source.contains("target_module,\n                target_optimization,"));
         assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::new"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::decode"));

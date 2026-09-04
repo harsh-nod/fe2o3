@@ -407,6 +407,81 @@ independent hardened G1 code-object fixture. It builds one private,
 content-addressed `cargo-fe2o3` production driver for `doctor`; neither that
 driver nor any backend child receives a qualification selector.
 
+The site-backed general-kernel regression matrix compiles the current dynamic
+GEMM, row-softmax, FlashAttention, grouped-expert MoE, and GEMM autoresearch
+sources through the production extractor, external ROCm finalization, and a
+nonempty gfx942 HSACO check:
+
+```text
+scripts/kernel-compile-matrix.sh gfx942
+```
+
+The `rocm-compile` lane runs this matrix after its focused production compiler
+and code-object tests. The generic lane runs the matrix's hermetic shell test,
+which substitutes fixture tools and verifies orchestration without requiring
+ROCm or a GPU.
+
+The separate gfx950 matrix covers 37 production Rust kernel entries represented
+by the kernels site. Together with the five gfx942 entries, the compile-only
+matrices cover 42 entries:
+
+```text
+scripts/kernel-compile-matrix.sh gfx950
+```
+
+Low precision: `kernel-fp4-gemm`, `kernel-fp8-gemm`,
+`kernel-fp4-attention`, and `kernel-fp8-attention`.
+
+Advanced attention: `kernel-kda-decode`, `kernel-kda-decode-baseline-v1`,
+`kernel-kda-prefill`, `kernel-kda-prefill-baseline-v1`,
+`kernel-content-sparse-attention`,
+`kernel-content-sparse-attention-reciprocal-reuse-v1`,
+`kernel-deepseek-sparse-attention`, `kernel-compressed-hybrid-attention`,
+`kernel-compressed-hybrid-attention-division-baseline-v1`,
+`kernel-attnres-aggregate`,
+`kernel-attnres-aggregate-explicit-reuse-v1`, `kernel-four-branch-residual`,
+`kernel-four-branch-residual-explicit-v1`, `kernel-mhc-sinkhorn-mix`, and
+`kernel-mhc-sinkhorn-mix-scalar-v1`.
+
+Advanced systems: `kernel-moe-route`, `kernel-moe-expert-rank`,
+`kernel-moe-expert-rank` with `expert-serial`, `kernel-combine-expert-ranks`,
+`kernel-speculative-transaction` with its canonical and
+`speculative-recompute-prefix` bodies, `kernel-qwen-ngram-gather` with its
+canonical and `ngram-reverse-probe` bodies, `kernel-stage-gradient-shard`, and
+`kernel-muon-update` with its canonical and `muon-broadcast16` bodies.
+
+GPT-OSS: `kernel-gpt-oss-decode`, `kernel-gpt-oss-decode-router-serial`,
+`kernel-gpt-oss-decode-held-fragments`,
+`kernel-gpt-oss-decode-interleaved-stores`, `kernel-gpt-oss-router-component`,
+`kernel-gpt-oss-attention-component`, and `kernel-gpt-oss-expert-component`.
+
+Compile-only mode still validates the checked-in manifest and therefore
+requires an exact reviewed Clang, LLD, and device-library closure. ROCm 7.2.1
+remains the default. Select the checked-in ROCm 7.2.4 closure explicitly:
+
+```text
+ROCM_PATH=/opt/rocm-7.2.4 \
+FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.4.manifest" \
+  scripts/kernel-compile-matrix.sh gfx950
+```
+
+The manifest pins the observed ROCm 7.2.4 Clang, LLD, and all nine bitcode
+inputs by SHA-256. This does not require an MI350X and does not inspect or
+execute any GPU. The gfx950 matrix is intentionally not in the gfx942-only
+`rocm-compile` lane.
+
+Every target and artifact directory is created under one private temporary
+root and removed when the command exits. The matrix deliberately stops before
+the qualification host runner, reports `hardware_observed=false`, and makes no
+numerical or execution claim. It does not cover the basic Cargo regression
+manifest, proof/source-model-only packages, or HIP comparators. Selected
+site-backed positive variants are listed above. Negative variants remain
+excluded: systems `combine-transposed` and `stage-tile4` fail compiler safety
+checks, the two route feature names have no live alternate Rust bodies, and
+GPT-OSS `scalar-attention` and `pipelined-attention` are absent from the
+admitted current-artifact table. Neither cross-compilation target is hardware
+or numerical coverage.
+
 ## Hardware smoke
 
 Hardware execution is deliberately opt-in:

@@ -1098,8 +1098,12 @@ fn checked_row_striped_pair_is_disjoint(
     ) else {
         return false;
     };
-    let first_component = sparse.fact(first.component()).constant_value();
-    let second_component = sparse.fact(second.component()).constant_value();
+    // A successful checked row-striped mapping already proves that its dynamic
+    // component is below elements-per-lane, its column is below columns, and
+    // columns is at most the row stride.  Different lanes therefore have
+    // different residues modulo lanes-per-row, while different rows occupy
+    // disjoint stride intervals.  Component constness is not required for
+    // cross-invocation disjointness.
     first.geometry() == second.geometry()
         && checked_runtime_layouts_are_equivalent_and_uniform(
             context,
@@ -1109,8 +1113,6 @@ fn checked_row_striped_pair_is_disjoint(
             sparse,
         )
         && first.invocation() == second.invocation()
-        && first_component.is_some_and(|component| component < first.geometry()[1])
-        && second_component.is_some_and(|component| component < second.geometry()[1])
         && checked_invocation_is_injective(first.invocation(), launch_extents)
 }
 

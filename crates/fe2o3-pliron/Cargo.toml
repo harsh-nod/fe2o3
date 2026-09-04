@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Bounded, non-authoritative Pliron context and pass-planning shell for fe2o3."
+description = "Owner-aware Pliron context, typed KIR bridge, and closed optimization executor for fe2o3."
 readme = "README.md"
 publish = false
 

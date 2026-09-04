@@ -234,9 +234,13 @@ fn extract_amdgpu_llvm_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), ordered workgroups {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> target-KIR optimizer ({} pass(es), {} mutating, epoch {}..={}) -> {} LLVM; {} semantic function(s), {} semantic u32 induction certificate(s) for {} checked addition(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), ordered workgroups {:?}, {} LLVM byte(s), artifact/launch authority {}",
         lowered.canonical_kernel_ir_version(),
         lowered.guarded_store_count(),
+        lowered.target_optimization_pass_count(),
+        lowered.target_optimization_mutating_pass_count(),
+        lowered.target_optimization_initial_epoch(),
+        lowered.target_optimization_final_epoch(),
         lowered.target_name(),
         lowered.semantic_function_count(),
         lowered.semantic_u32_induction_certificate_count(),

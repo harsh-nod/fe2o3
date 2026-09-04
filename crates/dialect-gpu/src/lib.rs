@@ -27,6 +27,9 @@ use pliron::{
 
 mod registration;
 
+pub mod cse_v1;
+pub mod optimization_v1;
+
 pub use registration::dialect_registration;
 
 /// Pliron dialect name.
@@ -87,6 +90,8 @@ pub enum AddressSpaceAttr {
     Workgroup,
     Global,
     Constant,
+    /// Pointer whose concrete address space remains unknown at this level.
+    Generic,
 }
 
 /// Visibility scope for synchronization.
@@ -859,13 +864,65 @@ pub fn register_dialect(
     <ExecutionExtentAttr as Attribute>::register::<ExecutionExtentAttr>(context);
     <ExecutionDomainAttr as Attribute>::register::<ExecutionDomainAttr>(context);
     <SubgroupSizeAttr as Attribute>::register::<SubgroupSizeAttr>(context);
+    <optimization_v1::AccessModeAttr as Attribute>::register::<optimization_v1::AccessModeAttr>(
+        context,
+    );
+    <optimization_v1::UnaryKindAttr as Attribute>::register::<optimization_v1::UnaryKindAttr>(
+        context,
+    );
+    <optimization_v1::BinaryKindAttr as Attribute>::register::<optimization_v1::BinaryKindAttr>(
+        context,
+    );
+    <optimization_v1::ComparePredicateAttr as Attribute>::register::<
+        optimization_v1::ComparePredicateAttr,
+    >(context);
+    <optimization_v1::CastKindAttr as Attribute>::register::<optimization_v1::CastKindAttr>(
+        context,
+    );
+    <optimization_v1::IndexAttr as Attribute>::register::<optimization_v1::IndexAttr>(context);
+    <optimization_v1::BFloat16Attr as Attribute>::register::<optimization_v1::BFloat16Attr>(
+        context,
+    );
+    <optimization_v1::MemoryAlignmentAttr as Attribute>::register::<
+        optimization_v1::MemoryAlignmentAttr,
+    >(context);
+    <optimization_v1::VolatileAttr as Attribute>::register::<optimization_v1::VolatileAttr>(
+        context,
+    );
+    <optimization_v1::PreservedOperationKindAttr as Attribute>::register::<
+        optimization_v1::PreservedOperationKindAttr,
+    >(context);
+    <optimization_v1::PreservedTerminatorKindAttr as Attribute>::register::<
+        optimization_v1::PreservedTerminatorKindAttr,
+    >(context);
     <HierarchyIndexType as Type>::register(context);
     <MemorySpaceType as Type>::register(context);
+    <optimization_v1::IndexType as Type>::register(context);
+    <optimization_v1::BFloat16Type as Type>::register(context);
+    <optimization_v1::PointerType as Type>::register(context);
+    <optimization_v1::SliceType as Type>::register(context);
     <HierarchyIdOp as Op>::register(context);
     <ExecutionLayoutOp as Op>::register(context);
     <MemorySpaceOp as Op>::register(context);
     <BarrierOp as Op>::register(context);
     <FenceOp as Op>::register(context);
+    <optimization_v1::ConstantOp as Op>::register(context);
+    <optimization_v1::UnaryOp as Op>::register(context);
+    <optimization_v1::BinaryOp as Op>::register(context);
+    <optimization_v1::CompareOp as Op>::register(context);
+    <optimization_v1::CastOp as Op>::register(context);
+    <optimization_v1::SelectOp as Op>::register(context);
+    <optimization_v1::CallOp as Op>::register(context);
+    <optimization_v1::ReturnOp as Op>::register(context);
+    <optimization_v1::BranchOp as Op>::register(context);
+    <optimization_v1::CondBranchOp as Op>::register(context);
+    <optimization_v1::SliceLengthOp as Op>::register(context);
+    <optimization_v1::SliceDataOp as Op>::register(context);
+    <optimization_v1::GetElementPointerOp as Op>::register(context);
+    <optimization_v1::LoadOp as Op>::register(context);
+    <optimization_v1::StoreOp as Op>::register(context);
+    <optimization_v1::PreservedOperationOp as Op>::register(context);
+    <optimization_v1::PreservedTerminatorOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context

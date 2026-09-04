@@ -622,6 +622,11 @@ G0 passes when:
 
 ## G1: General Compiler Spine
 
+Current status: the production route now contains the typed extraction,
+ranked-recipe normalization, target-neutral SSA/ABI lowering, formal admission,
+and fixed V2 Pliron optimization spine described below. Broader Rust language
+coverage and cost-model-driven GPU transforms remain open.
+
 ### Objectives
 
 - Add the explicit device extraction driver while keeping a compatibility

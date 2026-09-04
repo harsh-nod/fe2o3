@@ -26,6 +26,10 @@ documentation.
   the single production compiler route.
 - [Pliron Wave 0 architecture](pliron-wave0-architecture.md): typed IR
   integration.
+- [Optimizing compiler Wave 1](general-optimizing-compiler-wave1.md): stage
+  ownership, ranked normalization, and the fixed production V2 optimizer.
+- [Pliron optimizing middle end](pliron-optimizing-middle-end-v1.md): typed KIR
+  bridge, dialect legality interfaces, and pass execution contracts.
 - [Verification model](verification-model.md): what proof and evidence do and
   do not establish.
 - [GPU safety contract](gpu-safety-contract-v1.md): memory, launch, artifact,
