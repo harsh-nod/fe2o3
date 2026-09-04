@@ -11,10 +11,13 @@ use std::time::{Duration, Instant};
 
 use crate::{
     BackendBindingV1, BackendCancellationV1, BackendDeviceDescriptionV1, BackendLaunchV1,
-    BackendMemoryRegionV1, BackendPollV1, MAX_RUNTIME_MODULE_IMAGE_BYTES_V1,
-    RuntimeAsyncCopyBackendV1, RuntimeBackendFailureV1, RuntimeBackendV1,
-    RuntimeCancellationBackendV1, RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1,
-    RuntimeLaunchGeometryV1, RuntimeMemoryKindV1,
+    BackendMemoryRegionV1, BackendPollV1, BackendSemanticLaunchV1,
+    MAX_RUNTIME_MODULE_IMAGE_BYTES_V1, RuntimeAsyncCopyBackendV1, RuntimeAtomicBackendV1,
+    RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1, RuntimeBackendFailureV1,
+    RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCollectiveBackendV1,
+    RuntimeCollectiveLaunchContractV1, RuntimeCollectiveOperationV1,
+    RuntimeExecutionCapabilitiesV1, RuntimeFlushBackendV1, RuntimeLaunchGeometryV1,
+    RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
 };
 
 /// Space reserved above the largest facade payload for canonical codec fields.
@@ -34,6 +37,8 @@ pub const RUNTIME_WORKER_HANDSHAKE_V1: &[u8] = b"fe2o3-runtime-worker-v1";
 /// This transport version is separate from the compiler's Worker V3 proof and
 /// application protocol.
 pub const RUNTIME_WORKER_HANDSHAKE_V4: &[u8] = b"fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1";
+/// Exact first frame emitted by a worker adding typed semantic submission.
+pub const RUNTIME_WORKER_HANDSHAKE_V5: &[u8] = b"fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1";
 /// Parent-side allowance reserved inside a caller deadline for a wait response.
 pub const RUNTIME_WORKER_RESPONSE_GRACE_V1: Duration = Duration::from_millis(100);
 
@@ -230,6 +235,27 @@ pub trait RuntimeWorkerCodecV4: RuntimeWorkerCodecV1 {
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>>;
 }
 
+/// Additive V5 codec preserving typed atomic and collective launch contracts.
+///
+/// These methods transport already-validated declarations. They do not grant
+/// native semantic execution authority to the worker backend.
+pub trait RuntimeWorkerCodecV5: RuntimeWorkerCodecV4 {
+    fn encode_atomic_submit_request_v5(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<Vec<u8>, Self::Error>;
+
+    fn encode_collective_submit_request_v5(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<Vec<u8>, Self::Error>;
+
+    fn decode_semantic_submit_response_v5(
+        &mut self,
+        response: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>>;
+}
+
 const MAX_RUNTIME_WORKER_ERROR_BYTES_V1: usize = 4096;
 
 /// Canonical bounded binary worker protocol failure.
@@ -306,6 +332,29 @@ impl RuntimeWorkerCodecV1 for RuntimeBinaryCodecV4 {
     }
 }
 
+/// Canonical address-free Worker V5 codec.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuntimeBinaryCodecV5;
+
+impl RuntimeWorkerCodecV1 for RuntimeBinaryCodecV5 {
+    type Error = RuntimeBinaryCodecErrorV1;
+
+    fn encode_request_v1(
+        &mut self,
+        operation: RuntimeWorkerOperationV1<'_>,
+    ) -> Result<Vec<u8>, Self::Error> {
+        encode_binary_request_v1(operation)
+    }
+
+    fn decode_response_v1(
+        &mut self,
+        expected: RuntimeWorkerOperationKindV1,
+        response: &[u8],
+    ) -> Result<RuntimeWorkerResponseV1, RuntimeBackendFailureV1<Self::Error>> {
+        decode_binary_response_v1(expected, response)
+    }
+}
+
 const OP_ENUMERATE_DEVICES_V1: u8 = 1;
 const OP_CREATE_STREAM_V1: u8 = 2;
 const OP_DESTROY_STREAM_V1: u8 = 3;
@@ -328,6 +377,11 @@ const OP_EXECUTION_CAPABILITIES_V4: u8 = 19;
 const OP_ASYNC_COPY_V4: u8 = 20;
 const OP_CANCEL_V4: u8 = 21;
 const OP_DRAIN_V4: u8 = 22;
+const OP_SUBMIT_ATOMIC_V5: u8 = 23;
+const OP_SUBMIT_COLLECTIVE_V5: u8 = 24;
+
+const SEMANTIC_ATOMIC_V1: u8 = 1;
+const SEMANTIC_COLLECTIVE_V1: u8 = 2;
 
 const RESPONSE_OK_V1: u8 = 0;
 const RESPONSE_REJECTED_V1: u8 = 1;
@@ -496,6 +550,86 @@ fn encode_binary_request_v1(
         return Err(RuntimeBinaryCodecErrorV1::Limit("encoded request frame"));
     }
     Ok(output)
+}
+
+fn encode_binary_semantic_submit_request_v5(
+    launch: BackendLaunchV1<'_>,
+    expected: u8,
+) -> Result<Vec<u8>, RuntimeBinaryCodecErrorV1> {
+    let mut output = Vec::new();
+    match (expected, launch.semantic_launch) {
+        (SEMANTIC_ATOMIC_V1, BackendSemanticLaunchV1::Atomic(contract)) => {
+            validate_atomic_contract_v5(contract, launch.geometry)?;
+            output.push(OP_SUBMIT_ATOMIC_V5);
+            output.push(SEMANTIC_ATOMIC_V1);
+            output.push(atomic_operation_tag_v5(contract.operation));
+            output.push(memory_scope_tag_v5(contract.scope));
+            output.push(memory_order_tag_v5(contract.order));
+            output.push(match contract.failure_order {
+                None => 0,
+                Some(order) => memory_order_tag_v5(order) + 1,
+            });
+            output.push(u8::from(contract.weak));
+        }
+        (SEMANTIC_COLLECTIVE_V1, BackendSemanticLaunchV1::Collective(contract)) => {
+            validate_collective_contract_v5(contract, launch.geometry)?;
+            output.push(OP_SUBMIT_COLLECTIVE_V5);
+            output.push(SEMANTIC_COLLECTIVE_V1);
+            output.push(collective_operation_tag_v5(contract.operation));
+            output.push(memory_scope_tag_v5(contract.scope));
+            output.push(memory_order_tag_v5(contract.order));
+            put_u64_v1(&mut output, contract.participants);
+        }
+        _ => {
+            return Err(RuntimeBinaryCodecErrorV1::Malformed(
+                "semantic submit variant",
+            ));
+        }
+    }
+    encode_binary_launch_payload_v5(&mut output, launch)?;
+    if output.len() > MAX_RUNTIME_WORKER_FRAME_BYTES_V1 {
+        return Err(RuntimeBinaryCodecErrorV1::Limit(
+            "encoded semantic request frame",
+        ));
+    }
+    Ok(output)
+}
+
+fn encode_binary_launch_payload_v5(
+    output: &mut Vec<u8>,
+    launch: BackendLaunchV1<'_>,
+) -> Result<(), RuntimeBinaryCodecErrorV1> {
+    if launch.bindings.len() > fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 {
+        return Err(RuntimeBinaryCodecErrorV1::Limit("launch bindings"));
+    }
+    if launch.dependencies.len() > crate::MAX_RUNTIME_DEPENDENCIES_V1 {
+        return Err(RuntimeBinaryCodecErrorV1::Limit("launch dependencies"));
+    }
+    put_u64_v1(output, launch.stream);
+    put_u64_v1(output, launch.kernel);
+    put_blob_v1(
+        output,
+        launch.explicit_kernarg,
+        crate::MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
+    )?;
+    put_count_v1(output, launch.bindings.len(), "launch bindings")?;
+    for binding in launch.bindings {
+        put_backend_region_v1(output, binding.region);
+        put_u32_v1(output, binding.kernarg_byte_offset);
+    }
+    put_dependencies_v1(output, launch.dependencies)?;
+    put_geometry_v5(output, launch.geometry);
+    Ok(())
+}
+
+fn put_geometry_v5(output: &mut Vec<u8>, geometry: RuntimeLaunchGeometryV1) {
+    for axis in geometry.grid {
+        put_u32_v1(output, axis);
+    }
+    for axis in geometry.workgroup {
+        put_u32_v1(output, axis);
+    }
+    put_u32_v1(output, geometry.dynamic_shared_bytes);
 }
 
 fn decode_binary_response_v1(
@@ -693,6 +827,104 @@ impl RuntimeWorkerCodecV4 for RuntimeBinaryCodecV4 {
     }
 }
 
+impl RuntimeWorkerCodecV4 for RuntimeBinaryCodecV5 {
+    fn encode_execution_capabilities_request_v4(
+        &mut self,
+        device: u64,
+    ) -> Result<Vec<u8>, Self::Error> {
+        RuntimeBinaryCodecV4.encode_execution_capabilities_request_v4(device)
+    }
+
+    fn decode_execution_capabilities_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeBackendFailureV1<Self::Error>> {
+        RuntimeBinaryCodecV4.decode_execution_capabilities_response_v4(response)
+    }
+
+    fn encode_flush_stream_request_v4(&mut self, stream: u64) -> Result<Vec<u8>, Self::Error> {
+        RuntimeBinaryCodecV4.encode_flush_stream_request_v4(stream)
+    }
+
+    fn decode_flush_stream_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        RuntimeBinaryCodecV4.decode_flush_stream_response_v4(response)
+    }
+
+    fn encode_async_copy_request_v4(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<Vec<u8>, Self::Error> {
+        RuntimeBinaryCodecV4.encode_async_copy_request_v4(stream, source, destination, dependencies)
+    }
+
+    fn decode_async_copy_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        RuntimeBinaryCodecV4.decode_async_copy_response_v4(response)
+    }
+
+    fn encode_cancel_request_v4(&mut self, submission: u64) -> Result<Vec<u8>, Self::Error> {
+        RuntimeBinaryCodecV4.encode_cancel_request_v4(submission)
+    }
+
+    fn decode_cancel_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+        RuntimeBinaryCodecV4.decode_cancel_response_v4(response)
+    }
+
+    fn encode_drain_request_v4(
+        &mut self,
+        submission: u64,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, Self::Error> {
+        RuntimeBinaryCodecV4.encode_drain_request_v4(submission, timeout)
+    }
+
+    fn decode_drain_response_v4(
+        &mut self,
+        response: &[u8],
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        RuntimeBinaryCodecV4.decode_drain_response_v4(response)
+    }
+}
+
+impl RuntimeWorkerCodecV5 for RuntimeBinaryCodecV5 {
+    fn encode_atomic_submit_request_v5(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<Vec<u8>, Self::Error> {
+        encode_binary_semantic_submit_request_v5(launch, SEMANTIC_ATOMIC_V1)
+    }
+
+    fn encode_collective_submit_request_v5(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<Vec<u8>, Self::Error> {
+        encode_binary_semantic_submit_request_v5(launch, SEMANTIC_COLLECTIVE_V1)
+    }
+
+    fn decode_semantic_submit_response_v5(
+        &mut self,
+        response: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        match decode_binary_response_v1(RuntimeWorkerOperationKindV1::Handle, response)? {
+            RuntimeWorkerResponseV1::Handle(handle) => Ok(handle),
+            _ => Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeBinaryCodecErrorV1::Malformed("semantic-submit response"),
+            )),
+        }
+    }
+}
+
 fn put_u16_v1(output: &mut Vec<u8>, value: u16) {
     output.extend_from_slice(&value.to_le_bytes());
 }
@@ -758,6 +990,185 @@ fn access_tag_v1(access: crate::RuntimeAccessV1) -> u8 {
         crate::RuntimeAccessV1::Write => 2,
         crate::RuntimeAccessV1::ReadWrite => 3,
     }
+}
+
+const fn memory_scope_tag_v5(scope: RuntimeMemoryScopeV1) -> u8 {
+    match scope {
+        RuntimeMemoryScopeV1::Workgroup => 0,
+        RuntimeMemoryScopeV1::Device => 1,
+        RuntimeMemoryScopeV1::System => 2,
+    }
+}
+
+const fn memory_order_tag_v5(order: RuntimeMemoryOrderV1) -> u8 {
+    match order {
+        RuntimeMemoryOrderV1::Relaxed => 0,
+        RuntimeMemoryOrderV1::Acquire => 1,
+        RuntimeMemoryOrderV1::Release => 2,
+        RuntimeMemoryOrderV1::AcquireRelease => 3,
+        RuntimeMemoryOrderV1::SequentiallyConsistent => 4,
+    }
+}
+
+const fn atomic_operation_tag_v5(operation: RuntimeAtomicOperationV1) -> u8 {
+    match operation {
+        RuntimeAtomicOperationV1::Add => 0,
+        RuntimeAtomicOperationV1::Minimum => 1,
+        RuntimeAtomicOperationV1::Maximum => 2,
+        RuntimeAtomicOperationV1::BitwiseAnd => 3,
+        RuntimeAtomicOperationV1::BitwiseOr => 4,
+        RuntimeAtomicOperationV1::BitwiseXor => 5,
+        RuntimeAtomicOperationV1::Exchange => 6,
+        RuntimeAtomicOperationV1::CompareExchange => 7,
+    }
+}
+
+const fn collective_operation_tag_v5(operation: RuntimeCollectiveOperationV1) -> u8 {
+    match operation {
+        RuntimeCollectiveOperationV1::Barrier => 0,
+        RuntimeCollectiveOperationV1::Broadcast => 1,
+        RuntimeCollectiveOperationV1::ReduceSum => 2,
+        RuntimeCollectiveOperationV1::ReduceMinimum => 3,
+        RuntimeCollectiveOperationV1::ReduceMaximum => 4,
+        RuntimeCollectiveOperationV1::AllReduceSum => 5,
+        RuntimeCollectiveOperationV1::InclusiveScanSum => 6,
+    }
+}
+
+fn decode_memory_scope_v5(tag: u8) -> Result<RuntimeMemoryScopeV1, RuntimeBinaryCodecErrorV1> {
+    match tag {
+        0 => Ok(RuntimeMemoryScopeV1::Workgroup),
+        1 => Ok(RuntimeMemoryScopeV1::Device),
+        2 => Ok(RuntimeMemoryScopeV1::System),
+        _ => Err(RuntimeBinaryCodecErrorV1::Malformed("memory scope")),
+    }
+}
+
+fn decode_memory_order_v5(tag: u8) -> Result<RuntimeMemoryOrderV1, RuntimeBinaryCodecErrorV1> {
+    match tag {
+        0 => Ok(RuntimeMemoryOrderV1::Relaxed),
+        1 => Ok(RuntimeMemoryOrderV1::Acquire),
+        2 => Ok(RuntimeMemoryOrderV1::Release),
+        3 => Ok(RuntimeMemoryOrderV1::AcquireRelease),
+        4 => Ok(RuntimeMemoryOrderV1::SequentiallyConsistent),
+        _ => Err(RuntimeBinaryCodecErrorV1::Malformed("memory order")),
+    }
+}
+
+fn decode_atomic_operation_v5(
+    tag: u8,
+) -> Result<RuntimeAtomicOperationV1, RuntimeBinaryCodecErrorV1> {
+    match tag {
+        0 => Ok(RuntimeAtomicOperationV1::Add),
+        1 => Ok(RuntimeAtomicOperationV1::Minimum),
+        2 => Ok(RuntimeAtomicOperationV1::Maximum),
+        3 => Ok(RuntimeAtomicOperationV1::BitwiseAnd),
+        4 => Ok(RuntimeAtomicOperationV1::BitwiseOr),
+        5 => Ok(RuntimeAtomicOperationV1::BitwiseXor),
+        6 => Ok(RuntimeAtomicOperationV1::Exchange),
+        7 => Ok(RuntimeAtomicOperationV1::CompareExchange),
+        _ => Err(RuntimeBinaryCodecErrorV1::Malformed("atomic operation")),
+    }
+}
+
+fn decode_collective_operation_v5(
+    tag: u8,
+) -> Result<RuntimeCollectiveOperationV1, RuntimeBinaryCodecErrorV1> {
+    match tag {
+        0 => Ok(RuntimeCollectiveOperationV1::Barrier),
+        1 => Ok(RuntimeCollectiveOperationV1::Broadcast),
+        2 => Ok(RuntimeCollectiveOperationV1::ReduceSum),
+        3 => Ok(RuntimeCollectiveOperationV1::ReduceMinimum),
+        4 => Ok(RuntimeCollectiveOperationV1::ReduceMaximum),
+        5 => Ok(RuntimeCollectiveOperationV1::AllReduceSum),
+        6 => Ok(RuntimeCollectiveOperationV1::InclusiveScanSum),
+        _ => Err(RuntimeBinaryCodecErrorV1::Malformed("collective operation")),
+    }
+}
+
+fn validate_atomic_contract_v5(
+    contract: RuntimeAtomicLaunchContractV1,
+    geometry: RuntimeLaunchGeometryV1,
+) -> Result<(), RuntimeBinaryCodecErrorV1> {
+    if contract.geometry != geometry || geometry.validate().is_err() {
+        return Err(RuntimeBinaryCodecErrorV1::Malformed(
+            "atomic contract geometry",
+        ));
+    }
+    let legal = match (contract.operation, contract.failure_order) {
+        (RuntimeAtomicOperationV1::CompareExchange, Some(failure)) => {
+            valid_compare_exchange_orders_v5(contract.order, failure)
+        }
+        (RuntimeAtomicOperationV1::CompareExchange, None) => false,
+        (_, None) => !contract.weak,
+        (_, Some(_)) => false,
+    };
+    if !legal {
+        return Err(RuntimeBinaryCodecErrorV1::Malformed("atomic contract"));
+    }
+    Ok(())
+}
+
+const fn valid_compare_exchange_orders_v5(
+    success: RuntimeMemoryOrderV1,
+    failure: RuntimeMemoryOrderV1,
+) -> bool {
+    match success {
+        RuntimeMemoryOrderV1::Relaxed => matches!(failure, RuntimeMemoryOrderV1::Relaxed),
+        RuntimeMemoryOrderV1::Acquire => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed | RuntimeMemoryOrderV1::Acquire
+        ),
+        RuntimeMemoryOrderV1::Release => matches!(failure, RuntimeMemoryOrderV1::Relaxed),
+        RuntimeMemoryOrderV1::AcquireRelease => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed | RuntimeMemoryOrderV1::Acquire
+        ),
+        RuntimeMemoryOrderV1::SequentiallyConsistent => matches!(
+            failure,
+            RuntimeMemoryOrderV1::Relaxed
+                | RuntimeMemoryOrderV1::Acquire
+                | RuntimeMemoryOrderV1::SequentiallyConsistent
+        ),
+    }
+}
+
+fn validate_collective_contract_v5(
+    contract: RuntimeCollectiveLaunchContractV1,
+    geometry: RuntimeLaunchGeometryV1,
+) -> Result<(), RuntimeBinaryCodecErrorV1> {
+    if contract.geometry != geometry
+        || geometry.validate().is_err()
+        || geometry
+            .grid
+            .into_iter()
+            .zip(geometry.workgroup)
+            .any(|(grid, workgroup)| grid < workgroup || !grid.is_multiple_of(workgroup))
+    {
+        return Err(RuntimeBinaryCodecErrorV1::Malformed(
+            "collective contract geometry",
+        ));
+    }
+    let participants = match contract.scope {
+        RuntimeMemoryScopeV1::Workgroup => geometry.workgroup,
+        RuntimeMemoryScopeV1::Device => geometry.grid,
+        RuntimeMemoryScopeV1::System => {
+            return Err(RuntimeBinaryCodecErrorV1::Malformed(
+                "collective contract scope",
+            ));
+        }
+    }
+    .into_iter()
+    .try_fold(1_u64, |product, axis| product.checked_mul(u64::from(axis)))
+    .ok_or(RuntimeBinaryCodecErrorV1::Malformed(
+        "collective participant overflow",
+    ))?;
+    if contract.participants == 0 || contract.participants != participants {
+        return Err(RuntimeBinaryCodecErrorV1::Malformed(
+            "collective participant count",
+        ));
+    }
+    Ok(())
 }
 
 fn put_backend_region_v1(output: &mut Vec<u8>, region: BackendMemoryRegionV1) {
@@ -1004,7 +1415,7 @@ where
 }
 
 /// Serves the canonical bounded Worker V4 protocol over a backend implementing
-/// the complete negotiated extension set.
+/// the complete negotiated V4 extension set.
 pub fn serve_runtime_backend_worker_v4<B, R, W>(
     mut backend: B,
     input: R,
@@ -1017,6 +1428,28 @@ where
 {
     serve_runtime_worker_v4(input, output, |request| {
         dispatch_binary_request_v4(&mut backend, request)
+    })
+}
+
+/// Serves the canonical bounded Worker V5 protocol, including typed semantic
+/// submission. Backends without native semantic execution may satisfy the type
+/// boundary only through explicit pre-custody rejection implementations.
+pub fn serve_runtime_backend_worker_v5<B, R, W>(
+    mut backend: B,
+    input: R,
+    output: W,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1
+        + RuntimeAsyncCopyBackendV1
+        + RuntimeCancellationBackendV1
+        + RuntimeAtomicBackendV1
+        + RuntimeCollectiveBackendV1,
+    R: Read,
+    W: Write,
+{
+    serve_runtime_worker_v5(input, output, |request| {
+        dispatch_binary_request_v5(&mut backend, request)
     })
 }
 
@@ -1093,6 +1526,79 @@ where
             encode_poll_response_v1(backend.drain_v1(submission, deadline))?
         }
         _ => unreachable!("V4 extension opcode was filtered above"),
+    };
+    if response.len() > MAX_RUNTIME_WORKER_FRAME_BYTES_V1 {
+        return Err(RuntimeWorkerErrorV1::FrameTooLarge {
+            actual: response.len(),
+            maximum: MAX_RUNTIME_WORKER_FRAME_BYTES_V1,
+        });
+    }
+    Ok(response)
+}
+
+fn dispatch_binary_request_v5<B>(
+    backend: &mut B,
+    request: &[u8],
+) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1
+        + RuntimeAsyncCopyBackendV1
+        + RuntimeCancellationBackendV1
+        + RuntimeAtomicBackendV1
+        + RuntimeCollectiveBackendV1,
+{
+    let Some(operation) = request.first().copied() else {
+        return dispatch_binary_request_v4(backend, request);
+    };
+    if !matches!(operation, OP_SUBMIT_ATOMIC_V5 | OP_SUBMIT_COLLECTIVE_V5) {
+        return dispatch_binary_request_v4(backend, request);
+    }
+    let mut input = BinaryCursorV1::new(request);
+    let _operation = binary_u8_v1(&mut input)?;
+    let response = match operation {
+        OP_SUBMIT_ATOMIC_V5 => {
+            require_semantic_variant_v5(&mut input, SEMANTIC_ATOMIC_V1)?;
+            let operation = decode_atomic_operation_request_v5(&mut input)?;
+            let scope = decode_memory_scope_request_v5(&mut input)?;
+            let order = decode_memory_order_request_v5(&mut input)?;
+            let failure_order = decode_optional_memory_order_request_v5(&mut input)?;
+            let weak = decode_bool_request_v5(&mut input)?;
+            let launch = decode_binary_launch_payload_v5(&mut input)?;
+            require_binary_end_v1(&input)?;
+            let contract = RuntimeAtomicLaunchContractV1 {
+                operation,
+                scope,
+                order,
+                failure_order,
+                weak,
+                geometry: launch.geometry,
+            };
+            validate_atomic_contract_request_v5(contract, launch.geometry)?;
+            encode_handle_response_v1(backend.submit_atomic_v1(
+                launch.with_semantic_v5(BackendSemanticLaunchV1::Atomic(contract)),
+            ))?
+        }
+        OP_SUBMIT_COLLECTIVE_V5 => {
+            require_semantic_variant_v5(&mut input, SEMANTIC_COLLECTIVE_V1)?;
+            let operation = decode_collective_operation_request_v5(&mut input)?;
+            let scope = decode_memory_scope_request_v5(&mut input)?;
+            let order = decode_memory_order_request_v5(&mut input)?;
+            let participants = binary_u64_v1(&mut input)?;
+            let launch = decode_binary_launch_payload_v5(&mut input)?;
+            require_binary_end_v1(&input)?;
+            let contract = RuntimeCollectiveLaunchContractV1 {
+                operation,
+                scope,
+                order,
+                participants,
+                geometry: launch.geometry,
+            };
+            validate_collective_contract_request_v5(contract, launch.geometry)?;
+            encode_handle_response_v1(backend.submit_collective_v1(
+                launch.with_semantic_v5(BackendSemanticLaunchV1::Collective(contract)),
+            ))?
+        }
+        _ => unreachable!("V5 semantic opcode was filtered above"),
     };
     if response.len() > MAX_RUNTIME_WORKER_FRAME_BYTES_V1 {
         return Err(RuntimeWorkerErrorV1::FrameTooLarge {
@@ -1396,6 +1902,148 @@ fn binary_dependencies_v1(
     Ok(dependencies)
 }
 
+struct DecodedWorkerLaunchV5<'a> {
+    stream: u64,
+    kernel: u64,
+    explicit_kernarg: &'a [u8],
+    bindings: Vec<BackendBindingV1>,
+    dependencies: Vec<u64>,
+    geometry: RuntimeLaunchGeometryV1,
+}
+
+impl DecodedWorkerLaunchV5<'_> {
+    fn with_semantic_v5(&self, semantic_launch: BackendSemanticLaunchV1) -> BackendLaunchV1<'_> {
+        BackendLaunchV1 {
+            stream: self.stream,
+            kernel: self.kernel,
+            explicit_kernarg: self.explicit_kernarg,
+            bindings: &self.bindings,
+            dependencies: &self.dependencies,
+            geometry: self.geometry,
+            semantic_launch,
+        }
+    }
+}
+
+fn decode_binary_launch_payload_v5<'a>(
+    input: &mut BinaryCursorV1<'a>,
+) -> Result<DecodedWorkerLaunchV5<'a>, RuntimeWorkerErrorV1> {
+    let stream = binary_u64_v1(input)?;
+    let kernel = binary_u64_v1(input)?;
+    let explicit_kernarg = binary_blob_v1(input, crate::MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1)?;
+    let binding_count = binary_count_v1(input, fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1)?;
+    let mut bindings = Vec::with_capacity(binding_count);
+    for _ in 0..binding_count {
+        bindings.push(BackendBindingV1 {
+            region: binary_region_v1(input)?,
+            kernarg_byte_offset: binary_u32_v1(input)?,
+        });
+    }
+    let dependencies = binary_dependencies_v1(input)?;
+    let geometry = RuntimeLaunchGeometryV1 {
+        grid: [
+            binary_u32_v1(input)?,
+            binary_u32_v1(input)?,
+            binary_u32_v1(input)?,
+        ],
+        workgroup: [
+            binary_u32_v1(input)?,
+            binary_u32_v1(input)?,
+            binary_u32_v1(input)?,
+        ],
+        dynamic_shared_bytes: binary_u32_v1(input)?,
+    }
+    .validate()
+    .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid launch geometry"))?;
+    validate_binary_bindings_v1(explicit_kernarg, &bindings)?;
+    Ok(DecodedWorkerLaunchV5 {
+        stream,
+        kernel,
+        explicit_kernarg,
+        bindings,
+        dependencies,
+        geometry,
+    })
+}
+
+fn require_semantic_variant_v5(
+    input: &mut BinaryCursorV1<'_>,
+    expected: u8,
+) -> Result<(), RuntimeWorkerErrorV1> {
+    if binary_u8_v1(input)? != expected {
+        return Err(RuntimeWorkerErrorV1::Protocol(
+            "mismatched semantic submit variant",
+        ));
+    }
+    Ok(())
+}
+
+fn decode_atomic_operation_request_v5(
+    input: &mut BinaryCursorV1<'_>,
+) -> Result<RuntimeAtomicOperationV1, RuntimeWorkerErrorV1> {
+    decode_atomic_operation_v5(binary_u8_v1(input)?)
+        .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid atomic operation"))
+}
+
+fn decode_collective_operation_request_v5(
+    input: &mut BinaryCursorV1<'_>,
+) -> Result<RuntimeCollectiveOperationV1, RuntimeWorkerErrorV1> {
+    decode_collective_operation_v5(binary_u8_v1(input)?)
+        .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid collective operation"))
+}
+
+fn decode_memory_scope_request_v5(
+    input: &mut BinaryCursorV1<'_>,
+) -> Result<RuntimeMemoryScopeV1, RuntimeWorkerErrorV1> {
+    decode_memory_scope_v5(binary_u8_v1(input)?)
+        .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid semantic memory scope"))
+}
+
+fn decode_memory_order_request_v5(
+    input: &mut BinaryCursorV1<'_>,
+) -> Result<RuntimeMemoryOrderV1, RuntimeWorkerErrorV1> {
+    decode_memory_order_v5(binary_u8_v1(input)?)
+        .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid semantic memory order"))
+}
+
+fn decode_optional_memory_order_request_v5(
+    input: &mut BinaryCursorV1<'_>,
+) -> Result<Option<RuntimeMemoryOrderV1>, RuntimeWorkerErrorV1> {
+    match binary_u8_v1(input)? {
+        0 => Ok(None),
+        tag @ 1..=5 => decode_memory_order_v5(tag - 1)
+            .map(Some)
+            .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid failure memory order")),
+        _ => Err(RuntimeWorkerErrorV1::Protocol(
+            "invalid failure memory order",
+        )),
+    }
+}
+
+fn decode_bool_request_v5(input: &mut BinaryCursorV1<'_>) -> Result<bool, RuntimeWorkerErrorV1> {
+    match binary_u8_v1(input)? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RuntimeWorkerErrorV1::Protocol("invalid semantic boolean")),
+    }
+}
+
+fn validate_atomic_contract_request_v5(
+    contract: RuntimeAtomicLaunchContractV1,
+    geometry: RuntimeLaunchGeometryV1,
+) -> Result<(), RuntimeWorkerErrorV1> {
+    validate_atomic_contract_v5(contract, geometry)
+        .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid atomic contract"))
+}
+
+fn validate_collective_contract_request_v5(
+    contract: RuntimeCollectiveLaunchContractV1,
+    geometry: RuntimeLaunchGeometryV1,
+) -> Result<(), RuntimeWorkerErrorV1> {
+    validate_collective_contract_v5(contract, geometry)
+        .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid collective contract"))
+}
+
 fn validate_binary_bindings_v1(
     explicit_kernarg: &[u8],
     bindings: &[BackendBindingV1],
@@ -1646,6 +2294,15 @@ impl<C: RuntimeWorkerCodecV1> RuntimeWorkerBackendV1<C> {
 /// [`RuntimeWorkerBackendV4::spawn`]; drain instead obeys its caller deadline.
 /// A transport timeout or terminal response seals and reaps the worker.
 /// Runtime Worker V1 remains intentionally incapable of these extensions.
+/// Typed semantic submission is deliberately a V5-only source contract:
+///
+/// ```compile_fail
+/// use fe2o3_runtime::{
+///     RuntimeAtomicBackendV1, RuntimeBinaryCodecV4, RuntimeWorkerBackendV4,
+/// };
+/// fn require_atomic<T: RuntimeAtomicBackendV1>() {}
+/// require_atomic::<RuntimeWorkerBackendV4<RuntimeBinaryCodecV4>>();
+/// ```
 pub struct RuntimeWorkerBackendV4<C: RuntimeWorkerCodecV4> {
     inner: RuntimeWorkerBackendV1<C>,
     execution_capabilities: HashMap<u64, RuntimeExecutionCapabilitiesV1>,
@@ -1998,6 +2655,312 @@ impl<C: RuntimeWorkerCodecV4> RuntimeCancellationBackendV1 for RuntimeWorkerBack
             self.inner.transport.terminate();
         }
         decoded
+    }
+}
+
+/// Worker backend with the exact V5 semantic-launch extension profile.
+///
+/// The operational surface delegates to the unchanged V4 implementation. Only
+/// typed atomic and collective submissions use V5 opcodes. Exact handshake
+/// negotiation prevents either endpoint from silently downgrading to V4.
+pub struct RuntimeWorkerBackendV5<C: RuntimeWorkerCodecV5> {
+    inner: RuntimeWorkerBackendV4<C>,
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeWorkerBackendV5<C> {
+    pub fn spawn(
+        command: &RuntimeWorkerCommandV1,
+        codec: C,
+        startup_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<Self, RuntimeWorkerErrorV1> {
+        Ok(Self {
+            inner: RuntimeWorkerBackendV4 {
+                inner: RuntimeWorkerBackendV1 {
+                    transport: RuntimeWorkerTransportV1::spawn_with_handshake_v1(
+                        command,
+                        startup_timeout,
+                        RUNTIME_WORKER_HANDSHAKE_V5,
+                    )?,
+                    codec,
+                    request_timeout,
+                },
+                execution_capabilities: HashMap::new(),
+            },
+        })
+    }
+
+    pub const fn is_terminal(&self) -> bool {
+        self.inner.is_terminal()
+    }
+
+    pub fn shutdown(self, timeout: Duration) -> Result<(), RuntimeWorkerErrorV1> {
+        self.inner.shutdown(timeout)
+    }
+
+    fn semantic_submit_call_v5(
+        &mut self,
+        request: Vec<u8>,
+    ) -> Result<u64, RuntimeBackendFailureV1<RuntimeWorkerBackendErrorV1<C::Error>>> {
+        let response = self
+            .inner
+            .inner
+            .transport
+            .request_owned(request, self.inner.inner.request_timeout)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Terminal(RuntimeWorkerBackendErrorV1::Transport(error))
+            })?;
+        let decoded = self
+            .inner
+            .inner
+            .codec
+            .decode_semantic_submit_response_v5(&response)
+            .map_err(map_codec_failure_v1);
+        if matches!(&decoded, Err(RuntimeBackendFailureV1::Terminal(_))) {
+            self.inner.inner.transport.terminate();
+        }
+        match decoded? {
+            0 => self
+                .inner
+                .inner
+                .response_mismatch("nonzero semantic submission handle"),
+            handle => Ok(handle),
+        }
+    }
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeBackendV1 for RuntimeWorkerBackendV5<C> {
+    type Error = RuntimeWorkerBackendErrorV1<C::Error>;
+
+    fn execution_capabilities_v1(&self, device: u64) -> RuntimeExecutionCapabilitiesV1 {
+        self.inner.execution_capabilities_v1(device)
+    }
+
+    fn enumerate_devices_v1(
+        &mut self,
+    ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.enumerate_devices_v1()
+    }
+
+    fn create_stream_v1(
+        &mut self,
+        device: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.create_stream_v1(device)
+    }
+
+    fn destroy_stream_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.destroy_stream_v1(stream)
+    }
+
+    fn allocate_v1(
+        &mut self,
+        device: u64,
+        kind: RuntimeMemoryKindV1,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.allocate_v1(device, kind, byte_len, alignment)
+    }
+
+    fn release_allocation_v1(
+        &mut self,
+        allocation: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.release_allocation_v1(allocation)
+    }
+
+    fn write_allocation_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .write_allocation_v1(allocation, byte_offset, bytes)
+    }
+
+    fn read_allocation_v1(
+        &mut self,
+        allocation: u64,
+        byte_offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .read_allocation_v1(allocation, byte_offset, destination)
+    }
+
+    fn load_module_v1(
+        &mut self,
+        device: u64,
+        image: &[u8],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.load_module_v1(device, image)
+    }
+
+    fn unload_module_v1(
+        &mut self,
+        module: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.unload_module_v1(module)
+    }
+
+    fn resolve_kernel_v1(
+        &mut self,
+        module: u64,
+        name: &str,
+        signature: [u8; 32],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.resolve_kernel_v1(module, name, signature)
+    }
+
+    fn submit_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.submit_v1(launch)
+    }
+
+    fn poll_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.poll_v1(submission)
+    }
+
+    fn wait_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.wait_v1(submission, deadline)
+    }
+
+    fn release_submission_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.release_submission_v1(submission)
+    }
+
+    fn record_event_v1(
+        &mut self,
+        stream: u64,
+        submission: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.record_event_v1(stream, submission)
+    }
+
+    fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.release_event_v1(event)
+    }
+
+    fn peer_copy_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .peer_copy_v1(stream, source, destination, dependencies)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeFlushBackendV1 for RuntimeWorkerBackendV5<C> {
+    fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.flush_stream_v1(stream)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeAsyncCopyBackendV1 for RuntimeWorkerBackendV5<C> {
+    fn copy_async_v1(
+        &mut self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner
+            .copy_async_v1(stream, source, destination, dependencies)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeCancellationBackendV1 for RuntimeWorkerBackendV5<C> {
+    fn cancel_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.cancel_v1(submission)
+    }
+
+    fn drain_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.inner.drain_v1(submission, deadline)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeAtomicBackendV1 for RuntimeWorkerBackendV5<C> {
+    fn submit_atomic_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        let BackendSemanticLaunchV1::Atomic(contract) = launch.semantic_launch else {
+            return Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol(
+                    "atomic SPI requires an atomic semantic launch contract",
+                ),
+            ));
+        };
+        if validate_atomic_contract_v5(contract, launch.geometry).is_err() {
+            return Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol("invalid atomic launch contract"),
+            ));
+        }
+        let request = self
+            .inner
+            .inner
+            .codec
+            .encode_atomic_submit_request_v5(launch)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+            })?;
+        self.semantic_submit_call_v5(request)
+    }
+}
+
+impl<C: RuntimeWorkerCodecV5> RuntimeCollectiveBackendV1 for RuntimeWorkerBackendV5<C> {
+    fn submit_collective_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        let BackendSemanticLaunchV1::Collective(contract) = launch.semantic_launch else {
+            return Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol(
+                    "collective SPI requires a collective semantic launch contract",
+                ),
+            ));
+        };
+        if validate_collective_contract_v5(contract, launch.geometry).is_err() {
+            return Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol("invalid collective launch contract"),
+            ));
+        }
+        let request = self
+            .inner
+            .inner
+            .codec
+            .encode_collective_submit_request_v5(launch)
+            .map_err(|error| {
+                RuntimeBackendFailureV1::Rejected(RuntimeWorkerBackendErrorV1::Codec(error))
+            })?;
+        self.semantic_submit_call_v5(request)
     }
 }
 
@@ -2486,6 +3449,7 @@ impl RuntimeWorkerTransportV1 {
             return Err(RuntimeWorkerErrorV1::WorkerExited);
         }
         if request.is_empty() {
+            self.terminate();
             return Err(RuntimeWorkerErrorV1::Protocol(
                 "empty request is reserved for shutdown",
             ));
@@ -2623,7 +3587,7 @@ impl Drop for RuntimeWorkerTransportV1 {
 /// immediate progress. Use [`serve_runtime_backend_worker_v1`] only for a
 /// backend admitted by [`RuntimeWorkerV1ImmediateProgressBackendV1`], or use
 /// [`serve_runtime_backend_worker_v4`] for a backend implementing the complete
-/// negotiated V4 extension set.
+/// negotiated V4 extension set. Typed semantic transport requires the V5 APIs.
 pub fn serve_runtime_worker_v1<R, W, F>(
     input: R,
     output: W,
@@ -2652,6 +3616,21 @@ where
     F: FnMut(&[u8]) -> Result<Vec<u8>, RuntimeWorkerErrorV1>,
 {
     serve_runtime_worker_with_handshake_v1(input, output, RUNTIME_WORKER_HANDSHAKE_V4, handler)
+}
+
+/// Runs the worker side of the bounded, exact V5 request/response protocol.
+/// V5 retains every V4 operation and adds atomic and collective submission.
+pub fn serve_runtime_worker_v5<R, W, F>(
+    input: R,
+    output: W,
+    handler: F,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    R: Read,
+    W: Write,
+    F: FnMut(&[u8]) -> Result<Vec<u8>, RuntimeWorkerErrorV1>,
+{
+    serve_runtime_worker_with_handshake_v1(input, output, RUNTIME_WORKER_HANDSHAKE_V5, handler)
 }
 
 fn serve_runtime_worker_with_handshake_v1<R, W, F>(
@@ -2897,6 +3876,153 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum EmptyRequestLayerV1 {
+        Base,
+        V4,
+        V5,
+    }
+
+    struct EmptyRequestCodecV5 {
+        inner: RuntimeBinaryCodecV5,
+        layer: EmptyRequestLayerV1,
+    }
+
+    impl EmptyRequestCodecV5 {
+        const fn new(layer: EmptyRequestLayerV1) -> Self {
+            Self {
+                inner: RuntimeBinaryCodecV5,
+                layer,
+            }
+        }
+    }
+
+    impl RuntimeWorkerCodecV1 for EmptyRequestCodecV5 {
+        type Error = RuntimeBinaryCodecErrorV1;
+
+        fn encode_request_v1(
+            &mut self,
+            operation: RuntimeWorkerOperationV1<'_>,
+        ) -> Result<Vec<u8>, Self::Error> {
+            if matches!(self.layer, EmptyRequestLayerV1::Base) {
+                return Ok(Vec::new());
+            }
+            self.inner.encode_request_v1(operation)
+        }
+
+        fn decode_response_v1(
+            &mut self,
+            expected: RuntimeWorkerOperationKindV1,
+            response: &[u8],
+        ) -> Result<RuntimeWorkerResponseV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.inner.decode_response_v1(expected, response)
+        }
+    }
+
+    impl RuntimeWorkerCodecV4 for EmptyRequestCodecV5 {
+        fn encode_execution_capabilities_request_v4(
+            &mut self,
+            device: u64,
+        ) -> Result<Vec<u8>, Self::Error> {
+            self.inner.encode_execution_capabilities_request_v4(device)
+        }
+
+        fn decode_execution_capabilities_response_v4(
+            &mut self,
+            response: &[u8],
+        ) -> Result<RuntimeExecutionCapabilitiesV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.inner
+                .decode_execution_capabilities_response_v4(response)
+        }
+
+        fn encode_flush_stream_request_v4(&mut self, stream: u64) -> Result<Vec<u8>, Self::Error> {
+            if matches!(self.layer, EmptyRequestLayerV1::V4) {
+                return Ok(Vec::new());
+            }
+            self.inner.encode_flush_stream_request_v4(stream)
+        }
+
+        fn decode_flush_stream_response_v4(
+            &mut self,
+            response: &[u8],
+        ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.inner.decode_flush_stream_response_v4(response)
+        }
+
+        fn encode_async_copy_request_v4(
+            &mut self,
+            stream: u64,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+            dependencies: &[u64],
+        ) -> Result<Vec<u8>, Self::Error> {
+            self.inner
+                .encode_async_copy_request_v4(stream, source, destination, dependencies)
+        }
+
+        fn decode_async_copy_response_v4(
+            &mut self,
+            response: &[u8],
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.inner.decode_async_copy_response_v4(response)
+        }
+
+        fn encode_cancel_request_v4(&mut self, submission: u64) -> Result<Vec<u8>, Self::Error> {
+            self.inner.encode_cancel_request_v4(submission)
+        }
+
+        fn decode_cancel_response_v4(
+            &mut self,
+            response: &[u8],
+        ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.inner.decode_cancel_response_v4(response)
+        }
+
+        fn encode_drain_request_v4(
+            &mut self,
+            submission: u64,
+            timeout: Duration,
+        ) -> Result<Vec<u8>, Self::Error> {
+            self.inner.encode_drain_request_v4(submission, timeout)
+        }
+
+        fn decode_drain_response_v4(
+            &mut self,
+            response: &[u8],
+        ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+            self.inner.decode_drain_response_v4(response)
+        }
+    }
+
+    impl RuntimeWorkerCodecV5 for EmptyRequestCodecV5 {
+        fn encode_atomic_submit_request_v5(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<Vec<u8>, Self::Error> {
+            if matches!(self.layer, EmptyRequestLayerV1::V5) {
+                return Ok(Vec::new());
+            }
+            self.inner.encode_atomic_submit_request_v5(launch)
+        }
+
+        fn encode_collective_submit_request_v5(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<Vec<u8>, Self::Error> {
+            if matches!(self.layer, EmptyRequestLayerV1::V5) {
+                return Ok(Vec::new());
+            }
+            self.inner.encode_collective_submit_request_v5(launch)
+        }
+
+        fn decode_semantic_submit_response_v5(
+            &mut self,
+            response: &[u8],
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.inner.decode_semantic_submit_response_v5(response)
+        }
+    }
+
     struct WorkerArgumentsV1 {
         allocation: RuntimeAllocationIdV1,
     }
@@ -2925,6 +4051,8 @@ mod tests {
     struct ProtocolBackendV1 {
         next: u64,
         calls: Vec<&'static str>,
+        last_atomic: Option<RuntimeAtomicLaunchContractV1>,
+        last_collective: Option<RuntimeCollectiveLaunchContractV1>,
     }
 
     impl ProtocolBackendV1 {
@@ -3163,6 +4291,72 @@ mod tests {
         }
     }
 
+    impl RuntimeAtomicBackendV1 for ProtocolBackendV1 {
+        fn submit_atomic_v1(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let BackendSemanticLaunchV1::Atomic(contract) = launch.semantic_launch else {
+                return Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                    "wrong atomic semantic variant",
+                )));
+            };
+            match launch.stream {
+                2 => {
+                    return Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                        "rejected",
+                    )));
+                }
+                3 => {
+                    return Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                        "quiescent",
+                    )));
+                }
+                u64::MAX => {
+                    return Err(RuntimeBackendFailureV1::Terminal(TestCodecError(
+                        "terminal",
+                    )));
+                }
+                _ => {}
+            }
+            self.last_atomic = Some(contract);
+            Ok(self.handle("submit_atomic"))
+        }
+    }
+
+    impl RuntimeCollectiveBackendV1 for ProtocolBackendV1 {
+        fn submit_collective_v1(
+            &mut self,
+            launch: BackendLaunchV1<'_>,
+        ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let BackendSemanticLaunchV1::Collective(contract) = launch.semantic_launch else {
+                return Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                    "wrong collective semantic variant",
+                )));
+            };
+            match launch.stream {
+                2 => {
+                    return Err(RuntimeBackendFailureV1::Rejected(TestCodecError(
+                        "rejected",
+                    )));
+                }
+                3 => {
+                    return Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                        "quiescent",
+                    )));
+                }
+                u64::MAX => {
+                    return Err(RuntimeBackendFailureV1::Terminal(TestCodecError(
+                        "terminal",
+                    )));
+                }
+                _ => {}
+            }
+            self.last_collective = Some(contract);
+            Ok(self.handle("submit_collective"))
+        }
+    }
+
     impl RuntimeCancellationBackendV1 for ProtocolBackendV1 {
         fn cancel_v1(
             &mut self,
@@ -3280,6 +4474,74 @@ mod tests {
             .unwrap();
         let response = dispatch_binary_request_v4(backend, &request).unwrap();
         codec.decode_drain_response_v4(&response)
+    }
+
+    const TEST_SEMANTIC_GEOMETRY_V5: RuntimeLaunchGeometryV1 = RuntimeLaunchGeometryV1 {
+        grid: [64, 1, 1],
+        workgroup: [64, 1, 1],
+        dynamic_shared_bytes: 0,
+    };
+
+    const TEST_ATOMIC_CONTRACT_V5: RuntimeAtomicLaunchContractV1 = RuntimeAtomicLaunchContractV1 {
+        operation: RuntimeAtomicOperationV1::CompareExchange,
+        scope: RuntimeMemoryScopeV1::Device,
+        order: RuntimeMemoryOrderV1::AcquireRelease,
+        failure_order: Some(RuntimeMemoryOrderV1::Acquire),
+        weak: true,
+        geometry: TEST_SEMANTIC_GEOMETRY_V5,
+    };
+
+    const TEST_COLLECTIVE_CONTRACT_V5: RuntimeCollectiveLaunchContractV1 =
+        RuntimeCollectiveLaunchContractV1 {
+            operation: RuntimeCollectiveOperationV1::ReduceSum,
+            scope: RuntimeMemoryScopeV1::Workgroup,
+            order: RuntimeMemoryOrderV1::AcquireRelease,
+            participants: 64,
+            geometry: TEST_SEMANTIC_GEOMETRY_V5,
+        };
+
+    fn semantic_launch_v5(
+        stream: u64,
+        semantic_launch: BackendSemanticLaunchV1,
+    ) -> BackendLaunchV1<'static> {
+        static KERNARG: [u8; 8] = [0; 8];
+        static BINDINGS: [BackendBindingV1; 1] = [BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation: 47,
+                access: RuntimeAccessV1::ReadWrite,
+                byte_offset: 0,
+                byte_len: 8,
+            },
+            kernarg_byte_offset: 0,
+        }];
+        static DEPENDENCIES: [u64; 2] = [53, 59];
+        BackendLaunchV1 {
+            stream,
+            kernel: 43,
+            explicit_kernarg: &KERNARG,
+            bindings: &BINDINGS,
+            dependencies: &DEPENDENCIES,
+            geometry: TEST_SEMANTIC_GEOMETRY_V5,
+            semantic_launch,
+        }
+    }
+
+    fn canonical_semantic_call_v5(
+        backend: &mut ProtocolBackendV1,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<RuntimeBinaryCodecErrorV1>> {
+        let mut codec = RuntimeBinaryCodecV5;
+        let request = match launch.semantic_launch {
+            BackendSemanticLaunchV1::Atomic(_) => {
+                codec.encode_atomic_submit_request_v5(launch).unwrap()
+            }
+            BackendSemanticLaunchV1::Collective(_) => {
+                codec.encode_collective_submit_request_v5(launch).unwrap()
+            }
+            BackendSemanticLaunchV1::Ordinary => panic!("semantic test launch must be typed"),
+        };
+        let response = dispatch_binary_request_v5(backend, &request).unwrap();
+        codec.decode_semantic_submit_response_v5(&response)
     }
 
     const TEST_WORKER_SERVER: &str = r#"
@@ -3463,6 +4725,102 @@ while True:
     write_frame(response)
 "#;
 
+    const V5_SEMANTIC_WORKER_SERVER: &str = r#"
+import struct
+import sys
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+
+def read_exact(size):
+    data = b''
+    while len(data) < size:
+        part = stdin.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def read_frame():
+    size = struct.unpack('<I', read_exact(4))[0]
+    return read_exact(size)
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+def launch_payload(stream):
+    payload = struct.pack('<QQI', stream, 43, 8) + bytes(8)
+    payload += struct.pack('<I', 1)
+    payload += struct.pack('<QBQQI', 47, 3, 0, 8, 0)
+    payload += struct.pack('<IQQ', 2, 53, 59)
+    payload += struct.pack('<IIIIIII', 64, 1, 1, 64, 1, 1, 0)
+    return payload
+
+atomic = bytes((23, 1, 7, 1, 3, 2, 1))
+collective = bytes((24, 2, 2, 0, 3)) + struct.pack('<Q', 64)
+expected = (
+    atomic + launch_payload(41),
+    collective + launch_payload(41),
+    atomic + launch_payload(2),
+    collective + launch_payload(3),
+)
+responses = (
+    bytes((0,)) + struct.pack('<Q', 101),
+    bytes((0,)) + struct.pack('<Q', 102),
+    bytes((1,)) + struct.pack('<I', 16) + b'backend rejected',
+    bytes((2,)) + struct.pack('<I', 17) + b'backend quiescent',
+)
+
+write_frame(b'fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1')
+for wanted, response in zip(expected, responses):
+    request = read_frame()
+    if not request:
+        sys.exit(0)
+    if request != wanted:
+        sys.exit(21)
+    write_frame(response)
+sys.exit(0 if not read_frame() else 22)
+"#;
+
+    const V5_MALFORMED_SEMANTIC_RESPONSE_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+
+def write_frame(payload):
+    stdout.write(struct.pack('<I', len(payload)) + payload)
+    stdout.flush()
+
+write_frame(b'fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1')
+size = struct.unpack('<I', stdin.read(4))[0]
+request = stdin.read(size)
+if not request or request[0] != 23:
+    sys.exit(23)
+write_frame(bytes((0,)) + struct.pack('<Q', 101) + b'X')
+time.sleep(60)
+"#;
+
+    const V5_DELAYED_SEMANTIC_RESPONSE_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+handshake = b'fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1'
+stdout.write(struct.pack('<I', len(handshake)) + handshake)
+stdout.flush()
+size = struct.unpack('<I', stdin.read(4))[0]
+request = stdin.read(size)
+if not request or request[0] != 23:
+    sys.exit(24)
+time.sleep(60)
+"#;
+
     const V4_ZERO_ASYNC_COPY_WORKER_SERVER: &str = r#"
 import struct
 import sys
@@ -3566,7 +4924,33 @@ import struct
 import sys
 import time
 
-payload = b'fe2o3-runtime-worker-v5;extensions=flush-v1'
+payload = b'fe2o3-runtime-worker-v6;extensions=flush-v1'
+sys.stdout.buffer.write(struct.pack('<I', len(payload)) + payload)
+sys.stdout.buffer.flush()
+time.sleep(60)
+"#;
+
+    const PINNED_V4_WORKER_SERVER: &str = r#"
+import struct
+import sys
+
+payload = b'fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1'
+sys.stdout.buffer.write(struct.pack('<I', len(payload)) + payload)
+sys.stdout.buffer.flush()
+header = sys.stdin.buffer.read(4)
+if len(header) != 4:
+    sys.exit(8)
+size = struct.unpack('<I', header)[0]
+request = sys.stdin.buffer.read(size)
+sys.exit(0 if size == 0 and not request else 9)
+"#;
+
+    const MALFORMED_V5_PROFILE_WORKER_SERVER: &str = r#"
+import struct
+import sys
+import time
+
+payload = b'fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v2'
 sys.stdout.buffer.write(struct.pack('<I', len(payload)) + payload)
 sys.stdout.buffer.flush()
 time.sleep(60)
@@ -4106,6 +5490,121 @@ time.sleep(60)
     }
 
     #[test]
+    fn v5_semantic_codec_preserves_exact_contracts_and_failure_classes() {
+        let mut backend = ProtocolBackendV1::default();
+        let atomic =
+            semantic_launch_v5(41, BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5));
+        let collective = semantic_launch_v5(
+            41,
+            BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+        );
+        let mut codec = RuntimeBinaryCodecV5;
+        let atomic_request = codec.encode_atomic_submit_request_v5(atomic).unwrap();
+        let collective_request = codec
+            .encode_collective_submit_request_v5(collective)
+            .unwrap();
+        assert_eq!(
+            &atomic_request[..7],
+            &[OP_SUBMIT_ATOMIC_V5, SEMANTIC_ATOMIC_V1, 7, 1, 3, 2, 1]
+        );
+        assert_eq!(
+            &collective_request[..5],
+            &[OP_SUBMIT_COLLECTIVE_V5, SEMANTIC_COLLECTIVE_V1, 2, 0, 3]
+        );
+        assert!(atomic_request.len() <= MAX_RUNTIME_WORKER_FRAME_BYTES_V1);
+        assert!(collective_request.len() <= MAX_RUNTIME_WORKER_FRAME_BYTES_V1);
+
+        assert_ne!(canonical_semantic_call_v5(&mut backend, atomic).unwrap(), 0);
+        assert_eq!(backend.last_atomic, Some(TEST_ATOMIC_CONTRACT_V5));
+        assert_ne!(
+            canonical_semantic_call_v5(&mut backend, collective).unwrap(),
+            0
+        );
+        assert_eq!(backend.last_collective, Some(TEST_COLLECTIVE_CONTRACT_V5));
+        assert!(matches!(
+            canonical_semantic_call_v5(
+                &mut backend,
+                semantic_launch_v5(2, BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),),
+            ),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert!(matches!(
+            canonical_semantic_call_v5(
+                &mut backend,
+                semantic_launch_v5(
+                    3,
+                    BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+                ),
+            ),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        assert!(matches!(
+            canonical_semantic_call_v5(
+                &mut backend,
+                semantic_launch_v5(
+                    u64::MAX,
+                    BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+                ),
+            ),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+
+        let wrong_variant = semantic_launch_v5(
+            41,
+            BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+        );
+        assert!(matches!(
+            codec.encode_atomic_submit_request_v5(wrong_variant),
+            Err(RuntimeBinaryCodecErrorV1::Malformed(
+                "semantic submit variant"
+            ))
+        ));
+    }
+
+    #[test]
+    fn v5_semantic_dispatch_rejects_malformed_contracts_before_backend_custody() {
+        let mut codec = RuntimeBinaryCodecV5;
+        let atomic =
+            semantic_launch_v5(41, BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5));
+        let collective = semantic_launch_v5(
+            41,
+            BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+        );
+        let atomic_request = codec.encode_atomic_submit_request_v5(atomic).unwrap();
+        let collective_request = codec
+            .encode_collective_submit_request_v5(collective)
+            .unwrap();
+
+        let mut malformed = Vec::new();
+        let mut mismatch = atomic_request.clone();
+        mismatch[1] = SEMANTIC_COLLECTIVE_V1;
+        malformed.push(mismatch);
+        let mut bad_operation = atomic_request.clone();
+        bad_operation[2] = u8::MAX;
+        malformed.push(bad_operation);
+        let mut bad_weak = atomic_request.clone();
+        bad_weak[6] = 2;
+        malformed.push(bad_weak);
+        let mut zero_participants = collective_request.clone();
+        zero_participants[5..13].fill(0);
+        malformed.push(zero_participants);
+        let mut trailing = collective_request;
+        trailing.push(0);
+        malformed.push(trailing);
+
+        for request in malformed {
+            let mut backend = ProtocolBackendV1::default();
+            assert!(matches!(
+                dispatch_binary_request_v5(&mut backend, &request),
+                Err(RuntimeWorkerErrorV1::Protocol(_))
+            ));
+            assert!(backend.calls.is_empty());
+            assert_eq!(backend.last_atomic, None);
+            assert_eq!(backend.last_collective, None);
+        }
+    }
+
+    #[test]
     fn v4_additive_dispatcher_rejects_trailing_and_malformed_requests() {
         let mut codec = RuntimeBinaryCodecV4;
         let region = BackendMemoryRegionV1 {
@@ -4149,7 +5648,7 @@ time.sleep(60)
     }
 
     #[test]
-    fn v1_dispatcher_rejects_v4_extensions_and_v4_rejects_malformed_flush() {
+    fn older_dispatchers_reject_newer_extensions_and_v4_rejects_malformed_flush() {
         let flush_request = [OP_FLUSH_STREAM_V4]
             .into_iter()
             .chain(1_u64.to_le_bytes())
@@ -4174,6 +5673,35 @@ time.sleep(60)
         ] {
             assert!(matches!(
                 dispatch_binary_request_v1(&mut ProtocolBackendV1::default(), &request),
+                Err(RuntimeWorkerErrorV1::Protocol(
+                    "unknown canonical operation"
+                ))
+            ));
+        }
+
+        let mut v5_codec = RuntimeBinaryCodecV5;
+        for request in [
+            v5_codec
+                .encode_atomic_submit_request_v5(semantic_launch_v5(
+                    1,
+                    BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+                ))
+                .unwrap(),
+            v5_codec
+                .encode_collective_submit_request_v5(semantic_launch_v5(
+                    1,
+                    BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+                ))
+                .unwrap(),
+        ] {
+            assert!(matches!(
+                dispatch_binary_request_v1(&mut ProtocolBackendV1::default(), &request),
+                Err(RuntimeWorkerErrorV1::Protocol(
+                    "unknown canonical operation"
+                ))
+            ));
+            assert!(matches!(
+                dispatch_binary_request_v4(&mut ProtocolBackendV1::default(), &request),
                 Err(RuntimeWorkerErrorV1::Protocol(
                     "unknown canonical operation"
                 ))
@@ -4304,6 +5832,22 @@ time.sleep(60)
     }
 
     #[test]
+    fn v5_server_emits_only_the_v5_handshake() {
+        let mut request_bytes = Vec::new();
+        write_frame_v1(&mut request_bytes, &[]).unwrap();
+        let mut responses = Vec::new();
+        serve_runtime_worker_v5(Cursor::new(request_bytes), &mut responses, |_| {
+            panic!("shutdown frame must not reach the handler")
+        })
+        .unwrap();
+        let mut responses = Cursor::new(responses);
+        assert_eq!(
+            read_frame_v1(&mut responses).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+    }
+
+    #[test]
     fn v4_backend_server_dispatches_flush_after_exact_handshake() {
         let mut requests = Vec::new();
         let mut codec = RuntimeBinaryCodecV4;
@@ -4329,6 +5873,80 @@ time.sleep(60)
         codec
             .decode_flush_stream_response_v4(&read_frame_v1(&mut responses).unwrap())
             .unwrap();
+    }
+
+    #[test]
+    fn v5_backend_server_dispatches_semantics_after_exact_handshake() {
+        let mut requests = Vec::new();
+        let mut codec = RuntimeBinaryCodecV5;
+        write_frame_v1(
+            &mut requests,
+            &codec
+                .encode_atomic_submit_request_v5(semantic_launch_v5(
+                    41,
+                    BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        write_frame_v1(
+            &mut requests,
+            &codec
+                .encode_collective_submit_request_v5(semantic_launch_v5(
+                    41,
+                    BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        write_frame_v1(&mut requests, &[]).unwrap();
+        let mut responses = Vec::new();
+        serve_runtime_backend_worker_v5(
+            ProtocolBackendV1::default(),
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap();
+
+        let mut responses = Cursor::new(responses);
+        assert_eq!(
+            read_frame_v1(&mut responses).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_ne!(
+            codec
+                .decode_semantic_submit_response_v5(&read_frame_v1(&mut responses).unwrap())
+                .unwrap(),
+            0
+        );
+        assert_ne!(
+            codec
+                .decode_semantic_submit_response_v5(&read_frame_v1(&mut responses).unwrap())
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn v4_and_v5_server_bounds_preserve_native_xgmi_hosting() {
+        fn require_complete_v4_server_backend<B>()
+        where
+            B: RuntimeFlushBackendV1 + RuntimeAsyncCopyBackendV1 + RuntimeCancellationBackendV1,
+        {
+        }
+        fn require_complete_v5_server_backend<B>()
+        where
+            B: RuntimeFlushBackendV1
+                + RuntimeAsyncCopyBackendV1
+                + RuntimeCancellationBackendV1
+                + RuntimeAtomicBackendV1
+                + RuntimeCollectiveBackendV1,
+        {
+        }
+        require_complete_v4_server_backend::<RuntimeWorkerBackendV4<RuntimeBinaryCodecV4>>();
+        require_complete_v4_server_backend::<crate::KfdNativeXgmiRuntimeBackendV1>();
+        require_complete_v5_server_backend::<RuntimeWorkerBackendV5<RuntimeBinaryCodecV5>>();
+        require_complete_v5_server_backend::<crate::KfdNativeXgmiRuntimeBackendV1>();
     }
 
     #[test]
@@ -4361,7 +5979,7 @@ time.sleep(60)
     }
 
     #[test]
-    fn v4_backend_rejects_v1_downgrade_and_unknown_version_handshakes() {
+    fn v4_backend_rejects_v1_v5_and_unknown_version_handshakes() {
         if std::process::Command::new("python3")
             .arg("--version")
             .output()
@@ -4369,7 +5987,12 @@ time.sleep(60)
         {
             return;
         }
-        for script in [TEST_WORKER_SERVER, UNKNOWN_VERSION_WORKER_SERVER] {
+        for script in [
+            TEST_WORKER_SERVER,
+            V5_SEMANTIC_WORKER_SERVER,
+            MALFORMED_V5_PROFILE_WORKER_SERVER,
+            UNKNOWN_VERSION_WORKER_SERVER,
+        ] {
             let command = RuntimeWorkerCommandV1::new("python3")
                 .argument("-u")
                 .argument("-c")
@@ -4380,7 +6003,73 @@ time.sleep(60)
                 Duration::from_secs(2),
                 Duration::from_secs(2),
             ) {
-                Ok(_) => panic!("non-V4 handshake unexpectedly enabled flush"),
+                Ok(_) => panic!("non-exact V4 handshake unexpectedly enabled extensions"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error,
+                RuntimeWorkerErrorV1::Protocol("handshake mismatch")
+            ));
+        }
+    }
+
+    #[test]
+    fn v4_backend_interoperates_with_pinned_pre_semantic_profile() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        assert_eq!(
+            RUNTIME_WORKER_HANDSHAKE_V4,
+            b"fe2o3-runtime-worker-v4;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1"
+        );
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(PINNED_V4_WORKER_SERVER);
+        let backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            RuntimeBinaryCodecV4,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v5_backend_rejects_v1_v4_malformed_and_unknown_handshakes() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        assert_eq!(
+            RUNTIME_WORKER_HANDSHAKE_V5,
+            b"fe2o3-runtime-worker-v5;extensions=flush-v1,async-copy-v1,cancellation-v1,execution-capabilities-v1,semantic-launch-v1"
+        );
+        for script in [
+            TEST_WORKER_SERVER,
+            PINNED_V4_WORKER_SERVER,
+            MALFORMED_V5_PROFILE_WORKER_SERVER,
+            UNKNOWN_VERSION_WORKER_SERVER,
+        ] {
+            let command = RuntimeWorkerCommandV1::new("python3")
+                .argument("-u")
+                .argument("-c")
+                .argument(script);
+            let error = match RuntimeWorkerBackendV5::spawn(
+                &command,
+                RuntimeBinaryCodecV5,
+                Duration::from_secs(2),
+                Duration::from_secs(2),
+            ) {
+                Ok(_) => panic!("non-exact V5 handshake unexpectedly enabled semantics"),
                 Err(error) => error,
             };
             assert!(matches!(
@@ -4571,6 +6260,328 @@ time.sleep(60)
             RuntimeExecutionCapabilitiesV1::default()
         );
         backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v5_backend_carries_exact_semantic_contracts_and_failure_classes_over_child_process() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V5_SEMANTIC_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            RuntimeBinaryCodecV5,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+
+        assert_eq!(
+            backend
+                .submit_atomic_v1(semantic_launch_v5(
+                    41,
+                    BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+                ))
+                .unwrap(),
+            101
+        );
+        assert_eq!(
+            backend
+                .submit_collective_v1(semantic_launch_v5(
+                    41,
+                    BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+                ))
+                .unwrap(),
+            102
+        );
+        assert!(matches!(
+            backend.submit_atomic_v1(semantic_launch_v5(
+                2,
+                BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Remote(_))
+            ))
+        ));
+        assert!(matches!(
+            backend.submit_collective_v1(semantic_launch_v5(
+                3,
+                BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Quiescent(
+                RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Remote(_))
+            ))
+        ));
+        assert!(!backend.is_terminal());
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v5_backend_rejects_wrong_or_invalid_semantics_before_child_custody() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V5_SEMANTIC_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            RuntimeBinaryCodecV5,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.submit_atomic_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol(
+                    "atomic SPI requires an atomic semantic launch contract"
+                )
+            ))
+        ));
+        let invalid_atomic = RuntimeAtomicLaunchContractV1 {
+            failure_order: Some(RuntimeMemoryOrderV1::Release),
+            ..TEST_ATOMIC_CONTRACT_V5
+        };
+        assert!(matches!(
+            backend.submit_atomic_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Atomic(invalid_atomic),
+            )),
+            Err(RuntimeBackendFailureV1::Rejected(
+                RuntimeWorkerBackendErrorV1::Protocol("invalid atomic launch contract")
+            ))
+        ));
+        assert!(!backend.is_terminal());
+        backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn v5_malformed_semantic_response_reaps_and_seals_child() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V5_MALFORMED_SEMANTIC_RESPONSE_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            RuntimeBinaryCodecV5,
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.submit_atomic_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Codec(RuntimeBinaryCodecErrorV1::Malformed(_))
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(
+            backend
+                .inner
+                .inner
+                .transport
+                .child
+                .try_wait()
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn v1_empty_codec_request_seals_child_before_any_later_request() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(TEST_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV1::spawn(
+            &command,
+            EmptyRequestCodecV5::new(EmptyRequestLayerV1::Base),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.enumerate_devices_v1(),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::Protocol(
+                    "empty request is reserved for shutdown"
+                ))
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(backend.transport.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            backend.enumerate_devices_v1(),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v4_empty_codec_request_seals_child_before_any_later_request() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V4_FLUSH_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV4::spawn(
+            &command,
+            EmptyRequestCodecV5::new(EmptyRequestLayerV1::V4),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.flush_stream_v1(41),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::Protocol(
+                    "empty request is reserved for shutdown"
+                ))
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(backend.inner.transport.child.try_wait().unwrap().is_some());
+        assert!(matches!(
+            backend.flush_stream_v1(41),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v5_empty_semantic_request_seals_child_before_any_later_request() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V5_SEMANTIC_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            EmptyRequestCodecV5::new(EmptyRequestLayerV1::V5),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.submit_atomic_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::Protocol(
+                    "empty request is reserved for shutdown"
+                ))
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(
+            backend
+                .inner
+                .inner
+                .transport
+                .child
+                .try_wait()
+                .unwrap()
+                .is_some()
+        );
+        assert!(matches!(
+            backend.submit_collective_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Collective(TEST_COLLECTIVE_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
+            ))
+        ));
+    }
+
+    #[test]
+    fn v5_semantic_response_timeout_reaps_and_seals_child() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let command = RuntimeWorkerCommandV1::new("python3")
+            .argument("-u")
+            .argument("-c")
+            .argument(V5_DELAYED_SEMANTIC_RESPONSE_WORKER_SERVER);
+        let mut backend = RuntimeWorkerBackendV5::spawn(
+            &command,
+            RuntimeBinaryCodecV5,
+            Duration::from_secs(2),
+            TEST_WAIT_DEADLINE,
+        )
+        .unwrap();
+        assert!(matches!(
+            backend.submit_atomic_v1(semantic_launch_v5(
+                41,
+                BackendSemanticLaunchV1::Atomic(TEST_ATOMIC_CONTRACT_V5),
+            )),
+            Err(RuntimeBackendFailureV1::Terminal(
+                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::ResponseTimeout)
+            ))
+        ));
+        assert!(backend.is_terminal());
+        assert!(
+            backend
+                .inner
+                .inner
+                .transport
+                .child
+                .try_wait()
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

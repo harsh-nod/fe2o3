@@ -1277,6 +1277,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "rustc_apfloat",
  "rustix",
  "sha2 0.11.0",
 ]

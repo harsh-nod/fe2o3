@@ -36,20 +36,24 @@ use fe2o3_kfd::{
     SharedGttMemorySessionV1,
 };
 use fe2o3_profiler_protocol::{
-    KfdProfileAccessV1, KfdProfileBindingV1, KfdProfileHostContentV1, KfdProfileHostTimingV1,
-    KfdProfileLaunchV1, KfdProfileMemoryKindV1, KfdProfileResourceKindV1,
-    KfdRuntimeProfileEventKindV1, KfdRuntimeProfileV1, ProfileContentIdentityV1, ProfileIdentityV1,
+    KfdProfileAccessV1, KfdProfileAtomicContractV1, KfdProfileAtomicOperationV1,
+    KfdProfileBindingV1, KfdProfileCollectiveContractV1, KfdProfileCollectiveOperationV1,
+    KfdProfileHostContentV1, KfdProfileHostTimingV1, KfdProfileLaunchV1, KfdProfileMemoryKindV1,
+    KfdProfileMemoryOrderV1, KfdProfileMemoryScopeV1, KfdProfileResourceKindV1,
+    KfdProfileSemanticContractV1, KfdRuntimeProfileEventKindV1, KfdRuntimeProfileV1,
+    ProfileContentIdentityV1, ProfileIdentityV1,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
-    AuthenticatedKfdRuntimeDispatchTimestampsV1, BackendBindingV1, BackendDeviceDescriptionV1,
-    BackendLaunchV1, BackendMemoryRegionV1, BackendPollV1, BackendSemanticLaunchV1,
-    KfdRuntimeProfileRecorderV1, KfdRuntimeProfilerConfigV1, MAX_RUNTIME_DEPENDENCIES_V1,
-    MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1, MAX_RUNTIME_STREAMS_V1,
-    MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1, RuntimeAtomicBackendV1,
-    RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1, RuntimeBackendFailureV1,
-    RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
+    AuthenticatedKfdRuntimeDispatchTimestampsV1, AuthenticatedKfdRuntimeDispatchTimestampsV2,
+    BackendBindingV1, BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1,
+    BackendPollV1, BackendSemanticLaunchV1, KfdRuntimeProfileRecorderV1,
+    KfdRuntimeProfileWithSemanticSidecarV1, KfdRuntimeProfilerConfigV1,
+    MAX_RUNTIME_DEPENDENCIES_V1, MAX_RUNTIME_EVENTS_V1, MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1,
+    MAX_RUNTIME_STREAMS_V1, MAX_RUNTIME_SUBMISSIONS_V1, RuntimeAccessV1, RuntimeAsyncCopyBackendV1,
+    RuntimeAtomicBackendV1, RuntimeAtomicLaunchContractV1, RuntimeAtomicOperationV1,
+    RuntimeBackendFailureV1, RuntimeBackendV1, RuntimeCancellationBackendV1, RuntimeCapabilitiesV1,
     RuntimeCollectiveBackendV1, RuntimeCollectiveLaunchContractV1, RuntimeExecutionCapabilitiesV1,
     RuntimeFlushBackendV1, RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
 };
@@ -783,6 +787,7 @@ struct PreparedLaunchV1 {
     writebacks: Vec<WritebackV1>,
     dispatch_shape_sha256: [u8; 32],
     profile_launch: KfdProfileLaunchV1,
+    profile_semantic_contract: Option<KfdProfileSemanticContractV1>,
     profile_bindings: Option<Result<Vec<KfdProfileBindingV1>, ()>>,
     performance: KfdRuntimeLaunchPerformanceV1,
 }
@@ -1187,12 +1192,61 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
+    /// Enables the frozen V1 profiler together with the separately versioned
+    /// typed semantic sidecar. The extra sidecar storage is opt-in so the V1
+    /// producer's allocation and failure surface remains unchanged.
+    pub fn enable_profiler_with_semantic_profile_v1(
+        &mut self,
+        config: KfdRuntimeProfilerConfigV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        if self.profiler.is_some()
+            || self.next_handle != 1
+            || self.queue_retired
+            || !self.streams.is_empty()
+            || !self.allocations.is_empty()
+            || !self.modules.is_empty()
+            || !self.kernels.is_empty()
+            || !self.submissions.is_empty()
+            || !self.events.is_empty()
+            || self.any_compute_active_v1()
+            || self.queue.is_some()
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "direct-KFD profiling must begin before runtime resource creation",
+            ));
+        }
+        let recorder = KfdRuntimeProfileRecorderV1::new_with_semantic_profile(
+            config,
+            self.description.backend_device,
+            &self.description.target,
+            64,
+        )
+        .map_err(Self::capacity)?;
+        self.profiler = Some(recorder);
+        Ok(())
+    }
+
     /// Finishes profiling after all runtime and native KFD custody is closed.
     pub fn finish_profiler_v1(
         &mut self,
     ) -> Result<KfdRuntimeProfileV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.take_finished_profiler_recorder_v1()?
             .finish()
+            .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
+    }
+
+    /// Finishes the frozen Runtime Profile V1 together with the separately
+    /// versioned, exact semantic-contract sidecar.
+    pub fn finish_profiler_with_semantic_profile_v1(
+        &mut self,
+    ) -> Result<
+        KfdRuntimeProfileWithSemanticSidecarV1,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        self.take_finished_semantic_profiler_recorder_v1()?
+            .finish_with_semantic_profile()
             .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
     }
 
@@ -1209,9 +1263,22 @@ impl KfdRuntimeBackendV1 {
             .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
     }
 
-    fn take_finished_profiler_recorder_v1(
+    /// Finishes the explicit semantic profiler with V2 runtime custody over
+    /// host timestamps and the exact semantic sidecar.
+    pub fn finish_profiler_with_dispatch_timestamps_v2(
         &mut self,
-    ) -> Result<KfdRuntimeProfileRecorderV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    ) -> Result<
+        AuthenticatedKfdRuntimeDispatchTimestampsV2,
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        self.take_finished_semantic_profiler_recorder_v1()?
+            .finish_with_dispatch_timestamps_v2()
+            .map_err(|detail| Self::rejected(KfdRuntimeBackendErrorKindV1::InvalidLaunch, detail))
+    }
+
+    fn finished_profiler_recorder_v1(
+        &self,
+    ) -> Result<&KfdRuntimeProfileRecorderV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
         self.require_live()?;
         if !self.queue_retired
@@ -1228,12 +1295,42 @@ impl KfdRuntimeBackendV1 {
                 "direct-KFD profiling can finish only after logical cleanup and native shutdown",
             ));
         }
-        self.profiler.take().ok_or_else(|| {
+        self.profiler.as_ref().ok_or_else(|| {
             Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
                 "direct-KFD profiling was not enabled",
             )
         })
+    }
+
+    fn take_finished_profiler_recorder_v1(
+        &mut self,
+    ) -> Result<KfdRuntimeProfileRecorderV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        self.finished_profiler_recorder_v1()?;
+        Ok(self
+            .profiler
+            .take()
+            .expect("borrowed finished profiler remains installed"))
+    }
+
+    fn take_finished_semantic_profiler_recorder_v1(
+        &mut self,
+    ) -> Result<KfdRuntimeProfileRecorderV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        if !self
+            .finished_profiler_recorder_v1()?
+            .captures_semantic_profile()
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "semantic profiling was not enabled for this capture",
+            ));
+        }
+        Ok(self
+            .profiler
+            .take()
+            .expect("borrowed finished semantic profiler remains installed"))
     }
 
     fn profile_resource_v1(
@@ -1247,6 +1344,16 @@ impl KfdRuntimeBackendV1 {
     fn observe_profile_v1(&mut self, event: Option<KfdRuntimeProfileEventKindV1>) {
         if let Some(profiler) = self.profiler.as_mut() {
             profiler.observe(event);
+        }
+    }
+
+    fn observe_profile_dispatch_v1(
+        &mut self,
+        event: Option<KfdRuntimeProfileEventKindV1>,
+        semantic_contract: Option<KfdProfileSemanticContractV1>,
+    ) {
+        if let Some(profiler) = self.profiler.as_mut() {
+            profiler.observe_dispatch(event, semantic_contract);
         }
     }
 
@@ -2992,6 +3099,12 @@ impl KfdRuntimeBackendV1 {
             workgroup: launch.geometry.workgroup,
             dynamic_shared_bytes: launch.geometry.dynamic_shared_bytes,
         };
+        let profile_semantic_contract = self
+            .profiler
+            .as_ref()
+            .is_some_and(KfdRuntimeProfileRecorderV1::captures_semantic_profile)
+            .then(|| profile_semantic_contract_v1(launch.semantic_launch, profile_launch))
+            .flatten();
         let profile_bindings = self.prepare_profile_bindings_v1(launch.bindings);
         let stream_device = *self.streams.get(&launch.stream).ok_or_else(|| {
             Self::rejected(
@@ -3233,6 +3346,7 @@ impl KfdRuntimeBackendV1 {
             writebacks,
             dispatch_shape_sha256,
             profile_launch,
+            profile_semantic_contract,
             profile_bindings,
             performance: KfdRuntimeLaunchPerformanceV1 {
                 preparation,
@@ -3264,6 +3378,7 @@ impl KfdRuntimeBackendV1 {
             writebacks,
             dispatch_shape_sha256,
             profile_launch,
+            profile_semantic_contract,
             profile_bindings,
             mut performance,
         } = prepared;
@@ -3545,7 +3660,7 @@ impl KfdRuntimeBackendV1 {
             Some(Err(())) => None,
             None => None,
         };
-        self.observe_profile_v1(profile_event);
+        self.observe_profile_dispatch_v1(profile_event, profile_semantic_contract);
         Ok(())
     }
 
@@ -4320,6 +4435,87 @@ fn map_access_v1(access: RuntimeAccessV1) -> ArgumentAccess {
         RuntimeAccessV1::Read => ArgumentAccess::ReadOnly,
         RuntimeAccessV1::Write => ArgumentAccess::WriteOnly,
         RuntimeAccessV1::ReadWrite => ArgumentAccess::ReadWrite,
+    }
+}
+
+fn profile_semantic_contract_v1(
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
+    geometry: KfdProfileLaunchV1,
+) -> Option<KfdProfileSemanticContractV1> {
+    match semantic_launch {
+        KfdRuntimeSemanticLaunchV1::Ordinary => None,
+        KfdRuntimeSemanticLaunchV1::Atomic(contract) => Some(KfdProfileSemanticContractV1::Atomic(
+            KfdProfileAtomicContractV1 {
+                operation: match contract.operation {
+                    RuntimeAtomicOperationV1::Add => KfdProfileAtomicOperationV1::Add,
+                    RuntimeAtomicOperationV1::Minimum => KfdProfileAtomicOperationV1::Minimum,
+                    RuntimeAtomicOperationV1::Maximum => KfdProfileAtomicOperationV1::Maximum,
+                    RuntimeAtomicOperationV1::BitwiseAnd => KfdProfileAtomicOperationV1::BitwiseAnd,
+                    RuntimeAtomicOperationV1::BitwiseOr => KfdProfileAtomicOperationV1::BitwiseOr,
+                    RuntimeAtomicOperationV1::BitwiseXor => KfdProfileAtomicOperationV1::BitwiseXor,
+                    RuntimeAtomicOperationV1::Exchange => KfdProfileAtomicOperationV1::Exchange,
+                    RuntimeAtomicOperationV1::CompareExchange => {
+                        KfdProfileAtomicOperationV1::CompareExchange
+                    }
+                },
+                scope: profile_memory_scope_v1(contract.scope),
+                order: profile_memory_order_v1(contract.order),
+                failure_order: contract.failure_order.map(profile_memory_order_v1),
+                weak: contract.weak,
+                geometry,
+            },
+        )),
+        KfdRuntimeSemanticLaunchV1::Collective(contract) => Some(
+            KfdProfileSemanticContractV1::Collective(KfdProfileCollectiveContractV1 {
+                operation: match contract.operation {
+                    crate::RuntimeCollectiveOperationV1::Barrier => {
+                        KfdProfileCollectiveOperationV1::Barrier
+                    }
+                    crate::RuntimeCollectiveOperationV1::Broadcast => {
+                        KfdProfileCollectiveOperationV1::Broadcast
+                    }
+                    crate::RuntimeCollectiveOperationV1::ReduceSum => {
+                        KfdProfileCollectiveOperationV1::ReduceSum
+                    }
+                    crate::RuntimeCollectiveOperationV1::ReduceMinimum => {
+                        KfdProfileCollectiveOperationV1::ReduceMinimum
+                    }
+                    crate::RuntimeCollectiveOperationV1::ReduceMaximum => {
+                        KfdProfileCollectiveOperationV1::ReduceMaximum
+                    }
+                    crate::RuntimeCollectiveOperationV1::AllReduceSum => {
+                        KfdProfileCollectiveOperationV1::AllReduceSum
+                    }
+                    crate::RuntimeCollectiveOperationV1::InclusiveScanSum => {
+                        KfdProfileCollectiveOperationV1::InclusiveScanSum
+                    }
+                },
+                scope: profile_memory_scope_v1(contract.scope),
+                order: profile_memory_order_v1(contract.order),
+                participants: contract.participants,
+                geometry,
+            }),
+        ),
+    }
+}
+
+const fn profile_memory_scope_v1(scope: RuntimeMemoryScopeV1) -> KfdProfileMemoryScopeV1 {
+    match scope {
+        RuntimeMemoryScopeV1::Workgroup => KfdProfileMemoryScopeV1::Workgroup,
+        RuntimeMemoryScopeV1::Device => KfdProfileMemoryScopeV1::Device,
+        RuntimeMemoryScopeV1::System => KfdProfileMemoryScopeV1::System,
+    }
+}
+
+const fn profile_memory_order_v1(order: RuntimeMemoryOrderV1) -> KfdProfileMemoryOrderV1 {
+    match order {
+        RuntimeMemoryOrderV1::Relaxed => KfdProfileMemoryOrderV1::Relaxed,
+        RuntimeMemoryOrderV1::Acquire => KfdProfileMemoryOrderV1::Acquire,
+        RuntimeMemoryOrderV1::Release => KfdProfileMemoryOrderV1::Release,
+        RuntimeMemoryOrderV1::AcquireRelease => KfdProfileMemoryOrderV1::AcquireRelease,
+        RuntimeMemoryOrderV1::SequentiallyConsistent => {
+            KfdProfileMemoryOrderV1::SequentiallyConsistent
+        }
     }
 }
 
@@ -9829,6 +10025,55 @@ impl RuntimeAsyncCopyBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     }
 }
 
+fn reject_native_xgmi_semantic_submission_v1(
+    semantic_launch: BackendSemanticLaunchV1,
+    expected_atomic: bool,
+) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+    let correct_variant = matches!(
+        (expected_atomic, semantic_launch),
+        (true, BackendSemanticLaunchV1::Atomic(_))
+            | (false, BackendSemanticLaunchV1::Collective(_))
+    );
+    let (kind, detail) = if correct_variant {
+        (
+            KfdRuntimeBackendErrorKindV1::Unsupported,
+            "copy-only native XGMI backend has no compute semantic owner",
+        )
+    } else {
+        (
+            KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+            "native XGMI semantic SPI variant mismatch",
+        )
+    };
+    RuntimeBackendFailureV1::Rejected(KfdRuntimeBackendErrorV1::new(kind, detail))
+}
+
+impl RuntimeAtomicBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+    fn submit_atomic_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        Err(reject_native_xgmi_semantic_submission_v1(
+            launch.semantic_launch,
+            true,
+        ))
+    }
+}
+
+impl RuntimeCollectiveBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+    fn submit_collective_v1(
+        &mut self,
+        launch: BackendLaunchV1<'_>,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.require_live()?;
+        Err(reject_native_xgmi_semantic_submission_v1(
+            launch.semantic_launch,
+            false,
+        ))
+    }
+}
+
 impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
@@ -11383,6 +11628,56 @@ mod tests {
     }
 
     #[test]
+    fn profiler_projection_retains_exact_atomic_and_collective_contracts() {
+        let geometry = KfdProfileLaunchV1 {
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        };
+        let atomic = RuntimeAtomicLaunchContractV1 {
+            operation: RuntimeAtomicOperationV1::CompareExchange,
+            scope: RuntimeMemoryScopeV1::Device,
+            order: RuntimeMemoryOrderV1::SequentiallyConsistent,
+            failure_order: Some(RuntimeMemoryOrderV1::Acquire),
+            weak: true,
+            geometry: semantic_geometry_v1(),
+        };
+        assert_eq!(
+            profile_semantic_contract_v1(KfdRuntimeSemanticLaunchV1::Atomic(atomic), geometry),
+            Some(KfdProfileSemanticContractV1::Atomic(
+                KfdProfileAtomicContractV1 {
+                    operation: KfdProfileAtomicOperationV1::CompareExchange,
+                    scope: KfdProfileMemoryScopeV1::Device,
+                    order: KfdProfileMemoryOrderV1::SequentiallyConsistent,
+                    failure_order: Some(KfdProfileMemoryOrderV1::Acquire),
+                    weak: true,
+                    geometry,
+                }
+            ))
+        );
+
+        assert_eq!(
+            profile_semantic_contract_v1(
+                KfdRuntimeSemanticLaunchV1::Collective(collective_contract_v1()),
+                geometry,
+            ),
+            Some(KfdProfileSemanticContractV1::Collective(
+                KfdProfileCollectiveContractV1 {
+                    operation: KfdProfileCollectiveOperationV1::ReduceSum,
+                    scope: KfdProfileMemoryScopeV1::Workgroup,
+                    order: KfdProfileMemoryOrderV1::AcquireRelease,
+                    participants: 64,
+                    geometry,
+                }
+            ))
+        );
+        assert_eq!(
+            profile_semantic_contract_v1(KfdRuntimeSemanticLaunchV1::Ordinary, geometry),
+            None
+        );
+    }
+
+    #[test]
     fn semantic_profiles_control_both_capability_layers_fail_closed() {
         let overbound =
             KfdRuntimeLaunchGateV1::Semantic(Box::new(TestOverboundSemanticAuthorityV1));
@@ -12106,7 +12401,9 @@ mod tests {
         where
             T: RuntimeBackendV1
                 + RuntimeAsyncCopyBackendV1
+                + RuntimeAtomicBackendV1
                 + RuntimeCancellationBackendV1
+                + RuntimeCollectiveBackendV1
                 + RuntimeFlushBackendV1,
         {
         }
@@ -12121,6 +12418,29 @@ mod tests {
         assert!(!capabilities.profiling);
         assert!(!capabilities.atomics);
         assert!(!capabilities.collectives);
+
+        for failure in [
+            reject_native_xgmi_semantic_submission_v1(
+                BackendSemanticLaunchV1::Atomic(atomic_contract_v1()),
+                true,
+            ),
+            reject_native_xgmi_semantic_submission_v1(
+                BackendSemanticLaunchV1::Collective(collective_contract_v1()),
+                false,
+            ),
+        ] {
+            let RuntimeBackendFailureV1::Rejected(error) = failure else {
+                panic!("unsupported native XGMI semantics must reject before custody");
+            };
+            assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Unsupported);
+        }
+        let RuntimeBackendFailureV1::Rejected(error) = reject_native_xgmi_semantic_submission_v1(
+            BackendSemanticLaunchV1::Collective(collective_contract_v1()),
+            true,
+        ) else {
+            panic!("mismatched native XGMI semantic variant must reject");
+        };
+        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::InvalidLaunch);
     }
 
     #[test]
@@ -12816,6 +13136,62 @@ mod tests {
                 .complete_runtime_operation_history
         );
         assert!(evidence.dispatch_timestamps().records().is_empty());
+    }
+
+    #[test]
+    fn semantic_timestamp_v2_requires_explicit_sidecar_enablement() {
+        let mut ordinary = KfdRuntimeBackendV1::mock();
+        ordinary
+            .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([25; 32], 16).unwrap())
+            .unwrap();
+        ordinary.shutdown_native_v1().unwrap();
+        assert!(matches!(
+            ordinary.finish_profiler_with_dispatch_timestamps_v2(),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+        ));
+        let ordinary_evidence = ordinary
+            .finish_profiler_with_dispatch_timestamps_v1()
+            .unwrap();
+        assert!(ordinary_evidence.runtime_profile().events.is_empty());
+        assert!(ordinary_evidence.dispatch_timestamps().records().is_empty());
+
+        let mut semantic = KfdRuntimeBackendV1::mock();
+        semantic
+            .enable_profiler_with_semantic_profile_v1(
+                KfdRuntimeProfilerConfigV1::new([26; 32], 16).unwrap(),
+            )
+            .unwrap();
+        semantic.shutdown_native_v1().unwrap();
+        let evidence = semantic
+            .finish_profiler_with_dispatch_timestamps_v2()
+            .unwrap();
+        assert!(evidence.runtime_profile().events.is_empty());
+        assert!(evidence.dispatch_timestamps().records().is_empty());
+        assert!(evidence.semantic_profile().records().is_empty());
+        assert!(
+            evidence
+                .semantic_profile()
+                .coverage()
+                .complete_retained_dispatch_classification
+        );
+    }
+
+    #[test]
+    fn semantic_sidecar_finish_rejection_preserves_ordinary_v1_profiler() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend
+            .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([27; 32], 16).unwrap())
+            .unwrap();
+        backend.shutdown_native_v1().unwrap();
+        assert!(matches!(
+            backend.finish_profiler_with_semantic_profile_v1(),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+        ));
+        let capture = backend.finish_profiler_v1().unwrap();
+        assert!(capture.events.is_empty());
+        assert!(capture.coverage.complete_runtime_operation_history);
     }
 
     #[test]

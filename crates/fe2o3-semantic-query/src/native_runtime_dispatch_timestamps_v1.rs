@@ -4,22 +4,30 @@
 //! It reports exact host observation points without converting them into GPU
 //! begin/end timestamps or a globally synchronized time domain.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
 use fe2o3_profiler_protocol::{
-    KfdRuntimeProfileV1, NativeRuntimeDispatchTimestampCaptureV1,
-    NativeRuntimeDispatchTimestampCoverageV1, NativeRuntimeHostClockV1,
-    NativeRuntimeHostTimestampPointV1, ProfileContentIdentityV1, ProfileIdentityV1,
-    encode_kfd_runtime_profile_v1, encode_native_runtime_dispatch_timestamp_capture_v1,
+    KfdProfileLaunchV1, KfdProfileSemanticContractV1, KfdRuntimeProfileV1,
+    KfdRuntimeSemanticCoverageV1, KfdRuntimeSemanticProfileV1,
+    NativeRuntimeDispatchTimestampCaptureV1, NativeRuntimeDispatchTimestampCoverageV1,
+    NativeRuntimeHostClockV1, NativeRuntimeHostTimestampPointV1, ProfileContentIdentityV1,
+    ProfileIdentityV1, encode_kfd_runtime_profile_v1, encode_kfd_runtime_semantic_profile_v1,
+    encode_native_runtime_dispatch_timestamp_capture_v1,
+    kfd_runtime_semantic_profile_content_identity_v1,
     native_runtime_dispatch_timestamp_capture_content_identity_v1,
 };
-use fe2o3_runtime::AuthenticatedKfdRuntimeDispatchTimestampsV1;
+use fe2o3_runtime::{
+    AuthenticatedKfdRuntimeDispatchTimestampsV1, AuthenticatedKfdRuntimeDispatchTimestampsV2,
+};
 use fe2o3_semantic_import::TruthOriginV1;
 use serde::Serialize;
 
 pub const NATIVE_RUNTIME_DISPATCH_TIMESTAMP_REPORT_SCHEMA_V1: &str =
     "fe2o3-native-runtime-dispatch-timestamp-report-v1";
+pub const NATIVE_RUNTIME_DISPATCH_TIMESTAMP_REPORT_SCHEMA_V2: &str =
+    "fe2o3-native-runtime-dispatch-timestamp-report-v2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +105,49 @@ pub struct NativeRuntimeDispatchTimestampReportV1 {
     pub authority: NativeRuntimeDispatchTimestampReportAuthorityV1,
 }
 
+/// Additive V2 record joining authenticated host timestamps to the exact
+/// separately versioned runtime semantic sidecar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRuntimeDispatchTimestampRecordSummaryV2 {
+    pub record_identity: ProfileIdentityV1,
+    pub dispatch: ProfileIdentityV1,
+    pub queue: ProfileIdentityV1,
+    pub device: ProfileIdentityV1,
+    pub kernel: ProfileIdentityV1,
+    pub artifact: ProfileContentIdentityV1,
+    pub dispatch_shape: ProfileContentIdentityV1,
+    pub launch: KfdProfileLaunchV1,
+    /// Exact runtime-authorized declaration at publication. This is not an
+    /// inferred execution event or proof of machine behavior.
+    pub semantic_contract: Option<KfdProfileSemanticContractV1>,
+    pub publication: NativeRuntimeHostTimestampPointV1,
+    pub completion: Option<NativeRuntimeHostTimestampPointV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeRuntimeDispatchTimestampReportAuthorityV2 {
+    AuthenticatedNativeRuntimeCustodyReadOnlyNoCollectionDispatchProofOrExecutionAuthority,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRuntimeDispatchTimestampReportV2 {
+    pub schema: &'static str,
+    pub runtime_profile: ProfileContentIdentityV1,
+    pub semantic_profile: ProfileContentIdentityV1,
+    pub timestamp_capture: ProfileContentIdentityV1,
+    pub runtime_capture_scope: ProfileIdentityV1,
+    pub recorder_occurrence: ProfileIdentityV1,
+    pub host_clock: NativeRuntimeHostClockV1,
+    pub coverage: NativeRuntimeDispatchTimestampCoverageV1,
+    pub semantic_coverage: KfdRuntimeSemanticCoverageV1,
+    pub capabilities: Vec<NativeRuntimeDispatchTimestampCapabilityV1>,
+    pub records: Vec<NativeRuntimeDispatchTimestampRecordSummaryV2>,
+    pub authority: NativeRuntimeDispatchTimestampReportAuthorityV2,
+}
+
 pub fn report_authenticated_native_runtime_dispatch_timestamps_v1(
     evidence: &AuthenticatedKfdRuntimeDispatchTimestampsV1,
 ) -> Result<NativeRuntimeDispatchTimestampReportV1, NativeRuntimeDispatchTimestampReportErrorV1> {
@@ -104,6 +155,91 @@ pub fn report_authenticated_native_runtime_dispatch_timestamps_v1(
         evidence.runtime_profile(),
         evidence.dispatch_timestamps(),
     )
+}
+
+/// Reports authenticated host observations together with their exact typed
+/// runtime contract classification. The additive V2 report leaves the frozen
+/// V1 report unchanged and accepts only the non-constructible V2 custody bundle.
+pub fn report_authenticated_native_runtime_dispatch_timestamps_v2(
+    evidence: &AuthenticatedKfdRuntimeDispatchTimestampsV2,
+) -> Result<NativeRuntimeDispatchTimestampReportV2, NativeRuntimeDispatchTimestampReportErrorV2> {
+    report_validated_native_runtime_dispatch_timestamps_v2(
+        evidence.runtime_profile(),
+        evidence.dispatch_timestamps(),
+        evidence.semantic_profile(),
+    )
+}
+
+fn report_validated_native_runtime_dispatch_timestamps_v2(
+    runtime_profile: &KfdRuntimeProfileV1,
+    timestamp_capture: &NativeRuntimeDispatchTimestampCaptureV1,
+    semantic_capture: &KfdRuntimeSemanticProfileV1,
+) -> Result<NativeRuntimeDispatchTimestampReportV2, NativeRuntimeDispatchTimestampReportErrorV2> {
+    let report_v1 =
+        report_validated_native_runtime_dispatch_timestamps_v1(runtime_profile, timestamp_capture)
+            .map_err(NativeRuntimeDispatchTimestampReportErrorV2::from)?;
+    let runtime_bytes = encode_kfd_runtime_profile_v1(runtime_profile)
+        .map_err(|_| NativeRuntimeDispatchTimestampReportErrorV2::RuntimeProfileRejected)?;
+    let semantic_bytes =
+        encode_kfd_runtime_semantic_profile_v1(semantic_capture, &runtime_bytes)
+            .map_err(|_| NativeRuntimeDispatchTimestampReportErrorV2::SemanticProfileRejected)?;
+    let semantic_profile =
+        kfd_runtime_semantic_profile_content_identity_v1(&semantic_bytes, &runtime_bytes)
+            .map_err(|_| NativeRuntimeDispatchTimestampReportErrorV2::SemanticProfileRejected)?;
+
+    let mut semantics = HashMap::new();
+    semantics
+        .try_reserve(semantic_capture.records().len())
+        .map_err(|_| NativeRuntimeDispatchTimestampReportErrorV2::AllocationFailure)?;
+    for record in semantic_capture.records() {
+        if semantics.insert(record.dispatch(), record).is_some() {
+            return Err(NativeRuntimeDispatchTimestampReportErrorV2::SemanticJoinRejected);
+        }
+    }
+
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(report_v1.records.len())
+        .map_err(|_| NativeRuntimeDispatchTimestampReportErrorV2::AllocationFailure)?;
+    for timestamp in report_v1.records {
+        let semantic = semantics
+            .get(&timestamp.dispatch)
+            .copied()
+            .ok_or(NativeRuntimeDispatchTimestampReportErrorV2::SemanticJoinRejected)?;
+        if semantic.runtime_event() != timestamp.publication.runtime_event
+            || semantic.runtime_event_sequence() != timestamp.publication.runtime_event_sequence
+        {
+            return Err(NativeRuntimeDispatchTimestampReportErrorV2::SemanticJoinRejected);
+        }
+        records.push(NativeRuntimeDispatchTimestampRecordSummaryV2 {
+            record_identity: timestamp.record_identity,
+            dispatch: timestamp.dispatch,
+            queue: timestamp.queue,
+            device: timestamp.device,
+            kernel: timestamp.kernel,
+            artifact: timestamp.artifact,
+            dispatch_shape: semantic.dispatch_shape(),
+            launch: semantic.launch(),
+            semantic_contract: semantic.semantic_contract(),
+            publication: timestamp.publication,
+            completion: timestamp.completion,
+        });
+    }
+
+    Ok(NativeRuntimeDispatchTimestampReportV2 {
+        schema: NATIVE_RUNTIME_DISPATCH_TIMESTAMP_REPORT_SCHEMA_V2,
+        runtime_profile: report_v1.runtime_profile,
+        semantic_profile,
+        timestamp_capture: report_v1.timestamp_capture,
+        runtime_capture_scope: report_v1.runtime_capture_scope,
+        recorder_occurrence: report_v1.recorder_occurrence,
+        host_clock: report_v1.host_clock,
+        coverage: report_v1.coverage,
+        semantic_coverage: semantic_capture.coverage(),
+        capabilities: report_v1.capabilities,
+        records,
+        authority: NativeRuntimeDispatchTimestampReportAuthorityV2::AuthenticatedNativeRuntimeCustodyReadOnlyNoCollectionDispatchProofOrExecutionAuthority,
+    })
 }
 
 fn report_validated_native_runtime_dispatch_timestamps_v1(
@@ -246,12 +382,53 @@ impl fmt::Display for NativeRuntimeDispatchTimestampReportErrorV1 {
 
 impl Error for NativeRuntimeDispatchTimestampReportErrorV1 {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeRuntimeDispatchTimestampReportErrorV2 {
+    RuntimeProfileRejected,
+    TimestampCaptureRejected,
+    SemanticProfileRejected,
+    SemanticJoinRejected,
+    AllocationFailure,
+}
+
+impl From<NativeRuntimeDispatchTimestampReportErrorV1>
+    for NativeRuntimeDispatchTimestampReportErrorV2
+{
+    fn from(error: NativeRuntimeDispatchTimestampReportErrorV1) -> Self {
+        match error {
+            NativeRuntimeDispatchTimestampReportErrorV1::RuntimeProfileRejected => {
+                Self::RuntimeProfileRejected
+            }
+            NativeRuntimeDispatchTimestampReportErrorV1::TimestampCaptureRejected => {
+                Self::TimestampCaptureRejected
+            }
+            NativeRuntimeDispatchTimestampReportErrorV1::AllocationFailure => {
+                Self::AllocationFailure
+            }
+        }
+    }
+}
+
+impl fmt::Display for NativeRuntimeDispatchTimestampReportErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "native runtime dispatch timestamp V2 report rejected: {self:?}"
+        )
+    }
+}
+
+impl Error for NativeRuntimeDispatchTimestampReportErrorV2 {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_profiler_protocol::{
-        KfdProfileDeviceV1, KfdProfileHostContentModeV1, KfdProfileHostTimingV1,
-        KfdProfileLaunchV1, KfdProfileResourceKindV1, KfdRuntimeProfileEventKindV1,
+        KfdProfileAtomicContractV1, KfdProfileAtomicOperationV1, KfdProfileDeviceV1,
+        KfdProfileHostContentModeV1, KfdProfileHostTimingV1, KfdProfileLaunchV1,
+        KfdProfileMemoryOrderV1, KfdProfileMemoryScopeV1, KfdProfileResourceKindV1,
+        KfdProfileSemanticContractV1, KfdRuntimeProfileEventKindV1,
+        KfdRuntimeSemanticObservationV1, KfdRuntimeSemanticProfileV1,
         NativeRuntimeDispatchTimestampRecorderV1, push_observed_event_v1, resource_identity_v1,
     };
 
@@ -454,5 +631,58 @@ mod tests {
             .unwrap()
             .len()
         });
+    }
+
+    #[test]
+    fn additive_v2_report_joins_authenticated_timestamps_to_exact_typed_contract() {
+        let (runtime, timestamps) = one_dispatch_capture();
+        let (dispatch, dispatch_shape, launch) = runtime
+            .events
+            .iter()
+            .find_map(|event| match event.event {
+                KfdRuntimeProfileEventKindV1::DispatchPublished {
+                    dispatch,
+                    dispatch_shape,
+                    launch,
+                    ..
+                } => Some((dispatch, dispatch_shape, launch)),
+                _ => None,
+            })
+            .unwrap();
+        let semantic_contract = KfdProfileSemanticContractV1::Atomic(KfdProfileAtomicContractV1 {
+            operation: KfdProfileAtomicOperationV1::CompareExchange,
+            scope: KfdProfileMemoryScopeV1::Device,
+            order: KfdProfileMemoryOrderV1::AcquireRelease,
+            failure_order: Some(KfdProfileMemoryOrderV1::Acquire),
+            weak: true,
+            geometry: launch,
+        });
+        let semantics = KfdRuntimeSemanticProfileV1::new(
+            &runtime,
+            vec![KfdRuntimeSemanticObservationV1 {
+                dispatch,
+                semantic_contract: Some(semantic_contract),
+            }],
+        )
+        .unwrap();
+        let report = report_validated_native_runtime_dispatch_timestamps_v2(
+            &runtime,
+            timestamps.capture(),
+            &semantics,
+        )
+        .unwrap();
+        assert_eq!(
+            report.schema,
+            NATIVE_RUNTIME_DISPATCH_TIMESTAMP_REPORT_SCHEMA_V2
+        );
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.records[0].dispatch_shape, dispatch_shape);
+        assert_eq!(report.records[0].launch, launch);
+        assert_eq!(report.records[0].semantic_contract, Some(semantic_contract));
+        assert_eq!(report.semantic_coverage.typed_semantic_contracts, 1);
+        assert_eq!(
+            report.authority,
+            NativeRuntimeDispatchTimestampReportAuthorityV2::AuthenticatedNativeRuntimeCustodyReadOnlyNoCollectionDispatchProofOrExecutionAuthority
+        );
     }
 }

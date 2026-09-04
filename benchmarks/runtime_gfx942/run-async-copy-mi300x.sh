@@ -85,8 +85,9 @@ for depth in ${depths}; do
 done
 case "${kfd_profile}" in
   generic|directional|engine0|engine1) ;;
+  striped2|striped4|striped6|striped8|striped10|striped12|striped14|striped16) ;;
   *)
-    printf 'KFD profile must be generic, directional, engine0, or engine1\n' >&2
+    printf 'KFD profile must be generic, directional, engine0, engine1, or an admitted even striped2..striped16 profile\n' >&2
     exit 2
     ;;
 esac

@@ -55,15 +55,20 @@ An error is classified as one of:
 - `Terminal`: native state or quiescence is ambiguous; resources remain retained
   and the backend context cannot be used again.
 
-Community applications should host native KFD backends in the negotiated
-`RuntimeWorkerBackendV4`; its exact profile carries execution-capability
-discovery, flush, same-device async copy, cancellation, and deadline-bounded
-drain. The canonical V4 server requires the backend to implement all three
-additive SPIs; the direct, multi-device, and native-XGMI KFD owners satisfy that
-bound. Frozen `RuntimeWorkerBackendV1` remains for backends that explicitly opt
+Community applications should host native KFD backends requiring operational
+isolation in negotiated `RuntimeWorkerBackendV4`; its exact profile carries
+execution-capability discovery, flush, same-device async copy, cancellation,
+and deadline-bounded drain. The canonical V4 server requires the backend to
+implement all three additive SPIs; the direct, multi-device, and native-XGMI
+KFD owners satisfy that bound. Typed atomic/collective process transport uses additive
+`RuntimeWorkerBackendV5`, which retains every V4 operation and requires the two
+semantic SPIs. Direct and multi-device KFD carry exact contracts; copy-only
+native XGMI satisfies the server bound only through explicit pre-custody
+`Unsupported` rejections and false semantic capabilities. Frozen
+`RuntimeWorkerBackendV1` remains for backends that explicitly opt
 into immediate progress. The versioned transports share one subprocess owner
-and reject cross-version handshakes. V4 caches capability records only for the
-latest successfully enumerated roster and fails closed before enumeration,
+and reject cross-version handshakes. V4 and V5 cache capability records only
+for the latest successfully enumerated roster and fail closed before enumeration,
 after a failed replacement, and for unknown handles. Runtime Worker transport
 versioning is separate from compiler/proof Worker V3. The same isolation can
 contain deprecated HSA qualification code, but that is not a public runtime
@@ -130,7 +135,7 @@ host work can overlap DMA. First-prefix allocation failure rejects before
 mutation; a recoverable later-prefix failure is quiescent because prior prefixes
 have completed and the remaining custody is retryable. Flush creates no
 background thread. Frozen Runtime Worker V1 has no flush request; negotiated
-Runtime Worker V4 exposes the complete additive SPI profile with request-timeout
+Runtime Worker V4 and V5 expose the operational SPI profile with request-timeout
 and caller-drain-deadline bounds.
 
 The feature-gated gfx942 qualification lane is intentionally outside production
@@ -201,7 +206,9 @@ constructed with a separate unsafe semantic authority, and carries the
 contract into final authorization. This is executable admission and custody,
 not proof of kernel semantics, compiler preservation, firmware behavior, or
 native hardware refinement. Ordinary KFD constructors advertise neither
-capability, and Runtime Worker V4 does not encode this semantic launch yet.
+capability. Runtime Worker V4 deliberately does not encode semantic launches;
+the additive V5 profile preserves the exact validated contract across the
+process boundary without creating native semantic or proof authority.
 
 `RuntimeLaunchGeometryV1::grid` is the global work-item extent published in the
 AQL grid-size fields. `workgroup` is the per-group extent. For COV6 implicit
@@ -271,7 +278,7 @@ ambiguity.
   immediately ready work; wait is observation-only; and explicit in-process
   stream flush may enter the potentially blocking dirty-buffer reconciliation
   and publication path. Progress is caller-driven. Frozen Runtime Worker V1 does
-  not expose flush; negotiated Runtime Worker V4 does.
+  not expose flush; negotiated Runtime Worker V4 and V5 do.
 - SDMA batch submission and batch completion are linear in batch depth, bounded
   by 63 so one of the 64 physical ring slots remains empty. Currentness
   validation is constant per batch rather than per packet; packet construction

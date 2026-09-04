@@ -651,6 +651,15 @@ checked-device owner: the device, VM, and shared-memory session are linear and
 splitting that authority requires a separate native-owner transition. Striped
 queues apply only to SDMA work.
 
+The copy benchmark's `stripedN` profiles are an explicit concurrency
+diagnostic over that queue set. Each direction is partitioned into
+`min(N, depth)` balanced batches, every batch is published before the first
+wait, and each successful batch advances to the next native queue. Submission
+and wait retain their existing per-batch currentness envelopes. This is not an
+all-or-nothing multi-queue publication transaction: a later shard failure after
+an earlier publication is a terminal benchmark failure, and no production
+atomic-batch claim follows from the measurement.
+
 `GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
 capability sidecar, reviewed ROCr revision, direction policy and packet sources,
 packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves

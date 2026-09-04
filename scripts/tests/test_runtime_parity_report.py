@@ -145,6 +145,58 @@ class CheckParityTests(unittest.TestCase):
         )
         self.assertEqual(output[-1], "parity_status=pass")
 
+    def test_accepts_exact_bounded_striped_profile(self) -> None:
+        striped = row("kfd").replace("profile=directional", "profile=striped16")
+        striped += (
+            " configured_queues=16 concurrency=16 doorbells_per_batch=16"
+            " queue_depth=1 batch_size=16 direction=h2d-then-d2h"
+        )
+        lines = evidence(
+            [striped, row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+        )
+        lines[0] = lines[0].replace("kfd_profile=directional", "kfd_profile=striped16")
+        output = CHECK_PARITY.check_rows(
+            lines,
+            "fe2o3.async-copy-benchmark.v1",
+            1.0,
+            1.0,
+        )
+        self.assertEqual(output[-1], "parity_status=pass")
+
+    def test_rejects_striped_profile_methodology_substitution(self) -> None:
+        striped = row("kfd").replace("profile=directional", "profile=striped16")
+        striped += (
+            " configured_queues=16 concurrency=8 doorbells_per_batch=16"
+            " queue_depth=1 batch_size=16 direction=h2d-then-d2h"
+        )
+        lines = evidence(
+            [striped, row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+        )
+        lines[0] = lines[0].replace("kfd_profile=directional", "kfd_profile=striped16")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "concurrency"):
+            CHECK_PARITY.check_rows(
+                lines,
+                "fe2o3.async-copy-benchmark.v1",
+                1.0,
+                1.0,
+            )
+
+    def test_rejects_unbalanced_striped_profile(self) -> None:
+        lines = evidence(
+            [row("kfd").replace("profile=directional", "profile=striped3"), row("hsa"), row("hip")],
+            "fe2o3.async-copy-benchmark.v1",
+        )
+        lines[0] = lines[0].replace("kfd_profile=directional", "kfd_profile=striped3")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "unsupported"):
+            CHECK_PARITY.check_rows(
+                lines,
+                "fe2o3.async-copy-benchmark.v1",
+                1.0,
+                1.0,
+            )
+
     def test_rejects_slow_kfd_row(self) -> None:
         with self.assertRaisesRegex(CHECK_PARITY.CheckError, "parity_status=fail"):
             CHECK_PARITY.check_rows(

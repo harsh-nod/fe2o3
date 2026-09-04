@@ -148,6 +148,17 @@ clock-correlation sample, or advertise a device/global clock domain. Persisted
 timestamp JSON can be revalidated structurally but cannot recreate this
 authenticated query input.
 
+The additive
+`report_authenticated_native_runtime_dispatch_timestamps_v2` accepts only the
+distinct runtime-owned V2 custody type and leaves the V1 report schema
+unchanged. It joins each retained timestamp record to the exact KFD Runtime
+Semantic Profile V1 publication, exposing the opaque dispatch-shape identity,
+launch geometry, and optional typed atomic or collective contract. The report
+also carries sidecar coverage and rejects missing, duplicate, stale, or
+substituted joins. These are authenticated runtime contract declarations, not
+semantic execution events, machine-correctness proofs, GPU timestamps, or
+collection/dispatch authority.
+
 ## Profiler capture queries
 
 The same crate provides the read-only `CaptureQuerySessionV1` protocol and

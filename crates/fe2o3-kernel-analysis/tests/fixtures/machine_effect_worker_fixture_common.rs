@@ -502,7 +502,10 @@ fn evidence(request: &Request) -> Vec<u8> {
         .payload
         .first()
         .copied()
-        .filter(|mode| (19..=26).contains(mode));
+        .filter(|mode| (19..=34).contains(mode));
+    let semantic_fixture = semantic_mode.is_some_and(|mode| {
+        request.payload.len() == if mode == 34 { 20 } else { 16 }
+    });
     let global_atomic_fixture = matches!(semantic_mode, Some(19 | 20 | 23));
     let global_read_fixture = semantic_mode == Some(24);
     let effect_count = request.entries.len() as u32
@@ -524,8 +527,14 @@ fn evidence(request: &Request) -> Vec<u8> {
             push_effect(&mut output, &entry.symbol, 0, 1, 8);
             push_effect(&mut output, &entry.symbol, 0, 2, 4);
             push_effect(&mut output, &entry.symbol, 12, 4, 0);
-        } else if semantic_mode.is_some() && request.payload.len() == 16 {
-            push_effect(&mut output, &entry.symbol, 12, 4, 0);
+        } else if semantic_fixture {
+            push_effect(
+                &mut output,
+                &entry.symbol,
+                request.payload.len() as u64 - 4,
+                4,
+                0,
+            );
         } else {
             push_effect(&mut output, &entry.symbol, 0, 4, 0);
         }
@@ -554,23 +563,169 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
         .payload
         .first()
         .copied()
-        .filter(|mode| (19..=26).contains(mode));
-    let semantic_fixture = semantic_mode.is_some() && request.payload.len() == 16;
+        .filter(|mode| (19..=34).contains(mode));
+    let semantic_fixture = semantic_mode.is_some_and(|mode| {
+        request.payload.len() == if mode == 34 { 20 } else { 16 }
+    });
     push_u32(&mut output, request.entries.len() as u32);
     for entry in &request.entries {
         push_text(&mut output, &entry.symbol);
         push_u32(&mut output, 0);
         push_u64(&mut output, 0);
-        push_u32(&mut output, if semantic_fixture { 4 } else { 1 });
+        push_u32(
+            &mut output,
+            if semantic_fixture && semantic_mode == Some(34) {
+                5
+            } else if semantic_fixture {
+                4
+            } else {
+                1
+            },
+        );
         push_u16(&mut output, 0);
     }
 
     push_u32(
         &mut output,
-        request.entries.len() as u32 * if semantic_fixture { 4 } else { 1 },
+        request.entries.len() as u32
+            * if semantic_fixture && semantic_mode == Some(34) {
+                5
+            } else if semantic_fixture {
+                4
+            } else {
+                1
+            },
     );
     for entry in &request.entries {
-        if semantic_fixture {
+        if semantic_fixture && semantic_mode == Some(34) {
+            push_register_instruction(
+                &mut output,
+                &entry.symbol,
+                0,
+                "V_FMAMK_F32_gfx940",
+                &request.payload[0..4],
+                "VGPR4",
+                &["VGPR5", "VGPR6"],
+            );
+            push_register_instruction(
+                &mut output,
+                &entry.symbol,
+                4,
+                "V_MOV_B32_e32",
+                &request.payload[4..8],
+                "VGPR0",
+                &["VGPR4"],
+            );
+            push_register_instruction(
+                &mut output,
+                &entry.symbol,
+                8,
+                "V_MUL_F32_e32_vi",
+                &request.payload[8..12],
+                "VGPR1",
+                &["VGPR2", "VGPR3"],
+            );
+            push_register_instruction(
+                &mut output,
+                &entry.symbol,
+                12,
+                "V_ADD_F32_e32_vi",
+                &request.payload[12..16],
+                "VGPR0",
+                &["VGPR1", "VGPR0"],
+            );
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                16,
+                "S_ENDPGM",
+                &request.payload[16..20],
+                4,
+                1 << 2,
+                0,
+                0,
+            );
+        } else if semantic_fixture && semantic_mode.is_some_and(|mode| (27..=33).contains(&mode)) {
+            let mode = semantic_mode.unwrap();
+            let first_opcode = if mode == 30 {
+                "V_FMAMK_F32_gfx940"
+            } else {
+                "V_MOV_B32_e32"
+            };
+            push_register_instruction(
+                &mut output,
+                &entry.symbol,
+                0,
+                first_opcode,
+                &request.payload[0..4],
+                "VGPR0",
+                if mode == 30 {
+                    &["VGPR5", "VGPR6"]
+                } else {
+                    &["VGPR4"]
+                },
+            );
+            if mode == 31 {
+                push_register_instruction(
+                    &mut output,
+                    &entry.symbol,
+                    4,
+                    "V_ADD_F32_e32_vi",
+                    &request.payload[4..8],
+                    "VGPR0",
+                    &["VGPR1", "VGPR0"],
+                );
+                push_register_instruction(
+                    &mut output,
+                    &entry.symbol,
+                    8,
+                    "V_MUL_F32_e32_vi",
+                    &request.payload[8..12],
+                    "VGPR1",
+                    &["VGPR2", "VGPR3"],
+                );
+            } else {
+                push_register_instruction(
+                    &mut output,
+                    &entry.symbol,
+                    4,
+                    if mode == 28 {
+                        "V_FMAC_F32_e64_vi"
+                    } else {
+                        "V_MUL_F32_e32_vi"
+                    },
+                    &request.payload[4..8],
+                    "VGPR1",
+                    &["VGPR2", "VGPR3"],
+                );
+                push_register_instruction(
+                    &mut output,
+                    &entry.symbol,
+                    8,
+                    "V_ADD_F32_e32_vi",
+                    &request.payload[8..12],
+                    if mode == 33 { "VGPR7" } else { "VGPR0" },
+                    if mode == 29 {
+                        &["VGPR4", "VGPR0"]
+                    } else if mode == 32 {
+                        &["VGPR0", "VGPR1"]
+                    } else {
+                        &["VGPR1", "VGPR0"]
+                    },
+                );
+            }
+            push_trace_instruction(
+                &mut output,
+                &entry.symbol,
+                12,
+                "S_ENDPGM",
+                &request.payload[12..16],
+                4,
+                1 << 2,
+                0,
+                0,
+            );
+        } else if semantic_fixture {
             let (opcode, flags, memory, width) = match semantic_mode.unwrap() {
                 19 => ("GLOBAL_ATOMIC_ADD_RTN_vi", (1 << 0) | (1 << 1), 3, 4),
                 20 => ("GLOBAL_ATOMIC_INC_RTN_vi", (1 << 0) | (1 << 1), 3, 4),
@@ -647,6 +802,38 @@ fn trace(request: &Request, effects: &[u8]) -> Vec<u8> {
     }
     set_length(&mut output, TRACE_DOMAIN.len());
     output
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_register_instruction(
+    output: &mut Vec<u8>,
+    symbol: &str,
+    offset: u64,
+    opcode: &str,
+    encoding: &[u8],
+    destination: &str,
+    sources: &[&str],
+) {
+    push_text(output, symbol);
+    push_u64(output, offset);
+    push_u32(output, 0);
+    push_text(output, opcode);
+    push_u16(output, encoding.len() as u16);
+    output.extend_from_slice(encoding);
+    push_u16(output, 1);
+    push_u16(output, (sources.len() + 1) as u16);
+    for register in std::iter::once(destination).chain(sources.iter().copied()) {
+        output.push(1);
+        push_u16(output, u16::MAX);
+        push_text(output, register);
+    }
+    push_u16(output, 0);
+    push_u16(output, 0);
+    output.push(0);
+    push_u64(output, 0);
+    push_u16(output, 0);
+    output.push(0);
+    push_u16(output, 0);
 }
 
 #[allow(clippy::too_many_arguments)]

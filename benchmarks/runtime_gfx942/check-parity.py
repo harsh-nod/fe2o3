@@ -93,6 +93,7 @@ CANONICAL_UNIQUE_ID = re.compile(r"[0-9a-f]{16}")
 CONTEXT_UNIQUE_ID = re.compile(r"0x[0-9a-f]{16}")
 CANONICAL_SHA256 = re.compile(r"[0-9a-f]{64}")
 CANONICAL_GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
+STRIPED_KFD_PROFILE = re.compile(r"striped(2|4|6|8|10|12|14|16)")
 
 
 class CheckError(Exception):
@@ -183,6 +184,36 @@ def positive_integer(fields: dict[str, str], field: str, *, allow_zero: bool = F
     return int(value)
 
 
+def admitted_kfd_profile(profile: str) -> bool:
+    return profile in {"generic", "directional", "engine0", "engine1"} or (
+        STRIPED_KFD_PROFILE.fullmatch(profile) is not None
+    )
+
+
+def validate_striped_kfd_copy_row(row: dict[str, str], profile: str) -> None:
+    match = STRIPED_KFD_PROFILE.fullmatch(profile)
+    if match is None:
+        return
+    depth = positive_integer(row, "depth")
+    configured = positive_integer(row, "configured_queues")
+    expected_configured = int(match.group(1))
+    if configured != expected_configured:
+        raise CheckError("KFD striped row configured_queues does not match its profile")
+    concurrency = min(configured, depth)
+    if positive_integer(row, "concurrency") != concurrency:
+        raise CheckError("KFD striped row concurrency does not match depth and queue count")
+    if positive_integer(row, "doorbells_per_batch") != concurrency:
+        raise CheckError("KFD striped row doorbell count does not match its concurrency")
+    if positive_integer(row, "queue_depth") != (depth + concurrency - 1) // concurrency:
+        raise CheckError("KFD striped row queue depth is not the balanced shard ceiling")
+    if positive_integer(row, "batch_size") != depth:
+        raise CheckError("KFD striped row batch size does not match depth")
+    if row.get("direction") != "h2d-then-d2h":
+        raise CheckError("KFD striped row has an unsupported direction methodology")
+    if any(field.startswith("combined_") for field in row):
+        raise CheckError("KFD striped row must not claim a single combined currentness envelope")
+
+
 def validate_context(context: dict[str, str], schema: str) -> tuple[str, ...]:
     missing = set(COMMON_CONTEXT_FIELDS + SCHEMA_CONTEXT_FIELDS[schema]) - context.keys()
     if missing:
@@ -222,7 +253,7 @@ def validate_context(context: dict[str, str], schema: str) -> tuple[str, ...]:
     if schema != "fe2o3.xgmi-peer-benchmark.v1":
         if CANONICAL_SHA256.fullmatch(context["sdma_manifest_sha256"]) is None:
             raise CheckError("context sdma_manifest_sha256 must be canonical")
-        if context["kfd_profile"] not in {"generic", "directional", "engine0", "engine1"}:
+        if not admitted_kfd_profile(context["kfd_profile"]):
             raise CheckError("context kfd_profile is unsupported")
         if context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE) != "directional":
             raise CheckError("context kfd_multi_profile must be directional")
@@ -421,6 +452,7 @@ def check_rows(
         if schema == "fe2o3.async-copy-benchmark.v1":
             if kfd.get("profile") != context["kfd_profile"]:
                 raise CheckError("KFD copy row profile does not match benchmark context")
+            validate_striped_kfd_copy_row(kfd, context["kfd_profile"])
         elif schema == "fe2o3.async-copy-multi-device-benchmark.v1":
             if context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE) != "directional":
                 raise CheckError("multi-device KFD copy requires the directional profile")

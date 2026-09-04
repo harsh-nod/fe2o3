@@ -16,6 +16,8 @@ mod gfx942_exec_control;
 mod gfx942_machine_dataflow;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_register;
+#[cfg(feature = "authenticated-machine-effect")]
+mod gfx942_scalar_f32_recurrence;
 mod kernel_check_model;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_analysis;
@@ -96,6 +98,8 @@ pub use gfx942_exec_control::*;
 pub use gfx942_machine_dataflow::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_register::*;
+#[cfg(feature = "authenticated-machine-effect")]
+pub use gfx942_scalar_f32_recurrence::*;
 pub use kernel_check_model::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_analysis::*;

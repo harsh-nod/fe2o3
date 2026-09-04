@@ -17,6 +17,8 @@ mod dispatch_timestamps_v1;
 pub use dispatch_timestamps_v1::*;
 mod native_runtime_timestamps_v1;
 pub use native_runtime_timestamps_v1::*;
+mod runtime_semantic_profile_v1;
+pub use runtime_semantic_profile_v1::*;
 
 pub const KFD_RUNTIME_PROFILE_SCHEMA_VERSION_V1: u16 = 1;
 pub const KFD_RUNTIME_PROFILE_SCHEMA_V1: &str = "fe2o3-kfd-runtime-profile-v1";
@@ -305,6 +307,164 @@ impl KfdProfileLaunchV1 {
             .try_fold(1_u32, u32::checked_mul)
             .ok_or(KfdRuntimeProfileErrorV1::InvalidLaunch)?;
         Ok(())
+    }
+}
+
+/// Memory visibility scope declared by a profiled direct-KFD semantic launch.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KfdProfileMemoryScopeV1 {
+    Workgroup,
+    Device,
+    System,
+}
+
+/// Memory ordering declared by a profiled direct-KFD semantic launch.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KfdProfileMemoryOrderV1 {
+    Relaxed,
+    Acquire,
+    Release,
+    AcquireRelease,
+    SequentiallyConsistent,
+}
+
+/// Read-modify-write operation declared by a profiled atomic launch.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KfdProfileAtomicOperationV1 {
+    Add,
+    Minimum,
+    Maximum,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    Exchange,
+    CompareExchange,
+}
+
+/// Collective operation declared by a profiled collective launch.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KfdProfileCollectiveOperationV1 {
+    Barrier,
+    Broadcast,
+    ReduceSum,
+    ReduceMinimum,
+    ReduceMaximum,
+    AllReduceSum,
+    InclusiveScanSum,
+}
+
+/// Exact typed contract retained for an authorized atomic publication.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KfdProfileAtomicContractV1 {
+    pub operation: KfdProfileAtomicOperationV1,
+    pub scope: KfdProfileMemoryScopeV1,
+    pub order: KfdProfileMemoryOrderV1,
+    pub failure_order: Option<KfdProfileMemoryOrderV1>,
+    pub weak: bool,
+    pub geometry: KfdProfileLaunchV1,
+}
+
+/// Exact typed contract retained for an authorized collective publication.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KfdProfileCollectiveContractV1 {
+    pub operation: KfdProfileCollectiveOperationV1,
+    pub scope: KfdProfileMemoryScopeV1,
+    pub order: KfdProfileMemoryOrderV1,
+    pub participants: u64,
+    pub geometry: KfdProfileLaunchV1,
+}
+
+/// Optional typed contract classification for a direct-KFD publication.
+///
+/// A structurally valid value does not authenticate its producer, prove that
+/// the machine implementation satisfies the contract, or grant launch or
+/// proof authority to a profile consumer.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "class", content = "contract", rename_all = "snake_case")]
+pub enum KfdProfileSemanticContractV1 {
+    Atomic(KfdProfileAtomicContractV1),
+    Collective(KfdProfileCollectiveContractV1),
+}
+
+impl KfdProfileSemanticContractV1 {
+    pub(crate) fn is_valid_for_launch(self, launch: KfdProfileLaunchV1) -> bool {
+        match self {
+            Self::Atomic(contract) => {
+                if contract.geometry != launch
+                    || contract.scope == KfdProfileMemoryScopeV1::System
+                    || !profile_atomic_contract_is_legal_v1(contract)
+                {
+                    return false;
+                }
+            }
+            Self::Collective(contract) => {
+                let complete_workgroups = launch
+                    .grid
+                    .into_iter()
+                    .zip(launch.workgroup)
+                    .all(|(grid, workgroup)| grid >= workgroup && grid.is_multiple_of(workgroup));
+                let participants = launch
+                    .workgroup
+                    .into_iter()
+                    .try_fold(1_u64, |product, value| {
+                        product.checked_mul(u64::from(value))
+                    });
+                if contract.geometry != launch
+                    || contract.scope != KfdProfileMemoryScopeV1::Workgroup
+                    || !complete_workgroups
+                    || contract.participants == 0
+                    || participants != Some(contract.participants)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+const fn profile_atomic_contract_is_legal_v1(contract: KfdProfileAtomicContractV1) -> bool {
+    match (contract.operation, contract.failure_order) {
+        (KfdProfileAtomicOperationV1::CompareExchange, Some(failure)) => {
+            profile_compare_exchange_orders_are_legal_v1(contract.order, failure)
+        }
+        (KfdProfileAtomicOperationV1::CompareExchange, None) => false,
+        (_, None) => !contract.weak,
+        (_, Some(_)) => false,
+    }
+}
+
+const fn profile_compare_exchange_orders_are_legal_v1(
+    success: KfdProfileMemoryOrderV1,
+    failure: KfdProfileMemoryOrderV1,
+) -> bool {
+    match success {
+        KfdProfileMemoryOrderV1::Relaxed => {
+            matches!(failure, KfdProfileMemoryOrderV1::Relaxed)
+        }
+        KfdProfileMemoryOrderV1::Acquire => matches!(
+            failure,
+            KfdProfileMemoryOrderV1::Relaxed | KfdProfileMemoryOrderV1::Acquire
+        ),
+        KfdProfileMemoryOrderV1::Release => {
+            matches!(failure, KfdProfileMemoryOrderV1::Relaxed)
+        }
+        KfdProfileMemoryOrderV1::AcquireRelease => matches!(
+            failure,
+            KfdProfileMemoryOrderV1::Relaxed | KfdProfileMemoryOrderV1::Acquire
+        ),
+        KfdProfileMemoryOrderV1::SequentiallyConsistent => matches!(
+            failure,
+            KfdProfileMemoryOrderV1::Relaxed
+                | KfdProfileMemoryOrderV1::Acquire
+                | KfdProfileMemoryOrderV1::SequentiallyConsistent
+        ),
     }
 }
 

@@ -320,3 +320,29 @@ mappings and batched publication; device-clock profiling; public general
 atomic/collective operations backed by authenticated source-to-ISA refinement;
 native system-scope litmus evidence; and current clean-machine correctness and
 performance evidence. R10 does not claim HIP/HSA parity.
+
+## Runtime R15 Status
+
+R15 adds Runtime Worker V5 without changing the exact V4 wire or source
+contract. V5 preserves typed atomic/collective operation, scope, ordering,
+compare-exchange, participant, and geometry declarations across the process
+boundary and rejects malformed requests before backend custody. It does not
+create native semantic or proof authority. An opt-in canonical semantic
+profile sidecar separately binds those declarations to frozen Runtime Profile
+V1 publications; distinct V2 timestamp custody and query APIs join the sidecar
+without changing the V1 producer or report paths.
+
+The gfx942 kernel-analysis slice now checks one authenticated, separate scalar
+binary32 multiply/add recurrence step and supplies a pinned APFloat candidate
+model. It does not yet establish the machine-loop backedge, AMDGPU floating
+semantics, compiler refinement, or Worker V3 authority. The SDMA benchmark can
+publish balanced depth shards over an admitted even set of two through sixteen
+striped native queues before waiting, but each shard retains an independent
+currentness envelope; this is diagnostic concurrency, not a production
+all-or-nothing multi-queue transaction.
+
+R15 still does not establish HIP/HSA parity. The open items above remain, plus
+a production multi-queue SDMA custody API and clean, idle-hardware evidence for
+the new striped profiles. Orders-of-magnitude speedups are accepted only for an
+exact matched workload with retained measurements; they are not a general
+runtime target or current claim.

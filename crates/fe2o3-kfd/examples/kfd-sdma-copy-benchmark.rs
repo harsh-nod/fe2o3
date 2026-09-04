@@ -40,70 +40,129 @@ fn run_round(
     queue: &mut ComputeAqlQueueSessionV1,
     buffers: Vec<Buffers>,
     copy_bytes: usize,
+    concurrent_batches: usize,
 ) -> Result<(Vec<Buffers>, PhaseTiming, PhaseTiming), Box<dyn std::error::Error>> {
-    let mut requests = Vec::with_capacity(buffers.len());
-    let mut download_buffers = Vec::with_capacity(buffers.len());
-    for buffer in buffers {
-        requests.push(Gfx942SdmaCopyRequestV1::new(
-            buffer.upload,
-            0,
-            buffer.device,
-            0,
-            copy_bytes as u32,
-        ));
-        download_buffers.push(buffer.download);
-    }
+    let batches = partition_buffers(buffers, concurrent_batches);
+    let mut pending = Vec::with_capacity(batches.len());
     let start = Instant::now();
-    let tickets = queue
-        .submit_sdma_copy_batch(requests)
-        .map_err(|failure| failure.into_parts().0)?;
+    for batch in batches {
+        let mut requests = Vec::with_capacity(batch.len());
+        let mut download_buffers = Vec::with_capacity(batch.len());
+        for buffer in batch {
+            requests.push(Gfx942SdmaCopyRequestV1::new(
+                buffer.upload,
+                0,
+                buffer.device,
+                0,
+                copy_bytes as u32,
+            ));
+            download_buffers.push(buffer.download);
+        }
+        let tickets = queue
+            .submit_sdma_copy_batch(requests)
+            .map_err(|failure| failure.into_parts().0)?;
+        pending.push((tickets, download_buffers));
+    }
     let submitted = Instant::now();
-    let completed = queue.wait_sdma_copy_batch_for(&tickets, Duration::from_secs(30))?;
+    let uploaded_count = pending.iter().map(|(tickets, _)| tickets.len()).sum();
+    let mut uploaded = Vec::with_capacity(uploaded_count);
+    for (tickets, download_buffers) in pending {
+        let completed = queue.wait_sdma_copy_batch_for(&tickets, Duration::from_secs(30))?;
+        for (completed, download) in completed.into_iter().zip(download_buffers) {
+            let (upload, device) = completed.into_buffers();
+            uploaded.push((upload, device, download));
+        }
+    }
     let finished = Instant::now();
     let h2d_timing = PhaseTiming {
         total_ns: finished.duration_since(start).as_nanos(),
         submit_ns: submitted.duration_since(start).as_nanos(),
         wait_ns: finished.duration_since(submitted).as_nanos(),
     };
-    let mut uploaded = Vec::with_capacity(completed.len());
-    for (completed, download) in completed.into_iter().zip(download_buffers) {
-        let (upload, device) = completed.into_buffers();
-        uploaded.push((upload, device, download));
-    }
-    let mut requests = Vec::with_capacity(uploaded.len());
-    let mut upload_buffers = Vec::with_capacity(uploaded.len());
-    for (upload, device, download) in uploaded {
-        requests.push(Gfx942SdmaCopyRequestV1::new(
+    let uploaded = uploaded
+        .into_iter()
+        .map(|(upload, device, download)| Buffers {
+            upload,
             device,
-            0,
             download,
-            0,
-            copy_bytes as u32,
-        ));
-        upload_buffers.push(upload);
-    }
+        })
+        .collect();
+    let batches = partition_buffers(uploaded, concurrent_batches);
+    let mut pending = Vec::with_capacity(batches.len());
     let start = Instant::now();
-    let tickets = queue
-        .submit_sdma_copy_batch(requests)
-        .map_err(|failure| failure.into_parts().0)?;
+    for batch in batches {
+        let mut requests = Vec::with_capacity(batch.len());
+        let mut upload_buffers = Vec::with_capacity(batch.len());
+        for buffer in batch {
+            requests.push(Gfx942SdmaCopyRequestV1::new(
+                buffer.device,
+                0,
+                buffer.download,
+                0,
+                copy_bytes as u32,
+            ));
+            upload_buffers.push(buffer.upload);
+        }
+        let tickets = queue
+            .submit_sdma_copy_batch(requests)
+            .map_err(|failure| failure.into_parts().0)?;
+        pending.push((tickets, upload_buffers));
+    }
     let submitted = Instant::now();
-    let downloads = queue.wait_sdma_copy_batch_for(&tickets, Duration::from_secs(30))?;
+    let completed_count = pending.iter().map(|(tickets, _)| tickets.len()).sum();
+    let mut completed_buffers = Vec::with_capacity(completed_count);
+    for (tickets, upload_buffers) in pending {
+        let downloads = queue.wait_sdma_copy_batch_for(&tickets, Duration::from_secs(30))?;
+        for (completed, upload) in downloads.into_iter().zip(upload_buffers) {
+            let (device, download) = completed.into_buffers();
+            completed_buffers.push(Buffers {
+                upload,
+                device,
+                download,
+            });
+        }
+    }
     let finished = Instant::now();
     let d2h_timing = PhaseTiming {
         total_ns: finished.duration_since(start).as_nanos(),
         submit_ns: submitted.duration_since(start).as_nanos(),
         wait_ns: finished.duration_since(submitted).as_nanos(),
     };
-    let mut completed_buffers = Vec::with_capacity(downloads.len());
-    for (completed, upload) in downloads.into_iter().zip(upload_buffers) {
-        let (device, download) = completed.into_buffers();
-        completed_buffers.push(Buffers {
-            upload,
-            device,
-            download,
-        });
-    }
     Ok((completed_buffers, h2d_timing, d2h_timing))
+}
+
+fn partition_buffers(buffers: Vec<Buffers>, requested_batches: usize) -> Vec<Vec<Buffers>> {
+    let mut input = buffers.into_iter();
+    balanced_batch_lengths(input.len(), requested_batches)
+        .into_iter()
+        .map(|batch_len| input.by_ref().take(batch_len).collect())
+        .collect()
+}
+
+fn balanced_batch_lengths(item_count: usize, requested_batches: usize) -> Vec<usize> {
+    if item_count == 0 {
+        return Vec::new();
+    }
+    let batch_count = requested_batches.max(1).min(item_count);
+    let base = item_count / batch_count;
+    let remainder = item_count % batch_count;
+    (0..batch_count)
+        .map(|index| base + usize::from(index < remainder))
+        .collect()
+}
+
+fn admitted_striped_queue_count(profile: &str) -> Option<u32> {
+    match profile {
+        "striped2" => Some(2),
+        "striped4" => Some(4),
+        "striped6" => Some(6),
+        "striped8" => Some(8),
+        "striped10" => Some(10),
+        "striped12" => Some(12),
+        "striped14" => Some(14),
+        "striped16" => Some(16),
+        _ => None,
+    }
 }
 
 fn run_round_combined(
@@ -210,7 +269,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if !(5..=6).contains(&args.len()) {
         return Err(
-            "usage: kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> [generic|directional|engine0|engine1|striped2|striped4|striped8|striped16]".into(),
+            "usage: kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> [generic|directional|engine0|engine1|striped{even 2..16}]".into(),
         );
     }
     let unique_id = if let Some(hex) = args[0].strip_prefix("0x") {
@@ -234,33 +293,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .admit_uapi()?
         .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))?;
     let mut queue = device.create_compute_aql_queue(4096)?;
-    let (h2d_engine_index, d2h_engine_index) = match profile {
+    let (h2d_engine_index, d2h_engine_index, configured_queues) = match profile {
         "generic" => {
             let queue = queue.enable_sdma_copy_engine()?;
-            (queue.engine_index, queue.engine_index)
+            (queue.engine_index, queue.engine_index, 1)
         }
         "directional" => {
             let queues = queue.enable_gfx942_directional_sdma_copy_engines()?;
             (
                 queues.host_to_device.engine_index,
                 queues.device_to_host.engine_index,
+                1,
             )
         }
         "engine0" => {
             let queue = queue.enable_gfx942_sdma_copy_engine_on_engine_index(0)?;
-            (queue.engine_index, queue.engine_index)
+            (queue.engine_index, queue.engine_index, 1)
         }
         "engine1" => {
             let queue = queue.enable_gfx942_sdma_copy_engine_on_engine_index(1)?;
-            (queue.engine_index, queue.engine_index)
+            (queue.engine_index, queue.engine_index, 1)
         }
-        profile if profile.starts_with("striped") => {
-            let queue_count: u32 = profile["striped".len()..].parse()?;
+        profile if admitted_striped_queue_count(profile).is_some() => {
+            let queue_count = admitted_striped_queue_count(profile)
+                .expect("guard admits only explicit striped profiles");
             let queues = queue.enable_gfx942_striped_sdma_copy_engines(queue_count)?;
             if queues.len() != queue_count as usize {
                 return Err("striped queue observation count mismatch".into());
             }
-            (None, None)
+            (None, None, queues.len())
         }
         _ => return Err("unknown SDMA queue profile".into()),
     };
@@ -283,7 +344,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut d2h_wait = Vec::with_capacity(samples);
     for round in 0..rounds {
         prepare_and_poison(&mut queue, &mut buffers, copy_bytes, round)?;
-        let (next, h2d_timing, d2h_timing) = run_round(&mut queue, buffers, copy_bytes)?;
+        let (next, h2d_timing, d2h_timing) =
+            run_round(&mut queue, buffers, copy_bytes, configured_queues)?;
         buffers = next;
         validate_round(&mut queue, &buffers, copy_bytes, round)?;
         if round >= warmups {
@@ -295,20 +357,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             d2h_wait.push(d2h_timing.wait_ns);
         }
     }
-    let mut combined_h2d = Vec::with_capacity(samples);
-    let mut combined_d2h = Vec::with_capacity(samples);
-    for round in 0..rounds {
-        let pattern_round = rounds
-            .checked_add(round)
-            .ok_or("combined round index overflow")?;
-        prepare_and_poison(&mut queue, &mut buffers, copy_bytes, pattern_round)?;
-        let (next, h2d_ns, d2h_ns) = run_round_combined(&mut queue, buffers, copy_bytes)?;
-        buffers = next;
-        validate_round(&mut queue, &buffers, copy_bytes, pattern_round)?;
-        if round >= warmups {
-            combined_h2d.push(h2d_ns);
-            combined_d2h.push(d2h_ns);
+    let mut combined = None;
+    if configured_queues == 1 {
+        let mut combined_h2d = Vec::with_capacity(samples);
+        let mut combined_d2h = Vec::with_capacity(samples);
+        for round in 0..rounds {
+            let pattern_round = rounds
+                .checked_add(round)
+                .ok_or("combined round index overflow")?;
+            prepare_and_poison(&mut queue, &mut buffers, copy_bytes, pattern_round)?;
+            let (next, h2d_ns, d2h_ns) = run_round_combined(&mut queue, buffers, copy_bytes)?;
+            buffers = next;
+            validate_round(&mut queue, &buffers, copy_bytes, pattern_round)?;
+            if round >= warmups {
+                combined_h2d.push(h2d_ns);
+                combined_d2h.push(d2h_ns);
+            }
         }
+        combined = Some((
+            percentile(&combined_h2d, 1, 2),
+            percentile(&combined_d2h, 1, 2),
+        ));
     }
     for buffer in buffers {
         queue.recycle_sdma_buffer(buffer.upload)?;
@@ -334,20 +403,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let h2d_wait_p50 = percentile(&h2d_wait, 1, 2);
     let d2h_submit_p50 = percentile(&d2h_submit, 1, 2);
     let d2h_wait_p50 = percentile(&d2h_wait, 1, 2);
-    let combined_h2d_p50 = percentile(&combined_h2d, 1, 2);
-    let combined_d2h_p50 = percentile(&combined_d2h, 1, 2);
+    let concurrent_batches = configured_queues.min(depth);
+    let per_queue_depth = depth.div_ceil(concurrent_batches);
     let pool = queue.sdma_memory_pool_observation()?;
     let trimmed = queue.trim_sdma_memory_pool()?;
     queue.destroy()?;
-    println!(
-        "backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id={unique_id:016x} profile={profile} bytes={copy_bytes} depth={depth} queue_depth={depth} batch_size={depth} direction=h2d-then-d2h concurrency=1 doorbells_per_batch=1 warmups={warmups} samples={samples} h2d_engine_index={} d2h_engine_index={} h2d_p50_ns={h2d_p50} h2d_p95_ns={h2d_p95} h2d_submit_p50_ns={h2d_submit_p50} h2d_wait_p50_ns={h2d_wait_p50} h2d_p50_GBps={:.3} d2h_p50_ns={d2h_p50} d2h_p95_ns={d2h_p95} d2h_submit_p50_ns={d2h_submit_p50} d2h_wait_p50_ns={d2h_wait_p50} d2h_p50_GBps={:.3} combined_h2d_p50_ns={combined_h2d_p50} combined_h2d_p50_GBps={:.3} combined_d2h_p50_ns={combined_d2h_p50} combined_d2h_p50_GBps={:.3} pool_checkout_recycle_pair_ns={pool_ns_per_pair} pool_reuse_count={} pool_trimmed={trimmed}",
+    let mut row = format!(
+        "backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id={unique_id:016x} profile={profile} bytes={copy_bytes} depth={depth} queue_depth={per_queue_depth} batch_size={depth} direction=h2d-then-d2h concurrency={concurrent_batches} configured_queues={configured_queues} doorbells_per_batch={concurrent_batches} warmups={warmups} samples={samples} h2d_engine_index={} d2h_engine_index={} h2d_p50_ns={h2d_p50} h2d_p95_ns={h2d_p95} h2d_submit_p50_ns={h2d_submit_p50} h2d_wait_p50_ns={h2d_wait_p50} h2d_p50_GBps={:.3} d2h_p50_ns={d2h_p50} d2h_p95_ns={d2h_p95} d2h_submit_p50_ns={d2h_submit_p50} d2h_wait_p50_ns={d2h_wait_p50} d2h_p50_GBps={:.3} pool_checkout_recycle_pair_ns={pool_ns_per_pair} pool_reuse_count={} pool_trimmed={trimmed}",
         h2d_engine_index.unwrap_or(u32::MAX),
         d2h_engine_index.unwrap_or(u32::MAX),
         gbps(transferred, h2d_p50),
         gbps(transferred, d2h_p50),
-        gbps(transferred, combined_h2d_p50),
-        gbps(transferred, combined_d2h_p50),
         pool.reuse_count,
     );
+    if let Some((combined_h2d_p50, combined_d2h_p50)) = combined {
+        row.push_str(&format!(
+            " combined_h2d_p50_ns={combined_h2d_p50} combined_h2d_p50_GBps={:.3} combined_d2h_p50_ns={combined_d2h_p50} combined_d2h_p50_GBps={:.3}",
+            gbps(transferred, combined_h2d_p50),
+            gbps(transferred, combined_d2h_p50),
+        ));
+    }
+    println!("{row}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{admitted_striped_queue_count, balanced_batch_lengths};
+
+    #[test]
+    fn balanced_shards_cover_every_item_once() {
+        assert_eq!(balanced_batch_lengths(0, 16), []);
+        assert_eq!(balanced_batch_lengths(1, 16), [1]);
+        assert_eq!(balanced_batch_lengths(16, 16), [1; 16]);
+        assert_eq!(balanced_batch_lengths(17, 4), [5, 4, 4, 4]);
+        assert_eq!(balanced_batch_lengths(8, 0), [8]);
+    }
+
+    #[test]
+    fn striped_profile_roster_is_exact() {
+        assert_eq!(admitted_striped_queue_count("striped2"), Some(2));
+        assert_eq!(admitted_striped_queue_count("striped16"), Some(16));
+        for rejected in ["striped0", "striped1", "striped3", "striped18", "stripedx"] {
+            assert_eq!(admitted_striped_queue_count(rejected), None);
+        }
+    }
 }

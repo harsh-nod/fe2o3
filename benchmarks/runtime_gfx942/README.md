@@ -122,7 +122,8 @@ to publish a result when either relevant GPU exceeds
 also has an outer foreground timeout, controlled by
 `FE2O3_ASYNC_COPY_PHASE_TIMEOUT_SECONDS` and defaulting to 120 seconds.
 `FE2O3_ASYNC_COPY_KFD_PROFILE` selects the single-device KFD lane from
-`directional` (the default), `generic`, `engine0`, or `engine1`; the
+`directional` (the default), `generic`, `engine0`, `engine1`, or one of the
+balanced `striped2`, `striped4`, ..., `striped16` profiles; the
 multi-device KFD lane remains directional. New schema-V1 records state both
 facts independently as `kfd_profile` and `kfd_multi_profile=directional`.
 Retained schema-V1 records made before the latter field was added remain
@@ -136,11 +137,16 @@ directions and does not claim directional overlap. Its split metrics report
 submit and wait phases separately; `combined_*` reports the checked
 submit-through-observed-completion API with one currentness envelope. The KFD
 runner can select `generic`, `engine0`, or `engine1` for engine-policy
-ablations. HSA uses `hsa_amd_memory_async_copy`, and HIP uses one nonblocking
-stream per depth entry. The two-device rows publish both devices' work before either
-wait and report aggregate bytes over the shared wall-clock interval. These are
-aligned host submit-plus-wait boundaries and byte counts, not identical native
-mechanisms or allocation/currentness policies.
+ablations. A striped profile partitions each direction's depth into balanced
+contiguous shards, publishes every shard to a distinct round-robin native
+queue before waiting, and reports the exact configured queue count, active
+concurrency, per-queue depth ceiling, and doorbell count. Striped rows omit
+`combined_*`, because there is no single currentness envelope spanning those
+multiple queues. HSA uses `hsa_amd_memory_async_copy`, and HIP uses one
+nonblocking stream per depth entry. The two-device rows publish both devices'
+work before either wait and report aggregate bytes over the shared wall-clock
+interval. These are aligned host submit-plus-wait boundaries and byte counts,
+not identical native mechanisms or allocation/currentness policies.
 The two-device HIP metric includes single-threaded `hipSetDevice` transitions;
 the result row records this as `host_context=single-thread-device-switching`.
 

@@ -10,7 +10,12 @@ description = "Conservative kernel IR and authenticated physical-machine analyse
 
 [features]
 default = ["authenticated-machine-effect", "pliron-analysis"]
-authenticated-machine-effect = ["dep:fe2o3-artifact-transaction", "dep:rustix", "dep:sha2"]
+authenticated-machine-effect = [
+    "dep:fe2o3-artifact-transaction",
+    "dep:rustc_apfloat",
+    "dep:rustix",
+    "dep:sha2",
+]
 pliron-analysis = ["dep:dialect-gpu", "dep:dialect-kernel", "dep:dialect-proof", "dep:fe2o3-pliron-owner-core", "dep:pliron", "dep:sha2"]
 
 [dependencies]
@@ -23,6 +28,7 @@ fe2o3-pliron-owner-core = { workspace = true, optional = true }
 pliron = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 rustix = { workspace = true, features = ["process", "thread"], optional = true }
+rustc_apfloat = { workspace = true, optional = true }
 
 [lib]
 name = "fe2o3_kernel_analysis"

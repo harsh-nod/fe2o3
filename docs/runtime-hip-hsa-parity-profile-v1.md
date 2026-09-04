@@ -84,8 +84,10 @@ Worker V4 exposes execution-capability discovery, flush, same-device async copy,
 cancellation, and deadline-bounded drain under one exact handshake. Its
 capability cache is bound to the latest successfully enumerated roster and
 otherwise fails closed. Runtime transport versioning is separate from
-compiler/proof Worker V3. There is no background native-publication scheduler,
-queue-side dependency packet,
+compiler/proof Worker V3. Additive Runtime Worker V5 retains the V4 operations
+and transports exact typed atomic/collective contracts; this does not supply a
+production semantic authority or native proof. There is no background
+native-publication scheduler, queue-side dependency packet,
 or more than one in-flight dispatch per native lane. Consequently the new
 logical-stream surface removes the third-stream capacity failure but is not
 general HIP/HSA stream scheduling parity. The
@@ -119,8 +121,8 @@ failure is a prepublication rejection; recoverable failure after a completed
 prefix is quiescent and preserves retryable custody. Poll and wait remain the
 only completion-observation operations; neither publishes deferred work. There
 is no background native-publication thread. Runtime Worker V4 provides the portable
-capability, flush, async-copy, cancellation, and drain profile; Runtime Worker V1
-does not. The XGMI benchmark labels queued work as
+capability, flush, async-copy, cancellation, and drain profile; Runtime Worker V5
+retains it and adds semantic contract carriage. Runtime Worker V1 does not. The XGMI benchmark labels queued work as
 `outstanding_depth`; the native route uses one ordered SDMA engine per direction
 and does not claim that depth as engine concurrency.
 

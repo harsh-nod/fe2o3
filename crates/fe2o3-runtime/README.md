@@ -16,6 +16,8 @@ in-process copy, explicit-progress, and cancellation/drain extensions that
 leave the frozen Runtime Worker V1 wire contract unchanged. Negotiated Runtime
 Worker V4 carries one exact extension profile: execution-capability discovery,
 flush, same-device asynchronous copy, cancellation, and deadline-bounded drain.
+Runtime Worker V5 is additive and carries typed atomic and collective semantic
+submission while retaining every V4 operation unchanged.
 This transport versioning is separate from compiler/proof Worker V3.
 All carry only numeric sealed handles,
 address-free argument images, allocation-relative bindings, explicit event
@@ -33,20 +35,31 @@ memory effects. Direct KFD execution requires an unsafe launch authority. The
 deprecated HSA qualification adapter separately requires its caller to uphold
 an unsafe artifact, ABI, and effect contract; it is not a production fallback.
 
-`RuntimeWorkerTransportV1` is the subprocess owner shared by both transport
-versions. Native GPU backends requiring the additive runtime SPIs should use
+`RuntimeWorkerTransportV1` is the subprocess owner shared by all transport
+versions. Native GPU backends requiring the V4 operational SPIs should use
 `RuntimeWorkerBackendV4<RuntimeBinaryCodecV4>` with a child served by
 `serve_runtime_backend_worker_v4`; V4 requires its exact handshake before any
 request. Its canonical server requires the backend to implement flush,
-same-device async copy, and cancellation/drain; direct, multi-device, and native
-XGMI KFD owners satisfy that complete type bound. Execution capabilities are
+same-device async copy, and cancellation/drain. Typed semantic process
+transport uses `RuntimeWorkerBackendV5<RuntimeBinaryCodecV5>` with a child
+served by `serve_runtime_backend_worker_v5`; its server additionally requires
+atomic and collective submission SPIs. Direct and multi-device KFD owners
+satisfy that V5 type bound with contract-carrying semantic execution. The
+copy-only native-XGMI owner retains V5 hosting through explicit pre-custody
+rejections from both semantic SPIs; it does not advertise either execution
+capability.
+Execution capabilities are
 cached only for the latest successfully enumerated device roster and otherwise
 fail closed. The frozen `RuntimeWorkerBackendV1<RuntimeBinaryCodecV1>` remains
 for backends that explicitly opt into the immediate-progress marker and rejects
-a V4 peer. Both verify protocol compatibility with an exact handshake, use
-bounded request and response frames, enforce response deadlines, and
-terminates a worker that becomes unresponsive or violates the protocol. The
-parent caps each worker-backed completion wait at the caller's monotonic
+newer peers. Every version verifies protocol compatibility with an exact
+handshake, uses bounded request and response frames, enforces response
+deadlines, and terminates a worker that becomes unresponsive or violates the
+protocol. Adding `semantic-launch-v1` introduced V5 rather than mutating V4:
+Runtime Worker V1 and V4 bytes and codec source contracts remain unchanged, as
+does backend behavior for valid canonical requests. V4 rejects V5, and V5
+rejects V4 as a downgrade rather than accepting an ambiguous capability set.
+The parent caps each worker-backed completion wait at the caller's monotonic
 deadline and sends only a relative child duration, so no cross-process clock
 epoch is assumed. An already-expired wait returns `Pending` without publishing
 a request. The handshake does not authenticate or attest the worker executable,
@@ -203,8 +216,10 @@ the accepted unpublished submission is settled as failed and its scheduler
 custody is released before native publication. Authority panics are contained
 as fail-closed denials under the same prepublication settlement. The runtime
 does not provide a concrete production authority, synthesize instructions, or
-claim formal compiler, firmware, or hardware refinement. Runtime Worker V4 has
-no semantic-launch wire operation yet. This is not HIP/HSA parity. See
+claim formal compiler, firmware, or hardware refinement. Worker V5 preserves a
+validated semantic contract across the process boundary, but does not create
+native semantic support or authority when the hosted backend lacks it. This is
+not HIP/HSA parity. See
 [`docs/runtime-community-architecture-v1.md`](../../docs/runtime-community-architecture-v1.md).
 
 The additive R11 executable model covers the shared completion/event state,
