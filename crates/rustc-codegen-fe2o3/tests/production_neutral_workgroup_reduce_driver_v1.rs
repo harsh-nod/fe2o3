@@ -163,7 +163,10 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
             );
             assert!(
                 stderr.contains("Rust -> semantic MIR -> ranked PLIRON -> Kernel IR")
-                    && stderr.contains(&format!("composed formal/ranked memory -> {target} LLVM"))
+                    && stderr.contains(
+                        "composed formal/ranked memory -> target-KIR optimizer (7 pass(es)",
+                    )
+                    && stderr.contains(&format!("-> {target} LLVM"))
                     && stderr.contains("artifact/launch authority false"),
                 "{feature} omitted its successful {target} lowering receipt:\n{stderr}",
             );
@@ -180,6 +183,7 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
                 symbol,
                 "addrspace(3)",
                 "llvm.amdgcn.workitem.id.x",
+                "call void @llvm.trap()",
                 arithmetic,
             ] {
                 assert!(
