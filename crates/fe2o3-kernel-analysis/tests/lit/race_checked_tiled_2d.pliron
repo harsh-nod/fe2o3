@@ -2,7 +2,7 @@
 // EXPECT: REJECT
 // CHECK: error[FE2O3-RACE-002]
 // CHECK: access dimension 0 has unresolved index
-// CHECK: checked structured index markers are currently incomplete
+// CHECK: no supported checked structured contract
 builtin.func @race_checked_tiled_2d: builtin.function <() -> ()>
 {
   ^entry_block1v1():
