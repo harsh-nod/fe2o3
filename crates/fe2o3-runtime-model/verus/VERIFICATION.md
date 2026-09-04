@@ -6,9 +6,9 @@ execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
 logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
 persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
 directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
-chunking, R21 runtime scripted-failure-seam, and R22 batched directional
-persistent-SDMA-window models. The authenticated runner proves 414 obligations
-and rejects 228
+chunking, R21 runtime scripted-failure-seam, R22 batched directional
+persistent-SDMA-window, and R23 same-device D2D persistent-SDMA-window models.
+The authenticated runner proves 460 obligations and rejects 256
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -998,6 +998,68 @@ HIP/HSA parity, or performance.
 | Independent move-only executable window model | **Checked** | Eighteen focused Rust tests; R19 identity reuse without a Rust-to-Verus or R19 state-machine correspondence theorem. |
 | Boundary countermodels | **Rejected** | Nineteen pinned expected-negative files fail only at their named postconditions. |
 | Executable R19/R22, runtime/KFD, native hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R22 proof boundary. |
+
+## R23 same-device D2D persistent SDMA windows
+
+`r23_same_device_d2d_persistent_sdma_windows_v1.rs` proves 46 obligations for
+an independent same-device D2D aggregate-window model. Each admitted operation
+owns two distinct move-only allocation authorities and an exact paired
+source-read/destination-write lease. Admission requires distinct allocation,
+mapping, and backing identities, nonoverlapping mapped extents and requested
+ranges, and exact agreement on the VM, physical device, logical queue,
+queue occurrence, native queue, and the fixed local H2D SDMA engine used by the
+native same-device path.
+
+One window contains one through 63 paired packets with exact contiguous source
+and destination coverage. Its ticket roster uses distinct ring slots and the
+next generation from each selected slot's independent generation counter;
+unselected counters are unchanged. Source and destination persistent-use
+generations are consumed when their reservations succeed, before publication.
+A destination-reservation failure therefore consumes only the earlier source
+generation; a later clean prepublication retry preserves both consumed
+generations while restoring both allocation authorities. Preparation is
+unpublished. Confirmed publication commits the complete roster with one
+write-pointer advance and one doorbell action for the whole window.
+
+Pending and timeout observations preserve both authorities, both leases, and
+the exact aggregate roster for repoll. Partial aggregate completion does not
+retire a packet prefix, certify destination dirty bytes, or expose a
+continuation. Exact authenticated completion must cover every ticket and the
+full aggregate byte count before it creates a paired frontier. Destination
+dirty progress advances only after exact full-frontier retirement, and only
+then may the next window continue. Native execution failure, currentness loss,
+completion substitution, or indeterminate publication enters absorbing
+quarantine while retaining both authorities and every lease already acquired.
+Quarantine entry is validity-preserving even before admission, when no lease
+has yet been acquired.
+
+The executable R23 model has 24 focused Rust tests. Its private authority and
+lease types have no `Clone` or `Copy` implementation. Twenty-eight pinned
+expected-negative witnesses cover allocation and backing aliases, device and VM
+binding, mapped overlap and range bounds, exact lease roles and ranges, window
+bound, packet coverage and pairing, slot uniqueness and independent per-slot
+generation, ticket queue binding, preparation visibility, write-pointer and
+doorbell counts, prepublication restoration, pending and timeout custody,
+partial aggregate retirement, unauthenticated dirty progress, aggregate
+completion, paired frontier identity, quarantine custody, validity-preserving
+quarantine entry and absorption, and early continuation. The proof-source
+policy forbids module inclusion, so these are authenticated standalone bounded
+mutation witnesses, not source-coupled mutation tests of the positive R23 file.
+
+R23 is an independent finite mathematical model. It does not refine R19, R22,
+the executable Rust model, the runtime, or KFD. Publication counters are model
+fields, not evidence of atomics, ordering, coherence, firmware consumption, or
+DMA. The proof establishes no native execution or completion truth, liveness,
+HIP/HSA parity, or performance.
+
+## R23 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Paired ownership and leases, reservation-time use generations, fixed H2D child selection, nonaliasing, exact D2D window coverage, independent per-slot generations, one publication/doorbell action, whole-window custody, exact successful completion and frontier retirement, dirty progress, failure quarantine, and ordered continuation | **Proved** | Forty-six obligations in `r23_same_device_d2d_persistent_sdma_windows_v1.rs`; finite mathematical values only. |
+| Independent move-only executable D2D window model | **Checked** | Twenty-four focused Rust tests; no Rust-to-Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Twenty-eight pinned standalone expected-negative witnesses fail only at their named postconditions; they do not import the positive R23 model. |
+| Executable Rust, R19/R22, runtime/KFD, native hardware, liveness, HIP/HSA parity, or performance refinement | **Not established** | Explicitly outside the R23 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

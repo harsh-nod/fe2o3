@@ -2611,6 +2611,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .streams
             .get(&stream)
             .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        if source.allocation == destination.allocation {
+            return Err(RuntimeValidationErrorV1::InvalidRange.into());
+        }
         let translate = |region: RuntimeMemoryRegionV1| -> Result<
             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
             RuntimeValidationErrorV1,
@@ -4436,6 +4439,17 @@ mod tests {
                 stream,
                 region(source, RuntimeAccessV1::Read, 2),
                 region(destination, RuntimeAccessV1::Write, 14),
+                &[],
+            ),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::InvalidRange
+            ))
+        ));
+        assert!(matches!(
+            context.copy_async(
+                stream,
+                region(source, RuntimeAccessV1::Read, 0),
+                region(source, RuntimeAccessV1::Write, 8),
                 &[],
             ),
             Err(RuntimeErrorV1::Validation(

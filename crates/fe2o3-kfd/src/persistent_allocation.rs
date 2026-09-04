@@ -298,6 +298,13 @@ impl<S: Gfx942PersistentUseStateV1> Gfx942PersistentUseLeaseV1<S> {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) struct Gfx942PersistentLocalSdmaPairTransitionFailureV1<S: Gfx942PersistentUseStateV1> {
+    pub(crate) error: Gfx942PersistentUseErrorV1,
+    pub(crate) source: Gfx942PersistentUseLeaseV1<S>,
+    pub(crate) destination: Gfx942PersistentUseLeaseV1<S>,
+}
+
 impl<S: Gfx942PersistentUseStateV1> fmt::Debug for Gfx942PersistentUseLeaseV1<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -956,6 +963,402 @@ impl Gfx942PersistentDeviceAllocationV1 {
         }
         Ok(())
     }
+}
+
+fn validate_local_sdma_pair<S: Gfx942PersistentUseStateV1>(
+    source_owner: &Gfx942PersistentDeviceAllocationV1,
+    source: &Gfx942PersistentUseLeaseV1<S>,
+    destination_owner: &Gfx942PersistentDeviceAllocationV1,
+    destination: &Gfx942PersistentUseLeaseV1<S>,
+    expected: LedgerStateV1,
+) -> Result<(), Gfx942PersistentUseErrorV1> {
+    if Rc::ptr_eq(&source_owner.incarnation, &destination_owner.incarnation)
+        || source_owner.binding == destination_owner.binding
+        || source.request.operation() != Gfx942PersistentOperationV1::LocalSdmaSource
+        || destination.request.operation() != Gfx942PersistentOperationV1::LocalSdmaDestination
+        || source.request.range().byte_len() != destination.request.range().byte_len()
+    {
+        return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+    }
+    source_owner.validate_lease(source, expected)?;
+    destination_owner.validate_lease(destination, expected)
+}
+
+pub(crate) fn detach_local_native_pair_for_sdma_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+) -> Result<
+    (
+        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ),
+    Gfx942PersistentUseErrorV1,
+> {
+    if source_owner.quarantine.is_some() || destination_owner.quarantine.is_some() {
+        return Err(Gfx942PersistentUseErrorV1::Quarantined);
+    }
+    if Rc::ptr_eq(&source_owner.incarnation, &destination_owner.incarnation)
+        || source_owner.binding == destination_owner.binding
+        || !matches!(
+            source_owner.native,
+            Some(Gfx942PersistentNativeAllocationV1::Local(_))
+        )
+        || !matches!(
+            destination_owner.native,
+            Some(Gfx942PersistentNativeAllocationV1::Local(_))
+        )
+    {
+        return Err(Gfx942PersistentUseErrorV1::WrongState);
+    }
+    let Some(Gfx942PersistentNativeAllocationV1::Local(source)) = source_owner.native.take() else {
+        unreachable!("prevalidated local source native custody")
+    };
+    let Some(Gfx942PersistentNativeAllocationV1::Local(destination)) =
+        destination_owner.native.take()
+    else {
+        unreachable!("prevalidated local destination native custody")
+    };
+    Ok((source, destination))
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn restore_local_native_pair_from_sdma_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+) -> Result<
+    (),
+    (
+        Gfx942PersistentUseErrorV1,
+        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ),
+> {
+    if source_owner.quarantine.is_some() || destination_owner.quarantine.is_some() {
+        return Err((Gfx942PersistentUseErrorV1::Quarantined, source, destination));
+    }
+    if Rc::ptr_eq(&source_owner.incarnation, &destination_owner.incarnation)
+        || source_owner.binding == destination_owner.binding
+        || source_owner.native.is_some()
+        || destination_owner.native.is_some()
+        || source.storage_identity() != source_owner.binding
+        || destination.storage_identity() != destination_owner.binding
+        || source.storage_identity() == destination.storage_identity()
+        || source.layout().requested_bytes() != source_owner.byte_len
+        || destination.layout().requested_bytes() != destination_owner.byte_len
+    {
+        return Err((
+            Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration,
+            source,
+            destination,
+        ));
+    }
+    source_owner.native = Some(Gfx942PersistentNativeAllocationV1::Local(source));
+    destination_owner.native = Some(Gfx942PersistentNativeAllocationV1::Local(destination));
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn transition_local_sdma_pair<S: Gfx942PersistentUseStateV1, T: Gfx942PersistentUseStateV1>(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<S>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<S>,
+    expected: LedgerStateV1,
+    next: LedgerStateV1,
+) -> Result<
+    (Gfx942PersistentUseLeaseV1<T>, Gfx942PersistentUseLeaseV1<T>),
+    Gfx942PersistentLocalSdmaPairTransitionFailureV1<S>,
+> {
+    if let Err(error) = validate_local_sdma_pair(
+        source_owner,
+        &source,
+        destination_owner,
+        &destination,
+        expected,
+    ) {
+        return Err(Gfx942PersistentLocalSdmaPairTransitionFailureV1 {
+            error,
+            source,
+            destination,
+        });
+    }
+    source_owner.ledger[usize::from(source.slot)]
+        .as_mut()
+        .expect("validated source ledger slot")
+        .state = next;
+    destination_owner.ledger[usize::from(destination.slot)]
+        .as_mut()
+        .expect("validated destination ledger slot")
+        .state = next;
+    Ok((source.retag(), destination.retag()))
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn publish_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+) -> Result<
+    (
+        Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+        Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+    ),
+    Gfx942PersistentLocalSdmaPairTransitionFailureV1<Gfx942PersistentPreparedV1>,
+> {
+    transition_local_sdma_pair(
+        source_owner,
+        source,
+        destination_owner,
+        destination,
+        LedgerStateV1::Prepared,
+        LedgerStateV1::Published,
+    )
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn complete_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+) -> Result<
+    (
+        Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+    ),
+    Gfx942PersistentLocalSdmaPairTransitionFailureV1<Gfx942PersistentPublishedV1>,
+> {
+    transition_local_sdma_pair(
+        source_owner,
+        source,
+        destination_owner,
+        destination,
+        LedgerStateV1::Published,
+        LedgerStateV1::Completed,
+    )
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn cancel_prepared_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+) -> Result<(), Gfx942PersistentLocalSdmaPairTransitionFailureV1<Gfx942PersistentPreparedV1>> {
+    if let Err(error) = validate_local_sdma_pair(
+        source_owner,
+        &source,
+        destination_owner,
+        &destination,
+        LedgerStateV1::Prepared,
+    ) {
+        return Err(Gfx942PersistentLocalSdmaPairTransitionFailureV1 {
+            error,
+            source,
+            destination,
+        });
+    }
+    source_owner.ledger[usize::from(source.slot)] = None;
+    destination_owner.ledger[usize::from(destination.slot)] = None;
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn quarantine_prepared_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    reason: Gfx942PersistentQuarantineReasonV1,
+) -> Result<(), Gfx942PersistentLocalSdmaPairTransitionFailureV1<Gfx942PersistentPreparedV1>> {
+    if let Err(error) = validate_local_sdma_pair(
+        source_owner,
+        &source,
+        destination_owner,
+        &destination,
+        LedgerStateV1::Prepared,
+    ) {
+        return Err(Gfx942PersistentLocalSdmaPairTransitionFailureV1 {
+            error,
+            source,
+            destination,
+        });
+    }
+    source_owner.ledger[usize::from(source.slot)]
+        .as_mut()
+        .expect("validated source ledger slot")
+        .state = LedgerStateV1::Quarantined;
+    destination_owner.ledger[usize::from(destination.slot)]
+        .as_mut()
+        .expect("validated destination ledger slot")
+        .state = LedgerStateV1::Quarantined;
+    source_owner.quarantine = Some(reason);
+    destination_owner.quarantine = Some(reason);
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn quarantine_published_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>,
+    reason: Gfx942PersistentQuarantineReasonV1,
+) -> Result<(), Gfx942PersistentLocalSdmaPairTransitionFailureV1<Gfx942PersistentPublishedV1>> {
+    if let Err(error) = validate_local_sdma_pair(
+        source_owner,
+        &source,
+        destination_owner,
+        &destination,
+        LedgerStateV1::Published,
+    ) {
+        return Err(Gfx942PersistentLocalSdmaPairTransitionFailureV1 {
+            error,
+            source,
+            destination,
+        });
+    }
+    source_owner.ledger[usize::from(source.slot)]
+        .as_mut()
+        .expect("validated source ledger slot")
+        .state = LedgerStateV1::Quarantined;
+    destination_owner.ledger[usize::from(destination.slot)]
+        .as_mut()
+        .expect("validated destination ledger slot")
+        .state = LedgerStateV1::Quarantined;
+    source_owner.quarantine = Some(reason);
+    destination_owner.quarantine = Some(reason);
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn settle_completed_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+) -> Result<
+    (
+        Gfx942PersistentDependencyFrontierV1,
+        Gfx942PersistentDependencyFrontierV1,
+    ),
+    Gfx942PersistentLocalSdmaPairTransitionFailureV1<Gfx942PersistentCompletedV1>,
+> {
+    let validation = validate_local_sdma_pair(
+        source_owner,
+        &source,
+        destination_owner,
+        &destination,
+        LedgerStateV1::Completed,
+    )
+    .and_then(|()| {
+        if source_owner.ledger.iter().flatten().any(|record| {
+            record.sequence < source.sequence && record.state != LedgerStateV1::Settled
+        }) || destination_owner.ledger.iter().flatten().any(|record| {
+            record.sequence < destination.sequence && record.state != LedgerStateV1::Settled
+        }) {
+            return Err(Gfx942PersistentUseErrorV1::EarlierUseNotSettled);
+        }
+        if source_owner.frontier_generation.checked_add(1).is_none()
+            || destination_owner
+                .frontier_generation
+                .checked_add(1)
+                .is_none()
+        {
+            return Err(Gfx942PersistentUseErrorV1::GenerationExhausted);
+        }
+        Ok(())
+    });
+    if let Err(error) = validation {
+        return Err(Gfx942PersistentLocalSdmaPairTransitionFailureV1 {
+            error,
+            source,
+            destination,
+        });
+    }
+    let source_generation = source_owner.frontier_generation + 1;
+    let destination_generation = destination_owner.frontier_generation + 1;
+    source_owner.ledger[usize::from(source.slot)]
+        .as_mut()
+        .expect("validated source ledger slot")
+        .state = LedgerStateV1::Settled;
+    destination_owner.ledger[usize::from(destination.slot)]
+        .as_mut()
+        .expect("validated destination ledger slot")
+        .state = LedgerStateV1::Settled;
+    source_owner.frontier_generation = source_generation;
+    destination_owner.frontier_generation = destination_generation;
+    source_owner.frontier_sequence = Some(source.sequence);
+    destination_owner.frontier_sequence = Some(destination.sequence);
+    Ok((
+        Gfx942PersistentDependencyFrontierV1 {
+            incarnation: Rc::clone(&source_owner.incarnation),
+            binding: source_owner.binding,
+            generation: source_generation,
+            through_sequence: source.sequence,
+            thread_affinity: PhantomData,
+        },
+        Gfx942PersistentDependencyFrontierV1 {
+            incarnation: Rc::clone(&destination_owner.incarnation),
+            binding: destination_owner.binding,
+            generation: destination_generation,
+            through_sequence: destination.sequence,
+            thread_affinity: PhantomData,
+        },
+    ))
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn retire_settled_local_sdma_pair_v1(
+    source_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    source: Gfx942PersistentDependencyFrontierV1,
+    destination_owner: &mut Gfx942PersistentDeviceAllocationV1,
+    destination: Gfx942PersistentDependencyFrontierV1,
+) -> Result<
+    (),
+    (
+        Gfx942PersistentDependencyFrontierV1,
+        Gfx942PersistentDependencyFrontierV1,
+    ),
+> {
+    let current = |owner: &Gfx942PersistentDeviceAllocationV1,
+                   frontier: &Gfx942PersistentDependencyFrontierV1| {
+        Rc::ptr_eq(&frontier.incarnation, &owner.incarnation)
+            && frontier.binding == owner.binding
+            && frontier.generation == owner.frontier_generation
+            && Some(frontier.through_sequence) == owner.frontier_sequence
+            && owner
+                .ledger
+                .iter()
+                .flatten()
+                .all(|record| record.state == LedgerStateV1::Settled)
+            && owner.quarantine.is_none()
+    };
+    if !current(source_owner, &source) || !current(destination_owner, &destination) {
+        return Err((source, destination));
+    }
+    for slot in &mut source_owner.ledger {
+        if slot
+            .as_ref()
+            .is_some_and(|record| record.state == LedgerStateV1::Settled)
+        {
+            *slot = None;
+        }
+    }
+    for slot in &mut destination_owner.ledger {
+        if slot
+            .as_ref()
+            .is_some_and(|record| record.state == LedgerStateV1::Settled)
+        {
+            *slot = None;
+        }
+    }
+    source_owner.frontier_sequence = None;
+    destination_owner.frontier_sequence = None;
+    Ok(())
 }
 
 #[cfg(test)]

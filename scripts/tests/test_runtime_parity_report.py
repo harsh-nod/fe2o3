@@ -36,12 +36,43 @@ def row(backend: str, scale: float = 1.0) -> str:
     return " ".join(f"{key}={value}" for key, value in fields.items())
 
 
+def d2d_row(backend: str, scale: float = 1.0) -> str:
+    fields = {
+        "backend": backend,
+        "schema": "fe2o3.d2d-copy-benchmark.v1",
+        "unique_id": "6ced1647a296545c",
+        "bytes": "264239137",
+        "depth": "1",
+        "warmups": "10",
+        "samples": "30",
+        "device_index": "0",
+        "target": "gfx942:xnack-",
+        "xnack": "disabled",
+        "d2d_p50_ns": 10_000_000 * scale,
+        "d2d_p95_ns": 12_000_000 * scale,
+        "d2d_p50_GBps": 26.424 / scale,
+    }
+    if backend == "kfd":
+        fields.update(
+            profile="same-device-d2d",
+            packet_count="64",
+            window_count="2",
+            doorbells_per_copy="2",
+            max_packets_per_window="63",
+            validation="full-source-and-destination-every-round",
+            teardown="explicit",
+            progress="explicit-flush-then-wait",
+            timing="facade-enqueue-flush-through-observed-completion",
+        )
+    return " ".join(f"{key}={value}" for key, value in fields.items())
+
+
 def benchmark_context(schema: str, depth: int) -> str:
     fields = {
         "schema": (
             "fe2o3.async-copy-benchmark.v1"
             if "async-copy" in schema
-            else "fe2o3.xgmi-peer-benchmark.v1"
+            else schema
         ),
         "git_commit": "a0695a10e49ea6c4a211811e88a0f4da8ca46044",
         "target": "gfx942:xnack-",
@@ -56,12 +87,28 @@ def benchmark_context(schema: str, depth: int) -> str:
         "rocm_version": "7.2.4",
         "rustc": "rustc_1.97.1",
     }
-    if "async-copy" in schema:
+    if "async-copy" in schema or schema == "fe2o3.d2d-copy-benchmark.v1":
         fields.update(
-            kfd_profile="directional",
-            kfd_multi_profile="directional",
+            kfd_profile=(
+                "same-device-d2d"
+                if schema == "fe2o3.d2d-copy-benchmark.v1"
+                else "directional"
+            ),
             sdma_manifest_sha256="7" * 64,
         )
+        if "async-copy" in schema:
+            fields["kfd_multi_profile"] = "directional"
+        else:
+            fields.update(
+                sdma_manifest_sha256=CHECK_PARITY.GFX942_SDMA_MANIFEST_SHA256,
+                d2d_window_manifest_sha256=(
+                    CHECK_PARITY.GFX942_D2D_WINDOW_MANIFEST_SHA256
+                ),
+                bytes="264239137",
+                timing="submit-through-observed-completion",
+                setup_validation="outside-timing",
+                measurement="runtime-facade-r23-d2d-window",
+            )
     else:
         fields.update(
             kfd_surface="runtime-facade",
@@ -74,7 +121,10 @@ def benchmark_context(schema: str, depth: int) -> str:
 
 
 def evidence(rows: list[str], schema: str, depth: int = 16) -> list[str]:
-    multi = schema != "fe2o3.async-copy-benchmark.v1"
+    multi = schema in {
+        "fe2o3.async-copy-multi-device-benchmark.v1",
+        "fe2o3.xgmi-peer-benchmark.v1",
+    }
     phase_suffix = "-multi" if "multi-device" in schema else ""
     depth_field = "depth_per_device" if phase_suffix else "depth"
     load = "0,0" if multi else "0"
@@ -121,6 +171,93 @@ def multi_device_rows() -> list[str]:
 
 
 class CheckParityTests(unittest.TestCase):
+    def test_d2d_native_comparators_emit_the_checked_device_index_field(self) -> None:
+        benchmark_dir = MODULE_PATH.parent
+        for source_name in ("d2d_copy_hsa.cpp", "d2d_copy_hip.cpp"):
+            source = (benchmark_dir / source_name).read_text(encoding="utf-8")
+            output_literal = next(
+                line for line in source.splitlines() if "backend=" in line
+            )
+            self.assertIn("device_index=", output_literal, source_name)
+            self.assertNotIn("gpu_index=", output_literal, source_name)
+
+    def test_accepts_matched_d2d_rows_within_explicit_thresholds(self) -> None:
+        schema = "fe2o3.d2d-copy-benchmark.v1"
+        output = CHECK_PARITY.check_rows(
+            evidence(
+                [d2d_row("kfd", 1.05), d2d_row("hsa"), d2d_row("hip")],
+                schema,
+                1,
+            ),
+            schema,
+            1.1,
+            0.9,
+        )
+        self.assertEqual(output[-1], "parity_status=pass")
+
+    def test_rejects_d2d_context_without_exact_window_manifest(self) -> None:
+        schema = "fe2o3.d2d-copy-benchmark.v1"
+        lines = evidence(
+            [d2d_row("kfd"), d2d_row("hsa"), d2d_row("hip")], schema, 1
+        )
+        lines[0] = lines[0].replace(
+            "d2d_window_manifest_sha256="
+            + CHECK_PARITY.GFX942_D2D_WINDOW_MANIFEST_SHA256,
+            "d2d_window_manifest_sha256=" + "8" * 64,
+        )
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "window manifest identity"):
+            CHECK_PARITY.check_rows(lines, schema, 1.1, 0.9)
+
+    def test_rejects_d2d_rows_outside_explicit_thresholds(self) -> None:
+        schema = "fe2o3.d2d-copy-benchmark.v1"
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "parity_status=fail"):
+            CHECK_PARITY.check_rows(
+                evidence(
+                    [d2d_row("kfd", 2.0), d2d_row("hsa"), d2d_row("hip")],
+                    schema,
+                    1,
+                ),
+                schema,
+                1.1,
+                0.9,
+            )
+
+    def test_rejects_d2d_kfd_row_with_wrong_window_accounting(self) -> None:
+        schema = "fe2o3.d2d-copy-benchmark.v1"
+        kfd = d2d_row("kfd").replace("doorbells_per_copy=2", "doorbells_per_copy=1")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "doorbells_per_copy"):
+            CHECK_PARITY.check_rows(
+                evidence([kfd, d2d_row("hsa"), d2d_row("hip")], schema, 1),
+                schema,
+                1.1,
+                0.9,
+            )
+
+    def test_rejects_d2d_single_packet_or_inconsistent_metrics(self) -> None:
+        schema = "fe2o3.d2d-copy-benchmark.v1"
+        rows = [d2d_row("kfd"), d2d_row("hsa"), d2d_row("hip")]
+        short = [value.replace("bytes=264239137", "bytes=1048576") for value in rows]
+        lines = evidence(short, schema, 1)
+        lines[0] = lines[0].replace("bytes=264239137", "bytes=1048576")
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "cross-window"):
+            CHECK_PARITY.check_rows(lines, schema, 1.1, 0.9)
+
+        inconsistent = rows.copy()
+        inconsistent[0] = inconsistent[0].replace(
+            "d2d_p50_GBps=26.424", "d2d_p50_GBps=20.000"
+        )
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "inconsistent"):
+            CHECK_PARITY.check_rows(
+                evidence(inconsistent, schema, 1), schema, 1.1, 0.9
+            )
+
+        inverted = rows.copy()
+        inverted[0] = inverted[0].replace(
+            "d2d_p95_ns=12000000.0", "d2d_p95_ns=9000000"
+        )
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "below p50"):
+            CHECK_PARITY.check_rows(evidence(inverted, schema, 1), schema, 1.1, 0.9)
+
     def test_accepts_complete_rows_within_explicit_thresholds(self) -> None:
         output = CHECK_PARITY.check_rows(
             evidence(

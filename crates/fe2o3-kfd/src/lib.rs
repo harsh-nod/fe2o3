@@ -34,6 +34,9 @@ mod persistent_allocation;
 mod persistent_directional_sdma;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod persistent_same_device_sdma;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod persistent_sdma;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -84,6 +87,9 @@ pub use persistent_allocation::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use persistent_directional_sdma::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use persistent_same_device_sdma::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use persistent_sdma::*;

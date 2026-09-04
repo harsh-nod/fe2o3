@@ -1,4 +1,4 @@
-//! Private move-only adapter around the directional persistent SDMA owner API.
+//! Private move-only adapter around the persistent SDMA owner APIs.
 //!
 //! The native branch is a type-preserving forwarding layer. Tests use an exact
 //! FIFO script with opaque owners, so facade failure paths can be exercised
@@ -14,7 +14,8 @@
 
 use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
-    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942DirectionalPersistentSdmaDemotionCustodyV1,
+    GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
+    Gfx942DirectionalPersistentSdmaDemotionCustodyV1,
     Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaPromotionCustodyV1,
@@ -26,7 +27,12 @@ use fe2o3_kfd::{
     Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
     Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1,
     Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentSdmaDirectionV1,
-    Gfx942SdmaBufferV1,
+    Gfx942SameDevicePersistentSdmaWindowCompletedV1,
+    Gfx942SameDevicePersistentSdmaWindowCopyPollV1,
+    Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1,
+    Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1,
+    Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
+    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaBufferV1,
 };
 use std::time::Duration;
 
@@ -35,6 +41,56 @@ pub(super) struct DirectionalSdmaCopyRequestV1 {
     pub(super) host_offset: u64,
     pub(super) device_offset: u64,
     pub(super) copy_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SameDeviceSdmaCopyRequestV1 {
+    pub(super) source_offset: u64,
+    pub(super) destination_offset: u64,
+    pub(super) copy_bytes: u32,
+}
+
+fn validate_same_device_window_requests_v1(
+    requests: &[SameDeviceSdmaCopyRequestV1],
+) -> Result<(u64, u64, u32), String> {
+    if requests.is_empty()
+        || requests.len() > GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1
+    {
+        return Err("same-device SDMA window packet count is outside 1..=63".to_owned());
+    }
+    let first = requests[0];
+    let mut next_source_offset = first.source_offset;
+    let mut next_destination_offset = first.destination_offset;
+    let mut total_bytes = 0_u64;
+    for (index, request) in requests.iter().enumerate() {
+        if request.source_offset != next_source_offset
+            || request.destination_offset != next_destination_offset
+        {
+            return Err(
+                "same-device SDMA window requests are not ordered and contiguous".to_owned(),
+            );
+        }
+        if request.copy_bytes == 0
+            || request.copy_bytes > GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1
+            || (index + 1 != requests.len()
+                && request.copy_bytes != GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)
+        {
+            return Err("same-device SDMA window packetization is not canonical".to_owned());
+        }
+        let copy_bytes = u64::from(request.copy_bytes);
+        next_source_offset = next_source_offset
+            .checked_add(copy_bytes)
+            .ok_or_else(|| "same-device SDMA source window offset overflow".to_owned())?;
+        next_destination_offset = next_destination_offset
+            .checked_add(copy_bytes)
+            .ok_or_else(|| "same-device SDMA destination window offset overflow".to_owned())?;
+        total_bytes = total_bytes
+            .checked_add(copy_bytes)
+            .ok_or_else(|| "same-device SDMA window length overflow".to_owned())?;
+    }
+    let total_bytes = u32::try_from(total_bytes)
+        .map_err(|_| "same-device SDMA window length exceeds u32".to_owned())?;
+    Ok((first.source_offset, first.destination_offset, total_bytes))
 }
 
 fn validate_window_requests_v1(
@@ -116,6 +172,12 @@ pub(super) struct DirectionalSdmaPairOwnerV1 {
 }
 
 #[derive(Debug)]
+pub(super) struct SameDeviceSdmaPairOwnerV1 {
+    pub(super) source: DirectionalSdmaDeviceOwnerV1,
+    pub(super) destination: DirectionalSdmaDeviceOwnerV1,
+}
+
+#[derive(Debug)]
 pub(super) enum DirectionalSdmaSubmissionOwnerV1 {
     Native {
         submission: Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
@@ -187,6 +249,69 @@ impl DirectionalSdmaCompletedOwnerV1 {
     }
 }
 
+#[derive(Debug)]
+pub(super) enum SameDeviceSdmaSubmissionOwnerV1 {
+    Native {
+        submission: Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
+    },
+    #[cfg(test)]
+    Scripted(ScriptedSameDeviceSubmissionOwnerV1),
+}
+
+pub(super) enum SameDeviceSdmaCompletedOwnerV1 {
+    Native {
+        completed: Gfx942SameDevicePersistentSdmaWindowCompletedV1,
+    },
+    #[cfg(test)]
+    Scripted(ScriptedSameDeviceCompletedOwnerV1),
+}
+
+impl core::fmt::Debug for SameDeviceSdmaCompletedOwnerV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SameDeviceSdmaCompletedOwnerV1")
+            .field("source_offset", &self.source_offset())
+            .field("destination_offset", &self.destination_offset())
+            .field("copy_bytes", &self.copy_bytes())
+            .field("packet_count", &self.packet_count())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SameDeviceSdmaCompletedOwnerV1 {
+    pub(super) fn source_offset(&self) -> u64 {
+        match self {
+            Self::Native { completed } => completed.source_offset(),
+            #[cfg(test)]
+            Self::Scripted(completed) => completed.source_offset,
+        }
+    }
+
+    pub(super) fn destination_offset(&self) -> u64 {
+        match self {
+            Self::Native { completed } => completed.destination_offset(),
+            #[cfg(test)]
+            Self::Scripted(completed) => completed.destination_offset,
+        }
+    }
+
+    pub(super) fn copy_bytes(&self) -> u32 {
+        match self {
+            Self::Native { completed } => completed.copy_bytes(),
+            #[cfg(test)]
+            Self::Scripted(completed) => completed.copy_bytes,
+        }
+    }
+
+    pub(super) fn packet_count(&self) -> usize {
+        match self {
+            Self::Native { completed } => completed.packet_count(),
+            #[cfg(test)]
+            Self::Scripted(completed) => completed.packet_count,
+        }
+    }
+}
+
 pub(super) enum NativeDirectionalSdmaTerminalCustodyV1 {
     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
     Demotion(Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1),
@@ -198,8 +323,16 @@ pub(super) enum NativeDirectionalSdmaTerminalCustodyV1 {
     },
 }
 
+#[allow(dead_code)]
+pub(super) enum NativeSameDeviceSdmaTerminalCustodyV1 {
+    Submission(Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1),
+    PublishedWindow(SameDeviceSdmaSubmissionOwnerV1),
+    Completed(SameDeviceSdmaCompletedOwnerV1),
+}
+
 pub(super) enum SdmaTerminalCustodyV1 {
     Native(NativeDirectionalSdmaTerminalCustodyV1),
+    NativeSameDevice(NativeSameDeviceSdmaTerminalCustodyV1),
     #[cfg(test)]
     Scripted(ScriptedTerminalCustodyV1),
 }
@@ -226,6 +359,17 @@ pub(super) enum DirectionalSdmaExecutionFailureV1 {
     },
 }
 
+pub(super) enum SameDeviceSdmaExecutionFailureV1 {
+    Retryable {
+        detail: String,
+        submission: SameDeviceSdmaSubmissionOwnerV1,
+    },
+    ProcessTeardown {
+        detail: String,
+        custody: SdmaTerminalCustodyV1,
+    },
+}
+
 pub(super) enum SdmaRecycleFailureV1 {
     Recovered {
         detail: String,
@@ -244,6 +388,11 @@ pub(super) enum SdmaRecycleFailureV1 {
 pub(super) enum DirectionalSdmaPollV1 {
     Pending(DirectionalSdmaSubmissionOwnerV1),
     Completed(DirectionalSdmaCompletedOwnerV1),
+}
+
+pub(super) enum SameDeviceSdmaPollV1 {
+    Pending(SameDeviceSdmaSubmissionOwnerV1),
+    Completed(SameDeviceSdmaCompletedOwnerV1),
 }
 
 pub(super) enum DirectionalSdmaOpsV1<'a> {
@@ -681,6 +830,298 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
+    pub(super) fn submit_same_device(
+        &mut self,
+        pair: SameDeviceSdmaPairOwnerV1,
+        requests: Box<[SameDeviceSdmaCopyRequestV1]>,
+    ) -> Result<SameDeviceSdmaSubmissionOwnerV1, SdmaTransitionFailureV1<SameDeviceSdmaPairOwnerV1>>
+    {
+        let (source_offset, destination_offset, copy_bytes) =
+            match validate_same_device_window_requests_v1(&requests) {
+                Ok(window) => window,
+                Err(detail) => {
+                    return Err(SdmaTransitionFailureV1::Retryable {
+                        detail,
+                        custody: pair,
+                    });
+                }
+            };
+        match (self, pair.source, pair.destination) {
+            (
+                Self::Native(queue),
+                DirectionalSdmaDeviceOwnerV1::Native(source),
+                DirectionalSdmaDeviceOwnerV1::Native(destination),
+            ) => match queue.submit_same_device_persistent_sdma_window_v1(
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                copy_bytes,
+            ) {
+                Ok(submission)
+                    if submission.source_offset() == source_offset
+                        && submission.destination_offset() == destination_offset
+                        && submission.copy_bytes() == copy_bytes
+                        && submission.packet_count() == requests.len() =>
+                {
+                    Ok(SameDeviceSdmaSubmissionOwnerV1::Native { submission })
+                }
+                Ok(submission) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                    detail: "same-device SDMA published-window metadata changed unexpectedly"
+                        .to_owned(),
+                    custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                        NativeSameDeviceSdmaTerminalCustodyV1::PublishedWindow(
+                            SameDeviceSdmaSubmissionOwnerV1::Native { submission },
+                        ),
+                    ),
+                }),
+                Err(failure) => {
+                    let (error, custody) = failure.into_parts();
+                    Err(match custody {
+                        Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                            source,
+                            destination,
+                        } => SdmaTransitionFailureV1::Retryable {
+                            detail: error.to_string(),
+                            custody: SameDeviceSdmaPairOwnerV1 {
+                                source: DirectionalSdmaDeviceOwnerV1::Native(source),
+                                destination: DirectionalSdmaDeviceOwnerV1::Native(destination),
+                            },
+                        },
+                        Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
+                            custody,
+                        ) => SdmaTransitionFailureV1::ProcessTeardown {
+                            detail: error.to_string(),
+                            custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                                NativeSameDeviceSdmaTerminalCustodyV1::Submission(custody),
+                            ),
+                        },
+                    })
+                }
+            },
+            #[cfg(test)]
+            (
+                Self::Scripted(driver),
+                DirectionalSdmaDeviceOwnerV1::Scripted(source),
+                DirectionalSdmaDeviceOwnerV1::Scripted(destination),
+            ) => driver.submit_same_device(
+                SameDeviceSdmaPairOwnerV1 {
+                    source: DirectionalSdmaDeviceOwnerV1::Scripted(source),
+                    destination: DirectionalSdmaDeviceOwnerV1::Scripted(destination),
+                },
+                requests,
+            ),
+            #[cfg(test)]
+            (_, source, destination) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                detail: "same-device SDMA owner/driver mismatch during publication".to_owned(),
+                custody: scripted_mismatch_same_device_pair(
+                    SameDeviceSdmaPairOwnerV1 {
+                        source,
+                        destination,
+                    },
+                    "submission",
+                ),
+            }),
+        }
+    }
+
+    pub(super) fn poll_same_device(
+        &mut self,
+        submission: SameDeviceSdmaSubmissionOwnerV1,
+    ) -> Result<SameDeviceSdmaPollV1, SameDeviceSdmaExecutionFailureV1> {
+        match (self, submission) {
+            (Self::Native(queue), SameDeviceSdmaSubmissionOwnerV1::Native { submission }) => {
+                let expected_source_request = submission.source_request();
+                let expected_destination_request = submission.destination_request();
+                let expected_descriptor = submission.descriptor();
+                match queue.poll_same_device_persistent_sdma_window_v1(submission) {
+                    Ok(poll) => Ok(match poll {
+                        Gfx942SameDevicePersistentSdmaWindowCopyPollV1::Pending(submission)
+                            if submission.source_request() == expected_source_request
+                                && submission.destination_request()
+                                    == expected_destination_request
+                                && submission.descriptor() == expected_descriptor =>
+                        {
+                            SameDeviceSdmaPollV1::Pending(SameDeviceSdmaSubmissionOwnerV1::Native {
+                                submission,
+                            })
+                        }
+                        Gfx942SameDevicePersistentSdmaWindowCopyPollV1::Pending(submission) => {
+                            return Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                                detail:
+                                    "same-device SDMA pending-window identity changed unexpectedly"
+                                        .to_owned(),
+                                custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                                    NativeSameDeviceSdmaTerminalCustodyV1::PublishedWindow(
+                                        SameDeviceSdmaSubmissionOwnerV1::Native { submission },
+                                    ),
+                                ),
+                            });
+                        }
+                        Gfx942SameDevicePersistentSdmaWindowCopyPollV1::Completed(completed) => {
+                            SameDeviceSdmaPollV1::Completed(
+                                SameDeviceSdmaCompletedOwnerV1::Native { completed },
+                            )
+                        }
+                    }),
+                    Err(failure) => {
+                        let (error, custody) = failure.into_parts();
+                        Err(match custody {
+                            Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::Pending(
+                                submission,
+                            ) if submission.source_request() == expected_source_request
+                                && submission.destination_request()
+                                    == expected_destination_request
+                                && submission.descriptor() == expected_descriptor =>
+                            {
+                                SameDeviceSdmaExecutionFailureV1::Retryable {
+                                    detail: error.to_string(),
+                                    submission: SameDeviceSdmaSubmissionOwnerV1::Native {
+                                        submission,
+                                    },
+                                }
+                            }
+                            Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::Pending(
+                                submission,
+                            ) => SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                                detail:
+                                    "same-device SDMA retryable-window identity changed unexpectedly"
+                                        .to_owned(),
+                                custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                                    NativeSameDeviceSdmaTerminalCustodyV1::PublishedWindow(
+                                        SameDeviceSdmaSubmissionOwnerV1::Native { submission },
+                                    ),
+                                ),
+                            },
+                            Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::ProcessTeardown(
+                                custody,
+                            ) => SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                                detail: error.to_string(),
+                                custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                                    NativeSameDeviceSdmaTerminalCustodyV1::Submission(custody),
+                                ),
+                            },
+                        })
+                    }
+                }
+            }
+            #[cfg(test)]
+            (Self::Scripted(driver), SameDeviceSdmaSubmissionOwnerV1::Scripted(submission)) => {
+                driver.poll_same_device(submission)
+            }
+            #[cfg(test)]
+            (_, submission) => Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                detail: "same-device SDMA owner/driver mismatch during poll".to_owned(),
+                custody: scripted_mismatch_same_device_submission(submission, "poll"),
+            }),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn wait_same_device(
+        &mut self,
+        submission: SameDeviceSdmaSubmissionOwnerV1,
+        timeout: Duration,
+    ) -> Result<SameDeviceSdmaCompletedOwnerV1, SameDeviceSdmaExecutionFailureV1> {
+        match (self, submission) {
+            (Self::Native(queue), SameDeviceSdmaSubmissionOwnerV1::Native { submission }) => {
+                let expected_source_request = submission.source_request();
+                let expected_destination_request = submission.destination_request();
+                let expected_descriptor = submission.descriptor();
+                match queue.wait_same_device_persistent_sdma_window_for_v1(submission, timeout) {
+                    Ok(completed) => Ok(SameDeviceSdmaCompletedOwnerV1::Native { completed }),
+                    Err(failure) => {
+                        let (error, custody) = failure.into_parts();
+                        Err(match custody {
+                            Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::Pending(
+                                submission,
+                            ) if submission.source_request() == expected_source_request
+                                && submission.destination_request()
+                                    == expected_destination_request
+                                && submission.descriptor() == expected_descriptor =>
+                            {
+                                SameDeviceSdmaExecutionFailureV1::Retryable {
+                                    detail: error.to_string(),
+                                    submission: SameDeviceSdmaSubmissionOwnerV1::Native {
+                                        submission,
+                                    },
+                                }
+                            }
+                            Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::Pending(
+                                submission,
+                            ) => SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                                detail:
+                                    "same-device SDMA retryable-window identity changed unexpectedly"
+                                        .to_owned(),
+                                custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                                    NativeSameDeviceSdmaTerminalCustodyV1::PublishedWindow(
+                                        SameDeviceSdmaSubmissionOwnerV1::Native { submission },
+                                    ),
+                                ),
+                            },
+                            Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::ProcessTeardown(
+                                custody,
+                            ) => SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                                detail: error.to_string(),
+                                custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                                    NativeSameDeviceSdmaTerminalCustodyV1::Submission(custody),
+                                ),
+                            },
+                        })
+                    }
+                }
+            }
+            #[cfg(test)]
+            (Self::Scripted(driver), SameDeviceSdmaSubmissionOwnerV1::Scripted(submission)) => {
+                driver.wait_same_device(submission)
+            }
+            #[cfg(test)]
+            (_, submission) => Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                detail: "same-device SDMA owner/driver mismatch during wait".to_owned(),
+                custody: scripted_mismatch_same_device_submission(submission, "wait"),
+            }),
+        }
+    }
+
+    pub(super) fn retire_same_device(
+        &mut self,
+        completed: SameDeviceSdmaCompletedOwnerV1,
+    ) -> Result<SameDeviceSdmaPairOwnerV1, SdmaTransitionFailureV1<SameDeviceSdmaCompletedOwnerV1>>
+    {
+        match (self, completed) {
+            (Self::Native(_), SameDeviceSdmaCompletedOwnerV1::Native { completed }) => {
+                match completed.retire_settled_frontiers_v1() {
+                    Ok(pair) => {
+                        let (source, destination) = pair.into_parts();
+                        Ok(SameDeviceSdmaPairOwnerV1 {
+                            source: DirectionalSdmaDeviceOwnerV1::Native(source),
+                            destination: DirectionalSdmaDeviceOwnerV1::Native(destination),
+                        })
+                    }
+                    Err(failure) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                        detail: "paired same-device frontier retirement failed".to_owned(),
+                        custody: SdmaTerminalCustodyV1::NativeSameDevice(
+                            NativeSameDeviceSdmaTerminalCustodyV1::Completed(
+                                SameDeviceSdmaCompletedOwnerV1::Native {
+                                    completed: failure.into_completed(),
+                                },
+                            ),
+                        ),
+                    }),
+                }
+            }
+            #[cfg(test)]
+            (Self::Scripted(driver), SameDeviceSdmaCompletedOwnerV1::Scripted(completed)) => {
+                driver.retire_same_device(completed)
+            }
+            #[cfg(test)]
+            (_, completed) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                detail: "same-device SDMA owner/driver mismatch during retirement".to_owned(),
+                custody: scripted_mismatch_same_device_completed(completed, "retirement"),
+            }),
+        }
+    }
+
     pub(super) fn recycle(
         &mut self,
         buffer: SdmaBufferOwnerV1,
@@ -741,6 +1182,18 @@ mod scripted {
         ProcessTeardown,
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub(crate) enum ScriptedSameDeviceExecutionOutcomeV1 {
+        Pending,
+        Completed {
+            copy_bytes: Option<u32>,
+            requests: Option<Vec<SameDeviceSdmaCopyRequestV1>>,
+            swap_allocations: bool,
+        },
+        Retryable,
+        ProcessTeardown,
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum ScriptedRecycleOutcomeV1 {
         Success,
@@ -776,9 +1229,16 @@ mod scripted {
             requests: Vec<DirectionalSdmaCopyRequestV1>,
             outcome: ScriptedFailureModeV1,
         },
+        SubmitSameDeviceWindow {
+            requests: Vec<SameDeviceSdmaCopyRequestV1>,
+            outcome: ScriptedFailureModeV1,
+        },
         Poll(ScriptedExecutionOutcomeV1),
         Wait(ScriptedExecutionOutcomeV1),
         Retire(ScriptedFailureModeV1),
+        PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1),
+        WaitSameDevice(ScriptedSameDeviceExecutionOutcomeV1),
+        RetireSameDevice(ScriptedFailureModeV1),
         Recycle(ScriptedRecycleOutcomeV1),
     }
 
@@ -880,6 +1340,24 @@ mod scripted {
         pub(super) packet_count: usize,
     }
 
+    #[derive(Debug)]
+    pub(crate) struct ScriptedSameDeviceSubmissionOwnerV1 {
+        pair: SameDeviceSdmaPairOwnerV1,
+        requests: Box<[SameDeviceSdmaCopyRequestV1]>,
+        copy_bytes: u32,
+        source_owner_id: u64,
+        destination_owner_id: u64,
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct ScriptedSameDeviceCompletedOwnerV1 {
+        pair: SameDeviceSdmaPairOwnerV1,
+        pub(super) source_offset: u64,
+        pub(super) destination_offset: u64,
+        pub(super) copy_bytes: u32,
+        pub(super) packet_count: usize,
+    }
+
     #[allow(dead_code)]
     pub(crate) enum ScriptedTerminalCustodyV1 {
         Buffer(SdmaBufferOwnerV1),
@@ -887,6 +1365,9 @@ mod scripted {
         Pair(DirectionalSdmaPairOwnerV1),
         Submission(DirectionalSdmaSubmissionOwnerV1),
         Completed(DirectionalSdmaCompletedOwnerV1),
+        SameDevicePair(SameDeviceSdmaPairOwnerV1),
+        SameDeviceSubmission(SameDeviceSdmaSubmissionOwnerV1),
+        SameDeviceCompleted(SameDeviceSdmaCompletedOwnerV1),
     }
 
     pub(crate) struct ScriptedSdmaDriverV1 {
@@ -984,6 +1465,44 @@ mod scripted {
 
         fn owns_completed(&self, completed: &ScriptedCompletedOwnerV1) -> bool {
             self.owns_pair(&completed.pair)
+        }
+
+        fn same_device_owner_ids(pair: &SameDeviceSdmaPairOwnerV1) -> Option<(u64, u64)> {
+            match (&pair.source, &pair.destination) {
+                (
+                    DirectionalSdmaDeviceOwnerV1::Scripted(source),
+                    DirectionalSdmaDeviceOwnerV1::Scripted(destination),
+                ) => Some((source.token.id, destination.token.id)),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            }
+        }
+
+        fn owns_same_device_pair(&self, pair: &SameDeviceSdmaPairOwnerV1) -> bool {
+            match (&pair.source, &pair.destination) {
+                (
+                    DirectionalSdmaDeviceOwnerV1::Scripted(source),
+                    DirectionalSdmaDeviceOwnerV1::Scripted(destination),
+                ) => self.owns_device(source) && self.owns_device(destination),
+                #[allow(unreachable_patterns)]
+                _ => false,
+            }
+        }
+
+        fn owns_same_device_submission(
+            &self,
+            submission: &ScriptedSameDeviceSubmissionOwnerV1,
+        ) -> bool {
+            self.owns_same_device_pair(&submission.pair)
+                && Self::same_device_owner_ids(&submission.pair)
+                    == Some((submission.source_owner_id, submission.destination_owner_id))
+        }
+
+        fn owns_same_device_completed(
+            &self,
+            completed: &ScriptedSameDeviceCompletedOwnerV1,
+        ) -> bool {
+            self.owns_same_device_pair(&completed.pair)
         }
 
         pub(super) fn allocate_buffer(
@@ -1235,6 +1754,80 @@ mod scripted {
             }
         }
 
+        pub(super) fn submit_same_device(
+            &mut self,
+            pair: SameDeviceSdmaPairOwnerV1,
+            requests: Box<[SameDeviceSdmaCopyRequestV1]>,
+        ) -> Result<
+            SameDeviceSdmaSubmissionOwnerV1,
+            SdmaTransitionFailureV1<SameDeviceSdmaPairOwnerV1>,
+        > {
+            if !self.owns_same_device_pair(&pair) {
+                return Err(scripted_same_device_pair_mismatch(
+                    pair,
+                    "same-device submission owners belong to another driver".to_owned(),
+                ));
+            }
+            let Some((source_owner_id, destination_owner_id)) = Self::same_device_owner_ids(&pair)
+            else {
+                return Err(scripted_same_device_pair_mismatch(
+                    pair,
+                    "same-device submission owners are not scripted device allocations".to_owned(),
+                ));
+            };
+            if source_owner_id == destination_owner_id {
+                return Err(scripted_same_device_pair_mismatch(
+                    pair,
+                    "same-device submission requires distinct allocation owners".to_owned(),
+                ));
+            }
+            let copy_bytes = match validate_same_device_window_requests_v1(&requests) {
+                Ok((_, _, copy_bytes)) => copy_bytes,
+                Err(detail) => {
+                    return Err(SdmaTransitionFailureV1::Retryable {
+                        detail,
+                        custody: pair,
+                    });
+                }
+            };
+            let outcome = match self.pop() {
+                Ok(ScriptedSdmaStepV1::SubmitSameDeviceWindow {
+                    requests: expected_requests,
+                    outcome,
+                }) if expected_requests.as_slice() == requests.as_ref() => outcome,
+                Ok(step) => {
+                    return Err(scripted_same_device_pair_mismatch(
+                        pair,
+                        format!("same-device submission mismatch: {step:?}"),
+                    ));
+                }
+                Err(detail) => return Err(scripted_same_device_pair_mismatch(pair, detail)),
+            };
+            match outcome {
+                ScriptedFailureModeV1::Success => Ok(SameDeviceSdmaSubmissionOwnerV1::Scripted(
+                    ScriptedSameDeviceSubmissionOwnerV1 {
+                        pair,
+                        requests,
+                        copy_bytes,
+                        source_owner_id,
+                        destination_owner_id,
+                    },
+                )),
+                ScriptedFailureModeV1::Retryable => Err(SdmaTransitionFailureV1::Retryable {
+                    detail: "scripted same-device submission retryable".to_owned(),
+                    custody: pair,
+                }),
+                ScriptedFailureModeV1::ProcessTeardown => {
+                    Err(SdmaTransitionFailureV1::ProcessTeardown {
+                        detail: "scripted same-device submission teardown".to_owned(),
+                        custody: SdmaTerminalCustodyV1::Scripted(
+                            ScriptedTerminalCustodyV1::SameDevicePair(pair),
+                        ),
+                    })
+                }
+            }
+        }
+
         pub(super) fn poll(
             &mut self,
             submission: ScriptedSubmissionOwnerV1,
@@ -1256,6 +1849,31 @@ mod scripted {
                 Err(detail) => return Err(scripted_submission_mismatch(submission, detail)),
             };
             execute_outcome(submission, outcome, "poll")
+        }
+
+        pub(super) fn poll_same_device(
+            &mut self,
+            submission: ScriptedSameDeviceSubmissionOwnerV1,
+        ) -> Result<SameDeviceSdmaPollV1, SameDeviceSdmaExecutionFailureV1> {
+            if !self.owns_same_device_submission(&submission) {
+                return Err(scripted_same_device_submission_mismatch(
+                    submission,
+                    "same-device poll owner or allocation roles changed".to_owned(),
+                ));
+            }
+            let outcome = match self.pop() {
+                Ok(ScriptedSdmaStepV1::PollSameDevice(outcome)) => outcome,
+                Ok(step) => {
+                    return Err(scripted_same_device_submission_mismatch(
+                        submission,
+                        format!("same-device poll mismatch: {step:?}"),
+                    ));
+                }
+                Err(detail) => {
+                    return Err(scripted_same_device_submission_mismatch(submission, detail));
+                }
+            };
+            execute_same_device_outcome(submission, outcome, "poll")
         }
 
         pub(super) fn wait(
@@ -1283,6 +1901,39 @@ mod scripted {
                 DirectionalSdmaPollV1::Pending(submission) => {
                     Err(DirectionalSdmaExecutionFailureV1::Retryable {
                         detail: "scripted wait timed out".to_owned(),
+                        submission,
+                    })
+                }
+            }
+        }
+
+        pub(super) fn wait_same_device(
+            &mut self,
+            submission: ScriptedSameDeviceSubmissionOwnerV1,
+        ) -> Result<SameDeviceSdmaCompletedOwnerV1, SameDeviceSdmaExecutionFailureV1> {
+            if !self.owns_same_device_submission(&submission) {
+                return Err(scripted_same_device_submission_mismatch(
+                    submission,
+                    "same-device wait owner or allocation roles changed".to_owned(),
+                ));
+            }
+            let outcome = match self.pop() {
+                Ok(ScriptedSdmaStepV1::WaitSameDevice(outcome)) => outcome,
+                Ok(step) => {
+                    return Err(scripted_same_device_submission_mismatch(
+                        submission,
+                        format!("same-device wait mismatch: {step:?}"),
+                    ));
+                }
+                Err(detail) => {
+                    return Err(scripted_same_device_submission_mismatch(submission, detail));
+                }
+            };
+            match execute_same_device_outcome(submission, outcome, "wait")? {
+                SameDeviceSdmaPollV1::Completed(completed) => Ok(completed),
+                SameDeviceSdmaPollV1::Pending(submission) => {
+                    Err(SameDeviceSdmaExecutionFailureV1::Retryable {
+                        detail: "scripted same-device wait timed out".to_owned(),
                         submission,
                     })
                 }
@@ -1320,6 +1971,46 @@ mod scripted {
                         custody: SdmaTerminalCustodyV1::Scripted(
                             ScriptedTerminalCustodyV1::Completed(
                                 DirectionalSdmaCompletedOwnerV1::Scripted(completed),
+                            ),
+                        ),
+                    })
+                }
+            }
+        }
+
+        pub(super) fn retire_same_device(
+            &mut self,
+            completed: ScriptedSameDeviceCompletedOwnerV1,
+        ) -> Result<
+            SameDeviceSdmaPairOwnerV1,
+            SdmaTransitionFailureV1<SameDeviceSdmaCompletedOwnerV1>,
+        > {
+            if !self.owns_same_device_completed(&completed) {
+                return Err(scripted_same_device_completed_mismatch(
+                    completed,
+                    "same-device retirement owners belong to another driver".to_owned(),
+                ));
+            }
+            let outcome = match self.pop() {
+                Ok(ScriptedSdmaStepV1::RetireSameDevice(outcome)) => outcome,
+                Ok(step) => {
+                    return Err(scripted_same_device_completed_mismatch(
+                        completed,
+                        format!("same-device retirement mismatch: {step:?}"),
+                    ));
+                }
+                Err(detail) => {
+                    return Err(scripted_same_device_completed_mismatch(completed, detail));
+                }
+            };
+            match outcome {
+                ScriptedFailureModeV1::Success => Ok(completed.pair),
+                ScriptedFailureModeV1::Retryable | ScriptedFailureModeV1::ProcessTeardown => {
+                    Err(SdmaTransitionFailureV1::ProcessTeardown {
+                        detail: "scripted same-device retirement failure".to_owned(),
+                        custody: SdmaTerminalCustodyV1::Scripted(
+                            ScriptedTerminalCustodyV1::SameDeviceCompleted(
+                                SameDeviceSdmaCompletedOwnerV1::Scripted(completed),
                             ),
                         ),
                     })
@@ -1462,6 +2153,103 @@ mod scripted {
         ))
     }
 
+    fn execute_same_device_outcome(
+        submission: ScriptedSameDeviceSubmissionOwnerV1,
+        outcome: ScriptedSameDeviceExecutionOutcomeV1,
+        operation: &'static str,
+    ) -> Result<SameDeviceSdmaPollV1, SameDeviceSdmaExecutionFailureV1> {
+        match outcome {
+            ScriptedSameDeviceExecutionOutcomeV1::Pending => Ok(SameDeviceSdmaPollV1::Pending(
+                SameDeviceSdmaSubmissionOwnerV1::Scripted(submission),
+            )),
+            ScriptedSameDeviceExecutionOutcomeV1::Retryable => {
+                Err(SameDeviceSdmaExecutionFailureV1::Retryable {
+                    detail: format!("scripted same-device {operation} retryable"),
+                    submission: SameDeviceSdmaSubmissionOwnerV1::Scripted(submission),
+                })
+            }
+            ScriptedSameDeviceExecutionOutcomeV1::ProcessTeardown => {
+                Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                    detail: format!("scripted same-device {operation} teardown"),
+                    custody: SdmaTerminalCustodyV1::Scripted(
+                        ScriptedTerminalCustodyV1::SameDeviceSubmission(
+                            SameDeviceSdmaSubmissionOwnerV1::Scripted(submission),
+                        ),
+                    ),
+                })
+            }
+            ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes,
+                requests,
+                swap_allocations,
+            } => complete_scripted_same_device_submission(
+                submission,
+                copy_bytes,
+                requests,
+                swap_allocations,
+            ),
+        }
+    }
+
+    fn complete_scripted_same_device_submission(
+        mut submission: ScriptedSameDeviceSubmissionOwnerV1,
+        copy_bytes: Option<u32>,
+        reported_requests: Option<Vec<SameDeviceSdmaCopyRequestV1>>,
+        swap_allocations: bool,
+    ) -> Result<SameDeviceSdmaPollV1, SameDeviceSdmaExecutionFailureV1> {
+        for request in submission.requests.iter() {
+            let len = usize::try_from(request.copy_bytes).expect("u32 fits usize");
+            let source_start = usize::try_from(request.source_offset)
+                .expect("admitted scripted source offset fits usize");
+            let destination_start = usize::try_from(request.destination_offset)
+                .expect("admitted scripted destination offset fits usize");
+            let (
+                DirectionalSdmaDeviceOwnerV1::Scripted(source),
+                DirectionalSdmaDeviceOwnerV1::Scripted(destination),
+            ) = (&submission.pair.source, &mut submission.pair.destination)
+            else {
+                unreachable!("scripted same-device submission retains scripted owners")
+            };
+            destination.bytes[destination_start..destination_start + len]
+                .copy_from_slice(&source.bytes[source_start..source_start + len]);
+        }
+        if swap_allocations {
+            core::mem::swap(
+                &mut submission.pair.source,
+                &mut submission.pair.destination,
+            );
+        }
+        let reported_requests = reported_requests
+            .map(Vec::into_boxed_slice)
+            .unwrap_or_else(|| submission.requests.clone());
+        let pair_ids = ScriptedSdmaDriverV1::same_device_owner_ids(&submission.pair);
+        if pair_ids != Some((submission.source_owner_id, submission.destination_owner_id))
+            || reported_requests.as_ref() != submission.requests.as_ref()
+        {
+            return Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                detail: "scripted same-device completion identity or request roster changed"
+                    .to_owned(),
+                custody: SdmaTerminalCustodyV1::Scripted(
+                    ScriptedTerminalCustodyV1::SameDevicePair(submission.pair),
+                ),
+            });
+        }
+        let packet_count = reported_requests.len();
+        let (source_offset, destination_offset) = reported_requests
+            .first()
+            .map(|request| (request.source_offset, request.destination_offset))
+            .unwrap_or((0, 0));
+        Ok(SameDeviceSdmaPollV1::Completed(
+            SameDeviceSdmaCompletedOwnerV1::Scripted(ScriptedSameDeviceCompletedOwnerV1 {
+                pair: submission.pair,
+                source_offset,
+                destination_offset,
+                copy_bytes: copy_bytes.unwrap_or(submission.copy_bytes),
+                packet_count,
+            }),
+        ))
+    }
+
     fn scripted_buffer_mismatch(
         buffer: ScriptedBufferOwnerV1,
         detail: String,
@@ -1471,6 +2259,46 @@ mod scripted {
             custody: SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Buffer(
                 SdmaBufferOwnerV1::Scripted(buffer),
             )),
+        }
+    }
+
+    fn scripted_same_device_pair_mismatch(
+        pair: SameDeviceSdmaPairOwnerV1,
+        detail: String,
+    ) -> SdmaTransitionFailureV1<SameDeviceSdmaPairOwnerV1> {
+        SdmaTransitionFailureV1::ProcessTeardown {
+            detail,
+            custody: SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::SameDevicePair(
+                pair,
+            )),
+        }
+    }
+
+    fn scripted_same_device_submission_mismatch(
+        submission: ScriptedSameDeviceSubmissionOwnerV1,
+        detail: String,
+    ) -> SameDeviceSdmaExecutionFailureV1 {
+        SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+            detail,
+            custody: SdmaTerminalCustodyV1::Scripted(
+                ScriptedTerminalCustodyV1::SameDeviceSubmission(
+                    SameDeviceSdmaSubmissionOwnerV1::Scripted(submission),
+                ),
+            ),
+        }
+    }
+
+    fn scripted_same_device_completed_mismatch(
+        completed: ScriptedSameDeviceCompletedOwnerV1,
+        detail: String,
+    ) -> SdmaTransitionFailureV1<SameDeviceSdmaCompletedOwnerV1> {
+        SdmaTransitionFailureV1::ProcessTeardown {
+            detail,
+            custody: SdmaTerminalCustodyV1::Scripted(
+                ScriptedTerminalCustodyV1::SameDeviceCompleted(
+                    SameDeviceSdmaCompletedOwnerV1::Scripted(completed),
+                ),
+            ),
         }
     }
 
@@ -1526,7 +2354,9 @@ mod scripted {
 pub(super) use scripted::{
     ScriptedBufferKindV1, ScriptedBufferOwnerV1, ScriptedCompletedOwnerV1, ScriptedDeviceOwnerV1,
     ScriptedExecutionOutcomeV1, ScriptedFailureModeV1, ScriptedRecycleOutcomeV1,
-    ScriptedSdmaDriverV1, ScriptedSdmaStepV1, ScriptedSubmissionOwnerV1, ScriptedTerminalCustodyV1,
+    ScriptedSameDeviceCompletedOwnerV1, ScriptedSameDeviceExecutionOutcomeV1,
+    ScriptedSameDeviceSubmissionOwnerV1, ScriptedSdmaDriverV1, ScriptedSdmaStepV1,
+    ScriptedSubmissionOwnerV1, ScriptedTerminalCustodyV1,
 };
 
 #[cfg(test)]
@@ -1573,6 +2403,30 @@ fn scripted_mismatch_completed(
 }
 
 #[cfg(test)]
+fn scripted_mismatch_same_device_pair(
+    pair: SameDeviceSdmaPairOwnerV1,
+    _operation: &'static str,
+) -> SdmaTerminalCustodyV1 {
+    SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::SameDevicePair(pair))
+}
+
+#[cfg(test)]
+fn scripted_mismatch_same_device_submission(
+    submission: SameDeviceSdmaSubmissionOwnerV1,
+    _operation: &'static str,
+) -> SdmaTerminalCustodyV1 {
+    SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::SameDeviceSubmission(submission))
+}
+
+#[cfg(test)]
+fn scripted_mismatch_same_device_completed(
+    completed: SameDeviceSdmaCompletedOwnerV1,
+    _operation: &'static str,
+) -> SdmaTerminalCustodyV1 {
+    SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::SameDeviceCompleted(completed))
+}
+
+#[cfg(test)]
 mod window_tests {
     use super::*;
 
@@ -1604,5 +2458,85 @@ mod window_tests {
             ])
             .is_err()
         );
+
+        let first = SameDeviceSdmaCopyRequestV1 {
+            source_offset: 7,
+            destination_offset: 41,
+            copy_bytes: GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
+        };
+        let second = SameDeviceSdmaCopyRequestV1 {
+            source_offset: 7 + u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1),
+            destination_offset: 41 + u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1),
+            copy_bytes: 1,
+        };
+        assert_eq!(
+            validate_same_device_window_requests_v1(&[first, second]),
+            Ok((7, 41, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 + 1))
+        );
+        assert!(validate_same_device_window_requests_v1(&[second, first]).is_err());
+        assert!(validate_same_device_window_requests_v1(&[first, first]).is_err());
+        assert!(
+            validate_same_device_window_requests_v1(&[
+                SameDeviceSdmaCopyRequestV1 {
+                    copy_bytes: 1,
+                    ..first
+                },
+                second
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn same_device_wait_timeout_returns_the_exact_pair_for_later_completion() {
+        let request = SameDeviceSdmaCopyRequestV1 {
+            source_offset: 0,
+            destination_offset: 0,
+            copy_bytes: 8,
+        };
+        let mut driver = ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::SubmitSameDeviceWindow {
+                requests: vec![request],
+                outcome: ScriptedFailureModeV1::Success,
+            },
+            ScriptedSdmaStepV1::WaitSameDevice(ScriptedSameDeviceExecutionOutcomeV1::Pending),
+            ScriptedSdmaStepV1::WaitSameDevice(ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes: None,
+                requests: None,
+                swap_allocations: false,
+            }),
+            ScriptedSdmaStepV1::RetireSameDevice(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ]);
+        let pair = SameDeviceSdmaPairOwnerV1 {
+            source: driver.test_device_owner(8),
+            destination: driver.test_device_owner(8),
+        };
+        let mut ops = DirectionalSdmaOpsV1::Scripted(&mut driver);
+        let Ok(submission) = ops.submit_same_device(pair, vec![request].into_boxed_slice()) else {
+            panic!("scripted same-device publication must succeed");
+        };
+        let submission = match ops.wait_same_device(submission, Duration::ZERO) {
+            Err(SameDeviceSdmaExecutionFailureV1::Retryable { submission, .. }) => submission,
+            _ => panic!("scripted same-device timeout must return exact pending custody"),
+        };
+        let Ok(completed) = ops.wait_same_device(submission, Duration::from_millis(1)) else {
+            panic!("second scripted same-device wait must complete");
+        };
+        let Ok(pair) = ops.retire_same_device(completed) else {
+            panic!("scripted paired retirement must succeed");
+        };
+        for device in [pair.source, pair.destination] {
+            let Ok(buffer) = ops.demote(device) else {
+                panic!("scripted device demotion must succeed");
+            };
+            assert!(ops.recycle(buffer).is_ok());
+        }
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 0);
+        assert_eq!(driver.unexpected_drops(), 0);
     }
 }

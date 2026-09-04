@@ -4528,6 +4528,43 @@ impl Gfx942SdmaQueueSetV1 {
         owner.prepare_persistent_window_recoverable(memory, request)
     }
 
+    /// Prepares a local D2D window on the fixed H2D child without widening the
+    /// directional H2D/D2H selector used by the ordinary and R22 surfaces.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn prepare_same_device_persistent_window_recoverable(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942SdmaCopyRequestV1,
+    ) -> Result<PreparedPersistentSdmaWindowV1, (Gfx942SdmaErrorV1, Gfx942SdmaCopyRequestV1)> {
+        if request.source.kind() != Gfx942SdmaBufferKindV1::DeviceLocal
+            || request.destination.kind() != Gfx942SdmaBufferKindV1::DeviceLocal
+        {
+            return Err((
+                Gfx942SdmaErrorV1::Contract(
+                    "same-device persistent SDMA window requires two device buffers",
+                ),
+                request,
+            ));
+        }
+        let Self::Directional(owners) = self else {
+            return Err((
+                Gfx942SdmaErrorV1::Contract(
+                    "same-device persistent SDMA window requires a directional queue pair",
+                ),
+                request,
+            ));
+        };
+        let Some(owner) = owners.get_mut(GFX942_SDMA_H2D_OWNER_SLOT_V1) else {
+            return Err((
+                Gfx942SdmaErrorV1::Contract(
+                    "same-device persistent SDMA window missing fixed child queue",
+                ),
+                request,
+            ));
+        };
+        owner.prepare_persistent_window_recoverable(memory, request)
+    }
+
     pub(crate) fn submit(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,

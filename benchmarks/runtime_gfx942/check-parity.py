@@ -28,6 +28,11 @@ SCHEMA_METRICS = {
         ("d2h_p95_ns", "latency"),
         ("d2h_aggregate_p50_GBps", "bandwidth"),
     ),
+    "fe2o3.d2d-copy-benchmark.v1": (
+        ("d2d_p50_ns", "latency"),
+        ("d2d_p95_ns", "latency"),
+        ("d2d_p50_GBps", "bandwidth"),
+    ),
     "fe2o3.xgmi-peer-benchmark.v1": (
         ("forward_p50_ns", "latency"),
         ("forward_p95_ns", "latency"),
@@ -46,12 +51,14 @@ SCHEMA_MATCH_FIELDS = {
         "warmups",
         "samples",
     ),
+    "fe2o3.d2d-copy-benchmark.v1": ("unique_id", "warmups", "samples"),
     "fe2o3.xgmi-peer-benchmark.v1": ("unique_ids", "warmups", "samples"),
 }
 
 SCHEMA_CONTEXT = {
     "fe2o3.async-copy-benchmark.v1": "fe2o3.async-copy-benchmark.v1",
     "fe2o3.async-copy-multi-device-benchmark.v1": "fe2o3.async-copy-benchmark.v1",
+    "fe2o3.d2d-copy-benchmark.v1": "fe2o3.d2d-copy-benchmark.v1",
     "fe2o3.xgmi-peer-benchmark.v1": "fe2o3.xgmi-peer-benchmark.v1",
 }
 
@@ -76,6 +83,14 @@ SCHEMA_CONTEXT_FIELDS = {
         "kfd_profile",
         "sdma_manifest_sha256",
     ),
+    "fe2o3.d2d-copy-benchmark.v1": (
+        "kfd_profile",
+        "sdma_manifest_sha256",
+        "d2d_window_manifest_sha256",
+        "timing",
+        "setup_validation",
+        "measurement",
+    ),
     "fe2o3.xgmi-peer-benchmark.v1": (
         "kfd_surface",
         "timing",
@@ -94,6 +109,19 @@ CONTEXT_UNIQUE_ID = re.compile(r"0x[0-9a-f]{16}")
 CANONICAL_SHA256 = re.compile(r"[0-9a-f]{64}")
 CANONICAL_GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
 STRIPED_KFD_PROFILE = re.compile(r"striped(2|4|6|8|10|12|14|16)")
+GFX942_SDMA_MAX_LINEAR_COPY_BYTES = 0x003F_FFE0
+GFX942_D2D_MAX_WINDOW_PACKETS = 63
+GFX942_D2D_MIN_QUALIFICATION_BYTES = (
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES * GFX942_D2D_MAX_WINDOW_PACKETS + 1
+)
+GFX942_D2D_MAX_QUALIFICATION_BYTES = 256 * 1024 * 1024
+GFX942_SDMA_MANIFEST_SHA256 = (
+    "8543f344b4fba5fff152b718ea547e620e931ca01101f32f65828fe1eb9a303b"
+)
+GFX942_D2D_WINDOW_MANIFEST_SHA256 = (
+    "93d1277fe7aa07e0773793a756f4a4797d25e1abd09b5cb7639188a08baaedc7"
+)
+D2D_BANDWIDTH_ROUNDING_TOLERANCE = Decimal("0.000501")
 
 
 class CheckError(Exception):
@@ -185,7 +213,13 @@ def positive_integer(fields: dict[str, str], field: str, *, allow_zero: bool = F
 
 
 def admitted_kfd_profile(profile: str) -> bool:
-    return profile in {"generic", "directional", "engine0", "engine1"} or (
+    return profile in {
+        "generic",
+        "directional",
+        "engine0",
+        "engine1",
+        "same-device-d2d",
+    } or (
         STRIPED_KFD_PROFILE.fullmatch(profile) is not None
     )
 
@@ -212,6 +246,56 @@ def validate_striped_kfd_copy_row(row: dict[str, str], profile: str) -> None:
         raise CheckError("KFD striped row has an unsupported direction methodology")
     if any(field.startswith("combined_") for field in row):
         raise CheckError("KFD striped row must not claim a single combined currentness envelope")
+
+
+def validate_d2d_copy_rows(group: dict[str, dict[str, str]]) -> None:
+    for backend, row in group.items():
+        if row.get("device_index") != "0":
+            raise CheckError(f"D2D {backend} row must use visible device index zero")
+        if not row.get("target", "").startswith("gfx942"):
+            raise CheckError(f"D2D {backend} row must report a gfx942 target")
+        if row.get("xnack") != "disabled":
+            raise CheckError(f"D2D {backend} row must report XNACK disabled")
+        if positive_integer(row, "depth") != 1:
+            raise CheckError(f"D2D {backend} row must use depth one")
+
+    kfd = group["kfd"]
+    copy_bytes = positive_integer(kfd, "bytes")
+    if not (
+        GFX942_D2D_MIN_QUALIFICATION_BYTES
+        <= copy_bytes
+        <= GFX942_D2D_MAX_QUALIFICATION_BYTES
+    ):
+        raise CheckError("D2D row does not exercise the R23 cross-window envelope")
+    packet_count = (
+        copy_bytes + GFX942_SDMA_MAX_LINEAR_COPY_BYTES - 1
+    ) // GFX942_SDMA_MAX_LINEAR_COPY_BYTES
+    window_count = (
+        packet_count + GFX942_D2D_MAX_WINDOW_PACKETS - 1
+    ) // GFX942_D2D_MAX_WINDOW_PACKETS
+    expected = {
+        "packet_count": str(packet_count),
+        "window_count": str(window_count),
+        "doorbells_per_copy": str(window_count),
+        "max_packets_per_window": str(GFX942_D2D_MAX_WINDOW_PACKETS),
+        "validation": "full-source-and-destination-every-round",
+        "teardown": "explicit",
+        "progress": "explicit-flush-then-wait",
+        "timing": "facade-enqueue-flush-through-observed-completion",
+    }
+    for field, value in expected.items():
+        if kfd.get(field) != value:
+            raise CheckError(f"KFD D2D row has invalid {field} methodology")
+
+    for backend, row in group.items():
+        p50 = positive_number(row, "d2d_p50_ns")
+        p95 = positive_number(row, "d2d_p95_ns")
+        if p95 < p50:
+            raise CheckError(f"D2D {backend} p95 latency is below p50 latency")
+        bandwidth = positive_number(row, "d2d_p50_GBps")
+        expected_bandwidth = Decimal(copy_bytes) / p50
+        if abs(bandwidth - expected_bandwidth) > D2D_BANDWIDTH_ROUNDING_TOLERANCE:
+            raise CheckError(f"D2D {backend} bandwidth is inconsistent with bytes and p50")
 
 
 def validate_context(context: dict[str, str], schema: str) -> tuple[str, ...]:
@@ -255,8 +339,31 @@ def validate_context(context: dict[str, str], schema: str) -> tuple[str, ...]:
             raise CheckError("context sdma_manifest_sha256 must be canonical")
         if not admitted_kfd_profile(context["kfd_profile"]):
             raise CheckError("context kfd_profile is unsupported")
-        if context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE) != "directional":
+        if (
+            schema
+            in {
+                "fe2o3.async-copy-benchmark.v1",
+                "fe2o3.async-copy-multi-device-benchmark.v1",
+            }
+            and context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE)
+            != "directional"
+        ):
             raise CheckError("context kfd_multi_profile must be directional")
+        if schema == "fe2o3.d2d-copy-benchmark.v1":
+            if context["sdma_manifest_sha256"] != GFX942_SDMA_MANIFEST_SHA256:
+                raise CheckError("D2D context has the wrong SDMA manifest identity")
+            if (
+                context["d2d_window_manifest_sha256"]
+                != GFX942_D2D_WINDOW_MANIFEST_SHA256
+            ):
+                raise CheckError("D2D context has the wrong window manifest identity")
+            if (
+                context["kfd_profile"] != "same-device-d2d"
+                or context["timing"] != "submit-through-observed-completion"
+                or context["setup_validation"] != "outside-timing"
+                or context["measurement"] != "runtime-facade-r23-d2d-window"
+            ):
+                raise CheckError("D2D context has an unsupported timing methodology")
     elif (
         context["kfd_surface"] != "runtime-facade"
         or context["timing"] != "submit-through-observed-completion"
@@ -310,7 +417,15 @@ def validate_phase_evidence(
     schema: str,
 ) -> None:
     max_busy = int(context["max_busy_percent"])
-    device_count = 1 if schema == "fe2o3.async-copy-benchmark.v1" else 2
+    device_count = (
+        1
+        if schema
+        in {
+            "fe2o3.async-copy-benchmark.v1",
+            "fe2o3.d2d-copy-benchmark.v1",
+        }
+        else 2
+    )
     expected: set[tuple[str, str, str]] = set()
     for key, group in groups.items():
         for backend in group:
@@ -449,10 +564,16 @@ def check_rows(
             )
         kfd = group["kfd"]
         kfd_methodology = matched_methodology(kfd, schema)
-        if schema == "fe2o3.async-copy-benchmark.v1":
+        if schema in {
+            "fe2o3.async-copy-benchmark.v1",
+            "fe2o3.d2d-copy-benchmark.v1",
+        }:
             if kfd.get("profile") != context["kfd_profile"]:
                 raise CheckError("KFD copy row profile does not match benchmark context")
-            validate_striped_kfd_copy_row(kfd, context["kfd_profile"])
+            if schema == "fe2o3.async-copy-benchmark.v1":
+                validate_striped_kfd_copy_row(kfd, context["kfd_profile"])
+            else:
+                validate_d2d_copy_rows(group)
         elif schema == "fe2o3.async-copy-multi-device-benchmark.v1":
             if context.get("kfd_multi_profile", LEGACY_KFD_MULTI_PROFILE) != "directional":
                 raise CheckError("multi-device KFD copy requires the directional profile")
@@ -481,7 +602,11 @@ def check_rows(
                 raise CheckError(f"backend {backend} does not match context statistics")
             row_ids = (
                 (row["unique_id"],)
-                if schema == "fe2o3.async-copy-benchmark.v1"
+                if schema
+                in {
+                    "fe2o3.async-copy-benchmark.v1",
+                    "fe2o3.d2d-copy-benchmark.v1",
+                }
                 else tuple(row["unique_ids"].split(","))
             )
             expected_ids = context_ids[:1] if len(row_ids) == 1 else context_ids

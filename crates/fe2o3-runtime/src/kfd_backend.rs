@@ -2,10 +2,11 @@
 //!
 //! The admitted gfx942 KFD surface owns explicit process VMs and native queues.
 //! The single-device adapter owns a bounded set of independent compute queues
-//! and directional SDMA queues. The separate two-device adapter retains exact
-//! directional XGMI routes for copy-only peer execution. Atomic and collective
-//! execution is fail-closed unless a separate unsafe authority enumerates and
-//! authorizes the exact semantic contract carried by each launch.
+//! and persistent SDMA queues for host/device and same-device copies. The
+//! separate two-device adapter retains exact directional XGMI routes for
+//! copy-only peer execution. Atomic and collective execution is fail-closed
+//! unless a separate unsafe authority enumerates and authorizes the exact
+//! semantic contract carried by each launch.
 
 use core::fmt;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -23,7 +24,8 @@ use fe2o3_kfd::topology::Gfx942XgmiRouteV1;
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
     ComputeAqlQueueSessionV1, DeviceSelector, GFX942_MAX_FIXED_DISPATCH_DATA_V1,
-    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
+    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
+    GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
     GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
     Gfx942DeviceMemoryUnmappedV1, Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
@@ -67,7 +69,9 @@ use kfd_backend_sdma_seam::ScriptedSdmaDriverV1;
 use kfd_backend_sdma_seam::{
     DirectionalSdmaCompletedOwnerV1, DirectionalSdmaCopyRequestV1, DirectionalSdmaDeviceOwnerV1,
     DirectionalSdmaExecutionFailureV1, DirectionalSdmaPairOwnerV1, DirectionalSdmaPollV1,
-    DirectionalSdmaSubmissionOwnerV1, SdmaBufferOwnerV1, SdmaRecycleFailureV1,
+    DirectionalSdmaSubmissionOwnerV1, SameDeviceSdmaCompletedOwnerV1, SameDeviceSdmaCopyRequestV1,
+    SameDeviceSdmaExecutionFailureV1, SameDeviceSdmaPairOwnerV1, SameDeviceSdmaPollV1,
+    SameDeviceSdmaSubmissionOwnerV1, SdmaBufferOwnerV1, SdmaRecycleFailureV1,
     SdmaTransitionFailureV1,
 };
 
@@ -89,6 +93,12 @@ const MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1: usize = 256;
 const MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1: usize = MAX_COOPERATIVE_COPY_DEPENDENCY_DEPTH_V1;
 const MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1: usize = MAX_RUNTIME_DEPENDENCIES_V1;
 const KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1: u64 = 1;
+const _: () = assert!(
+    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1
+        == GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1
+);
+const KFD_RUNTIME_MAX_SDMA_WINDOW_PACKETS_V1: usize =
+    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1;
 
 /// Maximum host-staged size of one logical direct-KFD allocation.
 pub const KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1: u64 = 256 * 1024 * 1024;
@@ -626,20 +636,23 @@ struct ActiveSdmaCopyV1 {
     byte_len: u64,
     completed_bytes: u64,
     window_bytes: u64,
-    window_requests: Box<[DirectionalSdmaCopyRequestV1]>,
+    window_requests: Box<[DirectSdmaCopyRequestV1]>,
     dependencies: Vec<u64>,
     dependency_cursor: usize,
     dependency_depth: usize,
-    phase: ActiveDirectionalSdmaPhaseV1,
+    phase: ActiveSdmaPhaseV1,
 }
 
 #[derive(Debug)]
-enum ActiveDirectionalSdmaPhaseV1 {
+enum ActiveSdmaPhaseV1 {
     Ready,
-    Published(Box<DirectionalSdmaSubmissionOwnerV1>),
+    DirectionalPublished(Box<DirectionalSdmaSubmissionOwnerV1>),
+    SameDevicePublished(Box<SameDeviceSdmaSubmissionOwnerV1>),
 }
 
-#[allow(dead_code)]
+// Terminal transitions must retain native custody without allocating in the
+// failure path, so these move-only owners intentionally remain inline.
+#[allow(dead_code, clippy::large_enum_variant)]
 enum KfdRuntimeTerminalSdmaCustodyV1 {
     Buffer(SdmaBufferOwnerV1),
     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
@@ -655,6 +668,9 @@ enum KfdRuntimeTerminalSdmaCustodyV1 {
         device: DirectionalSdmaDeviceOwnerV1,
         host: SdmaBufferOwnerV1,
     },
+    SameDevicePair(SameDeviceSdmaPairOwnerV1),
+    SameDeviceCompleted(SameDeviceSdmaCompletedOwnerV1),
+    SameDevice(kfd_backend_sdma_seam::NativeSameDeviceSdmaTerminalCustodyV1),
     #[cfg(test)]
     Scripted(kfd_backend_sdma_seam::ScriptedTerminalCustodyV1),
 }
@@ -739,6 +755,25 @@ fn direct_sdma_direction_v1(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectSdmaCopyKindV1 {
+    Directional(Gfx942PersistentSdmaDirectionV1),
+    SameDevice,
+}
+
+fn direct_sdma_copy_kind_v1(
+    source: RuntimeMemoryKindV1,
+    destination: RuntimeMemoryKindV1,
+) -> Option<DirectSdmaCopyKindV1> {
+    direct_sdma_direction_v1(source, destination)
+        .map(DirectSdmaCopyKindV1::Directional)
+        .or_else(|| {
+            (source == RuntimeMemoryKindV1::DeviceLocal
+                && destination == RuntimeMemoryKindV1::DeviceLocal)
+                .then_some(DirectSdmaCopyKindV1::SameDevice)
+        })
+}
+
 fn directional_sdma_allocation_ids_v1(
     active: &ActiveSdmaCopyV1,
     direction: Gfx942PersistentSdmaDirectionV1,
@@ -751,14 +786,26 @@ fn directional_sdma_allocation_ids_v1(
 
 #[derive(Debug, Eq, PartialEq)]
 struct DirectSdmaWindowPlanV1 {
-    requests: Box<[DirectionalSdmaCopyRequestV1]>,
+    requests: Box<[DirectSdmaCopyRequestV1]>,
     copy_bytes: u64,
 }
 
-fn direct_sdma_window_plan_v1(
-    active: &ActiveSdmaCopyV1,
-    direction: Gfx942PersistentSdmaDirectionV1,
-) -> Option<DirectSdmaWindowPlanV1> {
+enum EitherSdmaWindowRequestsV1 {
+    Directional(
+        Gfx942PersistentSdmaDirectionV1,
+        Box<[DirectionalSdmaCopyRequestV1]>,
+    ),
+    SameDevice(Box<[SameDeviceSdmaCopyRequestV1]>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectSdmaCopyRequestV1 {
+    source_offset: u64,
+    destination_offset: u64,
+    copy_bytes: u32,
+}
+
+fn direct_sdma_window_plan_v1(active: &ActiveSdmaCopyV1) -> Option<DirectSdmaWindowPlanV1> {
     let mut remaining = active.byte_len.checked_sub(active.completed_bytes)?;
     if remaining == 0 {
         return None;
@@ -767,8 +814,7 @@ fn direct_sdma_window_plan_v1(
     let mut destination_offset = active
         .destination_offset
         .checked_add(active.completed_bytes)?;
-    let max_window_packets =
-        u64::try_from(GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1).ok()?;
+    let max_window_packets = u64::try_from(KFD_RUNTIME_MAX_SDMA_WINDOW_PACKETS_V1).ok()?;
     let request_capacity = usize::try_from(
         remaining
             .div_ceil(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))
@@ -778,18 +824,12 @@ fn direct_sdma_window_plan_v1(
     let mut requests = Vec::new();
     requests.try_reserve_exact(request_capacity).ok()?;
     let mut window_bytes = 0_u64;
-    while remaining != 0
-        && requests.len() < GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1
-    {
+    while remaining != 0 && requests.len() < KFD_RUNTIME_MAX_SDMA_WINDOW_PACKETS_V1 {
         let copy_bytes =
             u32::try_from(remaining.min(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))).ok()?;
-        let (host_offset, device_offset) = match direction {
-            Gfx942PersistentSdmaDirectionV1::HostToDevice => (source_offset, destination_offset),
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost => (destination_offset, source_offset),
-        };
-        requests.push(DirectionalSdmaCopyRequestV1 {
-            host_offset,
-            device_offset,
+        requests.push(DirectSdmaCopyRequestV1 {
+            source_offset,
+            destination_offset,
             copy_bytes,
         });
         let copy_bytes = u64::from(copy_bytes);
@@ -802,6 +842,43 @@ fn direct_sdma_window_plan_v1(
         requests: requests.into_boxed_slice(),
         copy_bytes: window_bytes,
     })
+}
+
+fn directional_sdma_requests_v1(
+    requests: &[DirectSdmaCopyRequestV1],
+    direction: Gfx942PersistentSdmaDirectionV1,
+) -> Option<Box<[DirectionalSdmaCopyRequestV1]>> {
+    let mut directional = Vec::new();
+    directional.try_reserve_exact(requests.len()).ok()?;
+    directional.extend(requests.iter().map(|request| {
+        let (host_offset, device_offset) = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                (request.source_offset, request.destination_offset)
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                (request.destination_offset, request.source_offset)
+            }
+        };
+        DirectionalSdmaCopyRequestV1 {
+            host_offset,
+            device_offset,
+            copy_bytes: request.copy_bytes,
+        }
+    }));
+    Some(directional.into_boxed_slice())
+}
+
+fn same_device_sdma_requests_v1(
+    requests: &[DirectSdmaCopyRequestV1],
+) -> Option<Box<[SameDeviceSdmaCopyRequestV1]>> {
+    let mut same_device = Vec::new();
+    same_device.try_reserve_exact(requests.len()).ok()?;
+    same_device.extend(requests.iter().map(|request| SameDeviceSdmaCopyRequestV1 {
+        source_offset: request.source_offset,
+        destination_offset: request.destination_offset,
+        copy_bytes: request.copy_bytes,
+    }));
+    Some(same_device.into_boxed_slice())
 }
 
 impl fmt::Debug for ActiveSubmissionV1 {
@@ -1935,7 +2012,11 @@ impl KfdRuntimeBackendV1 {
             stream,
             |candidate| {
                 self.active_sdma.get(&candidate).is_some_and(|copy| {
-                    matches!(copy.phase, ActiveDirectionalSdmaPhaseV1::Published(_))
+                    matches!(
+                        copy.phase,
+                        ActiveSdmaPhaseV1::DirectionalPublished(_)
+                            | ActiveSdmaPhaseV1::SameDevicePublished(_)
+                    )
                 })
             },
         )
@@ -2324,6 +2405,9 @@ impl KfdRuntimeBackendV1 {
                     host,
                 } => KfdRuntimeTerminalSdmaCustodyV1::Retirement { failure, host },
             },
+            kfd_backend_sdma_seam::SdmaTerminalCustodyV1::NativeSameDevice(custody) => {
+                KfdRuntimeTerminalSdmaCustodyV1::SameDevice(custody)
+            }
             #[cfg(test)]
             kfd_backend_sdma_seam::SdmaTerminalCustodyV1::Scripted(custody) => {
                 KfdRuntimeTerminalSdmaCustodyV1::Scripted(custody)
@@ -2346,6 +2430,22 @@ impl KfdRuntimeBackendV1 {
             .ok_or("SDMA destination allocation disappeared")?;
         direct_sdma_direction_v1(source.kind, destination.kind)
             .ok_or("unsupported SDMA direction reached publication")
+    }
+
+    fn direct_sdma_copy_kind_for_active_v1(
+        &self,
+        active: &ActiveSdmaCopyV1,
+    ) -> Result<DirectSdmaCopyKindV1, &'static str> {
+        let source = self
+            .allocations
+            .get(&active.source)
+            .ok_or("SDMA source allocation disappeared")?;
+        let destination = self
+            .allocations
+            .get(&active.destination)
+            .ok_or("SDMA destination allocation disappeared")?;
+        direct_sdma_copy_kind_v1(source.kind, destination.kind)
+            .ok_or("unsupported SDMA copy kind reached publication")
     }
 
     fn take_directional_sdma_storage_v1(
@@ -2440,9 +2540,111 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
+    fn take_same_device_sdma_storage_v1(
+        &mut self,
+        active: &ActiveSdmaCopyV1,
+        owner: KfdRuntimeSdmaInFlightV1,
+    ) -> Result<SameDeviceSdmaPairOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if active.source == active.destination {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "same-device persistent SDMA requires distinct allocation identities",
+            ));
+        }
+        let source_ready = self.allocations.get(&active.source).is_some_and(|record| {
+            record
+                .sdma_storage
+                .is_available_for_kind_v1(RuntimeMemoryKindV1::DeviceLocal)
+        });
+        let destination_ready = self
+            .allocations
+            .get(&active.destination)
+            .is_some_and(|record| {
+                record
+                    .sdma_storage
+                    .is_available_for_kind_v1(RuntimeMemoryKindV1::DeviceLocal)
+            });
+        if !source_ready || !destination_ready {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "same-device persistent SDMA storage is retained by pending work",
+            ));
+        }
+        let source = match std::mem::replace(
+            &mut self
+                .allocations
+                .get_mut(&active.source)
+                .expect("preflighted same-device source remains indexed")
+                .sdma_storage,
+            KfdRuntimeSdmaStorageV1::InFlight(owner),
+        ) {
+            KfdRuntimeSdmaStorageV1::Device(source) => *source,
+            _ => unreachable!("preflighted same-device source remains available"),
+        };
+        let destination = match std::mem::replace(
+            &mut self
+                .allocations
+                .get_mut(&active.destination)
+                .expect("preflighted same-device destination remains indexed")
+                .sdma_storage,
+            KfdRuntimeSdmaStorageV1::InFlight(owner),
+        ) {
+            KfdRuntimeSdmaStorageV1::Device(destination) => *destination,
+            _ => unreachable!("preflighted same-device destination remains available"),
+        };
+        Ok(SameDeviceSdmaPairOwnerV1 {
+            source,
+            destination,
+        })
+    }
+
+    fn restore_same_device_sdma_storage_v1(
+        &mut self,
+        active: &ActiveSdmaCopyV1,
+        owner: KfdRuntimeSdmaInFlightV1,
+        pair: SameDeviceSdmaPairOwnerV1,
+        destination_dirty: bool,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let source_slot_matches = self.allocations.get(&active.source).is_some_and(|record| {
+            matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::InFlight(actual) if actual == owner)
+        });
+        let destination_slot_matches = self
+            .allocations
+            .get(&active.destination)
+            .is_some_and(|record| {
+                matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::InFlight(actual) if actual == owner)
+            });
+        if !source_slot_matches || !destination_slot_matches {
+            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::SameDevicePair(
+                pair,
+            ));
+            return Err(self.terminal_error(
+                "same-device persistent SDMA restoration slot changed unexpectedly",
+            ));
+        }
+        self.allocations
+            .get_mut(&active.source)
+            .expect("same-device source remains indexed")
+            .sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(pair.source));
+        self.allocations
+            .get_mut(&active.destination)
+            .expect("same-device destination remains indexed")
+            .sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(pair.destination));
+        if destination_dirty {
+            let destination = self
+                .allocations
+                .get_mut(&active.destination)
+                .expect("active same-device destination remains indexed");
+            destination.sdma_shadow_dirty = true;
+            destination.content_sha256 = None;
+            destination.last_full_host_write = None;
+        }
+        Ok(())
+    }
+
     fn finish_sdma_copy_v1(
         &mut self,
-        mut active: ActiveSdmaCopyV1,
+        active: ActiveSdmaCopyV1,
         completed: DirectionalSdmaCompletedOwnerV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let direction = match self.direct_sdma_direction_for_active_v1(&active) {
@@ -2454,12 +2656,22 @@ impl KfdRuntimeBackendV1 {
                 return Err(self.terminal_error(detail));
             }
         };
+        let expected_offsets = active
+            .window_requests
+            .first()
+            .map(|expected| match direction {
+                Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                    (expected.source_offset, expected.destination_offset)
+                }
+                Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                    (expected.destination_offset, expected.source_offset)
+                }
+            });
         if completed.direction() != direction
             || u64::from(completed.copy_bytes()) != active.window_bytes
             || completed.packet_count() != active.window_requests.len()
-            || active.window_requests.first().is_none_or(|expected| {
-                completed.host_offset() != expected.host_offset
-                    || completed.device_offset() != expected.device_offset
+            || expected_offsets.is_none_or(|(host_offset, device_offset)| {
+                completed.host_offset() != host_offset || completed.device_offset() != device_offset
             })
         {
             self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Completed(
@@ -2492,6 +2704,58 @@ impl KfdRuntimeBackendV1 {
             pair,
             true,
         )?;
+        self.finish_sdma_window_progress_v1(active)
+    }
+
+    fn finish_same_device_sdma_copy_v1(
+        &mut self,
+        active: ActiveSdmaCopyV1,
+        completed: SameDeviceSdmaCompletedOwnerV1,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.direct_sdma_copy_kind_for_active_v1(&active) != Ok(DirectSdmaCopyKindV1::SameDevice)
+            || u64::from(completed.copy_bytes()) != active.window_bytes
+            || completed.packet_count() != active.window_requests.len()
+            || active.window_requests.first().is_none_or(|expected| {
+                completed.source_offset() != expected.source_offset
+                    || completed.destination_offset() != expected.destination_offset
+            })
+        {
+            self.retain_terminal_sdma_custody_v1(
+                KfdRuntimeTerminalSdmaCustodyV1::SameDeviceCompleted(completed),
+            );
+            return Err(self.terminal_error(
+                "same-device persistent SDMA completion metadata changed unexpectedly",
+            ));
+        }
+        let pair =
+            match self.directional_sdma_ops_v1().retire_same_device(completed) {
+                Ok(pair) => pair,
+                Err(SdmaTransitionFailureV1::Retryable { custody, .. }) => {
+                    self.retain_terminal_sdma_custody_v1(
+                        KfdRuntimeTerminalSdmaCustodyV1::SameDeviceCompleted(custody),
+                    );
+                    return Err(self
+                        .terminal_error("same-device persistent SDMA frontier retirement failed"));
+                }
+                Err(SdmaTransitionFailureV1::ProcessTeardown { custody, .. }) => {
+                    self.retain_sdma_seam_terminal_v1(custody);
+                    return Err(self
+                        .terminal_error("same-device persistent SDMA frontier retirement failed"));
+                }
+            };
+        self.restore_same_device_sdma_storage_v1(
+            &active,
+            KfdRuntimeSdmaInFlightV1::Async(active.id),
+            pair,
+            true,
+        )?;
+        self.finish_sdma_window_progress_v1(active)
+    }
+
+    fn finish_sdma_window_progress_v1(
+        &mut self,
+        mut active: ActiveSdmaCopyV1,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         active.completed_bytes = active
             .completed_bytes
             .checked_add(active.window_bytes)
@@ -2499,7 +2763,7 @@ impl KfdRuntimeBackendV1 {
         if active.completed_bytes < active.byte_len {
             // Poll only observes and returns exact custody. Explicit flush owns
             // every continuation publication.
-            active.phase = ActiveDirectionalSdmaPhaseV1::Ready;
+            active.phase = ActiveSdmaPhaseV1::Ready;
             active.window_bytes = 0;
             active.window_requests = Box::new([]);
             self.active_sdma.insert(active.id, active);
@@ -2580,8 +2844,12 @@ impl KfdRuntimeBackendV1 {
 
     fn publish_sdma_copy_v1(
         &mut self,
-        mut active: ActiveSdmaCopyV1,
+        active: ActiveSdmaCopyV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let copy_kind = match self.direct_sdma_copy_kind_for_active_v1(&active) {
+            Ok(copy_kind) => copy_kind,
+            Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
+        };
         for allocation in [active.source, active.destination] {
             if let Err(failure) = self.synchronize_native_allocation_v1(allocation) {
                 if active.completed_bytes != 0 {
@@ -2602,31 +2870,44 @@ impl KfdRuntimeBackendV1 {
                 };
             }
         }
-        let direction = match self.direct_sdma_direction_for_active_v1(&active) {
-            Ok(direction) => direction,
-            Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
-        };
-        let Some(window) = direct_sdma_window_plan_v1(&active, direction) else {
+        let Some(window) = direct_sdma_window_plan_v1(&active) else {
             return Ok(self.fail_unpublished_sdma_copy_v1(active));
         };
-        // Duplicate only bounded, addressless descriptors before moving native
-        // allocation custody into the publication transition.
-        let mut publication_requests = Vec::new();
-        if publication_requests
-            .try_reserve_exact(window.requests.len())
-            .is_err()
-        {
+        let publication = match copy_kind {
+            DirectSdmaCopyKindV1::Directional(direction) => {
+                directional_sdma_requests_v1(&window.requests, direction)
+                    .map(|requests| EitherSdmaWindowRequestsV1::Directional(direction, requests))
+            }
+            DirectSdmaCopyKindV1::SameDevice => same_device_sdma_requests_v1(&window.requests)
+                .map(EitherSdmaWindowRequestsV1::SameDevice),
+        };
+        let Some(publication) = publication else {
             if active.completed_bytes != 0 {
                 self.fail_quiescent_sdma_copy_v1(active);
                 return Err(Self::quiescent_error(
                     KfdRuntimeBackendErrorKindV1::Capacity,
-                    "KFD directional SDMA window metadata allocation failed",
+                    "KFD SDMA window metadata allocation failed",
                 ));
             }
             return Ok(self.fail_unpublished_sdma_copy_v1(active));
+        };
+        match publication {
+            EitherSdmaWindowRequestsV1::Directional(direction, requests) => {
+                self.publish_directional_sdma_window_v1(active, window, direction, requests)
+            }
+            EitherSdmaWindowRequestsV1::SameDevice(requests) => {
+                self.publish_same_device_sdma_window_v1(active, window, requests)
+            }
         }
-        publication_requests.extend_from_slice(&window.requests);
-        let publication_requests = publication_requests.into_boxed_slice();
+    }
+
+    fn publish_directional_sdma_window_v1(
+        &mut self,
+        mut active: ActiveSdmaCopyV1,
+        window: DirectSdmaWindowPlanV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        publication_requests: Box<[DirectionalSdmaCopyRequestV1]>,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let pair = match self.take_directional_sdma_storage_v1(
             &active,
             direction,
@@ -2651,7 +2932,7 @@ impl KfdRuntimeBackendV1 {
             Ok(submission) => {
                 active.window_bytes = window.copy_bytes;
                 active.window_requests = window.requests;
-                active.phase = ActiveDirectionalSdmaPhaseV1::Published(Box::new(submission));
+                active.phase = ActiveSdmaPhaseV1::DirectionalPublished(Box::new(submission));
                 self.active_sdma.insert(active.id, active);
                 Ok(BackendPollV1::Pending)
             }
@@ -2681,6 +2962,64 @@ impl KfdRuntimeBackendV1 {
                     Err(self.terminal_error(detail))
                 }
             },
+        }
+    }
+
+    fn publish_same_device_sdma_window_v1(
+        &mut self,
+        mut active: ActiveSdmaCopyV1,
+        window: DirectSdmaWindowPlanV1,
+        publication_requests: Box<[SameDeviceSdmaCopyRequestV1]>,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let pair = match self
+            .take_same_device_sdma_storage_v1(&active, KfdRuntimeSdmaInFlightV1::Async(active.id))
+        {
+            Ok(custody) => custody,
+            Err(failure) if active.completed_bytes != 0 => {
+                self.fail_quiescent_sdma_copy_v1(active);
+                return Err(match failure {
+                    RuntimeBackendFailureV1::Rejected(error) => {
+                        RuntimeBackendFailureV1::Quiescent(error)
+                    }
+                    failure => failure,
+                });
+            }
+            Err(_) => return Ok(self.fail_unpublished_sdma_copy_v1(active)),
+        };
+        match self
+            .directional_sdma_ops_v1()
+            .submit_same_device(pair, publication_requests)
+        {
+            Ok(submission) => {
+                active.window_bytes = window.copy_bytes;
+                active.window_requests = window.requests;
+                active.phase = ActiveSdmaPhaseV1::SameDevicePublished(Box::new(submission));
+                self.active_sdma.insert(active.id, active);
+                Ok(BackendPollV1::Pending)
+            }
+            Err(SdmaTransitionFailureV1::Retryable { detail, custody }) => {
+                let detail = format!("KFD same-device SDMA publication: {detail}");
+                self.restore_same_device_sdma_storage_v1(
+                    &active,
+                    KfdRuntimeSdmaInFlightV1::Async(active.id),
+                    custody,
+                    false,
+                )?;
+                if active.completed_bytes != 0 {
+                    self.fail_quiescent_sdma_copy_v1(active);
+                    Err(Self::quiescent_error(
+                        KfdRuntimeBackendErrorKindV1::Native,
+                        detail,
+                    ))
+                } else {
+                    Ok(self.fail_unpublished_sdma_copy_v1(active))
+                }
+            }
+            Err(SdmaTransitionFailureV1::ProcessTeardown { detail, custody }) => {
+                let detail = format!("KFD same-device SDMA publication: {detail}");
+                self.retain_sdma_seam_terminal_v1(custody);
+                Err(self.terminal_error(detail))
+            }
         }
     }
 
@@ -6612,41 +6951,83 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             return self.observe_pending_compute_v1(pending);
         }
         if let Some(mut active) = self.active_sdma.remove(&submission) {
-            let phase = std::mem::replace(&mut active.phase, ActiveDirectionalSdmaPhaseV1::Ready);
-            let ActiveDirectionalSdmaPhaseV1::Published(native_submission) = phase else {
-                return self.observe_unpublished_sdma_copy_v1(active);
-            };
-            let poll = self.directional_sdma_ops_v1().poll(*native_submission);
-            return match poll {
-                Ok(DirectionalSdmaPollV1::Pending(native_submission)) => {
-                    active.phase =
-                        ActiveDirectionalSdmaPhaseV1::Published(Box::new(native_submission));
-                    self.active_sdma.insert(submission, active);
-                    Ok(BackendPollV1::Pending)
-                }
-                Ok(DirectionalSdmaPollV1::Completed(completed)) => {
-                    self.finish_sdma_copy_v1(active, completed)
-                }
-                Err(failure) => match failure {
-                    DirectionalSdmaExecutionFailureV1::Retryable {
-                        detail,
-                        submission: native_submission,
-                    } => {
-                        active.phase =
-                            ActiveDirectionalSdmaPhaseV1::Published(Box::new(native_submission));
-                        self.active_sdma.insert(submission, active);
-                        Err(Self::rejected(
-                            KfdRuntimeBackendErrorKindV1::Native,
-                            format!("KFD directional SDMA completion observation: {detail}"),
-                        ))
+            let phase = std::mem::replace(&mut active.phase, ActiveSdmaPhaseV1::Ready);
+            return match phase {
+                ActiveSdmaPhaseV1::Ready => self.observe_unpublished_sdma_copy_v1(active),
+                ActiveSdmaPhaseV1::DirectionalPublished(native_submission) => {
+                    let poll = self.directional_sdma_ops_v1().poll(*native_submission);
+                    match poll {
+                        Ok(DirectionalSdmaPollV1::Pending(native_submission)) => {
+                            active.phase = ActiveSdmaPhaseV1::DirectionalPublished(Box::new(
+                                native_submission,
+                            ));
+                            self.active_sdma.insert(submission, active);
+                            Ok(BackendPollV1::Pending)
+                        }
+                        Ok(DirectionalSdmaPollV1::Completed(completed)) => {
+                            self.finish_sdma_copy_v1(active, completed)
+                        }
+                        Err(DirectionalSdmaExecutionFailureV1::Retryable {
+                            detail,
+                            submission: native_submission,
+                        }) => {
+                            active.phase = ActiveSdmaPhaseV1::DirectionalPublished(Box::new(
+                                native_submission,
+                            ));
+                            self.active_sdma.insert(submission, active);
+                            Err(Self::rejected(
+                                KfdRuntimeBackendErrorKindV1::Native,
+                                format!("KFD directional SDMA completion observation: {detail}"),
+                            ))
+                        }
+                        Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                            detail,
+                            custody,
+                        }) => {
+                            self.retain_sdma_seam_terminal_v1(custody);
+                            Err(self.terminal_error(format!(
+                                "KFD directional SDMA completion observation: {detail}"
+                            )))
+                        }
                     }
-                    DirectionalSdmaExecutionFailureV1::ProcessTeardown { detail, custody } => {
-                        self.retain_sdma_seam_terminal_v1(custody);
-                        Err(self.terminal_error(format!(
-                            "KFD directional SDMA completion observation: {detail}"
-                        )))
+                }
+                ActiveSdmaPhaseV1::SameDevicePublished(native_submission) => {
+                    let poll = self
+                        .directional_sdma_ops_v1()
+                        .poll_same_device(*native_submission);
+                    match poll {
+                        Ok(SameDeviceSdmaPollV1::Pending(native_submission)) => {
+                            active.phase =
+                                ActiveSdmaPhaseV1::SameDevicePublished(Box::new(native_submission));
+                            self.active_sdma.insert(submission, active);
+                            Ok(BackendPollV1::Pending)
+                        }
+                        Ok(SameDeviceSdmaPollV1::Completed(completed)) => {
+                            self.finish_same_device_sdma_copy_v1(active, completed)
+                        }
+                        Err(SameDeviceSdmaExecutionFailureV1::Retryable {
+                            detail,
+                            submission: native_submission,
+                        }) => {
+                            active.phase =
+                                ActiveSdmaPhaseV1::SameDevicePublished(Box::new(native_submission));
+                            self.active_sdma.insert(submission, active);
+                            Err(Self::rejected(
+                                KfdRuntimeBackendErrorKindV1::Native,
+                                format!("KFD same-device SDMA completion observation: {detail}"),
+                            ))
+                        }
+                        Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                            detail,
+                            custody,
+                        }) => {
+                            self.retain_sdma_seam_terminal_v1(custody);
+                            Err(self.terminal_error(format!(
+                                "KFD same-device SDMA completion observation: {detail}"
+                            )))
+                        }
                     }
-                },
+                }
             };
         }
         let lane = self.active_compute_lane_v1(submission).ok_or_else(|| {
@@ -11590,12 +11971,12 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             .get(&destination.allocation)
             .expect("admitted destination remains indexed")
             .kind;
-        if direct_sdma_direction_v1(source_kind, destination_kind).is_none() {
+        let Some(copy_kind) = direct_sdma_copy_kind_v1(source_kind, destination_kind) else {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
-                "direct KFD copy supports only host-to-device or device-to-host direction",
+                "direct KFD copy supports H2D, D2H, or same-device D2D",
             ));
-        }
+        };
         self.require_submission_capacity_v1()?;
         if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
             return Err(Self::capacity("KFD copy dependency capacity exceeded"));
@@ -11810,7 +12191,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             dependencies: dependency_submissions,
             dependency_cursor: 0,
             dependency_depth,
-            phase: ActiveDirectionalSdmaPhaseV1::Ready,
+            phase: ActiveSdmaPhaseV1::Ready,
         };
         self.retain_active_sdma_stream_v1(stream, id, new_active_sdma_stream);
         self.stream_submission_tails.insert(stream, id);
@@ -11819,15 +12200,17 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
                 .get(submission)
                 .is_some_and(|record| record.status == BackendPollV1::Succeeded)
         });
-        let storage_is_clean =
+        let preparation_is_ready =
             [source.allocation, destination.allocation]
                 .into_iter()
                 .all(|allocation| {
                     self.allocations.get(&allocation).is_some_and(|record| {
-                        !record.sdma_shadow_dirty && record.native_dirty.is_empty()
+                        record.native_dirty.is_empty()
+                            && (copy_kind == DirectSdmaCopyKindV1::SameDevice
+                                || !record.sdma_shadow_dirty)
                     })
                 });
-        if all_ready && storage_is_clean {
+        if all_ready && preparation_is_ready {
             self.publish_sdma_copy_v1(active)?;
         } else {
             self.active_sdma.insert(id, active);
@@ -11861,7 +12244,7 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             .filter(|submission| {
                 self.active_sdma
                     .get(submission)
-                    .is_some_and(|copy| matches!(copy.phase, ActiveDirectionalSdmaPhaseV1::Ready))
+                    .is_some_and(|copy| matches!(copy.phase, ActiveSdmaPhaseV1::Ready))
             });
         let Some(submission) = compute.into_iter().chain(sdma).min() else {
             return Ok(());
@@ -11879,7 +12262,7 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
                 ));
             }
             if self.active_sdma.get(&submission).is_some_and(|copy| {
-                matches!(copy.phase, ActiveDirectionalSdmaPhaseV1::Ready)
+                matches!(copy.phase, ActiveSdmaPhaseV1::Ready)
                     && copy.dependency_cursor == copy.dependencies.len()
             }) {
                 return Err(Self::rejected(
@@ -11962,8 +12345,11 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
             return Ok(crate::BackendCancellationV1::Cancelled);
         }
         if self.active_sdma.get(&submission).is_some_and(|active| {
-            matches!(active.phase, ActiveDirectionalSdmaPhaseV1::Published(_))
-                || active.completed_bytes != 0
+            matches!(
+                active.phase,
+                ActiveSdmaPhaseV1::DirectionalPublished(_)
+                    | ActiveSdmaPhaseV1::SameDevicePublished(_)
+            ) || active.completed_bytes != 0
         }) {
             return Ok(crate::BackendCancellationV1::TooLate);
         }
@@ -12315,7 +12701,8 @@ mod tests {
     use super::kfd_backend_sdma_seam::{
         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,
         ScriptedExecutionOutcomeV1, ScriptedFailureModeV1, ScriptedRecycleOutcomeV1,
-        ScriptedSdmaStepV1, SdmaTerminalCustodyV1, SdmaTransitionFailureV1,
+        ScriptedSameDeviceExecutionOutcomeV1, ScriptedSdmaStepV1, SdmaTerminalCustodyV1,
+        SdmaTransitionFailureV1,
     };
     use super::*;
 
@@ -12344,6 +12731,16 @@ mod tests {
     ) -> ScriptedSdmaStepV1 {
         ScriptedSdmaStepV1::SubmitWindow {
             direction,
+            requests: requests.into_iter().collect(),
+            outcome,
+        }
+    }
+
+    fn scripted_same_device_submit_window_step_v1(
+        requests: impl IntoIterator<Item = SameDeviceSdmaCopyRequestV1>,
+        outcome: ScriptedFailureModeV1,
+    ) -> ScriptedSdmaStepV1 {
+        ScriptedSdmaStepV1::SubmitSameDeviceWindow {
             requests: requests.into_iter().collect(),
             outcome,
         }
@@ -12394,6 +12791,41 @@ mod tests {
         (backend, stream, host, device)
     }
 
+    fn scripted_same_device_backend_v1(
+        byte_len: usize,
+        steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
+    ) -> (KfdRuntimeBackendV1, u64, u64, u64) {
+        let driver = ScriptedSdmaDriverV1::new(steps);
+        let source_owner = driver.test_device_owner(byte_len);
+        let destination_owner = driver.test_device_owner(byte_len);
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let source = backend.next_id().unwrap();
+        let destination = backend.next_id().unwrap();
+        let record = |storage| AllocationRecordV1 {
+            device: 7,
+            kind: RuntimeMemoryKindV1::DeviceLocal,
+            alignment: 8,
+            bytes: vec![0; byte_len].into(),
+            content_sha256: None,
+            last_full_host_write: None,
+            native_dirty: Vec::new(),
+            sdma_storage: KfdRuntimeSdmaStorageV1::Device(Box::new(storage)),
+            sdma_backed: true,
+            sdma_initialized: true,
+            sdma_shadow_dirty: false,
+        };
+        backend.allocations.insert(source, record(source_owner));
+        backend
+            .allocations
+            .insert(destination, record(destination_owner));
+        backend.staged_context_bytes = (byte_len as u64) * 2;
+        backend.native_available = true;
+        backend.sdma_enabled = true;
+        backend.scripted_sdma = Some(driver);
+        (backend, stream, source, destination)
+    }
+
     fn scripted_copy_regions_v1(
         host: u64,
         device: u64,
@@ -12415,8 +12847,38 @@ mod tests {
         )
     }
 
+    fn scripted_same_device_copy_regions_v1(
+        source: u64,
+        destination: u64,
+        byte_len: u64,
+    ) -> (BackendMemoryRegionV1, BackendMemoryRegionV1) {
+        (
+            BackendMemoryRegionV1 {
+                allocation: source,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len,
+            },
+            BackendMemoryRegionV1 {
+                allocation: destination,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len,
+            },
+        )
+    }
+
     fn scripted_release_steps_v1() -> [ScriptedSdmaStepV1; 3] {
         [
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ]
+    }
+
+    fn scripted_same_device_release_steps_v1() -> [ScriptedSdmaStepV1; 4] {
+        [
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
             ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
             ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
             ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
@@ -12481,6 +12943,32 @@ mod tests {
             .expect("scripted cleanup device remains indexed")
             .sdma_backed = false;
         backend.release_allocation_v1(device).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        let driver = backend.scripted_sdma.as_ref().unwrap();
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 0);
+        assert_eq!(driver.unexpected_drops(), 0);
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    fn clean_scripted_same_device_backend_v1(
+        backend: &mut KfdRuntimeBackendV1,
+        stream: u64,
+        source: u64,
+        destination: u64,
+        submission: Option<u64>,
+    ) {
+        if let Some(submission) = submission {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        for allocation in [source, destination] {
+            backend
+                .allocations
+                .get_mut(&allocation)
+                .expect("scripted same-device cleanup allocation remains indexed")
+                .sdma_backed = false;
+            backend.release_allocation_v1(allocation).unwrap();
+        }
         backend.destroy_stream_v1(stream).unwrap();
         let driver = backend.scripted_sdma.as_ref().unwrap();
         assert!(driver.is_exhausted());
@@ -12710,6 +13198,358 @@ mod tests {
         assert!(!backend.quiescent_sdma_submissions.contains(&submission));
         assert!(backend.active_sdma.is_empty());
         clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
+    }
+
+    #[test]
+    fn scripted_same_device_sdma_completion_restores_pair_and_dirties_only_destination() {
+        let request = SameDeviceSdmaCopyRequestV1 {
+            source_offset: 0,
+            destination_offset: 0,
+            copy_bytes: 8,
+        };
+        let mut steps = vec![
+            scripted_same_device_submit_window_step_v1([request], ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1::Pending),
+            ScriptedSdmaStepV1::PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1::Retryable),
+            ScriptedSdmaStepV1::PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes: None,
+                requests: None,
+                swap_allocations: false,
+            }),
+            ScriptedSdmaStepV1::RetireSameDevice(ScriptedFailureModeV1::Success),
+        ];
+        steps.extend(scripted_same_device_release_steps_v1());
+        let (mut backend, stream, source, destination) = scripted_same_device_backend_v1(8, steps);
+        let expected = [1, 3, 5, 7, 9, 11, 13, 15];
+        match &mut backend.allocations.get_mut(&source).unwrap().sdma_storage {
+            KfdRuntimeSdmaStorageV1::Device(owner) => owner
+                .scripted_bytes_mut()
+                .unwrap()
+                .copy_from_slice(&expected),
+            _ => unreachable!("scripted source starts with device custody"),
+        }
+        let (source_region, destination_region) =
+            scripted_same_device_copy_regions_v1(source, destination, 8);
+        let submission = backend
+            .copy_async_v1(stream, source_region, destination_region, &[])
+            .unwrap();
+        let event = backend.record_event_v1(stream, submission).unwrap();
+
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        assert!(matches!(
+            backend.poll_v1(submission),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Native
+        ));
+        assert!(backend.active_sdma.contains_key(&submission));
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert!(matches!(
+            backend.release_submission_v1(submission),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        backend.release_event_v1(event).unwrap();
+
+        let source_record = &backend.allocations[&source];
+        let destination_record = &backend.allocations[&destination];
+        let source_bytes = match &source_record.sdma_storage {
+            KfdRuntimeSdmaStorageV1::Device(owner) => owner.scripted_bytes().unwrap(),
+            _ => unreachable!("completed source restores device custody"),
+        };
+        let destination_bytes = match &destination_record.sdma_storage {
+            KfdRuntimeSdmaStorageV1::Device(owner) => owner.scripted_bytes().unwrap(),
+            _ => unreachable!("completed destination restores device custody"),
+        };
+        assert_eq!(source_bytes, expected);
+        assert_eq!(destination_bytes, expected);
+        assert!(!source_record.sdma_shadow_dirty);
+        assert!(destination_record.sdma_shadow_dirty);
+        assert_eq!(
+            backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
+            2
+        );
+        clean_scripted_same_device_backend_v1(
+            &mut backend,
+            stream,
+            source,
+            destination,
+            Some(submission),
+        );
+    }
+
+    #[test]
+    fn scripted_same_device_sdma_uses_authoritative_device_content_without_shadow_download() {
+        let request = SameDeviceSdmaCopyRequestV1 {
+            source_offset: 0,
+            destination_offset: 0,
+            copy_bytes: 8,
+        };
+        let mut steps = vec![
+            scripted_same_device_submit_window_step_v1([request], ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::PollSameDevice(ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes: None,
+                requests: None,
+                swap_allocations: false,
+            }),
+            ScriptedSdmaStepV1::RetireSameDevice(ScriptedFailureModeV1::Success),
+        ];
+        steps.extend(scripted_same_device_release_steps_v1());
+        let (mut backend, stream, source, destination) = scripted_same_device_backend_v1(8, steps);
+        let expected = [2, 4, 6, 8, 10, 12, 14, 16];
+        match &mut backend.allocations.get_mut(&source).unwrap().sdma_storage {
+            KfdRuntimeSdmaStorageV1::Device(owner) => owner
+                .scripted_bytes_mut()
+                .unwrap()
+                .copy_from_slice(&expected),
+            _ => unreachable!("scripted source starts with device custody"),
+        }
+        backend
+            .allocations
+            .get_mut(&source)
+            .unwrap()
+            .sdma_shadow_dirty = true;
+        backend
+            .allocations
+            .get_mut(&destination)
+            .unwrap()
+            .sdma_shadow_dirty = true;
+        let (source_region, destination_region) =
+            scripted_same_device_copy_regions_v1(source, destination, 8);
+
+        let submission = backend
+            .copy_async_v1(stream, source_region, destination_region, &[])
+            .unwrap();
+        assert!(matches!(
+            &backend.active_sdma[&submission].phase,
+            ActiveSdmaPhaseV1::SameDevicePublished(_)
+        ));
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        let destination_bytes = match &backend.allocations[&destination].sdma_storage {
+            KfdRuntimeSdmaStorageV1::Device(owner) => owner.scripted_bytes().unwrap(),
+            _ => unreachable!("completed destination restores device custody"),
+        };
+        assert_eq!(destination_bytes, expected);
+        assert!(backend.allocations[&source].sdma_shadow_dirty);
+        assert!(backend.allocations[&destination].sdma_shadow_dirty);
+        clean_scripted_same_device_backend_v1(
+            &mut backend,
+            stream,
+            source,
+            destination,
+            Some(submission),
+        );
+    }
+
+    #[test]
+    fn scripted_same_device_sdma_initial_retry_restores_both_allocations() {
+        let mut steps = vec![scripted_same_device_submit_window_step_v1(
+            [SameDeviceSdmaCopyRequestV1 {
+                source_offset: 0,
+                destination_offset: 0,
+                copy_bytes: 8,
+            }],
+            ScriptedFailureModeV1::Retryable,
+        )];
+        steps.extend(scripted_same_device_release_steps_v1());
+        let (mut backend, stream, source, destination) = scripted_same_device_backend_v1(8, steps);
+        let (source_region, destination_region) =
+            scripted_same_device_copy_regions_v1(source, destination, 8);
+        let submission = backend
+            .copy_async_v1(stream, source_region, destination_region, &[])
+            .unwrap();
+
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Failed {
+                code: COOPERATIVE_COPY_FAILURE_CODE_V1
+            }
+        );
+        for allocation in [source, destination] {
+            assert!(matches!(
+                backend.allocations[&allocation].sdma_storage,
+                KfdRuntimeSdmaStorageV1::Device(_)
+            ));
+            assert!(!backend.allocations[&allocation].sdma_shadow_dirty);
+        }
+        clean_scripted_same_device_backend_v1(
+            &mut backend,
+            stream,
+            source,
+            destination,
+            Some(submission),
+        );
+    }
+
+    #[test]
+    fn scripted_same_device_sdma_clean_retry_after_progress_is_quiescent() {
+        let mut steps = vec![scripted_same_device_submit_window_step_v1(
+            [SameDeviceSdmaCopyRequestV1 {
+                source_offset: 1,
+                destination_offset: 1,
+                copy_bytes: 7,
+            }],
+            ScriptedFailureModeV1::Retryable,
+        )];
+        steps.extend(scripted_same_device_release_steps_v1());
+        let (mut backend, stream, source, destination) = scripted_same_device_backend_v1(8, steps);
+        let dependency = backend.next_id().unwrap();
+        let event = backend.next_id().unwrap();
+        backend.submissions.insert(
+            dependency,
+            SubmissionRecordV1 {
+                stream,
+                status: BackendPollV1::Pending,
+            },
+        );
+        backend.events.insert(
+            event,
+            EventRecordV1 {
+                submission: dependency,
+            },
+        );
+        backend.event_submission_retain_counts.insert(dependency, 1);
+        let (source_region, destination_region) =
+            scripted_same_device_copy_regions_v1(source, destination, 8);
+        let submission = backend
+            .copy_async_v1(stream, source_region, destination_region, &[event])
+            .unwrap();
+        backend
+            .active_sdma
+            .get_mut(&submission)
+            .unwrap()
+            .completed_bytes = 1;
+        backend.submissions.get_mut(&dependency).unwrap().status = BackendPollV1::Succeeded;
+
+        assert!(matches!(
+            backend.flush_stream_v1(stream),
+            Err(RuntimeBackendFailureV1::Quiescent(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Native
+        ));
+        assert!(backend.quiescent_sdma_submissions.contains(&submission));
+        assert!(backend.active_sdma.is_empty());
+        for allocation in [source, destination] {
+            assert!(matches!(
+                backend.allocations[&allocation].sdma_storage,
+                KfdRuntimeSdmaStorageV1::Device(_)
+            ));
+        }
+        backend.release_event_v1(event).unwrap();
+        backend.release_submission_v1(dependency).unwrap();
+        clean_scripted_same_device_backend_v1(
+            &mut backend,
+            stream,
+            source,
+            destination,
+            Some(submission),
+        );
+    }
+
+    #[test]
+    fn scripted_same_device_sdma_prepublication_cancel_preserves_pair() {
+        let steps = scripted_same_device_release_steps_v1();
+        let (mut backend, stream, source, destination) = scripted_same_device_backend_v1(8, steps);
+        let dependency = backend.next_id().unwrap();
+        backend.submissions.insert(
+            dependency,
+            SubmissionRecordV1 {
+                stream,
+                status: BackendPollV1::Pending,
+            },
+        );
+        let event = backend.record_event_v1(stream, dependency).unwrap();
+        let (source_region, destination_region) =
+            scripted_same_device_copy_regions_v1(source, destination, 8);
+        let submission = backend
+            .copy_async_v1(stream, source_region, destination_region, &[event])
+            .unwrap();
+
+        assert_eq!(
+            backend.cancel_v1(submission).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        for allocation in [source, destination] {
+            assert!(matches!(
+                backend.allocations[&allocation].sdma_storage,
+                KfdRuntimeSdmaStorageV1::Device(_)
+            ));
+            assert!(!backend.allocations[&allocation].sdma_shadow_dirty);
+        }
+        backend.release_event_v1(event).unwrap();
+        backend.release_submission_v1(dependency).unwrap();
+        clean_scripted_same_device_backend_v1(
+            &mut backend,
+            stream,
+            source,
+            destination,
+            Some(submission),
+        );
+    }
+
+    #[test]
+    fn scripted_same_device_sdma_identity_changes_are_terminal_and_absorb_pair() {
+        let canonical = SameDeviceSdmaCopyRequestV1 {
+            source_offset: 0,
+            destination_offset: 0,
+            copy_bytes: 8,
+        };
+        let cases = [
+            ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes: Some(7),
+                requests: None,
+                swap_allocations: false,
+            },
+            ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes: None,
+                requests: Some(vec![SameDeviceSdmaCopyRequestV1 {
+                    destination_offset: 1,
+                    ..canonical
+                }]),
+                swap_allocations: false,
+            },
+            ScriptedSameDeviceExecutionOutcomeV1::Completed {
+                copy_bytes: None,
+                requests: None,
+                swap_allocations: true,
+            },
+        ];
+        let cases = cases
+            .into_iter()
+            .chain([ScriptedSameDeviceExecutionOutcomeV1::ProcessTeardown]);
+        for outcome in cases {
+            let steps = [
+                scripted_same_device_submit_window_step_v1(
+                    [canonical],
+                    ScriptedFailureModeV1::Success,
+                ),
+                ScriptedSdmaStepV1::PollSameDevice(outcome),
+            ];
+            let (mut backend, stream, source, destination) =
+                scripted_same_device_backend_v1(8, steps);
+            let (source_region, destination_region) =
+                scripted_same_device_copy_regions_v1(source, destination, 8);
+            let submission = backend
+                .copy_async_v1(stream, source_region, destination_region, &[])
+                .unwrap();
+
+            assert!(matches!(
+                backend.poll_v1(submission),
+                Err(RuntimeBackendFailureV1::Terminal(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
+            ));
+            assert!(backend.terminal);
+            assert!(backend.terminal_sdma_custody.is_some());
+            let driver = backend.scripted_sdma.as_ref().unwrap();
+            assert!(driver.is_exhausted());
+            assert_eq!(driver.live_owner_count(), 2);
+            assert_eq!(driver.unexpected_drops(), 0);
+            disarm_scripted_drop_after_inspection_v1(&mut backend);
+        }
     }
 
     #[test]
@@ -13794,7 +14634,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         backend
@@ -13958,7 +14798,7 @@ mod tests {
         assert_eq!(backend.allocations[&source].native_dirty.len(), 1);
         assert!(matches!(
             backend.active_sdma[&submission].phase,
-            ActiveDirectionalSdmaPhaseV1::Ready
+            ActiveSdmaPhaseV1::Ready
         ));
 
         assert_eq!(
@@ -14086,44 +14926,38 @@ mod tests {
             dependencies: Vec::new(),
             dependency_cursor: 0,
             dependency_depth: 1,
-            phase: ActiveDirectionalSdmaPhaseV1::Ready,
+            phase: ActiveSdmaPhaseV1::Ready,
         };
         let mut window_packet_counts = Vec::new();
         let mut packet_count = 0_usize;
         let mut last_bytes = 0;
         while active.completed_bytes < active.byte_len {
-            let h2d =
-                direct_sdma_window_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::HostToDevice)
-                    .unwrap();
-            let d2h =
-                direct_sdma_window_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::DeviceToHost)
-                    .unwrap();
-            assert_eq!(h2d.copy_bytes, d2h.copy_bytes);
-            assert_eq!(h2d.requests.len(), d2h.requests.len());
-            window_packet_counts.push(h2d.requests.len());
-            for (index, (h2d, d2h)) in h2d.requests.iter().zip(d2h.requests.iter()).enumerate() {
+            let window = direct_sdma_window_plan_v1(&active).unwrap();
+            window_packet_counts.push(window.requests.len());
+            let same_device_requests = same_device_sdma_requests_v1(&window.requests).unwrap();
+            assert_eq!(same_device_requests.len(), window.requests.len());
+            for (index, request) in window.requests.iter().enumerate() {
                 let packet_progress = u64::try_from(index).unwrap() * cap;
                 assert_eq!(
-                    h2d.host_offset,
+                    request.source_offset,
                     11 + active.completed_bytes + packet_progress
                 );
                 assert_eq!(
-                    h2d.device_offset,
+                    request.destination_offset,
                     29 + active.completed_bytes + packet_progress
                 );
                 assert_eq!(
-                    d2h.host_offset,
-                    29 + active.completed_bytes + packet_progress
+                    same_device_requests[index],
+                    SameDeviceSdmaCopyRequestV1 {
+                        source_offset: request.source_offset,
+                        destination_offset: request.destination_offset,
+                        copy_bytes: request.copy_bytes,
+                    }
                 );
-                assert_eq!(
-                    d2h.device_offset,
-                    11 + active.completed_bytes + packet_progress
-                );
-                assert_eq!(h2d.copy_bytes, d2h.copy_bytes);
                 packet_count += 1;
-                last_bytes = h2d.copy_bytes;
+                last_bytes = request.copy_bytes;
             }
-            active.completed_bytes += h2d.copy_bytes;
+            active.completed_bytes += window.copy_bytes;
         }
         assert_eq!(window_packet_counts, [63, 2]);
         assert_eq!(packet_count, 65);
@@ -14157,11 +14991,9 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             };
-            let window =
-                direct_sdma_window_plan_v1(&active, Gfx942PersistentSdmaDirectionV1::HostToDevice)
-                    .unwrap();
+            let window = direct_sdma_window_plan_v1(&active).unwrap();
             assert_eq!(window.requests.len(), expected_packets);
             assert_eq!(window.copy_bytes, expected_bytes);
         }
@@ -14235,7 +15067,7 @@ mod tests {
                 dependencies: vec![dependency],
                 dependency_cursor: 1,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, submission);
@@ -14287,7 +15119,7 @@ mod tests {
                 dependencies: vec![submission],
                 dependency_cursor: 0,
                 dependency_depth: 2,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, dependent);
@@ -14340,7 +15172,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, submission);
@@ -16301,7 +17133,7 @@ mod tests {
                 dependencies: vec![40],
                 dependency_cursor: 0,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, 41);
@@ -16726,7 +17558,7 @@ mod tests {
                 dependencies: vec![40],
                 dependency_cursor: 0,
                 dependency_depth: MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         assert_eq!(
@@ -16779,7 +17611,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, 40);
@@ -16954,7 +17786,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, 40);
@@ -16999,7 +17831,7 @@ mod tests {
                 dependencies: Vec::new(),
                 dependency_cursor: 0,
                 dependency_depth: 1,
-                phase: ActiveDirectionalSdmaPhaseV1::Ready,
+                phase: ActiveSdmaPhaseV1::Ready,
             },
         );
         index_sdma_custody_for_test_v1(&mut backend, 40);
@@ -17009,7 +17841,7 @@ mod tests {
         assert_eq!(backend.active_sdma[&40].completed_bytes, 4);
         assert!(matches!(
             backend.active_sdma[&40].phase,
-            ActiveDirectionalSdmaPhaseV1::Ready
+            ActiveSdmaPhaseV1::Ready
         ));
         assert_eq!(
             backend.cancel_v1(40).unwrap(),

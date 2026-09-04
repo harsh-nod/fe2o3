@@ -309,6 +309,51 @@ persistent compute/XGMI storage, background native progress, hardware
 correctness, and matched performance evidence remain open. It therefore does
 not satisfy this parity profile.
 
+## Current R23 Status
+
+R23 adds same-device D2D to the persistent local SDMA path. Each window moves
+one source-read lease and one destination-write lease from two distinct
+device-local allocation owners onto the fixed H2D child of the exact R19/R22
+directional queue pair. Admission binds one device, VM, parent queue
+occurrence, child queue occurrence, allocation generation, and two distinct
+storage identities. Identical allocations, overlapping mapped GPU ranges,
+noncanonical packet rosters, and windows outside one through 63 packets reject
+before native publication.
+
+One accepted window performs one release write-pointer publication and one
+doorbell. Poll is observation-only, and pending or bounded-timeout outcomes
+retain both allocation owners and both published leases. Completion must
+authenticate the exact aggregate offsets, byte length, packet count, and lower
+ticket record before either owner can advance. The two completed leases settle
+as a pair, and exact paired frontier retirement is required before both native
+allocations return to the runtime. A mismatch after possible publication
+quarantines both owners and poisons the session; no source or destination
+prefix is independently released.
+
+The public runtime facade derives D2D from two device-local regions, reuses the
+R22 packet and 63-packet window planner, restores paired custody after every
+window, and marks only the destination shadow device-dirty after authenticated
+completion and retirement. Continuations remain caller-driven through
+`flush_stream`. Native-neutral KFD and scripted facade tests cover success,
+retry, timeout, substitution, retirement failure, cleanup, and terminal
+containment. The independent executable model has 24 focused tests. Its
+abstract Verus artifact adds 46 obligations and 28 rejected mutations for
+pinned totals of 460 obligations and 256 rejected mutations. There is no
+theorem connecting those artifacts to executable Rust, CPU memory ordering,
+SDMA firmware, or hardware execution.
+
+The matched depth-one benchmark initializes and poisons two persistent device
+allocations outside timing, measures public-facade enqueue/flush through
+observed completion against HSA and HIP D2D operations, and then performs
+untimed D2H validation of both physical source and destination contents. The
+runner binds its output to the exact commit, both frozen SDMA manifests,
+software/device identity, and load boundaries. No MI300X result has yet
+qualified R23, so this tranche makes no correctness, performance-parity, or
+speedup claim. Unified persistent compute/XGMI storage, direct-backend
+background progress, production atomic/collective authority, broad Rust device
+language, hardware refinement, and the remaining gates below are still open.
+H2H remains unsupported but is outside the V1 copy-engine list.
+
 ## Required Gates
 
 ### G1: API and ownership

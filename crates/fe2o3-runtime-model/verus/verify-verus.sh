@@ -26,6 +26,7 @@ r19_directional_persistent_local_sdma_adapter_proof="$script_dir/r19_directional
 r20_runtime_facade_directional_chunking_proof="$script_dir/r20_runtime_facade_directional_chunking_v1.rs"
 r21_runtime_scripted_failure_seam_proof="$script_dir/r21_runtime_scripted_failure_seam_v1.rs"
 r22_batched_directional_persistent_sdma_windows_proof="$script_dir/r22_batched_directional_persistent_sdma_windows_v1.rs"
+r23_same_device_d2d_persistent_sdma_windows_proof="$script_dir/r23_same_device_d2d_persistent_sdma_windows_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -254,6 +255,34 @@ negative_r22_frontier_roster="$script_dir/negative/r22_batched_directional_persi
 negative_r22_early_continuation="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_early_continuation.rs"
 negative_r22_opaque_custody="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_opaque_custody.rs"
 negative_r22_window_count="$script_dir/negative/r22_batched_directional_persistent_sdma_windows_v1_window_count.rs"
+negative_r23_allocation_alias="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_allocation_alias.rs"
+negative_r23_backing_alias="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_backing_alias.rs"
+negative_r23_device_binding="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_device_binding.rs"
+negative_r23_vm_binding="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_vm_binding.rs"
+negative_r23_mapped_overlap="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_mapped_overlap.rs"
+negative_r23_range_bounds="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_range_bounds.rs"
+negative_r23_lease_role="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_lease_role.rs"
+negative_r23_lease_range="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_lease_range.rs"
+negative_r23_window_bound="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_window_bound.rs"
+negative_r23_packet_coverage="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_packet_coverage.rs"
+negative_r23_packet_pairing="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_packet_pairing.rs"
+negative_r23_slot_uniqueness="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_slot_uniqueness.rs"
+negative_r23_slot_generation="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_slot_generation.rs"
+negative_r23_ticket_queue="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_ticket_queue.rs"
+negative_r23_preparation_visibility="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_preparation_visibility.rs"
+negative_r23_write_pointer_count="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_write_pointer_count.rs"
+negative_r23_doorbell_count="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_doorbell_count.rs"
+negative_r23_prepublication_restore="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_prepublication_restore.rs"
+negative_r23_pending_observation="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_pending_observation.rs"
+negative_r23_timeout_custody="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_timeout_custody.rs"
+negative_r23_partial_retirement="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_partial_retirement.rs"
+negative_r23_unauthenticated_dirty="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_unauthenticated_dirty.rs"
+negative_r23_completion_aggregate="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_completion_aggregate.rs"
+negative_r23_frontier_pair="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_frontier_pair.rs"
+negative_r23_quarantine_custody="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_quarantine_custody.rs"
+negative_r23_quarantine_release="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_quarantine_release.rs"
+negative_r23_quarantine_entry_validity="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_quarantine_entry_validity.rs"
+negative_r23_early_continuation="$script_dir/negative/r23_same_device_d2d_persistent_sdma_windows_v1_early_continuation.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -301,6 +330,7 @@ expected_r19_directional_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R19_
 expected_r20_runtime_facade_directional_chunking=$(read_pin "$pin_dir/R20_RUNTIME_FACADE_DIRECTIONAL_CHUNKING_SHA256")
 expected_r21_runtime_scripted_failure_seam=$(read_pin "$pin_dir/R21_RUNTIME_SCRIPTED_FAILURE_SEAM_SHA256")
 expected_r22_batched_directional_persistent_sdma_windows=$(read_pin "$pin_dir/R22_BATCHED_DIRECTIONAL_PERSISTENT_SDMA_WINDOWS_SHA256")
+expected_r23_same_device_d2d_persistent_sdma_windows=$(read_pin "$pin_dir/R23_SAME_DEVICE_D2D_PERSISTENT_SDMA_WINDOWS_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -529,6 +559,34 @@ expected_negative_r22_frontier_roster=$(read_pin "$pin_dir/NEGATIVE_R22_FRONTIER
 expected_negative_r22_early_continuation=$(read_pin "$pin_dir/NEGATIVE_R22_EARLY_CONTINUATION_SHA256")
 expected_negative_r22_opaque_custody=$(read_pin "$pin_dir/NEGATIVE_R22_OPAQUE_CUSTODY_SHA256")
 expected_negative_r22_window_count=$(read_pin "$pin_dir/NEGATIVE_R22_WINDOW_COUNT_SHA256")
+expected_negative_r23_allocation_alias=$(read_pin "$pin_dir/NEGATIVE_R23_ALLOCATION_ALIAS_SHA256")
+expected_negative_r23_backing_alias=$(read_pin "$pin_dir/NEGATIVE_R23_BACKING_ALIAS_SHA256")
+expected_negative_r23_device_binding=$(read_pin "$pin_dir/NEGATIVE_R23_DEVICE_BINDING_SHA256")
+expected_negative_r23_vm_binding=$(read_pin "$pin_dir/NEGATIVE_R23_VM_BINDING_SHA256")
+expected_negative_r23_mapped_overlap=$(read_pin "$pin_dir/NEGATIVE_R23_MAPPED_OVERLAP_SHA256")
+expected_negative_r23_range_bounds=$(read_pin "$pin_dir/NEGATIVE_R23_RANGE_BOUNDS_SHA256")
+expected_negative_r23_lease_role=$(read_pin "$pin_dir/NEGATIVE_R23_LEASE_ROLE_SHA256")
+expected_negative_r23_lease_range=$(read_pin "$pin_dir/NEGATIVE_R23_LEASE_RANGE_SHA256")
+expected_negative_r23_window_bound=$(read_pin "$pin_dir/NEGATIVE_R23_WINDOW_BOUND_SHA256")
+expected_negative_r23_packet_coverage=$(read_pin "$pin_dir/NEGATIVE_R23_PACKET_COVERAGE_SHA256")
+expected_negative_r23_packet_pairing=$(read_pin "$pin_dir/NEGATIVE_R23_PACKET_PAIRING_SHA256")
+expected_negative_r23_slot_uniqueness=$(read_pin "$pin_dir/NEGATIVE_R23_SLOT_UNIQUENESS_SHA256")
+expected_negative_r23_slot_generation=$(read_pin "$pin_dir/NEGATIVE_R23_SLOT_GENERATION_SHA256")
+expected_negative_r23_ticket_queue=$(read_pin "$pin_dir/NEGATIVE_R23_TICKET_QUEUE_SHA256")
+expected_negative_r23_preparation_visibility=$(read_pin "$pin_dir/NEGATIVE_R23_PREPARATION_VISIBILITY_SHA256")
+expected_negative_r23_write_pointer_count=$(read_pin "$pin_dir/NEGATIVE_R23_WRITE_POINTER_COUNT_SHA256")
+expected_negative_r23_doorbell_count=$(read_pin "$pin_dir/NEGATIVE_R23_DOORBELL_COUNT_SHA256")
+expected_negative_r23_prepublication_restore=$(read_pin "$pin_dir/NEGATIVE_R23_PREPUBLICATION_RESTORE_SHA256")
+expected_negative_r23_pending_observation=$(read_pin "$pin_dir/NEGATIVE_R23_PENDING_OBSERVATION_SHA256")
+expected_negative_r23_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R23_TIMEOUT_CUSTODY_SHA256")
+expected_negative_r23_partial_retirement=$(read_pin "$pin_dir/NEGATIVE_R23_PARTIAL_RETIREMENT_SHA256")
+expected_negative_r23_unauthenticated_dirty=$(read_pin "$pin_dir/NEGATIVE_R23_UNAUTHENTICATED_DIRTY_SHA256")
+expected_negative_r23_completion_aggregate=$(read_pin "$pin_dir/NEGATIVE_R23_COMPLETION_AGGREGATE_SHA256")
+expected_negative_r23_frontier_pair=$(read_pin "$pin_dir/NEGATIVE_R23_FRONTIER_PAIR_SHA256")
+expected_negative_r23_quarantine_custody=$(read_pin "$pin_dir/NEGATIVE_R23_QUARANTINE_CUSTODY_SHA256")
+expected_negative_r23_quarantine_release=$(read_pin "$pin_dir/NEGATIVE_R23_QUARANTINE_RELEASE_SHA256")
+expected_negative_r23_quarantine_entry_validity=$(read_pin "$pin_dir/NEGATIVE_R23_QUARANTINE_ENTRY_VALIDITY_SHA256")
+expected_negative_r23_early_continuation=$(read_pin "$pin_dir/NEGATIVE_R23_EARLY_CONTINUATION_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -579,6 +637,7 @@ check_sources() {
     check_digest "$expected_r20_runtime_facade_directional_chunking" "$r20_runtime_facade_directional_chunking_proof"
     check_digest "$expected_r21_runtime_scripted_failure_seam" "$r21_runtime_scripted_failure_seam_proof"
     check_digest "$expected_r22_batched_directional_persistent_sdma_windows" "$r22_batched_directional_persistent_sdma_windows_proof"
+    check_digest "$expected_r23_same_device_d2d_persistent_sdma_windows" "$r23_same_device_d2d_persistent_sdma_windows_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -807,6 +866,34 @@ check_sources() {
     check_digest "$expected_negative_r22_early_continuation" "$negative_r22_early_continuation"
     check_digest "$expected_negative_r22_opaque_custody" "$negative_r22_opaque_custody"
     check_digest "$expected_negative_r22_window_count" "$negative_r22_window_count"
+    check_digest "$expected_negative_r23_allocation_alias" "$negative_r23_allocation_alias"
+    check_digest "$expected_negative_r23_backing_alias" "$negative_r23_backing_alias"
+    check_digest "$expected_negative_r23_device_binding" "$negative_r23_device_binding"
+    check_digest "$expected_negative_r23_vm_binding" "$negative_r23_vm_binding"
+    check_digest "$expected_negative_r23_mapped_overlap" "$negative_r23_mapped_overlap"
+    check_digest "$expected_negative_r23_range_bounds" "$negative_r23_range_bounds"
+    check_digest "$expected_negative_r23_lease_role" "$negative_r23_lease_role"
+    check_digest "$expected_negative_r23_lease_range" "$negative_r23_lease_range"
+    check_digest "$expected_negative_r23_window_bound" "$negative_r23_window_bound"
+    check_digest "$expected_negative_r23_packet_coverage" "$negative_r23_packet_coverage"
+    check_digest "$expected_negative_r23_packet_pairing" "$negative_r23_packet_pairing"
+    check_digest "$expected_negative_r23_slot_uniqueness" "$negative_r23_slot_uniqueness"
+    check_digest "$expected_negative_r23_slot_generation" "$negative_r23_slot_generation"
+    check_digest "$expected_negative_r23_ticket_queue" "$negative_r23_ticket_queue"
+    check_digest "$expected_negative_r23_preparation_visibility" "$negative_r23_preparation_visibility"
+    check_digest "$expected_negative_r23_write_pointer_count" "$negative_r23_write_pointer_count"
+    check_digest "$expected_negative_r23_doorbell_count" "$negative_r23_doorbell_count"
+    check_digest "$expected_negative_r23_prepublication_restore" "$negative_r23_prepublication_restore"
+    check_digest "$expected_negative_r23_pending_observation" "$negative_r23_pending_observation"
+    check_digest "$expected_negative_r23_timeout_custody" "$negative_r23_timeout_custody"
+    check_digest "$expected_negative_r23_partial_retirement" "$negative_r23_partial_retirement"
+    check_digest "$expected_negative_r23_unauthenticated_dirty" "$negative_r23_unauthenticated_dirty"
+    check_digest "$expected_negative_r23_completion_aggregate" "$negative_r23_completion_aggregate"
+    check_digest "$expected_negative_r23_frontier_pair" "$negative_r23_frontier_pair"
+    check_digest "$expected_negative_r23_quarantine_custody" "$negative_r23_quarantine_custody"
+    check_digest "$expected_negative_r23_quarantine_release" "$negative_r23_quarantine_release"
+    check_digest "$expected_negative_r23_quarantine_entry_validity" "$negative_r23_quarantine_entry_validity"
+    check_digest "$expected_negative_r23_early_continuation" "$negative_r23_early_continuation"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -838,6 +925,7 @@ check_sources
     "$r20_runtime_facade_directional_chunking_proof" \
     "$r21_runtime_scripted_failure_seam_proof" \
     "$r22_batched_directional_persistent_sdma_windows_proof" \
+    "$r23_same_device_d2d_persistent_sdma_windows_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1062,7 +1150,35 @@ check_sources
     "$negative_r22_frontier_roster" \
     "$negative_r22_early_continuation" \
     "$negative_r22_opaque_custody" \
-    "$negative_r22_window_count"
+    "$negative_r22_window_count" \
+    "$negative_r23_allocation_alias" \
+    "$negative_r23_backing_alias" \
+    "$negative_r23_device_binding" \
+    "$negative_r23_vm_binding" \
+    "$negative_r23_mapped_overlap" \
+    "$negative_r23_range_bounds" \
+    "$negative_r23_lease_role" \
+    "$negative_r23_lease_range" \
+    "$negative_r23_window_bound" \
+    "$negative_r23_packet_coverage" \
+    "$negative_r23_packet_pairing" \
+    "$negative_r23_slot_uniqueness" \
+    "$negative_r23_slot_generation" \
+    "$negative_r23_ticket_queue" \
+    "$negative_r23_preparation_visibility" \
+    "$negative_r23_write_pointer_count" \
+    "$negative_r23_doorbell_count" \
+    "$negative_r23_prepublication_restore" \
+    "$negative_r23_pending_observation" \
+    "$negative_r23_timeout_custody" \
+    "$negative_r23_partial_retirement" \
+    "$negative_r23_unauthenticated_dirty" \
+    "$negative_r23_completion_aggregate" \
+    "$negative_r23_frontier_pair" \
+    "$negative_r23_quarantine_custody" \
+    "$negative_r23_quarantine_release" \
+    "$negative_r23_quarantine_entry_validity" \
+    "$negative_r23_early_continuation"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1184,6 +1300,7 @@ check_positive "$r19_directional_persistent_local_sdma_adapter_proof" 'verificat
 check_positive "$r20_runtime_facade_directional_chunking_proof" 'verification results:: 31 verified, 0 errors' r20-runtime-facade-directional-chunking
 check_positive "$r21_runtime_scripted_failure_seam_proof" 'verification results:: 37 verified, 0 errors' r21-runtime-scripted-failure-seam
 check_positive "$r22_batched_directional_persistent_sdma_windows_proof" 'verification results:: 41 verified, 0 errors' r22-batched-directional-persistent-sdma-windows
+check_positive "$r23_same_device_d2d_persistent_sdma_windows_proof" 'verification results:: 46 verified, 0 errors' r23-same-device-d2d-persistent-sdma-windows
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1412,13 +1529,41 @@ check_negative "$negative_r22_frontier_roster" mutated_frontier_may_substitute_w
 check_negative "$negative_r22_early_continuation" mutated_continuation_may_precede_frontier_retirement_v1 r22-early-continuation
 check_negative "$negative_r22_opaque_custody" mutated_opaque_failure_may_drop_authority_v1 r22-opaque-custody
 check_negative "$negative_r22_window_count" mutated_256_mib_may_fit_one_window_and_64_packets_v1 r22-window-count
+check_negative "$negative_r23_allocation_alias" mutated_allocation_alias_is_rejected_v1 r23-allocation-alias
+check_negative "$negative_r23_backing_alias" mutated_backing_alias_is_rejected_v1 r23-backing-alias
+check_negative "$negative_r23_device_binding" mutated_cross_device_pair_is_rejected_v1 r23-device-binding
+check_negative "$negative_r23_vm_binding" mutated_cross_vm_pair_is_rejected_v1 r23-vm-binding
+check_negative "$negative_r23_mapped_overlap" mutated_mapped_overlap_is_rejected_v1 r23-mapped-overlap
+check_negative "$negative_r23_range_bounds" mutated_out_of_extent_range_is_rejected_v1 r23-range-bounds
+check_negative "$negative_r23_lease_role" mutated_source_and_destination_lease_roles_are_exact_v1 r23-lease-role
+check_negative "$negative_r23_lease_range" mutated_lease_ranges_match_window_v1 r23-lease-range
+check_negative "$negative_r23_window_bound" mutated_sixty_four_packets_fit_one_d2d_window_v1 r23-window-bound
+check_negative "$negative_r23_packet_coverage" mutated_source_and_destination_packets_cover_exact_window_v1 r23-packet-coverage
+check_negative "$negative_r23_packet_pairing" mutated_source_destination_packet_lengths_match_v1 r23-packet-pairing
+check_negative "$negative_r23_slot_uniqueness" mutated_distinct_d2d_packets_use_unique_slots_v1 r23-slot-uniqueness
+check_negative "$negative_r23_slot_generation" mutated_d2d_ticket_generation_may_ignore_slot_counter_v1 r23-slot-generation
+check_negative "$negative_r23_ticket_queue" mutated_d2d_ticket_may_bind_foreign_queue_v1 r23-ticket-queue
+check_negative "$negative_r23_preparation_visibility" mutated_d2d_preparation_has_no_publication_v1 r23-preparation-visibility
+check_negative "$negative_r23_write_pointer_count" mutated_d2d_window_may_update_pointer_per_packet_v1 r23-write-pointer-count
+check_negative "$negative_r23_doorbell_count" mutated_d2d_window_may_ring_doorbell_per_packet_v1 r23-doorbell-count
+check_negative "$negative_r23_prepublication_restore" mutated_d2d_prepublication_retry_restores_both_owners_v1 r23-prepublication-restore
+check_negative "$negative_r23_pending_observation" mutated_d2d_pending_is_observation_only_v1 r23-pending-observation
+check_negative "$negative_r23_timeout_custody" mutated_d2d_timeout_retains_both_leases_v1 r23-timeout-custody
+check_negative "$negative_r23_partial_retirement" mutated_d2d_partial_aggregate_may_retire_prefix_v1 r23-partial-retirement
+check_negative "$negative_r23_unauthenticated_dirty" mutated_d2d_unauthenticated_completion_may_certify_dirty_v1 r23-unauthenticated-dirty
+check_negative "$negative_r23_completion_aggregate" mutated_d2d_completion_aggregate_is_exact_v1 r23-completion-aggregate
+check_negative "$negative_r23_frontier_pair" mutated_d2d_frontier_retains_exact_owner_pair_v1 r23-frontier-pair
+check_negative "$negative_r23_quarantine_custody" mutated_d2d_quarantine_retains_two_authorities_v1 r23-quarantine-custody
+check_negative "$negative_r23_quarantine_release" mutated_d2d_quarantine_has_no_release_route_v1 r23-quarantine-release
+check_negative "$negative_r23_quarantine_entry_validity" mutated_d2d_quarantine_entry_preserves_validity_v1 r23-quarantine-entry-validity
+check_negative "$negative_r23_early_continuation" mutated_d2d_continuation_may_precede_full_retirement_v1 r23-early-continuation
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 mutations=228'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 mutations=256'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

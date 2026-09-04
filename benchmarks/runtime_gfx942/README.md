@@ -207,6 +207,57 @@ performance parity. No result is admissible while the shared GPU is busy, and
 no speedup claim may be made until raw output from the exact commit passes the
 same qualification checks as the retained asynchronous-copy results.
 
+### Same-Device D2D Window Qualification
+
+Run the R23 public-facade D2D comparison on an idle MI300X system:
+
+```sh
+benchmarks/runtime_gfx942/run-d2d-window-mi300x.sh > d2d-window.txt
+python3 benchmarks/runtime_gfx942/check-parity.py d2d-window.txt \
+  --schema fe2o3.d2d-copy-benchmark.v1 \
+  --max-latency-ratio 1.10 \
+  --min-bandwidth-ratio 0.90
+```
+
+The thresholds above are illustrative and must be chosen as an explicit
+release policy. A tenfold speedup policy would instead require a latency ratio
+of at most `0.10` and/or a bandwidth ratio of at least `10.0`; a parity result
+cannot be described as an order-of-magnitude result.
+
+The default transfers 256 MiB at depth one with three warmups and ten samples.
+`FE2O3_D2D_WINDOW_GPU_INDEX`, `FE2O3_D2D_WINDOW_BYTES`,
+`FE2O3_D2D_WINDOW_WARMUPS`, and `FE2O3_D2D_WINDOW_SAMPLES` select the measured
+device and controls. The size is restricted to 264,239,137 through 268,435,456
+bytes so the KFD path crosses its 63-packet window boundary. At 256 MiB this is
+65 packets in two windows, hence two write-pointer publications and two
+doorbells per measured copy. `FE2O3_D2D_WINDOW_SECOND_GPU_INDEX` selects an
+unused system-load sentinel; the runner requires a distinct second physical
+identity and checks it again after all phases without presenting it as a D2D
+participant.
+
+All three lanes retain distinct source and destination device allocations.
+Each round initializes the source and poisons the destination outside timing.
+The measured interval starts before the D2D enqueue and ends after host-observed
+completion: KFD uses `RuntimeContextV1::copy_async`, explicit `flush_stream`,
+and facade wait; HSA uses `hsa_amd_memory_async_copy`; HIP uses
+`hipMemcpyAsync` on one nonblocking stream. After the interval, every lane
+copies both allocations back to host and verifies that the destination exactly
+matches the source pattern and that the source was not modified.
+
+The runner requires a clean checkout, `gfx942:xnack-`, the exact KFD device
+identity, both frozen SDMA manifest digests, and a default 5% load ceiling at
+each measured phase boundary. It deletes its unique temporary build tree on
+every exit path. The checker requires the exact depth, packet/window/doorbell
+accounting, validation and timing labels, phase observations, and matching
+KFD/HSA/HIP device and statistical fields. A passing report applies only to
+that commit, device, software stack, size, depth, and timing boundary. No R23
+hardware result is currently retained, so this harness makes no correctness,
+parity, or speedup claim.
+
+Boundary load samples cannot detect unrelated work that starts and stops
+wholly inside one phase. Continuous machine exclusivity remains an external
+condition for release evidence.
+
 ## Native XGMI Peer Qualification
 
 Run the matched public-runtime-facade KFD, HSA, and HIP native peer-copy harness
