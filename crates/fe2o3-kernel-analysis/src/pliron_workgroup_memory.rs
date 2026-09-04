@@ -287,16 +287,21 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
                 });
             }
         };
-        let workgroup_size = layout
-            .workgroup_extents
+        let workgroup_extents = layout.workgroup_extents;
+        let workgroup_size = workgroup_extents
             .into_iter()
             .try_fold(1_u64, u64::checked_mul);
-        if workgroup_size != Some(64)
+        let wave_private_layout = workgroup_extents[1] == 1
+            && workgroup_extents[2] == 1
+            && (64..=256).contains(&workgroup_extents[0])
+            && workgroup_extents[0].is_multiple_of(64);
+        if !wave_private_layout
+            || workgroup_size.is_none()
             || layout.subgroup_size != 64
             || layout.execution_domain != ExecutionDomainAttr::FullPhysicalWorkgroups
         {
             return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
-                detail: "the coordinate-free gfx950 transpose tile requires one full physical Wave64 per workgroup".to_owned(),
+                detail: "the gfx950 transpose tile requires one to four full physical Wave64s in a one-dimensional workgroup; lowering assigns each wave a disjoint LDS tile".to_owned(),
             });
         }
         if let Err(detail) = validate_collective_transpose_lifecycle_v1(

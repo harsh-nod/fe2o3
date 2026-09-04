@@ -10,6 +10,13 @@ use fe2o3_amdgcn_model::{
 use fe2o3_kernel_ir::*;
 
 fn collective_and_lds_transpose_module(format: Gfx950LdsTransposeFormatV1) -> Module {
+    collective_and_lds_transpose_module_with_workgroup(format, 64)
+}
+
+fn collective_and_lds_transpose_module_with_workgroup(
+    format: Gfx950LdsTransposeFormatV1,
+    workgroup_x: u32,
+) -> Module {
     let source = Type::slice(
         Type::Scalar(ScalarType::U8),
         AddressSpace::Global,
@@ -135,7 +142,7 @@ fn collective_and_lds_transpose_module(format: Gfx950LdsTransposeFormatV1) -> Mo
             x: LaunchExtent::Dynamic,
         },
     );
-    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    kernel.workgroup_size = Some(WorkgroupSize::new(workgroup_x, 1, 1));
     kernel.required_capabilities = function.required_capabilities.clone();
 
     let mut module = Module::new("tests::gfx950_collectives_and_lds_transpose");
@@ -226,7 +233,7 @@ fn lowers_exact_fp4_and_fp8_collective_and_lds_transpose_modules() {
             32,
         ),
     ] {
-        let module = collective_and_lds_transpose_module(format);
+        let module = collective_and_lds_transpose_module_with_workgroup(format, 256);
         verify_module(&module).unwrap();
         assert!(VerifiedCanonicalKernelIrV8::from_module(module.clone()).is_err());
         let anchored = lower_kernel_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
@@ -245,8 +252,16 @@ fn lowers_exact_fp4_and_fp8_collective_and_lds_transpose_modules() {
             operations
         );
         let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+        let workgroup_bytes = bytes * 4;
         assert!(llvm.contains(&format!(
-            "@__fe2o3_lds_collective_10 = internal addrspace(3) global [{bytes} x i8] undef, align 64"
+            "@__fe2o3_lds_collective_10 = internal addrspace(3) global [{workgroup_bytes} x i8] undef, align 64"
+        )));
+        assert!(llvm.contains("%v10.transpose.wave.i32 = lshr i32 %v10.transpose.local.i32, 6"));
+        assert!(llvm.contains(&format!(
+            "%v10.transpose.byte.offset.i32 = mul i32 %v10.transpose.wave.i32, {bytes}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v10 = getelementptr [{workgroup_bytes} x i8], ptr addrspace(3) @__fe2o3_lds_collective_10, i32 0, i32 %v10.transpose.byte.offset.i32"
         )));
         assert_eq!(
             llvm.matches(&format!(" = call <2 x i32> @{intrinsic}"))

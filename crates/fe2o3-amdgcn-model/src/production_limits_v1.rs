@@ -15,4 +15,8 @@ pub const MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1: usize =
         - PRODUCTION_KIR_TO_LLVM_REPLAY_FIXED_BYTES_V1
         - MAX_TEXT_BYTES_V1;
 /// Maximum number of semantic anchor records emitted and admitted by V1.
-pub const MAX_PRODUCTION_SEMANTIC_ANCHORS_V1: usize = 4 * 1024;
+///
+/// The 16K bound admits production multi-wave kernels whose checked slice-offset and ownership
+/// paths expand beyond the original 4K teaching-kernel profile while remaining well below the
+/// compiler-module and ranked-analysis operation limits.
+pub const MAX_PRODUCTION_SEMANTIC_ANCHORS_V1: usize = 16 * 1024;

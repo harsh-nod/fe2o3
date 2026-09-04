@@ -1,10 +1,12 @@
 //! Independent 256-thread matrix-state KDA roots for measured ablations.
 
-use fe2o3_device::{kernel, thread, DisjointSlice, Gfx950Subgroup, Index1D, StridedReadView2D};
+use fe2o3_device::{DisjointSlice, Gfx950Subgroup, Index1D, StridedReadView2D, kernel, thread};
 
 use crate::{
     KDA_KEY_DIMENSION_V1, KDA_STATE_ELEMENTS_V1, KDA_VALUE_DIMENSION_V1, PREFILL_TOKENS_V1,
 };
+
+const MULTIGRID_WORKGROUPS_V1: usize = 4;
 
 macro_rules! kda_recurrent_step_baseline_v1 {
     ($token:expr, $query:ident, $key:ident, $value:ident, $alpha:ident, $beta:ident,
@@ -23,7 +25,7 @@ macro_rules! kda_recurrent_step_baseline_v1 {
 #[cfg(feature = "kernel-kda-decode-baseline-v1")]
 #[kernel(
     typed,
-    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_kda_decode(
     query: &[f32],
@@ -35,36 +37,68 @@ pub fn gfx950_kda_decode(
     mut final_state: DisjointSlice<f32, Index1D>,
     mut output: DisjointSlice<f32, Index1D>,
 ) {
-    if query.len() != KDA_KEY_DIMENSION_V1
-        || key.len() != KDA_KEY_DIMENSION_V1
-        || value.len() != KDA_VALUE_DIMENSION_V1
-        || alpha.len() != KDA_KEY_DIMENSION_V1
-        || beta.len() != 1
-        || initial_state.len() != KDA_STATE_ELEMENTS_V1
-        || final_state.len() != KDA_STATE_ELEMENTS_V1
-        || output.len() != KDA_STATE_ELEMENTS_V1
+    let batches = MULTIGRID_WORKGROUPS_V1;
+    let batch = thread::block_idx_x() as usize;
+    if query.len() != batches * KDA_KEY_DIMENSION_V1
+        || key.len() != batches * KDA_KEY_DIMENSION_V1
+        || value.len() != batches * KDA_VALUE_DIMENSION_V1
+        || alpha.len() != batches * KDA_KEY_DIMENSION_V1
+        || beta.len() != batches
+        || initial_state.len() != batches * KDA_STATE_ELEMENTS_V1
+        || final_state.len() != batches * KDA_STATE_ELEMENTS_V1
+        || output.len() != batches * KDA_STATE_ELEMENTS_V1
     {
         return;
     }
-    let Ok(query) = StridedReadView2D::from_shared_slice(query, 0, 1, 16, 16) else {
+    let Ok(query) = StridedReadView2D::from_shared_slice(
+        query,
+        batch.wrapping_mul(KDA_KEY_DIMENSION_V1),
+        1,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(key) = StridedReadView2D::from_shared_slice(key, 0, 1, 16, 16) else {
+    let Ok(key) = StridedReadView2D::from_shared_slice(
+        key,
+        batch.wrapping_mul(KDA_KEY_DIMENSION_V1),
+        1,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(value) = StridedReadView2D::from_shared_slice(value, 0, 1, 16, 16) else {
+    let Ok(value) = StridedReadView2D::from_shared_slice(
+        value,
+        batch.wrapping_mul(KDA_VALUE_DIMENSION_V1),
+        1,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(alpha) = StridedReadView2D::from_shared_slice(alpha, 0, 1, 16, 16) else {
+    let Ok(alpha) = StridedReadView2D::from_shared_slice(
+        alpha,
+        batch.wrapping_mul(KDA_KEY_DIMENSION_V1),
+        1,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(beta) = StridedReadView2D::from_shared_slice(beta, 0, 1, 1, 1) else {
+    let Ok(beta) = StridedReadView2D::from_shared_slice(beta, batch, 1, 1, 1) else {
         return;
     };
-    let Ok(state) = StridedReadView2D::from_shared_slice(initial_state, 0, 16, 16, 16) else {
+    let Ok(state) = StridedReadView2D::from_shared_slice(
+        initial_state,
+        batch.wrapping_mul(KDA_STATE_ELEMENTS_V1),
+        16,
+        16,
+        16,
+    ) else {
         return;
     };
-    let linear = thread::index_1d().get();
+    let linear = thread::thread_idx_x() as usize;
     let key_index = linear & 15;
     let value_column = linear >> 4;
     let subgroup = Gfx950Subgroup::current();
@@ -85,7 +119,7 @@ pub fn gfx950_kda_decode(
 #[cfg(feature = "kernel-kda-prefill-baseline-v1")]
 #[kernel(
     typed,
-    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [1, 1, 1])
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_kda_chunkwise_prefill(
     query: &[f32],
@@ -98,38 +132,70 @@ pub fn gfx950_kda_chunkwise_prefill(
     mut output_chunk0: DisjointSlice<f32, Index1D>,
     mut output_chunk1: DisjointSlice<f32, Index1D>,
 ) {
-    if query.len() != PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
-        || key.len() != PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
-        || value.len() != PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1
-        || alpha.len() != PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
-        || beta.len() != PREFILL_TOKENS_V1
-        || initial_state.len() != KDA_STATE_ELEMENTS_V1
-        || final_state.len() != KDA_STATE_ELEMENTS_V1
-        || output_chunk0.len() != KDA_STATE_ELEMENTS_V1
-        || output_chunk1.len() != KDA_STATE_ELEMENTS_V1
+    let batches = MULTIGRID_WORKGROUPS_V1;
+    let batch = thread::block_idx_x() as usize;
+    if query.len() != batches * PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
+        || key.len() != batches * PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
+        || value.len() != batches * PREFILL_TOKENS_V1 * KDA_VALUE_DIMENSION_V1
+        || alpha.len() != batches * PREFILL_TOKENS_V1 * KDA_KEY_DIMENSION_V1
+        || beta.len() != batches * PREFILL_TOKENS_V1
+        || initial_state.len() != batches * KDA_STATE_ELEMENTS_V1
+        || final_state.len() != batches * KDA_STATE_ELEMENTS_V1
+        || output_chunk0.len() != batches * KDA_STATE_ELEMENTS_V1
+        || output_chunk1.len() != batches * KDA_STATE_ELEMENTS_V1
     {
         return;
     }
-    let Ok(query) = StridedReadView2D::from_shared_slice(query, 0, 8, 16, 16) else {
+    let token_base = batch.wrapping_mul(PREFILL_TOKENS_V1);
+    let Ok(query) = StridedReadView2D::from_shared_slice(
+        query,
+        token_base.wrapping_mul(KDA_KEY_DIMENSION_V1),
+        8,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(key) = StridedReadView2D::from_shared_slice(key, 0, 8, 16, 16) else {
+    let Ok(key) = StridedReadView2D::from_shared_slice(
+        key,
+        token_base.wrapping_mul(KDA_KEY_DIMENSION_V1),
+        8,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(value) = StridedReadView2D::from_shared_slice(value, 0, 8, 16, 16) else {
+    let Ok(value) = StridedReadView2D::from_shared_slice(
+        value,
+        token_base.wrapping_mul(KDA_VALUE_DIMENSION_V1),
+        8,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(alpha) = StridedReadView2D::from_shared_slice(alpha, 0, 8, 16, 16) else {
+    let Ok(alpha) = StridedReadView2D::from_shared_slice(
+        alpha,
+        token_base.wrapping_mul(KDA_KEY_DIMENSION_V1),
+        8,
+        16,
+        16,
+    ) else {
         return;
     };
-    let Ok(beta) = StridedReadView2D::from_shared_slice(beta, 0, 1, 8, 8) else {
+    let Ok(beta) = StridedReadView2D::from_shared_slice(beta, token_base, 1, 8, 8) else {
         return;
     };
-    let Ok(initial_state) = StridedReadView2D::from_shared_slice(initial_state, 0, 16, 16, 16)
-    else {
+    let Ok(initial_state) = StridedReadView2D::from_shared_slice(
+        initial_state,
+        batch.wrapping_mul(KDA_STATE_ELEMENTS_V1),
+        16,
+        16,
+        16,
+    ) else {
         return;
     };
-    let linear = thread::index_1d().get();
+    let linear = thread::thread_idx_x() as usize;
     let key_index = linear & 15;
     let value_column = linear >> 4;
     let subgroup = Gfx950Subgroup::current();

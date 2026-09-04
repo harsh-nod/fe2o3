@@ -15,13 +15,18 @@ explicit verification path; it does not grant protected artifact publication
 authority. The HIP results below remain independent evidence.
 
 The fixed-shape suite covers several systems patterns on AMD CDNA 4 (`gfx950`).
-It is deliberately small enough to have independent, deterministic CPU oracles;
-it is not a framework, a distributed runtime, or a production collective
-implementation.
+Each wave-oriented launch contains 16 independent, batch-local instances: four
+WG256 workgroups each execute four Wave64 owners. The pointwise expert-rank
+combine instead contains four independent 256-element batches, one per WG256.
+Every input and output is batch-major, so no workgroup depends on another or
+writes another workgroup's elements. The suite remains deliberately small
+enough to have independent, deterministic CPU oracles; it is not a framework,
+a distributed runtime, or a production collective implementation.
 
 The executable covers:
 
-- A 16-token, 128-input, 16-output fused FP4/FP8 MoE. It computes router
+- Sixteen independent 16-token, 128-input, 16-output fused FP4/FP8 MoE
+  instances, one per wave. Each computes router
   logits, stable top-2 selection (lower expert ID wins exact ties), compact
   per-expert dispatch metadata, five expert tiles with a gfx950 mixed
   FP4/FP8 `16x16x128` scaled MFMA, SiLU, routed weighting, and a shared-expert
@@ -35,14 +40,17 @@ The executable covers:
   Rank results are reduced in fixed order and checked against independently
   decoded CPU expert GEMMs. This validates the bounded execution path, not an
   expert-parallel communication library.
-- Eight four-token speculative/MTP candidates with deterministic prefix
-  acceptance. Recurrent/KV-style state is committed only after full acceptance;
-  all other candidates roll back to the byte-identical base state.
-- A GPU-resident, 16-slot Qwen-style 3-gram hash table gather. Lookup scans in
+- Sixteen independent groups of eight four-token speculative/MTP candidates
+  with deterministic prefix acceptance. Recurrent/KV-style state is committed
+  only after full acceptance; all other candidates roll back to the
+  batch-local, byte-identical base state.
+- Sixteen independent GPU-resident, 16-slot Qwen-style 3-gram hash-table
+  gathers. Lookup scans in
   linear-probe order, verifies the complete key, selects higher priority on
   duplicate keys, and then the lower slot on a tie. Host-offload overlap,
   eviction, and table construction are outside this kernel's scope.
-- A 4x4 Muon update from two sharded gradient contributions. GPU kernels stage
+- Sixteen independent 4x4 Muon updates from two sharded gradient contributions.
+  GPU kernels stage
   each rank, while the host stages a deterministic rank-order reduction before
   a GPU Frobenius norm and five Newton-Schulz/polar iterations. This is
   explicitly not a GPU collective or a distributed optimizer runtime.
@@ -74,6 +82,34 @@ and rollback state, and bounded floating-point tolerances against the CPU
 references. Set `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the
 documented tool and target-directory environment variables when validating a
 copied checkout.
+
+## Multi-workgroup source status
+
+The Rust launch contracts require WG256 and admit at most four workgroups in
+the x dimension. The corresponding production hardware harness must launch
+exactly four workgroups; the CPU references concatenate all batch-local
+observations in the same order. Wave collectives remain scoped to their owning Wave64: there is
+no grid barrier, cross-workgroup reduction, atomic output ownership, or
+dependence on workgroup scheduling order.
+
+This topology change does not inherit or fabricate performance evidence. The
+historical measurements below were collected from earlier single-workgroup
+artifacts and must not be interpreted as measurements of the batched kernels.
+New timings require fresh digest-pinned HSACO, correctness, ISA, and dispatch
+records from the four-workgroup launch.
+
+The 2026-09-03 compatibility rerun also exercised the four live ablation bodies
+through production extraction, LLVM, HSACO, ISA inspection, and HSA at
+WG256/grid4. `expert-serial`, `speculative-recompute-prefix`,
+`ngram-reverse-probe`, and `muon-broadcast16` all matched the same batched CPU
+oracles as their canonical kernels. This is compatibility and correctness
+evidence only; the minimal one-sample runner settings are not performance
+evidence. `combine-transposed` still fails closed before GPU launch because
+the projection cannot prove an arithmetic-overflow assertion for its dynamic
+source index. `stage-tile4` still fails closed because its subgroup broadcast
+source lane is not statically bounded. The two route ablation feature names in
+the manifest do not select live alternate Rust bodies; their rejected historical
+experiments remain documentation rather than runnable kernels.
 
 ## Historical exploratory Rust optimization evidence
 

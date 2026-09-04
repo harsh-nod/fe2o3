@@ -752,7 +752,9 @@ fn validate_workgroup_resources(
                             ..
                         },
                     ) => (
-                        usize::try_from(format.lds_bytes()).ok(),
+                        usize::try_from(format.lds_bytes())
+                            .ok()
+                            .and_then(|bytes| bytes.checked_mul(participants / 64)),
                         "static workgroup allocation bytes",
                     ),
                     _ => continue,

@@ -180,12 +180,12 @@ pub const MIXING_STREAMS_V1: usize = 4;
 /// Sinkhorn row/column normalization iterations.
 pub const SINKHORN_ITERATIONS_V1: usize = 3;
 
-/// Exact workgroup dimensions declared by the non-KDA teaching kernels.
-pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
+/// Exact workgroup dimensions declared by every teaching kernel.
+pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [256, 1, 1];
 /// Exact workgroup dimensions declared by both canonical matrix-state KDA kernels.
 pub const GFX950_KDA_WORKGROUP_V2: [u32; 3] = [256, 1, 1];
 /// Exact grid dimensions declared by every teaching kernel.
-pub const GFX950_ADVANCED_ATTENTION_GRID_V1: [u32; 3] = [1, 1, 1];
+pub const GFX950_ADVANCED_ATTENTION_GRID_V1: [u32; 3] = [4, 1, 1];
 /// Whether the eight source roots use the production semantic lowering surface.
 pub const GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true;
 /// Boundary not established by the production source-lowering and runtime suite.

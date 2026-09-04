@@ -120,6 +120,32 @@ fn barrier(context: &mut Context, address_space: AddressSpaceAttr) -> BarrierOp 
     )
 }
 
+#[test]
+fn collective_transpose_accepts_one_to_four_wave_private_tiles() {
+    for (workgroup_size, clean) in [(64, true), (128, true), (256, true), (320, false)] {
+        let context = &mut setup();
+        let function = function_with_domain(
+            context,
+            &format!("transpose_wave_private_{workgroup_size}"),
+            workgroup_size,
+            workgroup_size,
+            64,
+        );
+        let entry = function.get_entry_block(context);
+        let write = transpose_effect(context, AccessKindAttr::Write);
+        let publish = barrier(context, AddressSpaceAttr::Workgroup);
+        let read = transpose_effect(context, AccessKindAttr::Read);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &write);
+        append(context, entry, &publish);
+        append(context, entry, &read);
+        append(context, entry, &ret);
+
+        let report = run_pliron_workgroup_memory_check_v1(context, &function);
+        assert_eq!(report.is_clean(), clean, "{:#?}", report.findings());
+    }
+}
+
 fn access(
     context: &mut Context,
     kind: AccessKindAttr,

@@ -1,12 +1,15 @@
 use fe2o3_gfx950_gpt_oss_decode::{
-    CONTEXT_TOKENS, EXPERTS, HIDDEN_SIZE, MATRIX_ROWS, OPENAI_GPT_OSS_COMMIT, PROFILE_BOUNDARY,
+    CONTEXT_TOKENS, EXPERTS, HIDDEN_SIZE, MATRIX_ROWS, MAX_WORKGROUPS, OPENAI_GPT_OSS_COMMIT,
+    PROFILE_BOUNDARY, PROFILE_ITEMS, WAVE_SIZE, WAVES_PER_WORKGROUP, WORKGROUP_SIZE,
 };
 
 #[test]
 fn production_source_preserves_the_fixed_layer_tile_contract() {
     let source = include_str!("../src/kernel.rs");
     assert!(source.contains("gfx950_gpt_oss_120b_decode_megakernel_v1"));
-    assert!(source.contains("launch(required = [64, 1, 1]"));
+    assert!(
+        source.contains("launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])")
+    );
     assert!(source.contains("control_flow(loop_bounds(2880, 64, 16))"));
     assert_eq!(source.matches("multiply_accumulate(\n").count(), 4);
     assert_eq!(source.matches("multiply_accumulate_fp4(").count(), 4);
@@ -14,6 +17,10 @@ fn production_source_preserves_the_fixed_layer_tile_contract() {
     assert!(source.contains("local_expert0 = lane_index.wrapping_mul(2)"));
     assert!(source.contains("local_expert1 = local_expert0.wrapping_add(1)"));
     assert!(source.contains("let selected = (id0 as usize)"));
+    assert!(source.contains("let lane_index = global_index % crate::WAVE_SIZE"));
+    assert!(source.contains("let item_index = global_index / crate::WAVE_SIZE"));
+    assert!(source.contains("item_index.wrapping_mul(HIDDEN_SIZE)"));
+    assert!(source.contains("activation_item_base"));
     assert!(!source.contains("unsafe"));
     assert_eq!(OPENAI_GPT_OSS_COMMIT.len(), 40);
     assert!(PROFILE_BOUNDARY.contains("batch=1"));
@@ -25,6 +32,11 @@ fn production_source_preserves_the_fixed_layer_tile_contract() {
     assert_eq!(CONTEXT_TOKENS, 16);
     assert_eq!(CONTEXT_TOKENS, MATRIX_ROWS);
     assert_eq!(EXPERTS, 128);
+    assert_eq!(WAVE_SIZE, 64);
+    assert_eq!(WORKGROUP_SIZE, 256);
+    assert_eq!(WAVES_PER_WORKGROUP, 4);
+    assert_eq!(MAX_WORKGROUPS, 4);
+    assert_eq!(PROFILE_ITEMS, 16);
 }
 
 #[test]
@@ -54,7 +66,10 @@ fn ablation_sources_keep_the_production_export_and_exact_stage_shapes() {
     for (feature, source) in variants {
         assert!(source.contains(feature));
         assert!(source.contains("gfx950_gpt_oss_120b_decode_megakernel_v1"));
-        assert!(source.contains("launch(required = [64, 1, 1]"));
+        assert!(source.contains("launch(required = [256, 1, 1]"));
+        assert!(source.contains("max_grid = [4, 1, 1]"));
+        assert!(source.contains("let lane_index = global_index % crate::WAVE_SIZE"));
+        assert!(source.contains("let item_index = global_index / crate::WAVE_SIZE"));
         assert_eq!(source.matches("multiply_accumulate_fp4(").count(), 4);
         assert!(!source.contains("unsafe"));
     }
@@ -76,8 +91,9 @@ fn ablation_sources_keep_the_production_export_and_exact_stage_shapes() {
 fn pipelined_attention_source_has_two_real_double_buffered_lds_pipelines() {
     let source = include_str!("../src/kernel_pipelined_attention.rs");
     assert!(source.contains("kernel-gpt-oss-decode-pipelined-attention"));
-    assert!(source.contains("WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>"));
-    assert!(source.contains("WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>"));
+    assert!(source.contains("WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 256, 1>"));
+    assert!(source.contains("WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 256, 1>"));
+    assert!(source.contains("let pipeline_lane = global_index % crate::WORKGROUP_SIZE"));
     assert!(source.contains("while phase_index < 4"));
     assert_eq!(source.matches("_pipeline.stage(").count(), 4);
     assert_eq!(source.matches("_pipeline.write(").count(), 4);
@@ -101,6 +117,14 @@ fn materialized_components_preserve_all_three_exact_stage_exports() {
     }
     assert_eq!(source.matches("multiply_accumulate(\n").count(), 4);
     assert_eq!(source.matches("multiply_accumulate_fp4(").count(), 4);
+    assert_eq!(source.matches("max_grid = [4, 1, 1]").count(), 3);
+    assert_eq!(source.matches("launch(required = [256, 1, 1]").count(), 3);
+    assert_eq!(
+        source
+            .matches("let item_index = global_index / crate::WAVE_SIZE")
+            .count(),
+        3
+    );
     assert!(!source.contains("unsafe"));
 }
 

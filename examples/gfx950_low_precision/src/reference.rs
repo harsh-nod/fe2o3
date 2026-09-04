@@ -127,6 +127,27 @@ pub fn deterministic_matrix(
     matrix
 }
 
+/// Generates a concatenated batch whose matrices use distinct deterministic salts.
+pub fn deterministic_batched_matrix(
+    format: LowPrecisionFormat,
+    batches: usize,
+    rows: usize,
+    columns: usize,
+    salt: usize,
+) -> Vec<u8> {
+    const VALUES: [f32; 5] = [-1.0, -0.5, 0.0, 0.5, 1.0];
+    let mut values = Vec::with_capacity(batches * rows * columns);
+    for batch in 0..batches {
+        let mut matrix = deterministic_matrix(format, rows, columns, salt + 7 * batch);
+        if matrix.len() > 1 {
+            matrix[0] = format.encode_test_value(VALUES[batch % VALUES.len()]);
+            matrix[1] = format.encode_test_value(VALUES[(batch / VALUES.len()) % VALUES.len()]);
+        }
+        values.extend(matrix);
+    }
+    values
+}
+
 /// Computes the fixed `16x16x128` GEMM without using a fe2o3 device operation.
 pub fn gemm_reference(
     format: LowPrecisionFormat,
@@ -145,6 +166,28 @@ pub fn gemm_reference(
             }
             output[row * GEMM_N + column] = accumulator;
         }
+    }
+    Ok(output)
+}
+
+/// Computes independent GEMMs for a contiguous batch of fixed-shape inputs.
+pub fn batched_gemm_reference(
+    format: LowPrecisionFormat,
+    batches: usize,
+    lhs: &[u8],
+    rhs: &[u8],
+) -> Result<Vec<f32>, ReferenceShapeError> {
+    let lhs_elements = GEMM_M * GEMM_K;
+    let rhs_elements = GEMM_K * GEMM_N;
+    require_length("lhs", lhs.len(), batches * lhs_elements)?;
+    require_length("rhs", rhs.len(), batches * rhs_elements)?;
+    let mut output = Vec::with_capacity(batches * GEMM_M * GEMM_N);
+    for batch in 0..batches {
+        output.extend(gemm_reference(
+            format,
+            &lhs[batch * lhs_elements..(batch + 1) * lhs_elements],
+            &rhs[batch * rhs_elements..(batch + 1) * rhs_elements],
+        )?);
     }
     Ok(output)
 }
@@ -190,6 +233,31 @@ pub fn attention_reference(
     Ok(output)
 }
 
+/// Computes independent attention problems for a contiguous fixed-shape batch.
+pub fn batched_attention_reference(
+    format: LowPrecisionFormat,
+    batches: usize,
+    query: &[u8],
+    key: &[u8],
+    value: &[u8],
+) -> Result<Vec<f32>, ReferenceShapeError> {
+    let qk_elements = ATTENTION_TOKENS * GEMM_K;
+    let value_elements = ATTENTION_TOKENS * VALUE_COLUMNS;
+    require_length("query", query.len(), batches * qk_elements)?;
+    require_length("key", key.len(), batches * qk_elements)?;
+    require_length("value", value.len(), batches * value_elements)?;
+    let mut output = Vec::with_capacity(batches * value_elements);
+    for batch in 0..batches {
+        output.extend(attention_reference(
+            format,
+            &query[batch * qk_elements..(batch + 1) * qk_elements],
+            &key[batch * qk_elements..(batch + 1) * qk_elements],
+            &value[batch * value_elements..(batch + 1) * value_elements],
+        )?);
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +286,43 @@ mod tests {
             assert_eq!(decode_fp8_e4m3(bits), expected);
         }
         assert!(decode_fp8_e4m3(0x7f).is_nan());
+    }
+
+    #[test]
+    fn batched_references_keep_nonuniform_problems_disjoint() {
+        let lhs = deterministic_batched_matrix(LowPrecisionFormat::Fp4E2M1, 2, GEMM_M, GEMM_K, 1);
+        let rhs = deterministic_batched_matrix(LowPrecisionFormat::Fp4E2M1, 2, GEMM_K, GEMM_N, 3);
+        let output = batched_gemm_reference(LowPrecisionFormat::Fp4E2M1, 2, &lhs, &rhs).unwrap();
+        assert_ne!(&output[..GEMM_M * GEMM_N], &output[GEMM_M * GEMM_N..]);
+
+        let query = deterministic_batched_matrix(
+            LowPrecisionFormat::Fp8E4M3,
+            2,
+            ATTENTION_TOKENS,
+            GEMM_K,
+            2,
+        );
+        let key = deterministic_batched_matrix(
+            LowPrecisionFormat::Fp8E4M3,
+            2,
+            ATTENTION_TOKENS,
+            GEMM_K,
+            4,
+        );
+        let value = deterministic_batched_matrix(
+            LowPrecisionFormat::Fp8E4M3,
+            2,
+            ATTENTION_TOKENS,
+            VALUE_COLUMNS,
+            6,
+        );
+        let output =
+            batched_attention_reference(LowPrecisionFormat::Fp8E4M3, 2, &query, &key, &value)
+                .unwrap();
+        assert_ne!(
+            &output[..ATTENTION_TOKENS * VALUE_COLUMNS],
+            &output[ATTENTION_TOKENS * VALUE_COLUMNS..]
+        );
     }
 
     #[test]

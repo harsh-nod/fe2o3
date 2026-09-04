@@ -18,6 +18,15 @@ perform stable softmax and value accumulation through typed fe2o3 operations.
 `src/reference.rs` is an independent CPU oracle with deterministic,
 axis-varying inputs and exact OCP E2M1/E4M3 decoders.
 
+All four Rust kernels launch four `256`-thread workgroups. Each workgroup owns
+four Wave64 problems, for a total batch of 16 non-identical inputs. A GEMM wave
+owns one complete `16x16` output tile. An attention wave owns one complete
+16-token head and a private transpose tile: 1 KiB for FP4 or 2 KiB for FP8.
+The compiler reserves 4 KiB or 8 KiB of static LDS per workgroup. All waves
+execute the same stage, publication, uniform workgroup barrier, and
+transpose-read lifecycle, while wave-relative LDS addresses prevent aliasing.
+No output element is shared between waves or workgroups.
+
 Run the Rust source and oracle checks with:
 
 ```bash
@@ -58,6 +67,22 @@ The strict Worker V3 provider and admission policy also pin this exact closure
 and reject caller-supplied providers. A measured native protected-worker build
 still requires matching LLVM/LLD development packages; this does not block the
 ordinary Rust-to-HSACO runners above.
+
+## Current WG256/grid4 numerical qualification
+
+On 2026-09-03, all four production Rust wrappers completed extraction,
+gfx950:xnack- COV6 finalization, symbol-scoped ISA inspection, and numerical
+execution on physical GPU 6 of SSH host `mi350` with ROCm 7.2.1. Each launch
+checked 16 non-identical inputs and all 4,096 output values, as well as
+immutable inputs and guard canaries. These receipts do not include new timing
+measurements.
+
+| Kernel | Maximum absolute error | HSACO SHA-256 |
+| --- | ---: | --- |
+| FP4 GEMM | `0` | `2e9cc2bd178e1e1b72237cb32cc8f3e08d2d140d735520ea0147ed84fe81f93b` |
+| FP8 GEMM | `0` | `75ce58c286cc6c3b199bf1144e571e8a3d6b7dc0e373a9dee0589bf67b3d1e6d` |
+| FP4 attention | `1.192092896e-7` | `cc25e739a12b1a889e42f522708d59b4e626908a2b351dc051f4d3df59a92e38` |
+| FP8 attention | `5.960464478e-8` | `4273c31ce4545e09e051abfcb704d1c7750d7b52ee50b01801caec5ddd2d0479` |
 
 ## HIP comparison fixture
 
@@ -100,9 +125,11 @@ softmax result. The comparison rejects NaN and infinity before applying its
 error tolerance. Execution is rejected when the selected HIP device is not
 `gfx950`.
 
-## Rust validation evidence
+## Previous single-wave Rust evidence
 
-On 2026-08-26, all four ordinary Rust runners passed through SSH host alias
+The following 2026-08-26 measurements predate the four-workgroup, four-wave
+mapping. They establish the numerical and ISA baseline but are not evidence for
+the current launch geometry. All four ordinary Rust runners passed through SSH host alias
 `mi350` (remote hostname `smci350-rck-g03-b19-03`) with ROCm 7.2.1 on gfx950.
 Every test checked all 256 outputs, immutable inputs, output canaries, exact
 gfx950:xnack- COV6 metadata, and symbol-scoped ISA.

@@ -14,9 +14,9 @@ const FRAME_PREFIX_BYTES_V1: usize = 648;
 const ADMITTED_PAYLOAD_BYTES_V1: usize = 464;
 const COUNT_FIELDS_V1: usize = 12;
 const FRAME_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/SOURCE-ISA-SUMMARY-FRAME/V1\0";
-const MAX_SOURCE_ISA_RECORDS_V1: u64 = 528_384;
+const MAX_SOURCE_ISA_RECORDS_V1: u64 = 540_672;
 const MAX_SOURCE_ISA_REFERENCES_V1: u64 = 1_016_800;
-const MAX_PRODUCTION_STRUCTURAL_OPERATIONS_V1: u64 = 4 * 1024;
+const MAX_PRODUCTION_STRUCTURAL_OPERATIONS_V1: u64 = 16 * 1024;
 
 /// Inert fixed-width identity for the producer session carried by an observation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

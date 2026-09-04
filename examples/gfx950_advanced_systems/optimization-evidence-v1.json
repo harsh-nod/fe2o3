@@ -9,7 +9,38 @@
   },
   "device": {
     "host": "smci350-rck-g03-b19-03",
+  "architecture": "gfx950",
+  "evidence_scope": "latency, ISA, namespace, and retained HSACO records below are historical 2026-08-29 WG64/grid1 or WG256/grid1 measurements; they are not performance claims for the current production launch",
+  "current_production_launch": {
+    "workgroup": [256, 1, 1],
+    "grid": [4, 1, 1],
+    "wave_oriented_decomposition": "16 independent batch-local Wave64 instances across four workgroups",
+    "combine_decomposition": "four independent 256-element batches, one per workgroup",
+    "global_synchronization": "none"
+  },
+  "current_correctness_campaign": {
+    "date": "2026-09-03",
+    "host": "smci350-rck-g03-b19-03",
     "architecture": "gfx950",
+    "source_state": "validated from the uncommitted gfx950/multi-workgroup-wave-20260903 worktree; a final source commit is not yet available",
+    "results": [
+      {"kernel": "gfx950_moe_route_fp4_t16_e4_k2_v1", "checked_elements": "top_experts=512 exact, top_weights=512 max_abs_error=2.980232239e-8, expert_counts=64 exact, dispatch=2048 exact", "hsaco_sha256": "c353b9dc394efbfbc87fb8f9c295e5d23b701d7b1c4c517e04c0a4f71953ee11", "binding_sha256": "344537929cdf16d940f1b7244b0efa12b6e6c00704c6431889fb9baebf23c80e"},
+      {"kernel": "gfx950_moe_expert_rank_fp4_fp8_v1", "checked_elements": "four plans x 4096 outputs; max_abs_error=[9.536743164e-7,4.768371582e-7,0,0]", "hsaco_sha256": "a221d2678c133346dbcef0faa106c896c7fdf22f57735232fa31c3275e915f7c", "binding_sha256": "3b0b091c97e08d3fba5fc96a824eedb40391e561f60cb6bd48102ee48ec69a39"},
+      {"kernel": "gfx950_combine_expert_ranks_v1", "checked_elements": "1024 outputs, max_abs_error=0", "hsaco_sha256": "2ea273809becd4d9502ed6296aed3345ea95fe3292421016103a5098cb6340f1a", "binding_sha256": "12dcf936e1fed25f6498ecb2235b729a973b127c900adc02bdcad1e6a8f8f178"},
+      {"kernel": "gfx950_speculative_transaction_v1", "checked_elements": "accepted=128 exact, committed=128 exact, output_state=1024 max_abs_error=1.192092896e-7", "hsaco_sha256": "7e853da0e9694dc99cebdea7248ce8175743309c10592452d05e79932716a922", "binding_sha256": "7437746e7fe0f2a2bd080266dbd8044f22f282b0365a91246578026ba8dc2de9"},
+      {"kernel": "gfx950_qwen_ngram_gather_v1", "checked_elements": "128 outputs exact", "hsaco_sha256": "f948126ccf46e8b0a7fca47c126a13966b9f70b63e68ed5a00ee94284bc623b2", "binding_sha256": "cf9e82fc336e94af81b661021e263aa3bd44bc00c07f543790f14573c331f063"},
+      {"kernel": "gfx950_stage_gradient_shard_v1", "checked_elements": "two plans x 256 outputs, max_abs_error=[0,0]", "hsaco_sha256": "b095c06802edc03bf5a42ae4ac7f1f71173add1990120c047bd80c50e4021a3b", "binding_sha256": "e762db1956bdf059b71cd68c7ccc7b6821626733e2a1c0dba04a9d9497c72ee4"},
+      {"kernel": "gfx950_muon_update_4x4_v1", "checked_elements": "update=256 max_abs_error=7.450580597e-9, norms=16 max_abs_error=5.960464478e-8", "hsaco_sha256": "b32da414bc18cfa84aa725b691d445d3a919d9758f6cd5846f02704ee8f1fe83", "binding_sha256": "4f0a63ee8c2945bec7e91a08246dc084e4c914358ed436fd50b8cf0c1ae65c09"}
+    ],
+    "variant_compatibility": [
+      {"variant": "expert-serial", "status": "production-hsa-pass", "checked_elements": "four plans x 4096 outputs per validation; max_abs_error=[9.536743164e-7,4.768371582e-7,0,0]", "hsaco_sha256": "0dbea1cc39fecac0e3528e6a79f77fc0e1b82e5cf077317f1818de496ccf3296", "binding_sha256": "600f8e2ca304a9c0a95ab42de75c96993c83dc162269c3862d5447d182455a24"},
+      {"variant": "speculative-recompute-prefix", "status": "production-hsa-pass", "checked_elements": "accepted=128 exact, committed=128 exact, output_state=1024 max_abs_error=1.192092896e-7", "hsaco_sha256": "cbc4ed0d715c5d935c1d9ce56d3ba03ee77add73ba522bd42db749beb5d2635d", "binding_sha256": "65642a46db79bd5f85eb388d051c3b62452fe7d1df8b9daad36094abc7aa7d9b"},
+      {"variant": "ngram-reverse-probe", "status": "production-hsa-pass", "checked_elements": "128 outputs exact", "hsaco_sha256": "4fe7b21267960ca1335adda6141e3d193fc0024f58310b42201f9c85048e14f5", "binding_sha256": "8ba3e6b5cb98c3be3c279bf270649b701f4ee8c3bc98396d3c0b00a66a3e66d8"},
+      {"variant": "muon-broadcast16", "status": "production-hsa-pass", "checked_elements": "update=256 max_abs_error=7.450580597e-9, norms=16 max_abs_error=0", "hsaco_sha256": "987dcc450569812666ba7dd13126f746e11a46e218977fa8bdb5bf0e68e9386f", "binding_sha256": "4634a55da877084ab42ba4ab491284ea6698c0c5765cd65ea12300b0d65a63af"},
+      {"variant": "combine-transposed", "status": "production-lowering-rejected", "checked_elements": "no GPU launch", "blocker": "semantic-to-ranked projection cannot prove the arithmetic-overflow assertion for the dynamic source-element addition"},
+      {"variant": "stage-tile4", "status": "production-lowering-rejected", "checked_elements": "no GPU launch", "blocker": "target-neutral lowering cannot prove the subgroup broadcast source lane is statically bounded"}
+    ]
+  },
     "physical_gpu": 6,
     "rocm": "7.2.1"
   },
@@ -28,13 +59,14 @@
   },
   "resource_bound": {
     "formula": "max(logical_bytes / 8000000000000, fp32_ops / 144200000000000, mixed_fp4_fp8_ops / 4600000000000000)",
-    "interpretation": "optimistic whole-device cold logical-payload floor, not a single-workgroup latency prediction"
+    "interpretation": "optimistic whole-device cold logical-payload floor for the historical fixed workload, not a latency prediction for either the historical grid1 artifact or the current WG256/grid4 launch"
   },
   "kernels": [
     {
       "kernel": "gfx950_moe_route_fp4_t16_e4_k2_v1",
       "shape": "tokens=16, hidden=128, experts=4, top_k=2, dispatch_capacity=32",
-      "optimization": "compute each token route once per wave and reuse a packed route map",
+      "optimization": "historical: compute each token route once per wave and reuse a packed route map",
+      "current_source_design": "16 independent batch-local Wave64 routes across WG256/grid4",
       "status": "production-lowering-blocked",
       "blocker_log": "/tmp/systems-route-helper.log",
       "blocker": "ConstantIndex projection on a non-array place in block 596, statement 0",
@@ -49,7 +81,8 @@
     {
       "kernel": "gfx950_moe_expert_rank_fp4_fp8_v1",
       "shape": "tokens=16, hidden=128, output=16, two routed experts plus optional shared expert",
-      "optimization": "one Wave64 with Blocked<Index1D,64,4> ownership and three mixed MFMAs",
+      "optimization": "historical: one Wave64 with Blocked<Index1D,64,4> ownership and three mixed MFMAs",
+      "current_source_design": "16 independent batch-local Wave64 experts across WG256/grid4, each retaining Blocked<Index1D,64,4> ownership",
       "status": "production-lowering-blocked",
       "blocker_log": "/tmp/systems-expert-rank-fixed.log",
       "blocker": "FE2O3-RACE-002 block 27 op 0 unresolved access dimension v109",
@@ -65,7 +98,8 @@
     {
       "kernel": "gfx950_combine_expert_ranks_v1",
       "shape": "rank_partials=2x16x16 f32, output=16x16 f32",
-      "optimization": "rejected one-wave blocked mapping; retained 256-thread exact mapping",
+      "optimization": "historical: rejected one-wave blocked mapping; retained one WG256 exact mapping",
+      "current_source_design": "four independent 256-element batches, one per workgroup in WG256/grid4",
       "status": "retained-baseline",
       "logical_bytes": 3072,
       "fp32_ops": 256,
@@ -86,7 +120,8 @@
     {
       "kernel": "gfx950_speculative_transaction_v1",
       "shape": "candidates=8, draft_steps=4, state_width=8",
-      "optimization": "reuse one acceptance result across each candidate state vector",
+      "optimization": "historical: reuse one acceptance result across each candidate state vector",
+      "current_source_design": "16 independent batch-local Wave64 transactions across WG256/grid4",
       "status": "retained-optimized",
       "logical_bytes": 896,
       "fp32_ops": 64,
@@ -109,7 +144,8 @@
     {
       "kernel": "gfx950_qwen_ngram_gather_v1",
       "shape": "queries=8, ngram=3, table_slots=16, probes=16",
-      "optimization": "rejected hash-first short circuit; retained branchless full-key probe",
+      "optimization": "historical: rejected hash-first short circuit; retained branchless full-key probe",
+      "current_source_design": "16 independent batch-local Wave64 gathers across WG256/grid4",
       "status": "retained-baseline",
       "logical_bytes": 576,
       "fp32_ops": 0,
@@ -134,7 +170,8 @@
     {
       "kernel": "gfx950_stage_gradient_shard_v1",
       "shape": "one 4x4 f32 shard per launch",
-      "optimization": "retained existing one-Wave64 exact copy",
+      "optimization": "historical: retained one-Wave64 exact copy",
+      "current_source_design": "16 independent batch-local Wave64 shard copies across WG256/grid4",
       "status": "retained-baseline",
       "logical_bytes": 128,
       "fp32_ops": 0,
@@ -153,7 +190,8 @@
     {
       "kernel": "gfx950_muon_update_4x4_v1",
       "shape": "two 4x4 f32 shards, five Newton-Schulz iterations",
-      "optimization": "distribute matrix elements across lanes and use Wave64 reductions/broadcasts",
+      "optimization": "historical: distribute matrix elements across lanes and use Wave64 reductions/broadcasts",
+      "current_source_design": "16 independent batch-local Wave64 matrix updates across WG256/grid4",
       "status": "retained-optimized",
       "logical_bytes": 196,
       "fp32_ops": 1649,
