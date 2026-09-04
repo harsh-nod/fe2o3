@@ -197,6 +197,20 @@ Worker V4/V5 subprocess tests now show background flush completing deferred
 ordinary and atomic events and sealing timeout/terminal/EOF failures; they are
 host protocol tests and do not satisfy the native liveness gate.
 
+R18 connects one persistent device allocation to one targeted local SDMA queue.
+It preserves exact queue-owned buffer accounting and move-only allocation, host,
+range-use, and ticket custody across confirmed publication, poll, bounded wait,
+completion, and settlement. Recoverable prepublication failure restores owners;
+retained or later uncertainty remains opaque until process teardown. Its
+independent executable model composes the R17 registry/lease state, and its
+abstract Verus summary adds 34 obligations and 24 rejected mutations for pinned
+totals of 259 and 159. This single-flight low-level adapter is not connected to
+the public facade or async progress engine. Exact quiescent-frontier retirement
+reclaims settled history and returns stale or substituted custody unchanged;
+native-neutral tests cover 66 sequential transition cycles. The tranche
+supplies no persistent compute, XGMI, concurrency, hardware-execution,
+refinement, or performance evidence.
+
 ## Required Gates
 
 ### G1: API and ownership

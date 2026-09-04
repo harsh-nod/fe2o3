@@ -265,6 +265,21 @@ metadata only and is not bound to the persistent mapping. Neither model is a
 refinement of the concrete KFD persistent owner, which remains disconnected
 from native compute/SDMA/XGMI publication and completion.
 
+R18 connects that owner to one targeted low-level KFD SDMA queue. It preserves
+the queue's existing device-buffer accounting and retains exact move-only
+allocation, host-buffer, range-use, and native-ticket custody through confirmed
+publication, poll, bounded wait, completion, and settlement. Recoverable
+prepublication failure restores the original owners; retained or later
+uncertainty becomes opaque process-teardown custody. The adapter is
+single-flight and is not wired into `RuntimeContextV1`, `RuntimeAsyncEngineV1`,
+or Worker V4/V5. Exact quiescent-frontier retirement reclaims settled ledger
+history and returns stale or substituted allocation/frontier custody unchanged;
+native-neutral tests cover 66 sequential transition cycles. Its independent
+executable and Verus models bring the pinned
+abstract totals to 259 obligations and 159 rejected mutations, without a
+Rust-to-Verus or native refinement claim. No hardware or performance evidence
+is attached to this tranche.
+
 The direct-KFD backend also exposes an opt-in bounded profiler. It records
 address-free logical resource lifecycle, host staging read/write ranges, native
 queue creation/teardown, successful AQL publication, completion, and

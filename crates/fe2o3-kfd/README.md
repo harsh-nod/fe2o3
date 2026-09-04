@@ -916,12 +916,16 @@ core around exactly one existing mapped device-local allocation. It accepts
 either the ordinary single-device mapped lease or an already complete,
 canonical two-device peer mapping. The non-cloneable owner and every use lease
 are thread-affine. They expose no GPU address, native allocation handle,
-descriptor, pointer, or mapping identity, and use neither shared ownership nor
-interior locking.
+descriptor, pointer, or mapping identity. Internal `Rc` identity is used only
+to bind move-only custody to one owner incarnation; there is no interior
+locking or externally cloneable allocation authority.
 
 The owner retains the existing private allocation generation, selected device,
-VM, and mapped-state identity for exact substitution checks. A fixed 64-slot
-ledger admits Compute, LocalSdma, and peer-mapped source/destination
+VM, and mapped-state identity for exact substitution checks. Each concrete
+owner also has a private, non-resettable incarnation identity carried by every
+use lease and dependency frontier, so demotion and re-promotion of the same
+native allocation cannot make old custody current again. A fixed 64-slot ledger
+admits Compute, LocalSdma, and peer-mapped source/destination
 classifications over checked nonempty allocation subranges. Operation selects
 the access class; callers cannot provide a contradictory access value.
 Overlapping reads can coexist and disjoint uses can coexist. Any active
@@ -937,7 +941,7 @@ active use. Caller-reported indeterminate publication or currentness loss
 quarantines the owner and blocks normal extraction; `Drop` performs no KFD
 operation.
 
-This core does not yet connect to the compute AQL or SDMA packet owners. Its
+Used directly, this core does not connect to the compute AQL or SDMA packet owners. Its
 `Prepared`, `Published`, `Completed`, dependency-frontier, timeout, and
 quarantine transitions are host-side custody states invoked by a future
 adapter; they are not observations of a queue, packet, signal, device, driver,
@@ -946,6 +950,52 @@ not a `Gfx942XgmiRouteV1`: the peer-mapped operation names grant no route
 direction, topology generation, home endpoint, selected SDMA engine, XGMI
 publication, or completion authority. The currentness-loss entry point records
 only a caller report and performs no currentness check. Queue-owned publication
-callbacks, exact compute/SDMA binding, completion conversion, live currentness
-checks, and terminal process-teardown custody remain the next integration
-tranche. There is no concrete-to-model or formal proof for this ledger yet.
+callbacks and exact compute binding remain separate integration work. There is
+no executable-Rust refinement proof for this ledger.
+
+## R18 targeted persistent local-SDMA adapter
+
+`promote_sdma_device_buffer_to_persistent_allocation_v1` moves one existing
+queue-owned device buffer into `Gfx942QueuePersistentAllocationV1` without
+changing `sdma_outstanding_buffers`. The wrapper remains bound to the exact
+parent `QueueKeyV1`, native child queue ID, target engine, pool generation,
+mapped allocation identity, and full physical extent. Admission is limited to
+one page-multiple local allocation no larger than 256 MiB and one single
+targeted queue. Engine 1 admits only H2D; engine 0 admits only D2H. Directional,
+striped, generic untargeted, peer-mapped, XGMI, compute, and concurrent range
+uses are outside this adapter.
+
+`submit_persistent_sdma_copy_v1` consumes that wrapper and exactly one ordinary
+host SDMA buffer. It reserves and prepares the derived R17 LocalSdma use, then
+moves the exact device lease into the existing SDMA queue record. Prepared and
+published custody bind the host storage identity, pool generation, logical and
+physical extents, plus the exact planned lower ticket slot and generation.
+Clean pre-publication rejection restores only those exact inputs and cancels the
+prepared use.
+Lower-layer `Retained` custody quarantines the use while it is still Prepared;
+it never fabricates a Published transition. Only confirmed lower publication
+advances the use to Published. Nonblocking
+`poll_persistent_sdma_copy_v1` and bounded
+`wait_persistent_sdma_copy_for_v1` retain the same move-only submission on
+pending or timeout. Exact completion authenticates the queue record's device
+identity, restores the original persistent owner, and advances through
+Completed and Settled. Demotion is available only after quiescent,
+non-quarantined restoration and advances the inherited pool generation once.
+The consuming `retire_settled_frontier_v1` allocation transition reclaims the
+bounded settled ledger after quiescence; it accepts only the exact latest
+frontier and returns both move-only inputs unchanged on stale or substituted
+frontiers. Retirement performs no native operation and does not change the
+inherited outstanding-buffer debit.
+
+Terminal currentness, publication, ticket, or completion uncertainty returns
+opaque process-teardown custody. No post-publication failure path allocates a
+replacement custody object or exposes the raw adapted device buffer to the
+ordinary recycle/release API. Host tests cover Prepared quarantine, exact
+detach/restore, pending and timeout retention, exact completion settlement,
+terminal completion custody, more than 64 sequential publish/complete/retire
+cycles, stale and substituted frontier rejection, demote/re-promote frontier
+ABA rejection, same-queue host and ticket substitution rejection, and the
+recoverable/retained/confirmed branch separation. These tests perform no KFD,
+DRM, SDMA, HIP, HSA, firmware, or GPU work. The adapter is not hardware
+execution evidence, a concurrency claim, a copy-performance result, or an
+executable-Rust/formal refinement proof.

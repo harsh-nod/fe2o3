@@ -47,6 +47,21 @@ use super::submit::{
     NativeBarrierAndSubmissionFailureV1, initialize_amd_aql_control, initialize_invalid_ring,
 };
 use super::*;
+use crate::persistent_allocation::{
+    Gfx942PersistentDependencyFrontierV1, Gfx942PersistentDeviceAllocationV1,
+    Gfx942PersistentOperationV1, Gfx942PersistentPreparedV1, Gfx942PersistentQuarantineReasonV1,
+    Gfx942PersistentUseErrorV1, Gfx942PersistentUseLeaseV1, Gfx942PersistentUseRequestV1,
+};
+use crate::persistent_sdma::{
+    GFX942_PERSISTENT_SDMA_MAX_ALLOCATION_BYTES_V1, Gfx942PersistentSdmaAttachmentV1,
+    Gfx942PersistentSdmaCompletedV1, Gfx942PersistentSdmaCopyPollV1,
+    Gfx942PersistentSdmaDemotionFailureV1, Gfx942PersistentSdmaDirectionV1,
+    Gfx942PersistentSdmaExecutionCustodyV1, Gfx942PersistentSdmaExecutionFailureV1,
+    Gfx942PersistentSdmaHostBindingV1, Gfx942PersistentSdmaPromotionFailureV1,
+    Gfx942PersistentSdmaSubmissionCustodyV1, Gfx942PersistentSdmaSubmissionFailureV1,
+    Gfx942PersistentSdmaSubmissionV1, Gfx942PersistentSdmaTerminalCustodyV1,
+    Gfx942PersistentSdmaTerminalStateV1, Gfx942QueuePersistentAllocationV1,
+};
 use crate::queue_linux::{
     LinuxCwsrShadowPagesV1, LinuxCwsrShadowsAfterEventDestroyedV1,
     LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1, LinuxDoorbellSliceV1,
@@ -63,8 +78,9 @@ use crate::sdma::{
     Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueueShardTicketsV1,
     Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
     Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1, Gfx942SdmaUnpublishedCopyRequestV1,
-    MultiQueueSdmaSubmitFailureV1, allocate_device_buffer, allocate_host_buffer, read_host_buffer,
-    release_buffer, striped_sdma_queue_count_is_admitted, write_host_buffer,
+    MultiQueueSdmaSubmitFailureV1, PreparedSdmaPublicationFailureV1, allocate_device_buffer,
+    allocate_host_buffer, read_host_buffer, release_buffer, striped_sdma_queue_count_is_admitted,
+    write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -1489,6 +1505,677 @@ fn classify_sdma_batch_execution_finish(
         }
         Some(_) => Gfx942SdmaBatchExecutionFinishV1::Terminal,
     }
+}
+
+/// Native-neutral custody captured immediately before one lower SDMA
+/// publication attempt. This is deliberately crate-private: the public API
+/// exposes only retryable, published, or process-teardown custody.
+pub(crate) struct PersistentSdmaPreparedCustodyV1 {
+    allocation: Gfx942QueuePersistentAllocationV1,
+    prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    planned_ticket: Gfx942SdmaCopyTicketV1,
+    host_binding: Gfx942PersistentSdmaHostBindingV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+}
+
+// Keeping move-only request custody inline avoids allocation on a failure path.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum PersistentSdmaPublicationObservationV1 {
+    Recoverable(Gfx942SdmaCopyRequestV1),
+    Retained(Gfx942SdmaCopyTicketV1),
+    Confirmed(Gfx942SdmaCopyTicketV1),
+}
+
+pub(crate) enum PersistentSdmaPublicationTransitionV1 {
+    Retryable {
+        allocation: Gfx942QueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+    },
+    Published(Gfx942PersistentSdmaSubmissionV1),
+    ProcessTeardown(Gfx942PersistentSdmaTerminalCustodyV1),
+}
+
+fn prepared_persistent_sdma_terminal_custody(
+    custody: PersistentSdmaPreparedCustodyV1,
+    request: Gfx942SdmaCopyRequestV1,
+    reason: Gfx942PersistentQuarantineReasonV1,
+) -> Gfx942PersistentSdmaTerminalCustodyV1 {
+    let PersistentSdmaPreparedCustodyV1 {
+        allocation,
+        prepared,
+        planned_ticket: _,
+        host_binding,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+    } = custody;
+    let sequence = prepared.sequence();
+    let state = match restore_persistent_sdma_request(
+        allocation,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+        host_binding,
+        request,
+    ) {
+        Ok((mut allocation, host)) => {
+            allocation
+                .owner
+                .quarantine_prepared(prepared, reason)
+                .expect("private prepared use must quarantine");
+            Gfx942PersistentSdmaTerminalStateV1::PreparedRestored { allocation, host }
+        }
+        Err((mut allocation, request)) => {
+            allocation
+                .owner
+                .quarantine_prepared(prepared, reason)
+                .expect("private prepared use must quarantine");
+            Gfx942PersistentSdmaTerminalStateV1::PreparedUnrestored {
+                allocation,
+                request,
+            }
+        }
+    };
+    Gfx942PersistentSdmaTerminalCustodyV1 {
+        direction,
+        sequence: Some(sequence),
+        state,
+    }
+}
+
+/// Applies the production ownership transition after a lower publication
+/// observation. It performs no native I/O and can therefore be exercised on a
+/// host with injected lower observations.
+pub(crate) fn transition_persistent_sdma_publication_v1(
+    custody: PersistentSdmaPreparedCustodyV1,
+    observation: PersistentSdmaPublicationObservationV1,
+    enclosing_operation_succeeded: bool,
+    closing_currentness_succeeded: bool,
+) -> PersistentSdmaPublicationTransitionV1 {
+    match observation {
+        PersistentSdmaPublicationObservationV1::Recoverable(request)
+            if enclosing_operation_succeeded && closing_currentness_succeeded =>
+        {
+            let PersistentSdmaPreparedCustodyV1 {
+                allocation,
+                prepared,
+                planned_ticket,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+            } = custody;
+            match restore_persistent_sdma_request(
+                allocation,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                request,
+            ) {
+                Ok((mut allocation, host)) => {
+                    allocation
+                        .owner
+                        .cancel_prepared(prepared)
+                        .expect("private prepared use must cancel");
+                    PersistentSdmaPublicationTransitionV1::Retryable { allocation, host }
+                }
+                Err((allocation, request)) => {
+                    PersistentSdmaPublicationTransitionV1::ProcessTeardown(
+                        prepared_persistent_sdma_terminal_custody(
+                            PersistentSdmaPreparedCustodyV1 {
+                                allocation,
+                                prepared,
+                                planned_ticket,
+                                host_binding,
+                                direction,
+                                host_offset,
+                                device_offset,
+                                copy_bytes,
+                            },
+                            request,
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                        ),
+                    )
+                }
+            }
+        }
+        PersistentSdmaPublicationObservationV1::Recoverable(request) => {
+            PersistentSdmaPublicationTransitionV1::ProcessTeardown(
+                prepared_persistent_sdma_terminal_custody(
+                    custody,
+                    request,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                ),
+            )
+        }
+        PersistentSdmaPublicationObservationV1::Retained(ticket) => {
+            let PersistentSdmaPreparedCustodyV1 {
+                mut allocation,
+                prepared,
+                planned_ticket: _,
+                host_binding: _,
+                direction,
+                host_offset: _,
+                device_offset: _,
+                copy_bytes: _,
+            } = custody;
+            let sequence = prepared.sequence();
+            allocation
+                .owner
+                .quarantine_prepared(
+                    prepared,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate,
+                )
+                .expect("private prepared use must quarantine");
+            PersistentSdmaPublicationTransitionV1::ProcessTeardown(
+                Gfx942PersistentSdmaTerminalCustodyV1 {
+                    direction,
+                    sequence: Some(sequence),
+                    state: Gfx942PersistentSdmaTerminalStateV1::PreparedQueueRetained {
+                        allocation,
+                        ticket,
+                    },
+                },
+            )
+        }
+        PersistentSdmaPublicationObservationV1::Confirmed(ticket) => {
+            let PersistentSdmaPreparedCustodyV1 {
+                mut allocation,
+                prepared,
+                planned_ticket,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+            } = custody;
+            let published = allocation
+                .owner
+                .publish(prepared)
+                .expect("private prepared use must publish after confirmed publication");
+            let ticket_identity_exact = ticket == planned_ticket;
+            if enclosing_operation_succeeded
+                && closing_currentness_succeeded
+                && ticket_identity_exact
+            {
+                return PersistentSdmaPublicationTransitionV1::Published(
+                    Gfx942PersistentSdmaSubmissionV1 {
+                        allocation,
+                        published,
+                        ticket,
+                        host_binding,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    },
+                );
+            }
+            let sequence = published.sequence();
+            allocation
+                .owner
+                .quarantine_published(
+                    published,
+                    if enclosing_operation_succeeded && closing_currentness_succeeded {
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate
+                    } else {
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss
+                    },
+                )
+                .expect("private published use must quarantine");
+            PersistentSdmaPublicationTransitionV1::ProcessTeardown(
+                Gfx942PersistentSdmaTerminalCustodyV1 {
+                    direction,
+                    sequence: Some(sequence),
+                    state: Gfx942PersistentSdmaTerminalStateV1::PublishedQueueRetained {
+                        allocation,
+                        ticket,
+                    },
+                },
+            )
+        }
+    }
+}
+
+// Keeping completed authority inline avoids allocation after device completion.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum PersistentSdmaCompletionObservationV1 {
+    Pending,
+    Timeout,
+    QueueRetained,
+    Completed(Gfx942SdmaCompletedCopyV1),
+}
+
+pub(crate) enum PersistentSdmaCompletionTransitionV1 {
+    Pending(Gfx942PersistentSdmaSubmissionV1),
+    Timeout(Gfx942PersistentSdmaSubmissionV1),
+    Completed(Gfx942PersistentSdmaCompletedV1),
+    ProcessTeardown(Gfx942PersistentSdmaTerminalCustodyV1),
+}
+
+/// Applies the production ownership transition after one lower completion
+/// observation. `enclosing_operation_succeeded` closes the native currentness
+/// envelope around the observation.
+pub(crate) fn transition_persistent_sdma_completion_v1(
+    mut submission: Gfx942PersistentSdmaSubmissionV1,
+    observation: PersistentSdmaCompletionObservationV1,
+    enclosing_operation_succeeded: bool,
+) -> PersistentSdmaCompletionTransitionV1 {
+    match observation {
+        PersistentSdmaCompletionObservationV1::Pending if enclosing_operation_succeeded => {
+            return PersistentSdmaCompletionTransitionV1::Pending(submission);
+        }
+        PersistentSdmaCompletionObservationV1::Timeout if enclosing_operation_succeeded => {
+            let timeout = submission
+                .allocation
+                .owner
+                .observe_timeout(submission.published)
+                .expect("private published use must retain timeout custody");
+            submission.published = timeout.into_published();
+            return PersistentSdmaCompletionTransitionV1::Timeout(submission);
+        }
+        PersistentSdmaCompletionObservationV1::Completed(completed) => {
+            let Gfx942PersistentSdmaSubmissionV1 {
+                allocation,
+                published,
+                ticket: _,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+            } = submission;
+            let sequence = published.sequence();
+            if !enclosing_operation_succeeded {
+                let mut allocation = allocation;
+                allocation
+                    .owner
+                    .quarantine_published(
+                        published,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                    )
+                    .expect("private published use must quarantine");
+                return PersistentSdmaCompletionTransitionV1::ProcessTeardown(
+                    Gfx942PersistentSdmaTerminalCustodyV1 {
+                        direction,
+                        sequence: Some(sequence),
+                        state: Gfx942PersistentSdmaTerminalStateV1::CompletedUnrestored {
+                            allocation,
+                            completed,
+                        },
+                    },
+                );
+            }
+            return match restore_completed_persistent_sdma_copy(
+                allocation,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                completed,
+            ) {
+                Ok((mut allocation, host)) => {
+                    let completed_use = allocation
+                        .owner
+                        .complete(published)
+                        .expect("private published use must complete");
+                    let frontier = allocation
+                        .owner
+                        .settle(completed_use)
+                        .expect("single-flight persistent use must settle in order");
+                    PersistentSdmaCompletionTransitionV1::Completed(
+                        Gfx942PersistentSdmaCompletedV1::new(
+                            allocation, host, frontier, direction, copy_bytes,
+                        ),
+                    )
+                }
+                Err((mut allocation, completed)) => {
+                    allocation
+                        .owner
+                        .quarantine_published(
+                            published,
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                        )
+                        .expect("private published use must quarantine");
+                    PersistentSdmaCompletionTransitionV1::ProcessTeardown(
+                        Gfx942PersistentSdmaTerminalCustodyV1 {
+                            direction,
+                            sequence: Some(sequence),
+                            state: Gfx942PersistentSdmaTerminalStateV1::CompletedUnrestored {
+                                allocation,
+                                completed,
+                            },
+                        },
+                    )
+                }
+            };
+        }
+        PersistentSdmaCompletionObservationV1::Pending
+        | PersistentSdmaCompletionObservationV1::Timeout
+        | PersistentSdmaCompletionObservationV1::QueueRetained => {}
+    }
+
+    let Gfx942PersistentSdmaSubmissionV1 {
+        mut allocation,
+        published,
+        ticket,
+        host_binding: _,
+        direction,
+        host_offset: _,
+        device_offset: _,
+        copy_bytes: _,
+    } = submission;
+    let sequence = published.sequence();
+    allocation
+        .owner
+        .quarantine_published(
+            published,
+            if enclosing_operation_succeeded {
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate
+            } else {
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss
+            },
+        )
+        .expect("private published use must quarantine");
+    PersistentSdmaCompletionTransitionV1::ProcessTeardown(Gfx942PersistentSdmaTerminalCustodyV1 {
+        direction,
+        sequence: Some(sequence),
+        state: Gfx942PersistentSdmaTerminalStateV1::PublishedQueueRetained { allocation, ticket },
+    })
+}
+
+fn map_persistent_sdma_use_error(
+    error: Gfx942PersistentUseErrorV1,
+) -> ComputeAqlQueueSessionErrorV1 {
+    ComputeAqlQueueSessionErrorV1::Contract(match error {
+        Gfx942PersistentUseErrorV1::InvalidRange => "persistent SDMA device range",
+        Gfx942PersistentUseErrorV1::OperationRequiresPeerMapping => {
+            "persistent SDMA local operation mapping"
+        }
+        Gfx942PersistentUseErrorV1::Capacity => "persistent SDMA use ledger full",
+        Gfx942PersistentUseErrorV1::GenerationExhausted => {
+            "persistent SDMA use generation exhausted"
+        }
+        Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration => {
+            "persistent SDMA use owner or generation"
+        }
+        Gfx942PersistentUseErrorV1::WrongState => "persistent SDMA use state",
+        Gfx942PersistentUseErrorV1::OverlappingWriterActive => {
+            "persistent SDMA overlapping writer active"
+        }
+        Gfx942PersistentUseErrorV1::DependencyRequired => "persistent SDMA dependency required",
+        Gfx942PersistentUseErrorV1::DependencyNotRequired => {
+            "persistent SDMA dependency not required"
+        }
+        Gfx942PersistentUseErrorV1::StaleOrSubstitutedDependency => {
+            "persistent SDMA stale or substituted dependency"
+        }
+        Gfx942PersistentUseErrorV1::EarlierUseNotSettled => {
+            "persistent SDMA earlier use not settled"
+        }
+        Gfx942PersistentUseErrorV1::Quarantined => "persistent SDMA allocation quarantined",
+        Gfx942PersistentUseErrorV1::OutstandingUses => {
+            "persistent SDMA allocation has outstanding uses"
+        }
+    })
+}
+
+fn persistent_sdma_request(
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host: Gfx942SdmaBufferV1,
+    host_offset: u64,
+    device: Gfx942SdmaBufferV1,
+    device_offset: u64,
+    copy_bytes: u32,
+) -> Gfx942SdmaCopyRequestV1 {
+    match direction {
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+            Gfx942SdmaCopyRequestV1::new(host, host_offset, device, device_offset, copy_bytes)
+        }
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+            Gfx942SdmaCopyRequestV1::new(device, device_offset, host, host_offset, copy_bytes)
+        }
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn restore_persistent_sdma_request(
+    mut allocation: Gfx942QueuePersistentAllocationV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+    host_binding: Gfx942PersistentSdmaHostBindingV1,
+    request: Gfx942SdmaCopyRequestV1,
+) -> Result<
+    (Gfx942QueuePersistentAllocationV1, Gfx942SdmaBufferV1),
+    (Gfx942QueuePersistentAllocationV1, Gfx942SdmaCopyRequestV1),
+> {
+    let matches_offsets = request.copy_bytes == copy_bytes
+        && match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                request.source_offset == host_offset
+                    && request.destination_offset == device_offset
+                    && request.source.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+                    && request.destination.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                request.source_offset == device_offset
+                    && request.destination_offset == host_offset
+                    && request.source.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
+                    && request.destination.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+            }
+        };
+    if !matches_offsets {
+        return Err((allocation, request));
+    }
+    let Gfx942SdmaCopyRequestV1 {
+        source,
+        source_offset: _,
+        destination,
+        destination_offset: _,
+        copy_bytes,
+    } = request;
+    let (device, host) = match direction {
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
+    };
+    let attachment = allocation.attachment;
+    let exact = device.belongs_to(attachment.queue)
+        && host_binding.matches(&host)
+        && device.storage_identity() == attachment.storage_identity
+        && device.pool_generation() == attachment.pool_generation
+        && device.requested_bytes() == attachment.logical_bytes
+        && device.physical_bytes() == attachment.physical_bytes;
+    if !exact {
+        return Err((
+            allocation,
+            persistent_sdma_request(
+                direction,
+                host,
+                host_offset,
+                device,
+                device_offset,
+                copy_bytes,
+            ),
+        ));
+    }
+    let (storage, owner, pool_generation, logical_bytes) = device.into_bridge_parts();
+    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
+        unreachable!("checked device-local SDMA storage")
+    };
+    if let Err((_, lease)) = allocation.owner.restore_local_native_from_sdma(lease) {
+        let device = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            owner,
+            pool_generation,
+            logical_bytes,
+        );
+        return Err((
+            allocation,
+            persistent_sdma_request(
+                direction,
+                host,
+                host_offset,
+                device,
+                device_offset,
+                copy_bytes,
+            ),
+        ));
+    }
+    Ok((allocation, host))
+}
+
+#[allow(clippy::result_large_err)]
+fn restore_completed_persistent_sdma_copy(
+    allocation: Gfx942QueuePersistentAllocationV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+    host_binding: Gfx942PersistentSdmaHostBindingV1,
+    completed: Gfx942SdmaCompletedCopyV1,
+) -> Result<
+    (Gfx942QueuePersistentAllocationV1, Gfx942SdmaBufferV1),
+    (Gfx942QueuePersistentAllocationV1, Gfx942SdmaCompletedCopyV1),
+> {
+    if completed.copy_bytes != copy_bytes
+        || completed.source_offset
+            != match direction {
+                Gfx942PersistentSdmaDirectionV1::HostToDevice => host_offset,
+                Gfx942PersistentSdmaDirectionV1::DeviceToHost => device_offset,
+            }
+        || completed.destination_offset
+            != match direction {
+                Gfx942PersistentSdmaDirectionV1::HostToDevice => device_offset,
+                Gfx942PersistentSdmaDirectionV1::DeviceToHost => host_offset,
+            }
+    {
+        return Err((allocation, completed));
+    }
+    let Gfx942SdmaCompletedCopyV1 {
+        source,
+        destination,
+        copy_bytes,
+        source_offset,
+        destination_offset,
+    } = completed;
+    let request = Gfx942SdmaCopyRequestV1 {
+        source,
+        source_offset,
+        destination,
+        destination_offset,
+        copy_bytes,
+    };
+    match restore_persistent_sdma_request(
+        allocation,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+        host_binding,
+        request,
+    ) {
+        Ok(restored) => Ok(restored),
+        Err((allocation, request)) => {
+            let Gfx942SdmaCopyRequestV1 {
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                copy_bytes,
+            } = request;
+            Err((
+                allocation,
+                Gfx942SdmaCompletedCopyV1 {
+                    source,
+                    destination,
+                    copy_bytes,
+                    source_offset,
+                    destination_offset,
+                },
+            ))
+        }
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn demote_persistent_sdma_custody_v1(
+    allocation: Gfx942QueuePersistentAllocationV1,
+    outstanding_buffers: usize,
+) -> Result<
+    (Gfx942SdmaBufferV1, usize),
+    (
+        Gfx942PersistentUseErrorV1,
+        Gfx942QueuePersistentAllocationV1,
+    ),
+> {
+    let Some(next_generation) = allocation.attachment.pool_generation.checked_add(1) else {
+        return Err((Gfx942PersistentUseErrorV1::GenerationExhausted, allocation));
+    };
+    let Gfx942QueuePersistentAllocationV1 { owner, attachment } = allocation;
+    let native = match owner.try_into_native() {
+        Ok(native) => native,
+        Err((error, owner)) => {
+            return Err((
+                error,
+                Gfx942QueuePersistentAllocationV1 { owner, attachment },
+            ));
+        }
+    };
+    let crate::persistent_allocation::Gfx942PersistentNativeAllocationV1::Local(lease) = native
+    else {
+        unreachable!("validated persistent SDMA custody is a local mapping")
+    };
+    Ok((
+        Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            attachment.queue,
+            next_generation,
+            attachment.logical_bytes,
+        ),
+        outstanding_buffers,
+    ))
+}
+
+#[allow(clippy::result_large_err)]
+fn promote_persistent_sdma_custody_v1(
+    buffer: Gfx942SdmaBufferV1,
+    native_queue_id: u32,
+    engine_index: u32,
+) -> Result<Gfx942QueuePersistentAllocationV1, Gfx942SdmaBufferV1> {
+    let storage_identity = buffer.storage_identity();
+    let physical_bytes = buffer.physical_bytes();
+    let (storage, queue, pool_generation, logical_bytes) = buffer.into_bridge_parts();
+    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
+        return Err(Gfx942SdmaBufferV1::from_bridge_parts(
+            storage,
+            queue,
+            pool_generation,
+            logical_bytes,
+        ));
+    };
+    Ok(Gfx942QueuePersistentAllocationV1 {
+        owner: Gfx942PersistentDeviceAllocationV1::from_local_mapping(lease),
+        attachment: Gfx942PersistentSdmaAttachmentV1 {
+            queue,
+            native_queue_id,
+            engine_index,
+            pool_generation,
+            logical_bytes,
+            physical_bytes,
+            storage_identity,
+        },
+    })
 }
 
 #[must_use = "a recoverable buffer-transition failure returns the mapped buffer authority"]
@@ -3439,6 +4126,762 @@ impl ComputeAqlQueueSessionV1 {
             return Ok(buffer);
         }
         self.allocate_sdma_device_buffer(bytes, alignment)
+    }
+
+    /// Promotes one exact queue-owned device buffer into the R18 persistent
+    /// adapter without changing the queue's outstanding-buffer debit.
+    ///
+    /// Admission is intentionally narrow: one full physical extent of at most
+    /// 256 MiB on a single targeted gfx942 engine. Engine 1 admits H2D and
+    /// engine 0 admits D2H. Directional and striped queue sets are rejected.
+    #[allow(clippy::result_large_err)]
+    pub fn promote_sdma_device_buffer_to_persistent_allocation_v1(
+        &mut self,
+        buffer: Gfx942SdmaBufferV1,
+    ) -> Result<Gfx942QueuePersistentAllocationV1, Gfx942PersistentSdmaPromotionFailureV1> {
+        let recover = |error, buffer| Gfx942PersistentSdmaPromotionFailureV1 {
+            error,
+            recovered: Some(buffer),
+        };
+        if !buffer.belongs_to(self.key) {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                buffer,
+            ));
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(recover(error, buffer));
+        }
+        let logical_bytes = buffer.requested_bytes();
+        let physical_bytes = buffer.physical_bytes();
+        if buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal
+            || logical_bytes != physical_bytes
+            || logical_bytes == 0
+            || logical_bytes > GFX942_PERSISTENT_SDMA_MAX_ALLOCATION_BYTES_V1
+            || !logical_bytes.is_multiple_of(crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1)
+            || buffer.pool_generation() == 0
+        {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA promotion requires one full page-multiple device extent up to 256 MiB",
+                ),
+                buffer,
+            ));
+        }
+        let observation = self.sdma.as_ref().and_then(|owner| {
+            owner
+                .exact_targeted_observation(crate::sdma::GFX942_SDMA_H2D_ENGINE_INDEX_V1)
+                .or_else(|| {
+                    owner.exact_targeted_observation(crate::sdma::GFX942_SDMA_D2H_ENGINE_INDEX_V1)
+                })
+        });
+        let Some(observation) = observation else {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA promotion requires one exact targeted engine 0 or 1",
+                ),
+                buffer,
+            ));
+        };
+        let validation = self.with_live_queue_memory_model(|memory| {
+            buffer
+                .checked_gpu_subrange(memory, 0, physical_bytes)
+                .map(|_| ())
+                .map_err(Into::into)
+        });
+        if let Err(error) = validation {
+            if self.terminal_poisoned {
+                return Err(Gfx942PersistentSdmaPromotionFailureV1 {
+                    error,
+                    recovered: None,
+                });
+            }
+            return Err(recover(error, buffer));
+        }
+        match promote_persistent_sdma_custody_v1(
+            buffer,
+            observation.queue_id,
+            observation
+                .engine_index
+                .expect("exact targeted observation has an engine"),
+        ) {
+            Ok(allocation) => Ok(allocation),
+            Err(_buffer) => {
+                self.poison_terminal();
+                Err(Gfx942PersistentSdmaPromotionFailureV1 {
+                    error: ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent SDMA promotion storage substitution",
+                    ),
+                    recovered: None,
+                })
+            }
+        }
+    }
+
+    /// Demotes a quiescent, non-quarantined persistent owner back into the
+    /// ordinary SDMA buffer API. The inherited outstanding-buffer debit is
+    /// preserved and the pool generation advances exactly once.
+    #[allow(clippy::result_large_err)]
+    pub fn demote_persistent_allocation_to_sdma_device_buffer_v1(
+        &mut self,
+        allocation: Gfx942QueuePersistentAllocationV1,
+    ) -> Result<Gfx942SdmaBufferV1, Gfx942PersistentSdmaDemotionFailureV1> {
+        let recover = |error, allocation| Gfx942PersistentSdmaDemotionFailureV1 {
+            error,
+            recovered: Some(allocation),
+        };
+        if allocation.attachment.queue != self.key {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract("foreign persistent SDMA allocation owner"),
+                allocation,
+            ));
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(recover(error, allocation));
+        }
+        if !self.persistent_sdma_attachment_is_current(&allocation.attachment) {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA targeted queue attachment changed",
+                ),
+                allocation,
+            ));
+        }
+        if allocation
+            .attachment
+            .pool_generation
+            .checked_add(1)
+            .is_none()
+        {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA pool generation exhausted",
+                ),
+                allocation,
+            ));
+        }
+        let Some(lease) = allocation.owner.local_native_for_sdma() else {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA allocation is active or not local",
+                ),
+                allocation,
+            ));
+        };
+        let validation = self.with_live_queue_memory_model(|memory| {
+            memory
+                .mapped_gfx942_device_memory_facts(lease)
+                .map(|_| ())
+                .map_err(Into::into)
+        });
+        if let Err(error) = validation {
+            if self.terminal_poisoned {
+                return Err(Gfx942PersistentSdmaDemotionFailureV1 {
+                    error,
+                    recovered: None,
+                });
+            }
+            return Err(recover(error, allocation));
+        }
+        match demote_persistent_sdma_custody_v1(allocation, self.sdma_outstanding_buffers) {
+            Ok((buffer, outstanding_buffers)) => {
+                self.sdma_outstanding_buffers = outstanding_buffers;
+                Ok(buffer)
+            }
+            Err((error, allocation)) => Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(match error {
+                    Gfx942PersistentUseErrorV1::GenerationExhausted => {
+                        "persistent SDMA pool generation exhausted"
+                    }
+                    Gfx942PersistentUseErrorV1::Quarantined => {
+                        "persistent SDMA allocation is quarantined"
+                    }
+                    _ => "persistent SDMA allocation has outstanding uses",
+                }),
+                allocation,
+            )),
+        }
+    }
+
+    /// Publishes one targeted local H2D or D2H copy while preserving the R17
+    /// persistent-use ledger and the existing queue buffer ledger.
+    ///
+    /// Exactly one ordinary host buffer accompanies the persistent device
+    /// allocation. A clean pre-publication rejection returns both. Confirmed
+    /// publication returns a move-only submission; indeterminate publication
+    /// returns observation-only process-teardown custody.
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    pub fn submit_persistent_sdma_copy_v1(
+        &mut self,
+        mut allocation: Gfx942QueuePersistentAllocationV1,
+        dependency: Option<&Gfx942PersistentDependencyFrontierV1>,
+        host: Gfx942SdmaBufferV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+    ) -> Result<Gfx942PersistentSdmaSubmissionV1, Gfx942PersistentSdmaSubmissionFailureV1> {
+        let retryable = |error, allocation, host| Gfx942PersistentSdmaSubmissionFailureV1 {
+            error,
+            custody: Gfx942PersistentSdmaSubmissionCustodyV1::Retryable { allocation, host },
+        };
+        let direction = allocation.direction();
+        if allocation.attachment.queue != self.key
+            || !host.belongs_to(self.key)
+            || host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
+            || copy_bytes == 0
+            || u64::from(copy_bytes) > u64::from(crate::sdma::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)
+            || host_offset
+                .checked_add(u64::from(copy_bytes))
+                .is_none_or(|end| end > host.requested_bytes())
+            || device_offset
+                .checked_add(u64::from(copy_bytes))
+                .is_none_or(|end| end > allocation.byte_len())
+            || !allocation.owner.local_native_is_attached_for_sdma()
+        {
+            return Err(retryable(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA submission owner, buffer, or range",
+                ),
+                allocation,
+                host,
+            ));
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(retryable(error, allocation, host));
+        }
+        if !self.persistent_sdma_attachment_is_current(&allocation.attachment) {
+            return Err(retryable(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA targeted queue attachment changed",
+                ),
+                allocation,
+                host,
+            ));
+        }
+        if let Err(error) = self.check_currentness() {
+            allocation
+                .owner
+                .quarantine_for_caller_reported_currentness_loss();
+            self.poison_terminal();
+            return Err(Gfx942PersistentSdmaSubmissionFailureV1 {
+                error,
+                custody: Gfx942PersistentSdmaSubmissionCustodyV1::ProcessTeardown(
+                    Gfx942PersistentSdmaTerminalCustodyV1 {
+                        direction,
+                        sequence: None,
+                        state: Gfx942PersistentSdmaTerminalStateV1::AdmissionRestored {
+                            allocation,
+                            host,
+                        },
+                    },
+                ),
+            });
+        }
+        let host_binding = Gfx942PersistentSdmaHostBindingV1::capture(&host, self.key);
+        let operation = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                Gfx942PersistentOperationV1::LocalSdmaDestination
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                Gfx942PersistentOperationV1::LocalSdmaSource
+            }
+        };
+        let use_request = match Gfx942PersistentUseRequestV1::new(
+            operation,
+            device_offset,
+            u64::from(copy_bytes),
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                return Err(retryable(
+                    map_persistent_sdma_use_error(error),
+                    allocation,
+                    host,
+                ));
+            }
+        };
+        let reserved = match allocation.owner.reserve(use_request, dependency) {
+            Ok(reserved) => reserved,
+            Err(failure) => {
+                return Err(retryable(
+                    map_persistent_sdma_use_error(failure.error()),
+                    allocation,
+                    host,
+                ));
+            }
+        };
+        let prepared_use = match allocation.owner.prepare(reserved) {
+            Ok(prepared) => prepared,
+            Err(failure) => {
+                let (error, reserved) = failure.into_parts();
+                let _ = allocation.owner.cancel_reserved(reserved);
+                return Err(retryable(
+                    map_persistent_sdma_use_error(error),
+                    allocation,
+                    host,
+                ));
+            }
+        };
+        let lease = match allocation.owner.detach_local_native_for_sdma() {
+            Ok(lease) => lease,
+            Err(error) => {
+                let _ = allocation.owner.cancel_prepared(prepared_use);
+                return Err(retryable(
+                    map_persistent_sdma_use_error(error),
+                    allocation,
+                    host,
+                ));
+            }
+        };
+        let device = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            allocation.attachment.queue,
+            allocation.attachment.pool_generation,
+            allocation.attachment.logical_bytes,
+        );
+        let request = persistent_sdma_request(
+            direction,
+            host,
+            host_offset,
+            device,
+            device_offset,
+            copy_bytes,
+        );
+
+        let mut requests = Some(vec![request]);
+        let mut preparation = None;
+        let prepare_operation = self.with_sdma_owner_memory(|owner, memory| {
+            preparation = Some(owner.prepare_batch_recoverable(
+                memory,
+                requests.take().expect("persistent request consumed once"),
+            ));
+            Ok(())
+        });
+        let preparation = preparation.unwrap_or_else(|| {
+            Err((
+                Gfx942SdmaErrorV1::Contract("persistent SDMA preparation did not execute"),
+                requests.expect("unexecuted preparation retains request"),
+            ))
+        });
+        let closing_prepare = self.check_currentness();
+        let owner_poisoned = self
+            .sdma
+            .as_ref()
+            .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
+        let preparation_terminal = prepare_operation.is_err()
+            || closing_prepare.is_err()
+            || (preparation.is_err() && owner_poisoned);
+        let prepared_batch = match preparation {
+            Ok(batch) if !preparation_terminal => batch,
+            Ok(batch) => {
+                let request = batch
+                    .into_requests()
+                    .pop()
+                    .expect("one persistent SDMA request was prepared");
+                return Err(self.terminal_prepared_persistent_sdma_failure(
+                    prepare_operation
+                        .err()
+                        .or_else(|| closing_prepare.err())
+                        .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "persistent SDMA preparation poisoned its queue",
+                        )),
+                    allocation,
+                    prepared_use,
+                    direction,
+                    host_offset,
+                    device_offset,
+                    copy_bytes,
+                    host_binding,
+                    request,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                ));
+            }
+            Err((error, mut recovered)) if !preparation_terminal => {
+                let request = recovered
+                    .pop()
+                    .expect("one persistent SDMA request was rejected");
+                let (mut allocation, host) = restore_persistent_sdma_request(
+                    allocation,
+                    direction,
+                    host_offset,
+                    device_offset,
+                    copy_bytes,
+                    host_binding,
+                    request,
+                )
+                .unwrap_or_else(|_| unreachable!("exact prepared request must restore"));
+                allocation
+                    .owner
+                    .cancel_prepared(prepared_use)
+                    .expect("private prepared use must cancel");
+                return Err(retryable(error.into(), allocation, host));
+            }
+            Err((error, mut recovered)) => {
+                let request = recovered
+                    .pop()
+                    .expect("one persistent SDMA request was rejected");
+                return Err(self.terminal_prepared_persistent_sdma_failure(
+                    prepare_operation
+                        .err()
+                        .or_else(|| closing_prepare.err())
+                        .unwrap_or_else(|| error.into()),
+                    allocation,
+                    prepared_use,
+                    direction,
+                    host_offset,
+                    device_offset,
+                    copy_bytes,
+                    host_binding,
+                    request,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                ));
+            }
+        };
+
+        let planned_ticket = prepared_batch
+            .exact_single_ticket()
+            .expect("one persistent SDMA request prepares one exact ticket");
+        let mut prepared_batch = Some(prepared_batch);
+        let mut publication = None;
+        let publication_operation = self.with_sdma_owner_memory(|owner, memory| {
+            memory
+                .check_queue_operational_currentness()
+                .map_err(ComputeAqlQueueSessionErrorV1::from)?;
+            publication = Some(
+                owner.submit_prepared_batch_with_custody(
+                    memory,
+                    prepared_batch
+                        .take()
+                        .expect("persistent prepared batch consumed once"),
+                ),
+            );
+            Ok(())
+        });
+        if publication.is_none() {
+            let request = prepared_batch
+                .expect("unexecuted publication retains prepared batch")
+                .into_requests()
+                .pop()
+                .expect("one persistent SDMA request was prepared");
+            return Err(self.terminal_prepared_persistent_sdma_failure(
+                publication_operation
+                    .err()
+                    .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent SDMA publication did not execute",
+                    )),
+                allocation,
+                prepared_use,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                request,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        }
+        match publication.expect("executed publication stores an outcome") {
+            Err(PreparedSdmaPublicationFailureV1::Recoverable { error, prepared }) => {
+                let request = prepared
+                    .into_requests()
+                    .pop()
+                    .expect("one persistent SDMA request was recoverable");
+                let closing = self.check_currentness();
+                let operation_succeeded = publication_operation.is_ok();
+                let closing_succeeded = closing.is_ok();
+                let transition = transition_persistent_sdma_publication_v1(
+                    PersistentSdmaPreparedCustodyV1 {
+                        allocation,
+                        prepared: prepared_use,
+                        planned_ticket,
+                        host_binding,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    },
+                    PersistentSdmaPublicationObservationV1::Recoverable(request),
+                    operation_succeeded,
+                    closing_succeeded,
+                );
+                self.finish_persistent_sdma_publication_transition(
+                    publication_operation
+                        .err()
+                        .or_else(|| closing.err())
+                        .unwrap_or_else(|| error.into()),
+                    transition,
+                )
+            }
+            Err(PreparedSdmaPublicationFailureV1::Retained { error, tickets }) => {
+                let ticket = *tickets
+                    .first()
+                    .expect("one persistent SDMA ticket was retained");
+                let transition = transition_persistent_sdma_publication_v1(
+                    PersistentSdmaPreparedCustodyV1 {
+                        allocation,
+                        prepared: prepared_use,
+                        planned_ticket,
+                        host_binding,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    },
+                    PersistentSdmaPublicationObservationV1::Retained(ticket),
+                    publication_operation.is_ok(),
+                    false,
+                );
+                self.finish_persistent_sdma_publication_transition(
+                    publication_operation.err().unwrap_or_else(|| error.into()),
+                    transition,
+                )
+            }
+            Ok(tickets) => {
+                let [ticket] = tickets.as_slice() else {
+                    unreachable!("one persistent SDMA request produces one ticket")
+                };
+                let ticket = *ticket;
+                let closing = self.check_currentness();
+                let operation_succeeded = publication_operation.is_ok();
+                let closing_succeeded = closing.is_ok();
+                let transition = transition_persistent_sdma_publication_v1(
+                    PersistentSdmaPreparedCustodyV1 {
+                        allocation,
+                        prepared: prepared_use,
+                        planned_ticket,
+                        host_binding,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    },
+                    PersistentSdmaPublicationObservationV1::Confirmed(ticket),
+                    operation_succeeded,
+                    closing_succeeded,
+                );
+                self.finish_persistent_sdma_publication_transition(
+                    publication_operation
+                        .err()
+                        .or_else(|| closing.err())
+                        .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                            "persistent SDMA ticket identity",
+                        )),
+                    transition,
+                )
+            }
+        }
+    }
+
+    /// Nonblocking completion observation for one persistent SDMA submission.
+    /// Pending returns the exact submission unchanged so an async progress
+    /// loop can poll again without reconstructing ticket or allocation state.
+    #[allow(clippy::result_large_err)]
+    pub fn poll_persistent_sdma_copy_v1(
+        &mut self,
+        submission: Gfx942PersistentSdmaSubmissionV1,
+    ) -> Result<Gfx942PersistentSdmaCopyPollV1, Gfx942PersistentSdmaExecutionFailureV1> {
+        let pending_failure = |error, submission| Gfx942PersistentSdmaExecutionFailureV1 {
+            error,
+            custody: Gfx942PersistentSdmaExecutionCustodyV1::Pending(submission),
+        };
+        if submission.allocation.attachment.queue != self.key {
+            return Err(pending_failure(
+                ComputeAqlQueueSessionErrorV1::Contract("foreign persistent SDMA submission owner"),
+                submission,
+            ));
+        }
+        if self.terminal_poisoned {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "terminal queue session requires process teardown",
+                ),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(pending_failure(error, submission));
+        }
+        if !self.persistent_sdma_attachment_is_current(&submission.allocation.attachment) {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA targeted queue attachment changed",
+                ),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        }
+        if !crate::sdma::ticket_matches_queue_occurrence(
+            submission.ticket,
+            submission.allocation.attachment.queue,
+            submission.allocation.attachment.native_queue_id,
+        ) {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                ComputeAqlQueueSessionErrorV1::Contract("persistent SDMA ticket identity"),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+            ));
+        }
+        let ticket = submission.ticket;
+        let mut poll_result = None;
+        let poll_operation = self.with_sdma_owner_memory(|owner, memory| {
+            poll_result = Some(owner.poll(memory, ticket));
+            Ok(())
+        });
+        let Some(poll_result) = poll_result else {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                poll_operation
+                    .err()
+                    .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent SDMA poll did not execute",
+                    )),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        };
+        let operation_succeeded = poll_operation.is_ok();
+        let (observation, lower_error) = match poll_result {
+            Ok(Gfx942SdmaCopyPollV1::Pending) => {
+                (PersistentSdmaCompletionObservationV1::Pending, None)
+            }
+            Err(error) => (
+                PersistentSdmaCompletionObservationV1::QueueRetained,
+                Some(error.into()),
+            ),
+            Ok(Gfx942SdmaCopyPollV1::Completed(completed)) => (
+                PersistentSdmaCompletionObservationV1::Completed(completed),
+                None,
+            ),
+        };
+        let transition =
+            transition_persistent_sdma_completion_v1(submission, observation, operation_succeeded);
+        match transition {
+            PersistentSdmaCompletionTransitionV1::Pending(submission) => {
+                Ok(Gfx942PersistentSdmaCopyPollV1::Pending(submission))
+            }
+            PersistentSdmaCompletionTransitionV1::Completed(completed) => {
+                Ok(Gfx942PersistentSdmaCopyPollV1::Completed(completed))
+            }
+            PersistentSdmaCompletionTransitionV1::Timeout(_) => {
+                unreachable!("a poll observation cannot produce timeout custody")
+            }
+            PersistentSdmaCompletionTransitionV1::ProcessTeardown(custody) => Err(self
+                .terminal_persistent_sdma_execution_transition(
+                    poll_operation.err().or(lower_error).unwrap_or(
+                        ComputeAqlQueueSessionErrorV1::Contract(
+                            "persistent SDMA completed resource identity",
+                        ),
+                    ),
+                    custody,
+                )),
+        }
+    }
+
+    /// Waits for one confirmed persistent SDMA publication. A timeout returns
+    /// the same move-only submission with its ticket and both native owners
+    /// still retained. Any non-timeout uncertainty is observation-only and
+    /// terminal for the queue session.
+    #[allow(clippy::result_large_err)]
+    pub fn wait_persistent_sdma_copy_for_v1(
+        &mut self,
+        submission: Gfx942PersistentSdmaSubmissionV1,
+        timeout: Duration,
+    ) -> Result<Gfx942PersistentSdmaCompletedV1, Gfx942PersistentSdmaExecutionFailureV1> {
+        let pending = |error, submission| Gfx942PersistentSdmaExecutionFailureV1 {
+            error,
+            custody: Gfx942PersistentSdmaExecutionCustodyV1::Pending(submission),
+        };
+        if submission.allocation.attachment.queue != self.key {
+            return Err(pending(
+                ComputeAqlQueueSessionErrorV1::Contract("foreign persistent SDMA submission owner"),
+                submission,
+            ));
+        }
+        if self.terminal_poisoned {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "terminal queue session requires process teardown",
+                ),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(pending(error, submission));
+        }
+        if !self.persistent_sdma_attachment_is_current(&submission.allocation.attachment) {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA targeted queue attachment changed",
+                ),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        }
+        if !crate::sdma::ticket_matches_queue_occurrence(
+            submission.ticket,
+            submission.allocation.attachment.queue,
+            submission.allocation.attachment.native_queue_id,
+        ) {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                ComputeAqlQueueSessionErrorV1::Contract("persistent SDMA ticket identity"),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+            ));
+        }
+
+        let ticket = submission.ticket;
+        let mut wait_result = None;
+        let wait_operation = self.with_sdma_owner_memory(|owner, memory| {
+            wait_result = Some(owner.wait_for(memory, ticket, timeout));
+            Ok(())
+        });
+        let Some(wait_result) = wait_result else {
+            return Err(self.terminal_queued_persistent_sdma_failure(
+                wait_operation
+                    .err()
+                    .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent SDMA wait did not execute",
+                    )),
+                submission,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            ));
+        };
+        let operation_succeeded = wait_operation.is_ok();
+        let (observation, lower_error) = match wait_result {
+            Err(Gfx942SdmaErrorV1::Timeout) => {
+                (PersistentSdmaCompletionObservationV1::Timeout, None)
+            }
+            Err(error) => (
+                PersistentSdmaCompletionObservationV1::QueueRetained,
+                Some(error.into()),
+            ),
+            Ok(completed) => (
+                PersistentSdmaCompletionObservationV1::Completed(completed),
+                None,
+            ),
+        };
+        let transition =
+            transition_persistent_sdma_completion_v1(submission, observation, operation_succeeded);
+        match transition {
+            PersistentSdmaCompletionTransitionV1::Timeout(submission) => Err(pending(
+                ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout),
+                submission,
+            )),
+            PersistentSdmaCompletionTransitionV1::Completed(completed) => Ok(completed),
+            PersistentSdmaCompletionTransitionV1::Pending(_) => {
+                unreachable!("a wait observation cannot produce pending custody")
+            }
+            PersistentSdmaCompletionTransitionV1::ProcessTeardown(custody) => Err(self
+                .terminal_persistent_sdma_execution_transition(
+                    wait_operation.err().or(lower_error).unwrap_or(
+                        ComputeAqlQueueSessionErrorV1::Contract(
+                            "persistent SDMA completed resource identity",
+                        ),
+                    ),
+                    custody,
+                )),
+        }
     }
 
     // Recoverable rejection returns the move-only allocation authority without
@@ -6581,6 +8024,158 @@ impl ComputeAqlQueueSessionV1 {
         Ok(())
     }
 
+    fn persistent_sdma_attachment_is_current(
+        &self,
+        attachment: &Gfx942PersistentSdmaAttachmentV1,
+    ) -> bool {
+        if attachment.queue != self.key {
+            return false;
+        }
+        self.sdma
+            .as_ref()
+            .and_then(|owner| owner.exact_targeted_observation(attachment.engine_index))
+            .is_some_and(|observation| {
+                observation.queue_id == attachment.native_queue_id
+                    && observation.engine_index == Some(attachment.engine_index)
+                    && matches!(
+                        attachment.engine_index,
+                        crate::sdma::GFX942_SDMA_D2H_ENGINE_INDEX_V1
+                            | crate::sdma::GFX942_SDMA_H2D_ENGINE_INDEX_V1
+                    )
+            })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn finish_persistent_sdma_publication_transition(
+        &mut self,
+        error: ComputeAqlQueueSessionErrorV1,
+        transition: PersistentSdmaPublicationTransitionV1,
+    ) -> Result<Gfx942PersistentSdmaSubmissionV1, Gfx942PersistentSdmaSubmissionFailureV1> {
+        match transition {
+            PersistentSdmaPublicationTransitionV1::Retryable { allocation, host } => {
+                Err(Gfx942PersistentSdmaSubmissionFailureV1 {
+                    error,
+                    custody: Gfx942PersistentSdmaSubmissionCustodyV1::Retryable {
+                        allocation,
+                        host,
+                    },
+                })
+            }
+            PersistentSdmaPublicationTransitionV1::Published(submission) => Ok(submission),
+            PersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) => {
+                self.poison_terminal();
+                Err(Gfx942PersistentSdmaSubmissionFailureV1 {
+                    error,
+                    custody: Gfx942PersistentSdmaSubmissionCustodyV1::ProcessTeardown(custody),
+                })
+            }
+        }
+    }
+
+    fn terminal_persistent_sdma_execution_transition(
+        &mut self,
+        error: ComputeAqlQueueSessionErrorV1,
+        custody: Gfx942PersistentSdmaTerminalCustodyV1,
+    ) -> Gfx942PersistentSdmaExecutionFailureV1 {
+        self.poison_terminal();
+        Gfx942PersistentSdmaExecutionFailureV1 {
+            error,
+            custody: Gfx942PersistentSdmaExecutionCustodyV1::ProcessTeardown(custody),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn terminal_prepared_persistent_sdma_failure(
+        &mut self,
+        error: ComputeAqlQueueSessionErrorV1,
+        allocation: Gfx942QueuePersistentAllocationV1,
+        prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+        host_binding: Gfx942PersistentSdmaHostBindingV1,
+        request: Gfx942SdmaCopyRequestV1,
+        reason: Gfx942PersistentQuarantineReasonV1,
+    ) -> Gfx942PersistentSdmaSubmissionFailureV1 {
+        let sequence = prepared.sequence();
+        let state = match restore_persistent_sdma_request(
+            allocation,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+            host_binding,
+            request,
+        ) {
+            Ok((mut allocation, host)) => {
+                allocation
+                    .owner
+                    .quarantine_prepared(prepared, reason)
+                    .expect("private prepared use must quarantine");
+                Gfx942PersistentSdmaTerminalStateV1::PreparedRestored { allocation, host }
+            }
+            Err((mut allocation, request)) => {
+                allocation
+                    .owner
+                    .quarantine_prepared(prepared, reason)
+                    .expect("private prepared use must quarantine");
+                Gfx942PersistentSdmaTerminalStateV1::PreparedUnrestored {
+                    allocation,
+                    request,
+                }
+            }
+        };
+        self.poison_terminal();
+        Gfx942PersistentSdmaSubmissionFailureV1 {
+            error,
+            custody: Gfx942PersistentSdmaSubmissionCustodyV1::ProcessTeardown(
+                Gfx942PersistentSdmaTerminalCustodyV1 {
+                    direction,
+                    sequence: Some(sequence),
+                    state,
+                },
+            ),
+        }
+    }
+
+    fn terminal_queued_persistent_sdma_failure(
+        &mut self,
+        error: ComputeAqlQueueSessionErrorV1,
+        submission: Gfx942PersistentSdmaSubmissionV1,
+        reason: Gfx942PersistentQuarantineReasonV1,
+    ) -> Gfx942PersistentSdmaExecutionFailureV1 {
+        let Gfx942PersistentSdmaSubmissionV1 {
+            mut allocation,
+            published,
+            ticket,
+            host_binding: _,
+            direction,
+            host_offset: _,
+            device_offset: _,
+            copy_bytes: _,
+        } = submission;
+        let sequence = published.sequence();
+        allocation
+            .owner
+            .quarantine_published(published, reason)
+            .expect("private published use must quarantine");
+        self.poison_terminal();
+        Gfx942PersistentSdmaExecutionFailureV1 {
+            error,
+            custody: Gfx942PersistentSdmaExecutionCustodyV1::ProcessTeardown(
+                Gfx942PersistentSdmaTerminalCustodyV1 {
+                    direction,
+                    sequence: Some(sequence),
+                    state: Gfx942PersistentSdmaTerminalStateV1::PublishedQueueRetained {
+                        allocation,
+                        ticket,
+                    },
+                },
+            ),
+        }
+    }
+
     fn checkout_sdma_pool(
         &mut self,
         kind: Gfx942SdmaBufferKindV1,
@@ -7100,6 +8695,803 @@ mod tests {
             id: QueueInstanceIdV1(queue),
             generation: QueueGenerationV1(generation),
         }
+    }
+
+    fn persistent_restore_fixture(
+        direction: Gfx942PersistentSdmaDirectionV1,
+        id: u64,
+    ) -> (
+        Gfx942QueuePersistentAllocationV1,
+        Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+        Gfx942SdmaCopyRequestV1,
+        Gfx942PersistentSdmaHostBindingV1,
+    ) {
+        let queue = test_queue_key(21, 1);
+        let (device, host) = crate::sdma::persistent_sdma_buffers_for_test(queue, id);
+        let host_binding = Gfx942PersistentSdmaHostBindingV1::capture(&host, queue);
+        let storage_identity = device.storage_identity();
+        let (storage, _, pool_generation, logical_bytes) = device.into_bridge_parts();
+        let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
+            unreachable!()
+        };
+        let mut owner = Gfx942PersistentDeviceAllocationV1::from_local_mapping(lease);
+        let operation = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                Gfx942PersistentOperationV1::LocalSdmaDestination
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                Gfx942PersistentOperationV1::LocalSdmaSource
+            }
+        };
+        let reserved = owner
+            .reserve(
+                Gfx942PersistentUseRequestV1::new(operation, 16, 32).unwrap(),
+                None,
+            )
+            .unwrap();
+        let prepared = owner.prepare(reserved).unwrap();
+        let lease = owner.detach_local_native_for_sdma().unwrap();
+        let device = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            queue,
+            pool_generation,
+            logical_bytes,
+        );
+        (
+            Gfx942QueuePersistentAllocationV1 {
+                owner,
+                attachment: Gfx942PersistentSdmaAttachmentV1 {
+                    queue,
+                    native_queue_id: 17,
+                    engine_index: direction.engine_index(),
+                    pool_generation,
+                    logical_bytes,
+                    physical_bytes: logical_bytes,
+                    storage_identity,
+                },
+            },
+            prepared,
+            persistent_sdma_request(direction, host, 8, device, 16, 32),
+            host_binding,
+        )
+    }
+
+    fn persistent_prepared_custody_fixture(
+        direction: Gfx942PersistentSdmaDirectionV1,
+        id: u64,
+    ) -> (
+        PersistentSdmaPreparedCustodyV1,
+        Gfx942SdmaCopyRequestV1,
+        Gfx942SdmaCopyTicketV1,
+    ) {
+        let (allocation, prepared, request, host_binding) =
+            persistent_restore_fixture(direction, id);
+        let ticket = crate::sdma::persistent_sdma_ticket_for_test(
+            allocation.attachment.queue,
+            allocation.attachment.native_queue_id,
+        );
+        (
+            PersistentSdmaPreparedCustodyV1 {
+                allocation,
+                prepared,
+                planned_ticket: ticket,
+                host_binding,
+                direction,
+                host_offset: 8,
+                device_offset: 16,
+                copy_bytes: 32,
+            },
+            request,
+            ticket,
+        )
+    }
+
+    fn persistent_published_custody_fixture(
+        direction: Gfx942PersistentSdmaDirectionV1,
+        id: u64,
+    ) -> (Gfx942PersistentSdmaSubmissionV1, Gfx942SdmaCopyRequestV1) {
+        let (custody, request, ticket) = persistent_prepared_custody_fixture(direction, id);
+        let transition = transition_persistent_sdma_publication_v1(
+            custody,
+            PersistentSdmaPublicationObservationV1::Confirmed(ticket),
+            true,
+            true,
+        );
+        let PersistentSdmaPublicationTransitionV1::Published(submission) = transition else {
+            panic!("exact confirmed publication must publish")
+        };
+        (submission, request)
+    }
+
+    fn prepare_restored_persistent_custody(
+        mut allocation: Gfx942QueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+        dependency: Option<&Gfx942PersistentDependencyFrontierV1>,
+    ) -> (
+        PersistentSdmaPreparedCustodyV1,
+        Gfx942SdmaCopyRequestV1,
+        Gfx942SdmaCopyTicketV1,
+    ) {
+        let direction = allocation.direction();
+        let operation = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                Gfx942PersistentOperationV1::LocalSdmaDestination
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                Gfx942PersistentOperationV1::LocalSdmaSource
+            }
+        };
+        let reserved = allocation
+            .owner
+            .reserve(
+                Gfx942PersistentUseRequestV1::new(operation, 16, 32).unwrap(),
+                dependency,
+            )
+            .unwrap();
+        let prepared = allocation.owner.prepare(reserved).unwrap();
+        let lease = allocation.owner.detach_local_native_for_sdma().unwrap();
+        let device = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(lease),
+            allocation.attachment.queue,
+            allocation.attachment.pool_generation,
+            allocation.attachment.logical_bytes,
+        );
+        let request = persistent_sdma_request(direction, host, 8, device, 16, 32);
+        let host_binding = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                Gfx942PersistentSdmaHostBindingV1::capture(
+                    &request.source,
+                    allocation.attachment.queue,
+                )
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                Gfx942PersistentSdmaHostBindingV1::capture(
+                    &request.destination,
+                    allocation.attachment.queue,
+                )
+            }
+        };
+        let ticket = crate::sdma::persistent_sdma_ticket_for_test(
+            allocation.attachment.queue,
+            allocation.attachment.native_queue_id,
+        );
+        (
+            PersistentSdmaPreparedCustodyV1 {
+                allocation,
+                prepared,
+                planned_ticket: ticket,
+                host_binding,
+                direction,
+                host_offset: 8,
+                device_offset: 16,
+                copy_bytes: 32,
+            },
+            request,
+            ticket,
+        )
+    }
+
+    fn completed_persistent_request(request: Gfx942SdmaCopyRequestV1) -> Gfx942SdmaCompletedCopyV1 {
+        let Gfx942SdmaCopyRequestV1 {
+            source,
+            source_offset,
+            destination,
+            destination_offset,
+            copy_bytes,
+        } = request;
+        Gfx942SdmaCompletedCopyV1 {
+            source,
+            source_offset,
+            destination,
+            destination_offset,
+            copy_bytes,
+        }
+    }
+
+    #[test]
+    fn persistent_sdma_request_restoration_is_exact_in_both_directions() {
+        for (ordinal, direction) in [
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (allocation, prepared, request, host_binding) =
+                persistent_restore_fixture(direction, 80 + ordinal as u64);
+            let (mut allocation, host) = match restore_persistent_sdma_request(
+                allocation,
+                direction,
+                8,
+                16,
+                32,
+                host_binding,
+                request,
+            ) {
+                Ok(restored) => restored,
+                Err(_) => panic!("exact persistent request must restore"),
+            };
+            assert!(allocation.owner.local_native_is_attached_for_sdma());
+            assert_eq!(host.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
+            allocation.owner.cancel_prepared(prepared).unwrap();
+        }
+    }
+
+    #[test]
+    fn persistent_sdma_request_restoration_rejects_generation_substitution() {
+        let direction = Gfx942PersistentSdmaDirectionV1::HostToDevice;
+        let (mut allocation, prepared, request, host_binding) =
+            persistent_restore_fixture(direction, 82);
+        allocation.attachment.pool_generation += 1;
+        let (mut allocation, request) = restore_persistent_sdma_request(
+            allocation,
+            direction,
+            8,
+            16,
+            32,
+            host_binding,
+            request,
+        )
+        .unwrap_err();
+        assert!(!allocation.owner.local_native_is_attached_for_sdma());
+        let (source, destination) = request.into_buffers();
+        assert_eq!(source.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
+        assert_eq!(destination.kind(), Gfx942SdmaBufferKindV1::DeviceLocal);
+        allocation.owner.cancel_prepared(prepared).unwrap();
+    }
+
+    #[test]
+    fn recoverable_persistent_publication_restores_exact_owners_without_teardown() {
+        let direction = Gfx942PersistentSdmaDirectionV1::HostToDevice;
+        let (custody, request, _ticket) = persistent_prepared_custody_fixture(direction, 83);
+        let expected_request = custody.prepared.request();
+        let expected_attachment = custody.allocation.attachment;
+        let expected_host = request.source.storage_identity();
+        let transition = transition_persistent_sdma_publication_v1(
+            custody,
+            PersistentSdmaPublicationObservationV1::Recoverable(request),
+            true,
+            true,
+        );
+        let PersistentSdmaPublicationTransitionV1::Retryable { allocation, host } = transition
+        else {
+            panic!("clean lower rejection must remain retryable without queue teardown")
+        };
+        assert_eq!(allocation.attachment, expected_attachment);
+        assert_eq!(host.storage_identity(), expected_host);
+        assert!(allocation.owner.local_native_is_attached_for_sdma());
+        assert_eq!(allocation.owner.live_use_count(), 0);
+        assert_eq!(allocation.owner.quarantine_reason(), None);
+        assert_eq!(
+            expected_request,
+            Gfx942PersistentUseRequestV1::new(
+                Gfx942PersistentOperationV1::LocalSdmaDestination,
+                16,
+                32,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn retained_persistent_publication_quarantines_directly_from_prepared() {
+        let (custody, _request, ticket) =
+            persistent_prepared_custody_fixture(Gfx942PersistentSdmaDirectionV1::DeviceToHost, 84);
+        let sequence = custody.prepared.sequence();
+        let transition = transition_persistent_sdma_publication_v1(
+            custody,
+            PersistentSdmaPublicationObservationV1::Retained(ticket),
+            true,
+            false,
+        );
+        let PersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) = transition else {
+            panic!("retained lower publication must require process teardown")
+        };
+        assert_eq!(custody.sequence(), Some(sequence));
+        assert_eq!(
+            custody.stage(),
+            crate::Gfx942PersistentSdmaTerminalStageV1::PreparedQueueRetained
+        );
+        let Gfx942PersistentSdmaTerminalStateV1::PreparedQueueRetained {
+            allocation,
+            ticket: retained_ticket,
+        } = custody.state
+        else {
+            unreachable!()
+        };
+        assert_eq!(retained_ticket, ticket);
+        assert_eq!(
+            allocation.owner.quarantine_reason(),
+            Some(Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate)
+        );
+    }
+
+    #[test]
+    fn confirmed_persistent_publication_records_the_exact_ticket() {
+        let (custody, _request, ticket) =
+            persistent_prepared_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 85);
+        let sequence = custody.prepared.sequence();
+        let expected_request = custody.prepared.request();
+        let transition = transition_persistent_sdma_publication_v1(
+            custody,
+            PersistentSdmaPublicationObservationV1::Confirmed(ticket),
+            true,
+            true,
+        );
+        let PersistentSdmaPublicationTransitionV1::Published(submission) = transition else {
+            panic!("confirmed exact publication must produce published custody")
+        };
+        assert_eq!(submission.ticket, ticket);
+        assert_eq!(submission.published.sequence(), sequence);
+        assert_eq!(submission.request(), expected_request);
+        assert_eq!(submission.allocation.owner.live_use_count(), 1);
+        assert_eq!(submission.allocation.owner.quarantine_reason(), None);
+    }
+
+    #[test]
+    fn confirmed_persistent_publication_rejects_same_queue_ticket_substitution() {
+        for (ordinal, slot, generation) in [(0_u64, 1_u16, 1_u32), (1, 0, 2)] {
+            let (custody, _request, planned_ticket) = persistent_prepared_custody_fixture(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                95 + ordinal,
+            );
+            let substituted_ticket = crate::sdma::persistent_sdma_ticket_coordinates_for_test(
+                custody.allocation.attachment.queue,
+                custody.allocation.attachment.native_queue_id,
+                slot,
+                generation,
+            );
+            assert_ne!(substituted_ticket, planned_ticket);
+            let transition = transition_persistent_sdma_publication_v1(
+                custody,
+                PersistentSdmaPublicationObservationV1::Confirmed(substituted_ticket),
+                true,
+                true,
+            );
+            let PersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) = transition else {
+                panic!("same-queue ticket substitution must require process teardown")
+            };
+            assert_eq!(
+                custody.stage(),
+                crate::Gfx942PersistentSdmaTerminalStageV1::PublishedQueueRetained
+            );
+            let Gfx942PersistentSdmaTerminalStateV1::PublishedQueueRetained { allocation, ticket } =
+                custody.state
+            else {
+                unreachable!()
+            };
+            assert_eq!(ticket, substituted_ticket);
+            assert_eq!(
+                allocation.owner.quarantine_reason(),
+                Some(Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate)
+            );
+        }
+    }
+
+    #[test]
+    fn pending_and_timeout_keep_the_exact_published_submission() {
+        let (pending, _request) =
+            persistent_published_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 86);
+        let pending_ticket = pending.ticket;
+        let pending_sequence = pending.published.sequence();
+        let PersistentSdmaCompletionTransitionV1::Pending(pending) =
+            transition_persistent_sdma_completion_v1(
+                pending,
+                PersistentSdmaCompletionObservationV1::Pending,
+                true,
+            )
+        else {
+            panic!("pending observation must preserve published custody")
+        };
+        assert_eq!(pending.ticket, pending_ticket);
+        assert_eq!(pending.published.sequence(), pending_sequence);
+
+        let (timeout, _request) =
+            persistent_published_custody_fixture(Gfx942PersistentSdmaDirectionV1::DeviceToHost, 87);
+        let timeout_ticket = timeout.ticket;
+        let timeout_sequence = timeout.published.sequence();
+        let PersistentSdmaCompletionTransitionV1::Timeout(timeout) =
+            transition_persistent_sdma_completion_v1(
+                timeout,
+                PersistentSdmaCompletionObservationV1::Timeout,
+                true,
+            )
+        else {
+            panic!("timeout observation must preserve published custody")
+        };
+        assert_eq!(timeout.ticket, timeout_ticket);
+        assert_eq!(timeout.published.sequence(), timeout_sequence);
+        assert_eq!(timeout.allocation.owner.live_use_count(), 1);
+    }
+
+    #[test]
+    fn exact_persistent_completion_restores_both_owners_and_frontier() {
+        let (submission, request) =
+            persistent_published_custody_fixture(Gfx942PersistentSdmaDirectionV1::DeviceToHost, 88);
+        let sequence = submission.published.sequence();
+        let expected_attachment = submission.allocation.attachment;
+        let expected_host = request.destination.storage_identity();
+        let transition = transition_persistent_sdma_completion_v1(
+            submission,
+            PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(request)),
+            true,
+        );
+        let PersistentSdmaCompletionTransitionV1::Completed(completed) = transition else {
+            panic!("exact completion must restore and settle custody")
+        };
+        assert_eq!(
+            completed.direction(),
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost
+        );
+        assert_eq!(completed.copy_bytes(), 32);
+        let (allocation, host, frontier) = completed.into_parts();
+        assert_eq!(allocation.attachment, expected_attachment);
+        assert_eq!(host.storage_identity(), expected_host);
+        assert!(allocation.owner.local_native_is_attached_for_sdma());
+        assert_eq!(allocation.owner.live_use_count(), 0);
+        assert_eq!(allocation.owner.retained_settled_use_count(), 1);
+        assert_eq!(frontier.through_sequence(), sequence);
+    }
+
+    #[test]
+    fn exact_persistent_completion_rejects_same_queue_host_substitution() {
+        let (submission, request) =
+            persistent_published_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 97);
+        let queue = submission.allocation.attachment.queue;
+        let Gfx942SdmaCopyRequestV1 {
+            source: original_host,
+            source_offset,
+            destination: exact_device,
+            destination_offset,
+            copy_bytes,
+        } = request;
+        let (_unused_device, substituted_host) =
+            crate::sdma::persistent_sdma_buffers_for_test(queue, 98);
+        assert_ne!(
+            original_host.storage_identity(),
+            substituted_host.storage_identity()
+        );
+        let completed = Gfx942SdmaCompletedCopyV1 {
+            source: substituted_host,
+            source_offset,
+            destination: exact_device,
+            destination_offset,
+            copy_bytes,
+        };
+        let transition = transition_persistent_sdma_completion_v1(
+            submission,
+            PersistentSdmaCompletionObservationV1::Completed(completed),
+            true,
+        );
+        let PersistentSdmaCompletionTransitionV1::ProcessTeardown(custody) = transition else {
+            panic!("same-queue host substitution must require process teardown")
+        };
+        assert_eq!(
+            custody.stage(),
+            crate::Gfx942PersistentSdmaTerminalStageV1::CompletedUnrestored
+        );
+        let Gfx942PersistentSdmaTerminalStateV1::CompletedUnrestored {
+            allocation,
+            completed: _,
+        } = custody.state
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            allocation.owner.quarantine_reason(),
+            Some(Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate)
+        );
+    }
+
+    #[test]
+    fn persistent_host_binding_rejects_same_storage_descriptor_substitution() {
+        let queue = test_queue_key(21, 1);
+        let (device, host) = crate::sdma::persistent_sdma_buffers_for_test(queue, 99);
+        drop(device);
+        let binding = Gfx942PersistentSdmaHostBindingV1::capture(&host, queue);
+        let logical_bytes = host.requested_bytes();
+        let (storage, owner, pool_generation, recovered_logical_bytes) = host.into_bridge_parts();
+        assert_eq!(logical_bytes, recovered_logical_bytes);
+        let substituted_generation = Gfx942SdmaBufferV1::from_bridge_parts(
+            storage,
+            owner,
+            pool_generation + 1,
+            logical_bytes,
+        );
+        assert!(!binding.matches(&substituted_generation));
+
+        let (device, host) = crate::sdma::persistent_sdma_buffers_for_test(queue, 100);
+        drop(device);
+        let binding = Gfx942PersistentSdmaHostBindingV1::capture(&host, queue);
+        let (storage, owner, pool_generation, logical_bytes) = host.into_bridge_parts();
+        let substituted_extent = Gfx942SdmaBufferV1::from_bridge_parts(
+            storage,
+            owner,
+            pool_generation,
+            logical_bytes / 2,
+        );
+        assert!(!binding.matches(&substituted_extent));
+    }
+
+    #[test]
+    fn completed_observation_with_lost_currentness_is_terminal_and_unrestored() {
+        let (submission, request) =
+            persistent_published_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 89);
+        let sequence = submission.published.sequence();
+        let transition = transition_persistent_sdma_completion_v1(
+            submission,
+            PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(request)),
+            false,
+        );
+        let PersistentSdmaCompletionTransitionV1::ProcessTeardown(custody) = transition else {
+            panic!("completion outside the currentness envelope must be terminal")
+        };
+        assert_eq!(custody.sequence(), Some(sequence));
+        assert_eq!(
+            custody.stage(),
+            crate::Gfx942PersistentSdmaTerminalStageV1::CompletedUnrestored
+        );
+        let Gfx942PersistentSdmaTerminalStateV1::CompletedUnrestored {
+            allocation,
+            completed: _,
+        } = custody.state
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            allocation.owner.quarantine_reason(),
+            Some(Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss)
+        );
+    }
+
+    #[test]
+    fn persistent_demotion_advances_pool_generation_without_changing_buffer_debit() {
+        let (custody, request, _ticket) =
+            persistent_prepared_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 90);
+        let expected_identity = custody.allocation.attachment.storage_identity;
+        let expected_generation = custody.allocation.attachment.pool_generation + 1;
+        let transition = transition_persistent_sdma_publication_v1(
+            custody,
+            PersistentSdmaPublicationObservationV1::Recoverable(request),
+            true,
+            true,
+        );
+        let PersistentSdmaPublicationTransitionV1::Retryable {
+            allocation,
+            host: _,
+        } = transition
+        else {
+            panic!("clean rejection must restore quiescent allocation custody")
+        };
+        let (buffer, outstanding_buffers) =
+            demote_persistent_sdma_custody_v1(allocation, 2).unwrap();
+        assert_eq!(outstanding_buffers, 2);
+        assert_eq!(buffer.kind(), Gfx942SdmaBufferKindV1::DeviceLocal);
+        assert_eq!(buffer.storage_identity(), expected_identity);
+        assert_eq!(buffer.pool_generation(), expected_generation);
+    }
+
+    #[test]
+    fn demote_repromote_rejects_frontier_aba_for_the_same_native_allocation() {
+        let (submission, request) = persistent_published_custody_fixture(
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            101,
+        );
+        let PersistentSdmaCompletionTransitionV1::Completed(completed) =
+            transition_persistent_sdma_completion_v1(
+                submission,
+                PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(
+                    request,
+                )),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let (allocation, host, old_frontier) = completed.into_parts();
+        let old_sequence = old_frontier.through_sequence();
+        let old_identity = allocation.attachment.storage_identity;
+        let old_pool_generation = allocation.attachment.pool_generation;
+        let (device, outstanding_buffers) =
+            demote_persistent_sdma_custody_v1(allocation, 2).unwrap();
+        assert_eq!(outstanding_buffers, 2);
+        assert_eq!(device.storage_identity(), old_identity);
+        assert_eq!(device.pool_generation(), old_pool_generation + 1);
+
+        let allocation = promote_persistent_sdma_custody_v1(
+            device,
+            17,
+            Gfx942PersistentSdmaDirectionV1::HostToDevice.engine_index(),
+        )
+        .expect("the same device buffer must re-promote");
+        assert_eq!(allocation.attachment.storage_identity, old_identity);
+        let (prepared, request, ticket) =
+            prepare_restored_persistent_custody(allocation, host, None);
+        let PersistentSdmaPublicationTransitionV1::Published(submission) =
+            transition_persistent_sdma_publication_v1(
+                prepared,
+                PersistentSdmaPublicationObservationV1::Confirmed(ticket),
+                true,
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let PersistentSdmaCompletionTransitionV1::Completed(completed) =
+            transition_persistent_sdma_completion_v1(
+                submission,
+                PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(
+                    request,
+                )),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let (mut allocation, _host, new_frontier) = completed.into_parts();
+        assert_eq!(new_frontier.through_sequence(), old_sequence);
+
+        let rejected = allocation
+            .owner
+            .reserve(
+                Gfx942PersistentUseRequestV1::new(
+                    Gfx942PersistentOperationV1::LocalSdmaDestination,
+                    16,
+                    32,
+                )
+                .unwrap(),
+                Some(&old_frontier),
+            )
+            .expect_err("an old incarnation frontier cannot order new history");
+        assert_eq!(
+            rejected.error(),
+            Gfx942PersistentUseErrorV1::StaleOrSubstitutedDependency
+        );
+        let failure = allocation
+            .retire_settled_frontier_v1(old_frontier)
+            .expect_err("an old incarnation frontier cannot retire new history");
+        let (allocation, _returned_old_frontier) = failure.into_parts();
+        let allocation = allocation
+            .retire_settled_frontier_v1(new_frontier)
+            .expect("the exact new incarnation frontier must retire new history");
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+    }
+
+    #[test]
+    fn frontier_retirement_supports_more_than_the_bounded_ledger_sequential_uses() {
+        let (mut prepared, mut request, mut ticket) =
+            persistent_prepared_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 91);
+        let expected_attachment = prepared.allocation.attachment;
+        for cycle in 0..(crate::GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1 + 2) {
+            let publication = transition_persistent_sdma_publication_v1(
+                prepared,
+                PersistentSdmaPublicationObservationV1::Confirmed(ticket),
+                true,
+                true,
+            );
+            let PersistentSdmaPublicationTransitionV1::Published(submission) = publication else {
+                panic!("cycle {cycle} must publish")
+            };
+            let completion = transition_persistent_sdma_completion_v1(
+                submission,
+                PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(
+                    request,
+                )),
+                true,
+            );
+            let PersistentSdmaCompletionTransitionV1::Completed(completed) = completion else {
+                panic!("cycle {cycle} must complete")
+            };
+            let (allocation, host, frontier) = completed.into_parts();
+            assert_eq!(allocation.owner.retained_settled_use_count(), 1);
+            let allocation = allocation
+                .retire_settled_frontier_v1(frontier)
+                .unwrap_or_else(|_| panic!("cycle {cycle} exact frontier must retire"));
+            assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+            assert_eq!(allocation.attachment, expected_attachment);
+            if cycle + 1 == crate::GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1 + 2 {
+                break;
+            }
+            (prepared, request, ticket) =
+                prepare_restored_persistent_custody(allocation, host, None);
+        }
+    }
+
+    #[test]
+    fn stale_frontier_retirement_returns_exact_custody_and_current_frontier_still_retires() {
+        let (first, first_request) =
+            persistent_published_custody_fixture(Gfx942PersistentSdmaDirectionV1::HostToDevice, 92);
+        let PersistentSdmaCompletionTransitionV1::Completed(first) =
+            transition_persistent_sdma_completion_v1(
+                first,
+                PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(
+                    first_request,
+                )),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let (allocation, host, stale_frontier) = first.into_parts();
+        let stale_sequence = stale_frontier.through_sequence();
+        let (second, second_request, second_ticket) =
+            prepare_restored_persistent_custody(allocation, host, Some(&stale_frontier));
+        let PersistentSdmaPublicationTransitionV1::Published(second) =
+            transition_persistent_sdma_publication_v1(
+                second,
+                PersistentSdmaPublicationObservationV1::Confirmed(second_ticket),
+                true,
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let PersistentSdmaCompletionTransitionV1::Completed(second) =
+            transition_persistent_sdma_completion_v1(
+                second,
+                PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(
+                    second_request,
+                )),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let (allocation, _host, current_frontier) = second.into_parts();
+        assert!(current_frontier.through_sequence() > stale_sequence);
+        let failure = allocation
+            .retire_settled_frontier_v1(stale_frontier)
+            .expect_err("stale frontier must return both move-only inputs");
+        let (allocation, returned_stale) = failure.into_parts();
+        assert_eq!(returned_stale.through_sequence(), stale_sequence);
+        assert_eq!(allocation.owner.retained_settled_use_count(), 2);
+        let allocation = allocation
+            .retire_settled_frontier_v1(current_frontier)
+            .expect("exact latest frontier retires all settled history");
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+    }
+
+    #[test]
+    fn substituted_frontier_retirement_returns_both_allocation_and_frontier() {
+        fn complete_one(
+            direction: Gfx942PersistentSdmaDirectionV1,
+            id: u64,
+        ) -> (
+            Gfx942QueuePersistentAllocationV1,
+            Gfx942PersistentDependencyFrontierV1,
+        ) {
+            let (submission, request) = persistent_published_custody_fixture(direction, id);
+            let PersistentSdmaCompletionTransitionV1::Completed(completed) =
+                transition_persistent_sdma_completion_v1(
+                    submission,
+                    PersistentSdmaCompletionObservationV1::Completed(completed_persistent_request(
+                        request,
+                    )),
+                    true,
+                )
+            else {
+                unreachable!()
+            };
+            let (allocation, _host, frontier) = completed.into_parts();
+            (allocation, frontier)
+        }
+
+        let (allocation_a, frontier_a) =
+            complete_one(Gfx942PersistentSdmaDirectionV1::HostToDevice, 93);
+        let (allocation_b, frontier_b) =
+            complete_one(Gfx942PersistentSdmaDirectionV1::HostToDevice, 94);
+        let frontier_b_sequence = frontier_b.through_sequence();
+        let failure = allocation_a
+            .retire_settled_frontier_v1(frontier_b)
+            .expect_err("another allocation's frontier must be rejected");
+        let (allocation_a, returned_frontier_b) = failure.into_parts();
+        assert_eq!(returned_frontier_b.through_sequence(), frontier_b_sequence);
+        let _allocation_a = allocation_a
+            .retire_settled_frontier_v1(frontier_a)
+            .expect("allocation A still accepts its exact frontier");
+        let _allocation_b = allocation_b
+            .retire_settled_frontier_v1(returned_frontier_b)
+            .expect("allocation B accepts its returned exact frontier");
     }
 
     #[test]

@@ -7,9 +7,10 @@
 //! or native access. In particular, it does not refine Rust auto-traits, OS
 //! thread affinity, KFD, SDMA, VM currentness, or GPU completion.
 //!
-//! The registry represents exactly one allocation of at most 256 MiB mapped to
-//! exactly two devices. It deliberately does not model a two-registry atomic
-//! XGMI join or a 1 GiB aggregate allocation boundary.
+//! The public R17 admission represents exactly one allocation of at most 256
+//! MiB mapped to exactly two devices. Its allocation-form-neutral use ledger is
+//! also reused internally by the R18 one-device local adapter. R17 deliberately
+//! does not model a two-registry atomic XGMI join or a 1 GiB aggregate boundary.
 
 // Transition failures deliberately return move-only custody without boxing.
 #![allow(clippy::result_large_err)]
@@ -141,6 +142,7 @@ pub enum R17PersistentUsePhaseV1 {
     Published,
     TimedOut,
     Terminal,
+    Settled,
     CancelledBeforePublication,
     Quarantined,
     Released,
@@ -192,9 +194,26 @@ pub struct R17PersistentRegistrySnapshotV1 {
     pub published_count: usize,
     pub timed_out_count: usize,
     pub terminal_count: usize,
+    pub settled_count: usize,
     pub quarantined_count: usize,
     pub released_count: usize,
     pub next_generation: u64,
+    pub frontier_generation: u64,
+    pub frontier_use: Option<R17PersistentUseLeaseKeyV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R17SettledFrontierKeyV1 {
+    pub allocation: MemoryAllocationKeyV1,
+    pub mapping: MemoryMappingKeyV1,
+    pub through_use: R17PersistentUseLeaseKeyV1,
+    pub generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R17PersistentFrontierRetirementReceiptV1 {
+    pub frontier: R17SettledFrontierKeyV1,
+    pub retired_use_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -259,6 +278,21 @@ struct R17PersistentUseRecordV1 {
     quarantine_reason: Option<R17PersistentQuarantineReasonV1>,
 }
 
+#[derive(Clone, Copy)]
+enum R17PersistentMappingShapeV1 {
+    ExactTwoDevice([DeviceKeyV1; R17_PERSISTENT_NATIVE_DEVICE_COUNT_V1]),
+    LocalOneDevice(DeviceKeyV1),
+}
+
+impl R17PersistentMappingShapeV1 {
+    const fn device_count(self) -> usize {
+        match self {
+            Self::ExactTwoDevice(_) => R17_PERSISTENT_NATIVE_DEVICE_COUNT_V1,
+            Self::LocalOneDevice(_) => 1,
+        }
+    }
+}
+
 /// Sole model owner of one persistent allocation registry.
 ///
 /// This type is intentionally neither `Clone` nor `Send`. The `Rc` marker is a
@@ -283,10 +317,12 @@ pub struct R17PersistentNativeAllocationRegistryV1 {
     owner: R17PersistentAllocationOwnerIdV1,
     allocation: MemoryAllocationKeyV1,
     mapping: MemoryMappingKeyV1,
-    devices: [DeviceKeyV1; R17_PERSISTENT_NATIVE_DEVICE_COUNT_V1],
+    mapping_shape: R17PersistentMappingShapeV1,
     byte_len: u64,
     current: bool,
     next_generation: u64,
+    frontier_generation: u64,
+    frontier_use: Option<R17PersistentUseLeaseKeyV1>,
     completed_lease_count: usize,
     records: [Option<R17PersistentUseRecordV1>; MAX_R17_PERSISTENT_USE_LEASES_V1],
     registry_incarnation: Rc<()>,
@@ -299,6 +335,34 @@ impl R17PersistentNativeAllocationRegistryV1 {
         allocation: MemoryAllocationRecordV1,
         mapping: MemoryMappingRecordV1,
         devices: [DeviceKeyV1; R17_PERSISTENT_NATIVE_DEVICE_COUNT_V1],
+    ) -> Result<Self, R17PersistentAllocationErrorV1> {
+        Self::new_with_mapping_shape_model_only(
+            owner,
+            allocation,
+            mapping,
+            R17PersistentMappingShapeV1::ExactTwoDevice(devices),
+        )
+    }
+
+    pub(crate) fn new_local_model_only(
+        owner: R17PersistentAllocationOwnerIdV1,
+        allocation: MemoryAllocationRecordV1,
+        mapping: MemoryMappingRecordV1,
+        device: DeviceKeyV1,
+    ) -> Result<Self, R17PersistentAllocationErrorV1> {
+        Self::new_with_mapping_shape_model_only(
+            owner,
+            allocation,
+            mapping,
+            R17PersistentMappingShapeV1::LocalOneDevice(device),
+        )
+    }
+
+    fn new_with_mapping_shape_model_only(
+        owner: R17PersistentAllocationOwnerIdV1,
+        allocation: MemoryAllocationRecordV1,
+        mapping: MemoryMappingRecordV1,
+        mapping_shape: R17PersistentMappingShapeV1,
     ) -> Result<Self, R17PersistentAllocationErrorV1> {
         if owner.0 == 0 {
             return Err(R17PersistentAllocationErrorV1::InvalidOwner);
@@ -323,20 +387,35 @@ impl R17PersistentNativeAllocationRegistryV1 {
         {
             return Err(R17PersistentAllocationErrorV1::InvalidAllocation);
         }
-        if devices[0] >= devices[1]
-            || devices[0].physical == devices[1].physical
-            || devices.iter().any(|device| device.generation.0 == 0)
-            || !devices.contains(&allocation.key.vm.device)
-        {
+        let valid_device_shape = match mapping_shape {
+            R17PersistentMappingShapeV1::ExactTwoDevice(devices) => {
+                devices[0] < devices[1]
+                    && devices[0].physical != devices[1].physical
+                    && devices.iter().all(|device| device.generation.0 != 0)
+                    && devices.contains(&allocation.key.vm.device)
+            }
+            R17PersistentMappingShapeV1::LocalOneDevice(device) => {
+                device.generation.0 != 0 && device == allocation.key.vm.device
+            }
+        };
+        if !valid_device_shape {
             return Err(R17PersistentAllocationErrorV1::InvalidDeviceSet);
         }
+        let exact_mapping_devices = match mapping_shape {
+            R17PersistentMappingShapeV1::ExactTwoDevice(devices) => {
+                mapping.target_devices.as_slice() == devices
+            }
+            R17PersistentMappingShapeV1::LocalOneDevice(device) => {
+                mapping.target_devices.as_slice() == [device]
+            }
+        };
         if mapping.key.allocation != allocation.key
             || mapping.state != MemoryMappingStateV1::Mapped
             || mapping.key.id.0 == 0
             || mapping.access != MemoryAccessV1::ReadWrite
             || mapping.mapped_start != 0
-            || mapping.mapped_end != R17_PERSISTENT_NATIVE_DEVICE_COUNT_V1
-            || mapping.target_devices.as_slice() != devices
+            || mapping.mapped_end != mapping_shape.device_count()
+            || !exact_mapping_devices
         {
             return Err(R17PersistentAllocationErrorV1::InvalidMapping);
         }
@@ -344,10 +423,12 @@ impl R17PersistentNativeAllocationRegistryV1 {
             owner,
             allocation: allocation.key,
             mapping: mapping.key,
-            devices,
+            mapping_shape,
             byte_len: allocation.spec.byte_len,
             current: true,
             next_generation: 1,
+            frontier_generation: 0,
+            frontier_use: None,
             completed_lease_count: 0,
             records: [const { None }; MAX_R17_PERSISTENT_USE_LEASES_V1],
             registry_incarnation: Rc::new(()),
@@ -370,7 +451,10 @@ impl R17PersistentNativeAllocationRegistryV1 {
     }
 
     pub const fn devices(&self) -> [DeviceKeyV1; R17_PERSISTENT_NATIVE_DEVICE_COUNT_V1] {
-        self.devices
+        match self.mapping_shape {
+            R17PersistentMappingShapeV1::ExactTwoDevice(devices) => devices,
+            R17PersistentMappingShapeV1::LocalOneDevice(device) => [device, device],
+        }
     }
 
     pub const fn byte_len(&self) -> u64 {
@@ -389,9 +473,12 @@ impl R17PersistentNativeAllocationRegistryV1 {
             published_count: 0,
             timed_out_count: 0,
             terminal_count: 0,
+            settled_count: 0,
             quarantined_count: 0,
             released_count: self.completed_lease_count,
             next_generation: self.next_generation,
+            frontier_generation: self.frontier_generation,
+            frontier_use: self.frontier_use,
         };
         for record in self.records.iter().flatten() {
             match record.phase {
@@ -399,6 +486,7 @@ impl R17PersistentNativeAllocationRegistryV1 {
                 R17PersistentUsePhaseV1::Published => snapshot.published_count += 1,
                 R17PersistentUsePhaseV1::TimedOut => snapshot.timed_out_count += 1,
                 R17PersistentUsePhaseV1::Terminal => snapshot.terminal_count += 1,
+                R17PersistentUsePhaseV1::Settled => snapshot.settled_count += 1,
                 R17PersistentUsePhaseV1::Quarantined => snapshot.quarantined_count += 1,
                 R17PersistentUsePhaseV1::CancelledBeforePublication
                 | R17PersistentUsePhaseV1::Released => snapshot.released_count += 1,
@@ -527,10 +615,17 @@ impl R17PersistentNativeAllocationRegistryV1 {
         if self.mapping.allocation != self.allocation {
             return Err(R17PersistentAllocationErrorV1::InvalidMapping);
         }
-        if self.devices[0] == self.devices[1]
-            || self.devices[0].physical == self.devices[1].physical
-            || !self.devices.contains(&self.allocation.vm.device)
-        {
+        let valid_device_shape = match self.mapping_shape {
+            R17PersistentMappingShapeV1::ExactTwoDevice(devices) => {
+                devices[0] < devices[1]
+                    && devices[0].physical != devices[1].physical
+                    && devices.contains(&self.allocation.vm.device)
+            }
+            R17PersistentMappingShapeV1::LocalOneDevice(device) => {
+                device.generation.0 != 0 && device == self.allocation.vm.device
+            }
+        };
+        if !valid_device_shape {
             return Err(R17PersistentAllocationErrorV1::InvalidDeviceSet);
         }
         for (index, record) in self
@@ -561,7 +656,9 @@ impl R17PersistentNativeAllocationRegistryV1 {
                 }
             }
             let terminal_ok = match record.phase {
-                R17PersistentUsePhaseV1::Terminal | R17PersistentUsePhaseV1::Released => {
+                R17PersistentUsePhaseV1::Terminal
+                | R17PersistentUsePhaseV1::Settled
+                | R17PersistentUsePhaseV1::Released => {
                     record.terminal_status.is_some() && record.quarantine_reason.is_none()
                 }
                 R17PersistentUsePhaseV1::Quarantined => record.quarantine_reason.is_some(),
@@ -586,6 +683,14 @@ impl R17PersistentNativeAllocationRegistryV1 {
             {
                 return Err(R17PersistentAllocationErrorV1::NotCurrent);
             }
+        }
+        if let Some(frontier_use) = self.frontier_use
+            && (self.frontier_generation == 0
+                || self
+                    .record(frontier_use)
+                    .is_none_or(|record| record.phase != R17PersistentUsePhaseV1::Settled))
+        {
+            return Err(R17PersistentAllocationErrorV1::StaleLease);
         }
         for (index, left) in self.records.iter().enumerate() {
             let Some(left) = left.as_ref() else {
@@ -638,12 +743,16 @@ impl R17PersistentNativeAllocationRegistryV1 {
                 route,
             } => {
                 let observation = route.observation();
+                let R17PersistentMappingShapeV1::ExactTwoDevice(devices) = self.mapping_shape
+                else {
+                    return Err(R17PersistentAllocationErrorV1::InvalidClassBinding);
+                };
                 route.authority_domain() == AuthorityDomainV1::ModelOnly
                     && route.source_device() == source_device
                     && route.destination_device() == destination_device
                     && source_device != destination_device
-                    && self.devices.contains(&source_device)
-                    && self.devices.contains(&destination_device)
+                    && devices.contains(&source_device)
+                    && devices.contains(&destination_device)
                     && ((self.allocation.vm.device == source_device
                         && descriptor.access == R17PersistentAccessModeV1::Read)
                         || (self.allocation.vm.device == destination_device
@@ -785,6 +894,29 @@ impl R17PersistentNativeAllocationRegistryV1 {
         Ok(())
     }
 
+    fn quarantine_reserved_indeterminate(
+        &mut self,
+        binding: R17PersistentUseBindingV1,
+        registry_incarnation: &Rc<()>,
+        reason: R17PersistentQuarantineReasonV1,
+    ) -> Result<(), R17PersistentAllocationErrorV1> {
+        self.require_current()?;
+        let index = self.require_binding(binding, registry_incarnation)?;
+        if self.records[index]
+            .as_ref()
+            .expect("validated record")
+            .phase
+            != R17PersistentUsePhaseV1::Reserved
+        {
+            return Err(R17PersistentAllocationErrorV1::IllegalState);
+        }
+        self.lose_currentness_inner(reason);
+        let record = self.records[index].as_mut().expect("validated record");
+        record.phase = R17PersistentUsePhaseV1::Quarantined;
+        record.quarantine_reason = Some(reason);
+        Ok(())
+    }
+
     fn observe_use(
         &mut self,
         binding: R17PersistentUseBindingV1,
@@ -856,6 +988,89 @@ impl R17PersistentNativeAllocationRegistryV1 {
         Ok(())
     }
 
+    fn settle_terminal_for_frontier(
+        &mut self,
+        binding: R17PersistentUseBindingV1,
+        registry_incarnation: &Rc<()>,
+        status: R17PersistentTerminalStatusV1,
+    ) -> Result<R17SettledFrontierKeyV1, R17PersistentAllocationErrorV1> {
+        self.require_current()?;
+        let index = self.require_binding(binding, registry_incarnation)?;
+        let record = self.records[index].as_ref().expect("validated record");
+        if record.phase != R17PersistentUsePhaseV1::Terminal
+            || record.terminal_status != Some(status)
+            || self
+                .records
+                .iter()
+                .enumerate()
+                .any(|(other_index, record)| {
+                    other_index != index
+                        && record
+                            .as_ref()
+                            .is_some_and(|record| record.phase != R17PersistentUsePhaseV1::Settled)
+                })
+        {
+            return Err(R17PersistentAllocationErrorV1::DependentRetained);
+        }
+        let frontier_generation = self
+            .frontier_generation
+            .checked_add(1)
+            .ok_or(R17PersistentAllocationErrorV1::CapacityExceeded)?;
+        self.records[index]
+            .as_mut()
+            .expect("validated record")
+            .phase = R17PersistentUsePhaseV1::Settled;
+        self.frontier_generation = frontier_generation;
+        self.frontier_use = Some(binding.lease);
+        Ok(R17SettledFrontierKeyV1 {
+            allocation: self.allocation,
+            mapping: self.mapping,
+            through_use: binding.lease,
+            generation: frontier_generation,
+        })
+    }
+
+    fn retire_settled_frontier(
+        &mut self,
+        frontier: R17SettledFrontierKeyV1,
+        registry_incarnation: &Rc<()>,
+    ) -> Result<usize, R17PersistentAllocationErrorV1> {
+        self.require_current()?;
+        if !Rc::ptr_eq(registry_incarnation, &self.registry_incarnation)
+            || frontier.allocation != self.allocation
+            || frontier.mapping != self.mapping
+        {
+            return Err(R17PersistentAllocationErrorV1::WrongOwner);
+        }
+        if frontier.generation != self.frontier_generation
+            || Some(frontier.through_use) != self.frontier_use
+        {
+            return Err(R17PersistentAllocationErrorV1::StaleLease);
+        }
+        if self.records.iter().flatten().any(|record| {
+            record.phase != R17PersistentUsePhaseV1::Settled
+                || record.binding.lease.generation > frontier.through_use.generation
+        }) {
+            return Err(R17PersistentAllocationErrorV1::DependentRetained);
+        }
+        let retired_use_count = self.records.iter().flatten().count();
+        let completed_lease_count = self
+            .completed_lease_count
+            .checked_add(retired_use_count)
+            .ok_or(R17PersistentAllocationErrorV1::CapacityExceeded)?;
+        for record in &mut self.records {
+            if record
+                .as_ref()
+                .is_some_and(|record| record.phase == R17PersistentUsePhaseV1::Settled)
+            {
+                *record = None;
+            }
+        }
+        self.completed_lease_count = completed_lease_count;
+        self.frontier_use = None;
+        Ok(retired_use_count)
+    }
+
     fn reconcile_cancelled(
         &self,
         binding: R17PersistentUseBindingV1,
@@ -917,6 +1132,7 @@ impl R17PersistentNativeAllocationRegistryV1 {
                     quarantined_uses += 1;
                 }
                 R17PersistentUsePhaseV1::CancelledBeforePublication
+                | R17PersistentUsePhaseV1::Settled
                 | R17PersistentUsePhaseV1::Quarantined
                 | R17PersistentUsePhaseV1::Released => {}
             }
@@ -1024,6 +1240,32 @@ impl R17ReservedPersistentUseLeaseV1 {
             Ok(()) => Ok(R17PersistentUseReleaseReceiptV1 {
                 binding: self.binding,
                 outcome: R17PersistentReleaseOutcomeV1::CancelledBeforePublication,
+            }),
+            Err(error) => Err(R17PersistentLeaseTransitionFailureV1 {
+                error,
+                retained: self,
+            }),
+        }
+    }
+
+    /// Quarantines a reserved use when a lower layer retained native custody
+    /// before publication could be confirmed. This is distinct from ordinary
+    /// currentness loss, which cancels reservations that never left the owner.
+    pub fn quarantine_indeterminate_prepublication_model_only(
+        self,
+        registry: &mut R17PersistentNativeAllocationRegistryV1,
+    ) -> Result<R17QuarantinedPersistentUseLeaseV1, R17PersistentLeaseTransitionFailureV1<Self>>
+    {
+        let reason = R17PersistentQuarantineReasonV1::NativeResultIndeterminate;
+        match registry.quarantine_reserved_indeterminate(
+            self.binding,
+            &self.registry_incarnation,
+            reason,
+        ) {
+            Ok(()) => Ok(R17QuarantinedPersistentUseLeaseV1 {
+                binding: self.binding,
+                reason,
+                _registry_incarnation: self.registry_incarnation,
             }),
             Err(error) => Err(R17PersistentLeaseTransitionFailureV1 {
                 error,
@@ -1229,6 +1471,26 @@ impl R17TerminalPersistentUseLeaseV1 {
         }
     }
 
+    pub(crate) fn settle_for_frontier_model_only(
+        self,
+        registry: &mut R17PersistentNativeAllocationRegistryV1,
+    ) -> Result<R17SettledPersistentFrontierV1, R17PersistentLeaseTransitionFailureV1<Self>> {
+        match registry.settle_terminal_for_frontier(
+            self.binding,
+            &self.registry_incarnation,
+            self.status,
+        ) {
+            Ok(frontier) => Ok(R17SettledPersistentFrontierV1 {
+                frontier,
+                registry_incarnation: self.registry_incarnation,
+            }),
+            Err(error) => Err(R17PersistentLeaseTransitionFailureV1 {
+                error,
+                retained: self,
+            }),
+        }
+    }
+
     pub fn reconcile_after_currentness_loss_model_only(
         self,
         registry: &R17PersistentNativeAllocationRegistryV1,
@@ -1239,6 +1501,36 @@ impl R17TerminalPersistentUseLeaseV1 {
                 binding: self.binding,
                 reason,
                 _registry_incarnation: self.registry_incarnation,
+            }),
+            Err(error) => Err(R17PersistentLeaseTransitionFailureV1 {
+                error,
+                retained: self,
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[must_use = "settled history must be retired before bounded ledger reuse"]
+pub(crate) struct R17SettledPersistentFrontierV1 {
+    frontier: R17SettledFrontierKeyV1,
+    registry_incarnation: Rc<()>,
+}
+
+impl R17SettledPersistentFrontierV1 {
+    pub(crate) const fn key(&self) -> R17SettledFrontierKeyV1 {
+        self.frontier
+    }
+
+    pub(crate) fn retire_model_only(
+        self,
+        registry: &mut R17PersistentNativeAllocationRegistryV1,
+    ) -> Result<R17PersistentFrontierRetirementReceiptV1, R17PersistentLeaseTransitionFailureV1<Self>>
+    {
+        match registry.retire_settled_frontier(self.frontier, &self.registry_incarnation) {
+            Ok(retired_use_count) => Ok(R17PersistentFrontierRetirementReceiptV1 {
+                frontier: self.frontier,
+                retired_use_count,
             }),
             Err(error) => Err(R17PersistentLeaseTransitionFailureV1 {
                 error,

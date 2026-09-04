@@ -21,6 +21,7 @@ r13_logical_scheduler_proof="$script_dir/r13_logical_scheduler_v1.rs"
 r14_async_observer_proof="$script_dir/r14_async_observer_v1.rs"
 r16_worker_semantic_boundary_proof="$script_dir/r16_worker_semantic_boundary_v1.rs"
 r17_persistent_native_allocation_proof="$script_dir/r17_persistent_native_allocation_v1.rs"
+r18_persistent_local_sdma_adapter_proof="$script_dir/r18_persistent_local_sdma_adapter_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -156,6 +157,30 @@ negative_r17_slot_generation="$script_dir/negative/r17_persistent_native_allocat
 negative_r17_use_slot_bound="$script_dir/negative/r17_persistent_native_allocation_v1_use_slot_bound.rs"
 negative_r17_writer_overlap="$script_dir/negative/r17_persistent_native_allocation_v1_writer_overlap.rs"
 negative_r17_xgmi_binding="$script_dir/negative/r17_persistent_native_allocation_v1_xgmi_binding.rs"
+negative_r18_unique_location="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_unique_location.rs"
+negative_r18_allocation_vm="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_allocation_vm.rs"
+negative_r18_logical_queue="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_logical_queue.rs"
+negative_r18_native_queue="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_native_queue.rs"
+negative_r18_queue_occurrence="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_queue_occurrence.rs"
+negative_r18_attachment_generation="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_attachment_generation.rs"
+negative_r18_direction_engine="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_direction_engine.rs"
+negative_r18_direction_role="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_direction_role.rs"
+negative_r18_persistent_range="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_persistent_range.rs"
+negative_r18_host_identity="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_host_identity.rs"
+negative_r18_prepublication_restore="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_prepublication_restore.rs"
+negative_r18_confirmed_ticket="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_confirmed_ticket.rs"
+negative_r18_ambiguity_quarantine="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_ambiguity_quarantine.rs"
+negative_r18_timeout_custody="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_timeout_custody.rs"
+negative_r18_completion_ticket="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_completion_ticket.rs"
+negative_r18_completion_identity="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_completion_identity.rs"
+negative_r18_completion_range="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_completion_range.rs"
+negative_r18_early_release="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_early_release.rs"
+negative_r18_preparation_quarantine="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_preparation_quarantine.rs"
+negative_r18_completion_currentness_quarantine="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_completion_currentness_quarantine.rs"
+negative_r18_permanent_quarantine="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_permanent_quarantine.rs"
+negative_r18_frontier_substitution="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_frontier_substitution.rs"
+negative_r18_frontier_release="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_frontier_release.rs"
+negative_r18_frontier_reuse="$script_dir/negative/r18_persistent_local_sdma_adapter_v1_frontier_reuse.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -198,6 +223,7 @@ expected_r13_logical_scheduler=$(read_pin "$pin_dir/R13_LOGICAL_SCHEDULER_SHA256
 expected_r14_async_observer=$(read_pin "$pin_dir/R14_ASYNC_OBSERVER_SHA256")
 expected_r16_worker_semantic_boundary=$(read_pin "$pin_dir/R16_WORKER_SEMANTIC_BOUNDARY_SHA256")
 expected_r17_persistent_native_allocation=$(read_pin "$pin_dir/R17_PERSISTENT_NATIVE_ALLOCATION_SHA256")
+expected_r18_persistent_local_sdma_adapter=$(read_pin "$pin_dir/R18_PERSISTENT_LOCAL_SDMA_ADAPTER_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -333,6 +359,30 @@ expected_negative_r17_slot_generation=$(read_pin "$pin_dir/NEGATIVE_R17_SLOT_GEN
 expected_negative_r17_use_slot_bound=$(read_pin "$pin_dir/NEGATIVE_R17_USE_SLOT_BOUND_SHA256")
 expected_negative_r17_writer_overlap=$(read_pin "$pin_dir/NEGATIVE_R17_WRITER_OVERLAP_SHA256")
 expected_negative_r17_xgmi_binding=$(read_pin "$pin_dir/NEGATIVE_R17_XGMI_BINDING_SHA256")
+expected_negative_r18_unique_location=$(read_pin "$pin_dir/NEGATIVE_R18_UNIQUE_LOCATION_SHA256")
+expected_negative_r18_allocation_vm=$(read_pin "$pin_dir/NEGATIVE_R18_ALLOCATION_VM_SHA256")
+expected_negative_r18_logical_queue=$(read_pin "$pin_dir/NEGATIVE_R18_LOGICAL_QUEUE_SHA256")
+expected_negative_r18_native_queue=$(read_pin "$pin_dir/NEGATIVE_R18_NATIVE_QUEUE_SHA256")
+expected_negative_r18_queue_occurrence=$(read_pin "$pin_dir/NEGATIVE_R18_QUEUE_OCCURRENCE_SHA256")
+expected_negative_r18_attachment_generation=$(read_pin "$pin_dir/NEGATIVE_R18_ATTACHMENT_GENERATION_SHA256")
+expected_negative_r18_direction_engine=$(read_pin "$pin_dir/NEGATIVE_R18_DIRECTION_ENGINE_SHA256")
+expected_negative_r18_direction_role=$(read_pin "$pin_dir/NEGATIVE_R18_DIRECTION_ROLE_SHA256")
+expected_negative_r18_persistent_range=$(read_pin "$pin_dir/NEGATIVE_R18_PERSISTENT_RANGE_SHA256")
+expected_negative_r18_host_identity=$(read_pin "$pin_dir/NEGATIVE_R18_HOST_IDENTITY_SHA256")
+expected_negative_r18_prepublication_restore=$(read_pin "$pin_dir/NEGATIVE_R18_PREPUBLICATION_RESTORE_SHA256")
+expected_negative_r18_confirmed_ticket=$(read_pin "$pin_dir/NEGATIVE_R18_CONFIRMED_TICKET_SHA256")
+expected_negative_r18_ambiguity_quarantine=$(read_pin "$pin_dir/NEGATIVE_R18_AMBIGUITY_QUARANTINE_SHA256")
+expected_negative_r18_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R18_TIMEOUT_CUSTODY_SHA256")
+expected_negative_r18_completion_ticket=$(read_pin "$pin_dir/NEGATIVE_R18_COMPLETION_TICKET_SHA256")
+expected_negative_r18_completion_identity=$(read_pin "$pin_dir/NEGATIVE_R18_COMPLETION_IDENTITY_SHA256")
+expected_negative_r18_completion_range=$(read_pin "$pin_dir/NEGATIVE_R18_COMPLETION_RANGE_SHA256")
+expected_negative_r18_early_release=$(read_pin "$pin_dir/NEGATIVE_R18_EARLY_RELEASE_SHA256")
+expected_negative_r18_preparation_quarantine=$(read_pin "$pin_dir/NEGATIVE_R18_PREPARATION_QUARANTINE_SHA256")
+expected_negative_r18_completion_currentness_quarantine=$(read_pin "$pin_dir/NEGATIVE_R18_COMPLETION_CURRENTNESS_QUARANTINE_SHA256")
+expected_negative_r18_permanent_quarantine=$(read_pin "$pin_dir/NEGATIVE_R18_PERMANENT_QUARANTINE_SHA256")
+expected_negative_r18_frontier_substitution=$(read_pin "$pin_dir/NEGATIVE_R18_FRONTIER_SUBSTITUTION_SHA256")
+expected_negative_r18_frontier_release=$(read_pin "$pin_dir/NEGATIVE_R18_FRONTIER_RELEASE_SHA256")
+expected_negative_r18_frontier_reuse=$(read_pin "$pin_dir/NEGATIVE_R18_FRONTIER_REUSE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -378,6 +428,7 @@ check_sources() {
     check_digest "$expected_r14_async_observer" "$r14_async_observer_proof"
     check_digest "$expected_r16_worker_semantic_boundary" "$r16_worker_semantic_boundary_proof"
     check_digest "$expected_r17_persistent_native_allocation" "$r17_persistent_native_allocation_proof"
+    check_digest "$expected_r18_persistent_local_sdma_adapter" "$r18_persistent_local_sdma_adapter_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -513,6 +564,30 @@ check_sources() {
     check_digest "$expected_negative_r17_use_slot_bound" "$negative_r17_use_slot_bound"
     check_digest "$expected_negative_r17_writer_overlap" "$negative_r17_writer_overlap"
     check_digest "$expected_negative_r17_xgmi_binding" "$negative_r17_xgmi_binding"
+    check_digest "$expected_negative_r18_unique_location" "$negative_r18_unique_location"
+    check_digest "$expected_negative_r18_allocation_vm" "$negative_r18_allocation_vm"
+    check_digest "$expected_negative_r18_logical_queue" "$negative_r18_logical_queue"
+    check_digest "$expected_negative_r18_native_queue" "$negative_r18_native_queue"
+    check_digest "$expected_negative_r18_queue_occurrence" "$negative_r18_queue_occurrence"
+    check_digest "$expected_negative_r18_attachment_generation" "$negative_r18_attachment_generation"
+    check_digest "$expected_negative_r18_direction_engine" "$negative_r18_direction_engine"
+    check_digest "$expected_negative_r18_direction_role" "$negative_r18_direction_role"
+    check_digest "$expected_negative_r18_persistent_range" "$negative_r18_persistent_range"
+    check_digest "$expected_negative_r18_host_identity" "$negative_r18_host_identity"
+    check_digest "$expected_negative_r18_prepublication_restore" "$negative_r18_prepublication_restore"
+    check_digest "$expected_negative_r18_confirmed_ticket" "$negative_r18_confirmed_ticket"
+    check_digest "$expected_negative_r18_ambiguity_quarantine" "$negative_r18_ambiguity_quarantine"
+    check_digest "$expected_negative_r18_timeout_custody" "$negative_r18_timeout_custody"
+    check_digest "$expected_negative_r18_completion_ticket" "$negative_r18_completion_ticket"
+    check_digest "$expected_negative_r18_completion_identity" "$negative_r18_completion_identity"
+    check_digest "$expected_negative_r18_completion_range" "$negative_r18_completion_range"
+    check_digest "$expected_negative_r18_early_release" "$negative_r18_early_release"
+    check_digest "$expected_negative_r18_preparation_quarantine" "$negative_r18_preparation_quarantine"
+    check_digest "$expected_negative_r18_completion_currentness_quarantine" "$negative_r18_completion_currentness_quarantine"
+    check_digest "$expected_negative_r18_permanent_quarantine" "$negative_r18_permanent_quarantine"
+    check_digest "$expected_negative_r18_frontier_substitution" "$negative_r18_frontier_substitution"
+    check_digest "$expected_negative_r18_frontier_release" "$negative_r18_frontier_release"
+    check_digest "$expected_negative_r18_frontier_reuse" "$negative_r18_frontier_reuse"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -539,6 +614,7 @@ check_sources
     "$r14_async_observer_proof" \
     "$r16_worker_semantic_boundary_proof" \
     "$r17_persistent_native_allocation_proof" \
+    "$r18_persistent_local_sdma_adapter_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -670,7 +746,31 @@ check_sources
     "$negative_r17_slot_generation" \
     "$negative_r17_use_slot_bound" \
     "$negative_r17_writer_overlap" \
-    "$negative_r17_xgmi_binding"
+    "$negative_r17_xgmi_binding" \
+    "$negative_r18_unique_location" \
+    "$negative_r18_allocation_vm" \
+    "$negative_r18_logical_queue" \
+    "$negative_r18_native_queue" \
+    "$negative_r18_queue_occurrence" \
+    "$negative_r18_attachment_generation" \
+    "$negative_r18_direction_engine" \
+    "$negative_r18_direction_role" \
+    "$negative_r18_persistent_range" \
+    "$negative_r18_host_identity" \
+    "$negative_r18_prepublication_restore" \
+    "$negative_r18_confirmed_ticket" \
+    "$negative_r18_ambiguity_quarantine" \
+    "$negative_r18_timeout_custody" \
+    "$negative_r18_completion_ticket" \
+    "$negative_r18_completion_identity" \
+    "$negative_r18_completion_range" \
+    "$negative_r18_early_release" \
+    "$negative_r18_preparation_quarantine" \
+    "$negative_r18_completion_currentness_quarantine" \
+    "$negative_r18_permanent_quarantine" \
+    "$negative_r18_frontier_substitution" \
+    "$negative_r18_frontier_release" \
+    "$negative_r18_frontier_reuse"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -787,6 +887,7 @@ check_positive "$r13_logical_scheduler_proof" 'verification results:: 20 verifie
 check_positive "$r14_async_observer_proof" 'verification results:: 10 verified, 0 errors' r14-async-observer
 check_positive "$r16_worker_semantic_boundary_proof" 'verification results:: 21 verified, 0 errors' r16-worker-semantic-boundary
 check_positive "$r17_persistent_native_allocation_proof" 'verification results:: 32 verified, 0 errors' r17-persistent-native-allocation
+check_positive "$r18_persistent_local_sdma_adapter_proof" 'verification results:: 34 verified, 0 errors' r18-persistent-local-sdma-adapter
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -922,13 +1023,37 @@ check_negative "$negative_r17_slot_generation" mutated_slot_reuse_advances_gener
 check_negative "$negative_r17_use_slot_bound" mutated_65th_use_is_rejected_v1 r17-use-slot-bound
 check_negative "$negative_r17_writer_overlap" mutated_overlapping_read_write_conflicts_v1 r17-writer-overlap
 check_negative "$negative_r17_xgmi_binding" mutated_xgmi_route_metadata_roster_and_access_are_exact_v1 r17-xgmi-route-metadata
+check_negative "$negative_r18_unique_location" mutated_publication_preserves_unique_native_location_v1 r18-unique-location
+check_negative "$negative_r18_allocation_vm" mutated_allocation_vm_substitution_is_rejected_v1 r18-allocation-vm
+check_negative "$negative_r18_logical_queue" mutated_logical_queue_occurrence_substitution_is_rejected_v1 r18-logical-queue
+check_negative "$negative_r18_native_queue" mutated_native_queue_id_substitution_is_rejected_v1 r18-native-queue
+check_negative "$negative_r18_queue_occurrence" mutated_native_child_queue_reuse_is_rejected_v1 r18-queue-occurrence
+check_negative "$negative_r18_attachment_generation" mutated_attachment_generation_substitution_is_rejected_v1 r18-attachment-generation
+check_negative "$negative_r18_direction_engine" mutated_d2h_engine_one_is_rejected_v1 r18-direction-engine
+check_negative "$negative_r18_direction_role" mutated_d2h_is_exact_read_source_v1 r18-direction-role
+check_negative "$negative_r18_persistent_range" mutated_persistent_range_offset_substitution_is_rejected_v1 r18-persistent-range
+check_negative "$negative_r18_host_identity" mutated_host_generation_substitution_is_rejected_v1 r18-host-identity
+check_negative "$negative_r18_prepublication_restore" mutated_recoverable_failure_restores_native_owner_v1 r18-prepublication-restore
+check_negative "$negative_r18_confirmed_ticket" mutated_stale_ticket_cannot_confirm_publication_v1 r18-confirmed-ticket
+check_negative "$negative_r18_ambiguity_quarantine" mutated_retained_indeterminate_is_quarantined_v1 r18-ambiguity-quarantine
+check_negative "$negative_r18_timeout_custody" mutated_timeout_retains_ticket_and_native_custody_v1 r18-timeout-custody
+check_negative "$negative_r18_completion_ticket" mutated_stale_completion_generation_is_rejected_v1 r18-completion-ticket
+check_negative "$negative_r18_completion_identity" mutated_completion_native_generation_is_exact_v1 r18-completion-identity
+check_negative "$negative_r18_completion_range" mutated_completion_range_offset_is_exact_v1 r18-completion-range
+check_negative "$negative_r18_early_release" mutated_published_use_blocks_native_release_v1 r18-early-release
+check_negative "$negative_r18_preparation_quarantine" mutated_preparation_quarantine_has_no_ticket_v1 r18-preparation-quarantine
+check_negative "$negative_r18_completion_currentness_quarantine" mutated_incomplete_completion_currentness_quarantines_v1 r18-completion-currentness-quarantine
+check_negative "$negative_r18_permanent_quarantine" mutated_permanent_quarantine_blocks_release_v1 r18-permanent-quarantine
+check_negative "$negative_r18_frontier_substitution" mutated_stale_frontier_is_rejected_atomically_v1 r18-frontier-substitution
+check_negative "$negative_r18_frontier_release" mutated_pending_frontier_blocks_release_v1 r18-frontier-release
+check_negative "$negative_r18_frontier_reuse" mutated_sixty_five_sequential_uses_reuse_slots_v1 r18-frontier-reuse
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 mutations=135'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 mutations=159'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

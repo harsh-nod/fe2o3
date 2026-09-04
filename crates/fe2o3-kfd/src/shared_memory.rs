@@ -283,6 +283,33 @@ pub(crate) fn xgmi_mapping_for_sdma_test(id: u64) -> Gfx942XgmiMappedDeviceMemor
     }
 }
 
+#[cfg(test)]
+pub(crate) fn local_mapping_for_persistent_sdma_test(
+    id: u64,
+) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+    xgmi_mapping_for_sdma_test(id).lease
+}
+
+#[cfg(test)]
+pub(crate) fn mapped_host_for_persistent_sdma_test(
+    id: u64,
+    bytes: usize,
+) -> SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1> {
+    SharedGttAllocationV1 {
+        session_id: 1,
+        id,
+        generation: 1,
+        layout: SharedGttAllocationLayoutV1 {
+            profile: SharedGttProfileV1::HostVisibleCoherent,
+            requested_bytes: bytes,
+            cpu_mapping_bytes: bytes,
+            gpu_va_bytes: bytes as u64,
+            uapi_flags: KfdAllocMemoryFlags::HOST_VISIBLE_COHERENT.bits(),
+        },
+        marker: PhantomData,
+    }
+}
+
 pub enum Gfx942XgmiMapRecoveryV1 {
     Unmapped(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>),
     PartiallyMapped(Gfx942XgmiMappedDeviceMemoryV1),

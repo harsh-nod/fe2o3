@@ -3,9 +3,9 @@
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13
-logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, and R17
-persistent-native-allocation models. The authenticated runner proves 225
-obligations and rejects 135
+logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
+persistent-native-allocation, and R18 persistent-local-SDMA-adapter models. The
+authenticated runner proves 259 obligations and rejects 159
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -565,7 +565,16 @@ despite a queued dependent, and currentness loss without quarantine; and R16
 Worker V4 downgrade acceptance, an over-bound dependency count, semantic
 variant mismatch, custody on malformed admission, semantic-contract
 substitution, terminal reopening, collapsed worker/sidecar scope predicates,
-and sidecar contract substitution. The launcher
+and sidecar contract substitution.
+R18 mutations additionally reject duplicate native authority, allocation-VM,
+logical-queue, native-SDMA-queue, native-child-occurrence, attachment-generation,
+host-generation, persistent-range, completion
+range, completion-ticket, and completion-native substitutions; reversed D2H
+engine or endpoint polarity; incomplete prepublication restoration; confirmed
+publication from a stale ticket; retained ambiguity without quarantine; timeout
+without ticket/native custody; native release while published; stale frontier
+retirement; release with a retained settled frontier; and exhaustion after 65
+sequential settle/retire cycles. The launcher
 rejects source substitution, lexically audits all proof files for trusted
 constructs, clears the environment, bounds execution time, pins Z3 through the
 authenticated Verus release closure, and rechecks the authenticated inputs after
@@ -713,6 +722,68 @@ no two-registry atomic XGMI join, and no 1 GiB aggregate allocation claim.
 | Bounded owner admission, registry/slot identities, class/range binding, conflicts, dependency gate, custody, quarantine, and release | **Proved** | Thirty-two verified obligations over mathematical summaries in `r17_persistent_native_allocation_v1.rs`. |
 | Independent bounded executable lifecycle | **Checked** | Nineteen Rust tests plus compile-fail `Clone`/`Send` examples; no refinement theorem. |
 | Rust auto-traits, OS thread, native memory, queue publication, KFD/SDMA/GPU execution, liveness, or performance | **Not established** | Explicitly outside the R17 model. |
+
+## R18 persistent local SDMA adapter
+
+`r18_persistent_local_sdma_adapter_v1.rs` proves 34 obligations over one
+abstract persistent local device allocation, one ordinary host allocation, and
+one targeted gfx942 SDMA operation. The binding retains the allocation, mapping,
+VM and device generations; host session, allocation, generation, and coherent
+visibility; persistent and host half-open ranges; copy extent; persistent-use
+identity; logical parent queue occurrence; native KFD queue slot; engine; and
+planned ticket slot and generation. The logical queue ID and native KFD queue
+ID are separate fields.
+Native KFD queue slot zero is admitted, while values at or above 1024 are
+rejected.
+
+The direction roster is exact: device-to-host uses ordinary SDMA engine zero
+and binds the persistent allocation as a read source; host-to-device uses engine
+one and binds it as a write destination. The model deliberately admits one
+in-flight adapter use because its sole abstract native authority changes
+location between the prepared request, queue record, persistent owner, and
+quarantine custody. Recoverable prepublication failure restores the exact
+binding and prepared lease. Confirmed publication requires the planned ticket.
+An SDMA retained error moves directly from prepared custody to quarantine: it is
+not called published, because mapped completion or ring writes may have failed
+before write-pointer publication. Pending and timeout observations retain the
+same ticket and queue custody. Preparation currentness loss permanently
+quarantines without claiming a ticket. Completion requires the exact ticket,
+native and host identities, ranges, and extent; an incomplete currentness
+envelope permanently quarantines the queue-retained ticket instead of leaving
+published custody resumable. Completion settlement creates an exact retained
+frontier keyed by the native allocation and persistent-use slot/generation;
+release remains blocked until that frontier is retired by an exact observation.
+Stale or substituted frontier observations are atomic no-ops, and the bounded
+reuse proof shows that exact retirement leaves no occupied slot after 65
+sequential uses. Normal release remains blocked until cancellation or retired
+settlement and complete owner quiescence, and every quarantine is absorbing.
+
+Twenty-four expected-negative mutations cover the listed identity, direction,
+custody, ambiguity, completion, frontier-retirement, reuse, and release
+boundary classes. These mutations are small countermodels to the named mathematical
+properties; they do not inject faults into production Rust.
+
+R18 is a standalone summary, not a refinement proof. It does not connect its
+types or transitions to either R17 model, the concrete persistent-allocation
+ledger, the separately implemented R18 adapter, or `sdma.rs`. In particular,
+the concrete persistent operation enum itself carries no queue/engine receipt,
+and R17's local-SDMA class does not distinguish child native SDMA queues that
+share a logical parent queue; the concrete adapter's separate attachment record
+has no refinement theorem to this file.
+The abstract authority count does not prove unique Rust ownership, move/drop or
+panic/unwind behavior, auto-traits, OS-thread affinity, address validity, ioctl
+truth, queue-record installation, mapped-write or release-fence ordering,
+doorbell delivery, currentness observations, firmware DMA, GPU completion,
+memory visibility, liveness, or performance.
+
+## R18 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Abstract local allocation/host/range/direction/queue/ticket binding, single-location custody, and exact settled-frontier retirement | **Proved** | Thirty-four obligations in `r18_persistent_local_sdma_adapter_v1.rs`; one mathematical in-flight adapter use at a time plus a bounded sequential-reuse summary. |
+| Identity, direction, restoration, ambiguity, timeout, completion, frontier, reuse, and release countermodels | **Rejected** | Twenty-four pinned expected-negative proof files fail only at their named postconditions. |
+| R17, concrete persistent-ledger, or native SDMA refinement | **Not established** | No theorem links the abstract R18 values or transitions to executable Rust or KFD state. |
+| Native ordering, DMA/completion truth, liveness, HIP/HSA parity, or performance | **Not established** | Requires a concrete sealed adapter, hardware execution evidence, and matched benchmarks. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

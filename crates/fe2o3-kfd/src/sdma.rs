@@ -512,7 +512,7 @@ impl Gfx942SdmaBufferV1 {
         }
     }
 
-    fn checked_gpu_subrange(
+    pub(crate) fn checked_gpu_subrange(
         &self,
         memory: &SharedGttMemorySessionV1,
         offset: u64,
@@ -875,7 +875,14 @@ pub(crate) struct PreparedSdmaBatchV1 {
 }
 
 impl PreparedSdmaBatchV1 {
-    fn into_requests(self) -> Vec<Gfx942SdmaCopyRequestV1> {
+    pub(crate) fn exact_single_ticket(&self) -> Option<Gfx942SdmaCopyTicketV1> {
+        let [ticket] = self.tickets.as_slice() else {
+            return None;
+        };
+        Some(*ticket)
+    }
+
+    pub(crate) fn into_requests(self) -> Vec<Gfx942SdmaCopyRequestV1> {
         self.requests
     }
 }
@@ -1037,7 +1044,10 @@ enum MultiQueuePublicationObservationV1 {
     Indeterminate,
 }
 
-enum PreparedSdmaPublicationFailureV1<P = PreparedSdmaBatchV1, T = Gfx942SdmaCopyTicketV1> {
+pub(crate) enum PreparedSdmaPublicationFailureV1<
+    P = PreparedSdmaBatchV1,
+    T = Gfx942SdmaCopyTicketV1,
+> {
     Recoverable {
         error: Gfx942SdmaErrorV1,
         prepared: P,
@@ -1901,7 +1911,6 @@ impl Gfx942SdmaQueueOwnerV1 {
             || prepared_batch.requests.len() != prepared_batch.copies.len()
             || prepared_batch.requests.len() != prepared_batch.tickets.len()
         {
-            self.poisoned = true;
             return Err(PreparedSdmaPublicationFailureV1::Recoverable {
                 error: Gfx942SdmaErrorV1::Contract("SDMA prepared batch queue or roster"),
                 prepared: prepared_batch,
@@ -1914,7 +1923,6 @@ impl Gfx942SdmaQueueOwnerV1 {
         ) {
             Ok(plan) => plan,
             Err(error) => {
-                self.poisoned = true;
                 return Err(PreparedSdmaPublicationFailureV1::Recoverable {
                     error,
                     prepared: prepared_batch,
@@ -3615,6 +3623,19 @@ impl Gfx942SdmaQueueSetV1 {
         }
     }
 
+    pub(crate) fn exact_targeted_observation(
+        &self,
+        engine_index: u32,
+    ) -> Option<Gfx942SdmaQueueObservationV1> {
+        let Self::Generic(owners) = self else {
+            return None;
+        };
+        let [owner] = owners.as_slice() else {
+            return None;
+        };
+        (owner.engine_index == Some(engine_index)).then(|| owner.observation())
+    }
+
     pub(crate) const fn is_striped(&self) -> bool {
         matches!(self, Self::Striped { .. })
     }
@@ -3829,6 +3850,30 @@ impl Gfx942SdmaQueueSetV1 {
             self.advance_striped_owner()?;
         }
         result
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn submit_prepared_batch_with_custody(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        prepared: PreparedSdmaBatchV1,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, PreparedSdmaPublicationFailureV1> {
+        let ticket = match prepared.tickets.first().copied() {
+            Some(ticket) => ticket,
+            None => {
+                return Err(PreparedSdmaPublicationFailureV1::Recoverable {
+                    error: Gfx942SdmaErrorV1::Contract("SDMA prepared batch ticket roster"),
+                    prepared,
+                });
+            }
+        };
+        let owner = match self.owner_for_ticket(ticket) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return Err(PreparedSdmaPublicationFailureV1::Recoverable { error, prepared });
+            }
+        };
+        owner.submit_prepared_batch_with_custody(memory, prepared)
     }
 
     pub(crate) fn poll(
@@ -4480,6 +4525,53 @@ pub(crate) fn allocate_device_buffer(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn persistent_sdma_buffers_for_test(
+    owner: QueueKeyV1,
+    id: u64,
+) -> (Gfx942SdmaBufferV1, Gfx942SdmaBufferV1) {
+    let device = Gfx942SdmaBufferV1 {
+        storage: Gfx942SdmaBufferStorageV1::Device(
+            crate::shared_memory::local_mapping_for_persistent_sdma_test(id),
+        ),
+        owner,
+        pool_generation: 1,
+        logical_bytes: 4096,
+    };
+    let host = Gfx942SdmaBufferV1 {
+        storage: Gfx942SdmaBufferStorageV1::Host(
+            crate::shared_memory::mapped_host_for_persistent_sdma_test(id + 1000, 4096),
+        ),
+        owner,
+        pool_generation: 1,
+        logical_bytes: 4096,
+    };
+    (device, host)
+}
+
+#[cfg(test)]
+pub(crate) fn persistent_sdma_ticket_for_test(
+    owner: QueueKeyV1,
+    queue_id: u32,
+) -> Gfx942SdmaCopyTicketV1 {
+    persistent_sdma_ticket_coordinates_for_test(owner, queue_id, 0, 1)
+}
+
+#[cfg(test)]
+pub(crate) fn persistent_sdma_ticket_coordinates_for_test(
+    owner: QueueKeyV1,
+    queue_id: u32,
+    slot: u16,
+    generation: u32,
+) -> Gfx942SdmaCopyTicketV1 {
+    Gfx942SdmaCopyTicketV1 {
+        owner,
+        queue_id,
+        slot,
+        generation,
+    }
+}
+
 pub(crate) fn release_buffer(
     memory: &mut SharedGttMemorySessionV1,
     buffer: Gfx942SdmaBufferV1,
@@ -4665,7 +4757,7 @@ fn exact_queue_owner(left: QueueKeyV1, right: QueueKeyV1) -> bool {
     left == right
 }
 
-fn ticket_matches_queue_occurrence(
+pub(crate) fn ticket_matches_queue_occurrence(
     ticket: Gfx942SdmaCopyTicketV1,
     owner: QueueKeyV1,
     queue_id: u32,

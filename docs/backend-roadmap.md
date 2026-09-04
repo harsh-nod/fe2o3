@@ -415,3 +415,39 @@ connected to compute AQL, local SDMA, native XGMI, live currentness observation,
 or the public runtime facade. The next tranche must bind an exact queue
 occurrence and native publication/completion ticket to each persistent use and
 retain terminally ambiguous native authority until process teardown.
+
+## Runtime R18 Status
+
+R18 connects the persistent-allocation custody core to one targeted local SDMA
+queue. Promotion preserves the existing queue-owned device-buffer debit and
+binds the exact parent queue occurrence, native child queue, directional engine,
+pool generation, mapped storage identity, and extent. A move-only submission
+retains the device allocation, host buffer, range use, and native ticket across
+publication, nonblocking poll, bounded wait, completion, and settlement. Only a
+confirmed publication enters `Published`; recoverable prepublication failure
+restores the exact owners, while retained or postpublication uncertainty becomes
+opaque process-teardown custody. A consuming retirement transition reclaims
+settled ledger history only for the exact quiescent frontier and returns both
+allocation and frontier custody unchanged on stale or substituted input.
+
+The independent R18 executable model composes the R17 registry and lease rather
+than duplicating its lifecycle as shadow state. Its pinned Verus summary adds 34
+obligations and 24 expected-negative mutations, bringing the authenticated
+totals to 259 and 159. It covers exact local-SDMA bindings, direction and engine,
+ticket occurrence, ranges, timeout custody, completion restoration, and
+quarantine. It remains a standalone abstract model, not a Rust-to-Verus, KFD,
+firmware, or hardware refinement.
+
+Native-neutral KFD tests drive the production custody transitions for
+publication, pending, timeout, completion, restoration, and retirement. They
+include 66 sequential publish/complete/retire cycles and stale/cross-allocation
+frontier rejection. These are ownership-transition tests, not native execution
+or liveness evidence.
+
+R18 still does not establish HIP/HSA parity. The bridge is single-flight and
+local to one targeted queue; it is not wired into the public runtime facade or
+async progress engine and provides no persistent compute AQL, concurrent range
+leases, directional or striped queue-set integration, peer/XGMI use, or unified
+multi-device graph. The shared MI300X host was busy during validation, so this
+tranche carries no native execution, copy-performance, or comparative HIP/HSA
+evidence.

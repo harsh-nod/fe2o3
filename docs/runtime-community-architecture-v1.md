@@ -484,6 +484,21 @@ copyable numeric observation identities remain non-authoritative. Its abstract
 Verus summary adds 32 obligations and 14 mutations, bringing the pinned totals
 to 225 and 135;
 there is no correspondence theorem between that proof and the KFD ledger.
+
+R18 binds one such owner to a targeted local SDMA queue without changing the
+existing queue buffer accounting. The move-only adapter authenticates its exact
+queue occurrence, native queue, direction/engine, pool generation, storage
+identity, range use, and ticket through confirmed publication and completion.
+Recoverable prepublication failure restores the exact owners; retained or later
+uncertainty is terminal process-teardown custody. The independent executable
+model composes the R17 registry/lease lifecycle, and the abstract Verus summary
+adds 34 obligations and 24 mutations for cumulative totals of 259 and 159. The
+adapter is single-flight, is not connected to the public runtime facade or async
+progress engine, and has no executable-Rust/native refinement theorem. Exact
+quiescent-frontier retirement reclaims settled ledger history; stale or
+cross-allocation frontiers return their allocation and frontier custody
+unchanged. Native-neutral tests cover 66 sequential transition cycles without
+establishing hardware progress.
 Runtime Worker V4/V5 background progress is additionally exercised through
 real child processes, including deadline, terminal-response, and EOF failure
 sealing, but those tests do not execute native KFD work.
@@ -492,8 +507,10 @@ The remaining community-launch blockers are material. Direct KFD owns exactly
 two compute lanes per child, but has no background native-publication scheduler, queue-side
 dependency packets, or more than two in-flight compute dispatches. Native XGMI is owned by a separate
 exact two-device, copy-only backend; there is no unified native multi-device
-compute owner. The R17 persistent owner is not yet joined to either path. The
-host exposes a typed unsafe boundary and sealed adapter for
+compute owner. R18 joins one persistent owner only to a targeted local SDMA
+queue; persistent compute, native XGMI, concurrent range leases, and runtime
+facade/progress integration remain absent. The host exposes a typed unsafe
+boundary and sealed adapter for
 a separately reviewed producer of the required Worker V3 semantic-to-machine
 refinement receipt, but the repository ships no concrete issue #214 proof
 backend or authenticated scalar proof artifact. The Rust
