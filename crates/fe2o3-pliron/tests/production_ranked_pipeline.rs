@@ -532,8 +532,8 @@ fn production_gfx950_transpose_allocation_effect_reaches_the_full_pipeline() {
             vec![
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 92,
-                    global_extents: [64, 1, 1],
-                    workgroup_extents: [64, 1, 1],
+                    global_extents: [128, 1, 1],
+                    workgroup_extents: [128, 1, 1],
                     subgroup_size: 64,
                     full_physical_workgroups: true,
                 },
@@ -704,15 +704,6 @@ fn production_gfx950_transpose_lifecycle_rejects_hostile_traces() {
             gfx950_transpose_barrier(HierarchyAttr::Workgroup, MemoryOrderAttr::AcquireRelease),
             gfx950_transpose_effect(AccessKindAttr::Read, true),
             gfx950_transpose_effect(AccessKindAttr::Read, false),
-        ],
-    );
-    assert_gfx950_transpose_lifecycle_rejected(
-        "two_wave_workgroup",
-        128,
-        vec![
-            gfx950_transpose_effect(AccessKindAttr::Write, true),
-            gfx950_transpose_barrier(HierarchyAttr::Workgroup, MemoryOrderAttr::AcquireRelease),
-            gfx950_transpose_effect(AccessKindAttr::Read, true),
         ],
     );
 }
