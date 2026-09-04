@@ -168,7 +168,10 @@ use crate::{
     OperationHandleError, ProductionSessionLimitsV1, validate_name,
 };
 
+mod ranked_cfg_ssa_canonicalize_v1;
 mod ranked_index_constant_fold_v1;
+mod ranked_memory_type_legalize_v1;
+mod ranked_preverification_transform_v1;
 
 pub use ranked_index_constant_fold_v1::ProductionRankedTranslationErrorV1;
 
@@ -1913,7 +1916,10 @@ impl ProductionRankedKernelV1 {
             tree_work: 0,
         };
         kernel.tree_work = kernel.validate()?;
-        kernel = ranked_index_constant_fold_v1::fold_and_validate_index_constants_v1(kernel)
+        kernel =
+            ranked_preverification_transform_v1::transform_and_validate_ranked_preverification_v1(
+                kernel,
+            )
             .map_err(ProductionRankedKernelErrorV1::InvalidTransformation)?;
         let transformed_tree_work = kernel.validate()?;
         if transformed_tree_work != kernel.tree_work {
@@ -6512,6 +6518,14 @@ fn compile_ranked_kernel_for_lowering_with_target_v1(
     limits: ProductionSessionLimitsV1,
     atomic_target: Option<PlironAtomicTargetContextV1>,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    if let ProductionConstructionKindV1::RankedKernel { kernel, .. } = &construction.kind {
+        ranked_preverification_transform_v1::require_ranked_preverification_normal_form_v1(kernel)
+            .map_err(|error| {
+                ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedRecipe(
+                    ProductionRankedKernelErrorV1::InvalidTransformation(error),
+                ))
+            })?;
+    }
     let kernel_registration = dialect_kernel::dialect_registration()
         .map_err(ProductionRankedCompileErrorV1::Registration)?;
     let gpu_registration = dialect_gpu::dialect_registration()

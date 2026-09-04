@@ -172,8 +172,10 @@ a protocol caveat in the evidence file.
 The sparse and hybrid runners additionally require exactly four
 `ds_read_b64_tr_b8` instructions before one FP8
 `v_mfma_f32_16x16x128_f8f6f4`. Exponential device math uses only the reviewed
-ROCm 7.2.1 OCML `exp` closure shared with the low-precision examples; gfx950
-square root lowers to its target-native LLVM intrinsic. Set
+selected reviewed OCML `exp` closure shared with the low-precision examples;
+ROCm 7.2.1 remains the default and the checked-in ROCm 7.2.4 manifest is an
+explicit alternative. Gfx950 square root lowers to its target-native LLVM
+intrinsic. Set
 `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the documented tool and
 target-directory environment variables when validating a copied checkout.
 

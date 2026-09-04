@@ -790,6 +790,7 @@ for core_step in \
   device-copy-derive-real-trait \
   device-copy-derive-ui \
   core-production-runtime-surface-ui \
+  kernel-compile-matrix-shell-tests \
   s09-debug-checker; do
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
@@ -1220,6 +1221,10 @@ assert_equals \
   "cargo test --locked -p dialect-amdgcn --test lowering rocm_compiles_the_golden_to_an_amdgpu_code_object -- --ignored --exact" \
   "$(step_command rocm-g1-code-object)" \
   'ROCm compile did not produce the target code-object fixture'
+assert_equals \
+  'bash scripts/kernel-compile-matrix.sh gfx942' \
+  "$(step_command rocm-kernel-compile-matrix)" \
+  'ROCm compile did not run the site-backed production kernel matrix'
 for retired_step in \
   rocm-trusted-device-items \
   rocm-trusted-device-item-stale-cleanup \

@@ -1336,6 +1336,76 @@ fn predicated_checked_row_striped_access_proves_four_workgroups_disjoint() {
 }
 
 #[test]
+fn predicated_checked_row_striped_dynamic_component_is_disjoint() {
+    for invocation_varying_layout in [false, true] {
+        let context = &mut setup();
+        let (function, arguments) =
+            function_with_index_arguments(context, "predicated_row_striped_dynamic_component", 5);
+        let entry = function.get_entry_block(context);
+        let access_block = block(context, &function, "access");
+        let exit = block(context, &function, "exit");
+        let view_type =
+            RankedViewType::new(context, 32, true, vec![dialect_kernel::DYNAMIC_EXTENT]).unwrap();
+        let output = RankedViewOp::new(context, view_type, vec![arguments[0]]).unwrap();
+        let invocation = InvocationIndexOp::new(context, 0, 0);
+        let rows = if invocation_varying_layout {
+            invocation.result(context)
+        } else {
+            arguments[2]
+        };
+        let checked = CheckedRowStripedIndex2DOp::new_predicated(
+            context,
+            invocation.result(context),
+            arguments[1],
+            rows,
+            arguments[3],
+            arguments[4],
+            arguments[0],
+            [64, 64],
+        );
+        let guard = IndexLessThanBranchOp::new(
+            context,
+            checked.result(context),
+            arguments[0],
+            access_block,
+            exit,
+        );
+        for operation in [
+            output.get_operation(),
+            invocation.get_operation(),
+            checked.get_operation(),
+            guard.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        let write = RankedAccessOp::new_predicated(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            checked.result(context),
+            checked.success(context).unwrap(),
+        )
+        .unwrap();
+        let to_exit = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        append(context, access_block, &write);
+        append(context, access_block, &to_exit);
+        append(context, exit, &ret);
+
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        if invocation_varying_layout {
+            assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+            assert!(matches!(
+                report.findings(),
+                [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+            ));
+        } else {
+            assert!(report.is_clean(), "{report:?}");
+        }
+    }
+}
+
+#[test]
 fn predicated_checked_access_rejects_invocation_varying_runtime_layout() {
     let context = &mut setup();
     let (function, arguments) =

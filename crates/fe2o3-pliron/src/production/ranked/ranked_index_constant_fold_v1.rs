@@ -40,6 +40,20 @@ pub enum ProductionRankedTranslationErrorV1 {
         block: usize,
         operation: usize,
     },
+    IllegalControlFlowCanonicalization {
+        block: usize,
+    },
+    MissedControlFlowCanonicalization {
+        block: usize,
+    },
+    IllegalMemoryTypeLegalization {
+        block: usize,
+        operation: usize,
+    },
+    MissedMemoryTypeLegalization {
+        block: usize,
+        operation: usize,
+    },
     TreeWorkChanged,
 }
 
@@ -55,6 +69,10 @@ impl ProductionRankedTranslationErrorV1 {
             Self::IncorrectFoldedValue { .. } => "FE2O3-RANKED-TRANSFORM-008",
             Self::MissedFold { .. } => "FE2O3-RANKED-TRANSFORM-009",
             Self::TreeWorkChanged => "FE2O3-RANKED-TRANSFORM-010",
+            Self::IllegalControlFlowCanonicalization { .. } => "FE2O3-RANKED-TRANSFORM-011",
+            Self::MissedControlFlowCanonicalization { .. } => "FE2O3-RANKED-TRANSFORM-012",
+            Self::IllegalMemoryTypeLegalization { .. } => "FE2O3-RANKED-TRANSFORM-013",
+            Self::MissedMemoryTypeLegalization { .. } => "FE2O3-RANKED-TRANSFORM-014",
         }
     }
 }
@@ -97,6 +115,22 @@ impl fmt::Display for ProductionRankedTranslationErrorV1 {
             Self::MissedFold { block, operation } => write!(
                 formatter,
                 "ranked translation output is not at a fixed point at block {block}, operation {operation}"
+            ),
+            Self::IllegalControlFlowCanonicalization { block } => write!(
+                formatter,
+                "ranked translation changed control flow outside the canonical relation at block {block}"
+            ),
+            Self::MissedControlFlowCanonicalization { block } => write!(
+                formatter,
+                "ranked translation left a non-canonical control-flow form at block {block}"
+            ),
+            Self::IllegalMemoryTypeLegalization { block, operation } => write!(
+                formatter,
+                "ranked translation changed memory typing outside the canonical relation at block {block}, operation {operation}"
+            ),
+            Self::MissedMemoryTypeLegalization { block, operation } => write!(
+                formatter,
+                "ranked translation left an implicit memory-space form at block {block}, operation {operation}"
             ),
             Self::TreeWorkChanged => {
                 formatter.write_str("ranked translation changed bounded operation-tree work")
@@ -147,6 +181,16 @@ fn preceding_constant_v1(
     constants.get(&identity).copied()
 }
 
+fn fold_unsigned_cast_v1(value: u64, bit_width: u16) -> Option<u64> {
+    match bit_width {
+        8 => Some(value & u64::from(u8::MAX)),
+        16 => Some(value & u64::from(u16::MAX)),
+        32 => Some(value & u64::from(u32::MAX)),
+        64 => Some(value),
+        _ => None,
+    }
+}
+
 fn run_folder_v1(kernel: &mut ProductionRankedKernelV1) {
     for block in &mut kernel.blocks {
         let mut constants = BTreeMap::new();
@@ -164,6 +208,13 @@ fn run_folder_v1(kernel: &mut ProductionRankedKernelV1) {
                 } => preceding_constant_v1(&constants, *lhs)
                     .zip(preceding_constant_v1(&constants, *rhs))
                     .and_then(|(lhs, rhs)| fold_candidate_v1(*kind, lhs, rhs))
+                    .map(|value| (*result, value)),
+                ProductionRankedOperationV1::IndexUnsignedCast {
+                    result,
+                    source,
+                    bit_width,
+                } => preceding_constant_v1(&constants, *source)
+                    .and_then(|value| fold_unsigned_cast_v1(value, *bit_width))
                     .map(|value| (*result, value)),
                 _ => None,
             };
@@ -193,6 +244,16 @@ fn validator_constant_v1(
         ProductionRankedValueV1::Argument(_) | ProductionRankedValueV1::BlockArgument { .. } => {
             None
         }
+    }
+}
+
+fn validator_unsigned_cast_v1(value: u64, bit_width: u16) -> Option<u64> {
+    match bit_width {
+        8 => Some(value % (u64::from(u8::MAX) + 1)),
+        16 => Some(value % (u64::from(u16::MAX) + 1)),
+        32 => Some(value % (u64::from(u32::MAX) + 1)),
+        64 => Some(value),
+        _ => None,
     }
 }
 
@@ -246,31 +307,29 @@ fn replay_translation_v1(
             .enumerate()
         {
             if before_operation == after_operation {
-                if let ProductionRankedOperationV1::IndexBinary { kind, lhs, rhs, .. } =
-                    after_operation
-                    && let Some(expected) = validator_constant_v1(&constants, *lhs)
-                        .zip(validator_constant_v1(&constants, *rhs))
-                        .and_then(|(lhs, rhs)| validator_evaluate_v1(*kind, lhs, rhs))
-                {
-                    let _ = expected;
+                let foldable = match after_operation {
+                    ProductionRankedOperationV1::IndexBinary { kind, lhs, rhs, .. } => {
+                        validator_constant_v1(&constants, *lhs)
+                            .zip(validator_constant_v1(&constants, *rhs))
+                            .and_then(|(lhs, rhs)| validator_evaluate_v1(*kind, lhs, rhs))
+                    }
+                    ProductionRankedOperationV1::IndexUnsignedCast {
+                        source, bit_width, ..
+                    } => validator_constant_v1(&constants, *source)
+                        .and_then(|value| validator_unsigned_cast_v1(value, *bit_width)),
+                    _ => None,
+                };
+                if foldable.is_some() {
                     return Err(ProductionRankedTranslationErrorV1::MissedFold {
                         block: block_index,
                         operation: operation_index,
                     });
                 }
             } else {
-                let (
-                    ProductionRankedOperationV1::IndexBinary {
-                        result,
-                        kind,
-                        lhs,
-                        rhs,
-                    },
-                    ProductionRankedOperationV1::IndexConstant {
-                        result: after_result,
-                        value: actual,
-                    },
-                ) = (before_operation, after_operation)
+                let ProductionRankedOperationV1::IndexConstant {
+                    result: after_result,
+                    value: actual,
+                } = after_operation
                 else {
                     return Err(ProductionRankedTranslationErrorV1::OperationChanged {
                         block: block_index,
@@ -278,17 +337,44 @@ fn replay_translation_v1(
                         component: "operation kind, attributes, operands, result type, effect, or proof site",
                     });
                 };
-                if result != after_result {
+                let (result, expected) = match before_operation {
+                    ProductionRankedOperationV1::IndexBinary {
+                        result,
+                        kind,
+                        lhs,
+                        rhs,
+                    } => (
+                        *result,
+                        validator_constant_v1(&constants, *lhs)
+                            .zip(validator_constant_v1(&constants, *rhs))
+                            .and_then(|(lhs, rhs)| validator_evaluate_v1(*kind, lhs, rhs)),
+                    ),
+                    ProductionRankedOperationV1::IndexUnsignedCast {
+                        result,
+                        source,
+                        bit_width,
+                    } => (
+                        *result,
+                        validator_constant_v1(&constants, *source)
+                            .and_then(|value| validator_unsigned_cast_v1(value, *bit_width)),
+                    ),
+                    _ => {
+                        return Err(ProductionRankedTranslationErrorV1::OperationChanged {
+                            block: block_index,
+                            operation: operation_index,
+                            component: "operation kind, attributes, operands, result type, effect, or proof site",
+                        });
+                    }
+                };
+                if result != *after_result {
                     return Err(ProductionRankedTranslationErrorV1::OperationChanged {
                         block: block_index,
                         operation: operation_index,
                         component: "SSA result identity",
                     });
                 }
-                let expected = validator_constant_v1(&constants, *lhs)
-                    .zip(validator_constant_v1(&constants, *rhs))
-                    .and_then(|(lhs, rhs)| validator_evaluate_v1(*kind, lhs, rhs))
-                    .ok_or(ProductionRankedTranslationErrorV1::IllegalRewrite {
+                let expected =
+                    expected.ok_or(ProductionRankedTranslationErrorV1::IllegalRewrite {
                         block: block_index,
                         operation: operation_index,
                     })?;
@@ -342,6 +428,12 @@ pub(super) fn fold_and_validate_index_constants_v1(
     Ok(output)
 }
 
+pub(super) fn require_folded_index_constants_v1(
+    kernel: &ProductionRankedKernelV1,
+) -> Result<(), ProductionRankedTranslationErrorV1> {
+    replay_translation_v1(kernel, kernel).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +460,14 @@ mod tests {
             kind,
             lhs: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(lhs)),
             rhs: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(rhs)),
+        }
+    }
+
+    fn unsigned_cast(identity: u32, source: u32, bit_width: u16) -> ProductionRankedOperationV1 {
+        ProductionRankedOperationV1::IndexUnsignedCast {
+            result: ProductionRankedValueIdV1::new(identity),
+            source: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(source)),
+            bit_width,
         }
     }
 
@@ -430,6 +530,24 @@ mod tests {
         let after = fold_and_validate_index_constants_v1(before).expect("chained fold");
         assert_eq!(folded_value(&after, 2), Some(12));
         assert_eq!(folded_value(&after, 4), Some(24));
+    }
+
+    #[test]
+    fn folds_every_supported_unsigned_cast_with_low_bit_semantics() {
+        for (bit_width, input, expected) in [
+            (8, 0x1ff, 0xff),
+            (16, 0x1_ffff, 0xffff),
+            (32, 0x1_ffff_ffff, 0xffff_ffff),
+            (64, u64::MAX, u64::MAX),
+        ] {
+            let before = raw_kernel(
+                "unsigned_cast_fold",
+                0,
+                vec![constant(0, input), unsigned_cast(1, 0, bit_width)],
+            );
+            let after = fold_and_validate_index_constants_v1(before).expect("checked cast fold");
+            assert_eq!(folded_value(&after, 1), Some(expected));
+        }
     }
 
     #[test]

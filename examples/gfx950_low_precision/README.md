@@ -51,11 +51,14 @@ and executes a digest-pinned HSA numerical test:
 ./run-fp8-attention-gfx950.sh
 ```
 
-The attention runner disables Clang's implicit GPU libraries and links only the
-ordered nine-file ROCm 7.2.1 closure accepted by
-`gfx950-ocml-rocm-7.2.1.manifest`. It requires one scaled gfx950 MFMA, two B4 or
-four B8 transpose reads, one uniform publication barrier, and the exact static
-LDS allocation before dispatch.
+The attention runner disables Clang's implicit GPU libraries and links only an
+ordered nine-file closure accepted by the shared digest validator. It defaults
+to `gfx950-ocml-rocm-7.2.1.manifest`; the separately reviewed
+`gfx950-ocml-rocm-7.2.4.manifest` is selected explicitly with
+`FE2O3_GFX950_OCML_MANIFEST`. Both manifests pin every device library plus
+Clang and LLD. The runner requires one scaled gfx950 MFMA, two B4 or four B8
+transpose reads, one uniform publication barrier, and the exact static LDS
+allocation before dispatch.
 
 The selected root compiler binding is portable across checkout paths.
 Cargo's original ordered metadata remains a separate build observation; only

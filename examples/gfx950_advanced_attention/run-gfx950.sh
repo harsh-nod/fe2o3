@@ -154,6 +154,12 @@ OBJDUMP=${OBJDUMP:-$ROCM_PATH/llvm/bin/llvm-objdump}
 READOBJ=${READOBJ:-$ROCM_PATH/llvm/bin/llvm-readobj}
 SHA256SUM=${SHA256SUM:-sha256sum}
 GIT=${GIT:-git}
+COMPILE_ONLY=${FE2O3_EXAMPLE_COMPILE_ONLY:-0}
+
+if [[ $COMPILE_ONLY != 0 && $COMPILE_ONLY != 1 ]]; then
+    printf 'FE2O3_EXAMPLE_COMPILE_ONLY must be 0 or 1\n' >&2
+    exit 2
+fi
 
 if ! command -v -- "$RUSTUP" >/dev/null 2>&1 && [[ -x $HOME/.cargo/bin/rustup ]]; then
     RUSTUP=$HOME/.cargo/bin/rustup
@@ -174,7 +180,7 @@ fi
 
 OCML_ARGS=()
 OCML_HELPER=$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-closure.sh
-OCML_MANIFEST=$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest
+OCML_MANIFEST=${FE2O3_GFX950_OCML_MANIFEST:-$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest}
 if [[ ! -f $OCML_HELPER || ! -f $OCML_MANIFEST ]]; then
     printf 'reviewed gfx950 ROCm closure is incomplete\n' >&2
     exit 1
@@ -422,6 +428,12 @@ for forbidden in v_cvt_f32_fp4 v_cvt_f32_fp8 v_dot; do
 done
 
 HSACO=$(cd -- "$(dirname -- "$HSACO")" && pwd -P)/$(basename -- "$HSACO")
+if [[ $COMPILE_ONLY == 1 ]]; then
+    printf 'COMPILE PASS: %s reached validated gfx950:xnack- HSACO; hardware execution skipped\n' \
+        "$SYMBOL"
+    printf 'HSACO: %s\n' "$HSACO"
+    exit 0
+fi
 HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
 LLVM_SHA256=$("$SHA256SUM" -- "$LLVM_IR" | awk '{ print $1 }')
 ISA_SHA256=$("$SHA256SUM" -- "$DISASSEMBLY" | awk '{ print $1 }')
