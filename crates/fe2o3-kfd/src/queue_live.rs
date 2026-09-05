@@ -37,9 +37,10 @@ use super::dispatch_binding::{
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
     Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
     Gfx942FixedDispatchStorageIdentityV1, Gfx942RecycledDispatchWriteRequestV1,
-    ReturnedDispatchDataV1, TypedKernargImageV1, persistent_fixed_dispatch_control_identity_v1,
-    prepare_dispatch_resources, prepare_persistent_fixed_dispatch_resources_v1,
-    prepare_public_fixed_dispatch_resources, prepare_public_fixed_dispatch_resources_after_detach,
+    PersistentFixedDispatchControlIdentityV1, ReturnedDispatchDataV1, TypedKernargImageV1,
+    persistent_fixed_dispatch_control_identity_v1, prepare_dispatch_resources,
+    prepare_persistent_fixed_dispatch_resources_v1, prepare_public_fixed_dispatch_resources,
+    prepare_public_fixed_dispatch_resources_after_detach,
     prepare_public_fixed_dispatch_resources_after_recycle, unwrap_completed, unwrap_published,
     validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress, wrap_published,
 };
@@ -172,11 +173,12 @@ use crate::sdma::{
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
     AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
-    ExecutableGttV1, Gfx942InitializedDeviceMemoryV1, Gfx942InitializedHostVisibleMemoryV1,
-    GttCpuWritableV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
-    HostVisibleCoherentGttV1, LiveQueueModelFoundationLoanV1, SharedGttAllocationV1,
-    SharedGttMappedResourceFactsV1, SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
-    UserptrAqlControlGttV1, UserptrAqlQueueProbeGttV1,
+    ExecutableGttV1, Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1,
+    Gfx942DeviceMemoryMappedV1, Gfx942InitializedDeviceMemoryV1,
+    Gfx942InitializedHostVisibleMemoryV1, GttCpuWritableV1, GttGpuAccessibleExecutableV1,
+    GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1, LiveQueueModelFoundationLoanV1,
+    SharedGttAllocationV1, SharedGttMappedResourceFactsV1, SharedGttMemorySessionV1,
+    SharedGttQueueResourceAuthorityV1, UserptrAqlControlGttV1, UserptrAqlQueueProbeGttV1,
 };
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -2663,6 +2665,231 @@ enum SdmaPublicationModeV1 {
     OrdinaryBatch,
     StripedBatch,
     ExecuteBatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistentRetainedControlReplayCustodyStageV1 {
+    Input,
+    Storage,
+    Data,
+    Attached,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistentRetainedControlReplayDispositionV1 {
+    RetryableInput,
+    TerminalInput,
+    TerminalStorage,
+    TerminalData,
+    TerminalAttached,
+}
+
+const fn classify_persistent_retained_control_replay_failure_v1(
+    stage: PersistentRetainedControlReplayCustodyStageV1,
+    loan_succeeded: bool,
+    cancellation_succeeded: bool,
+    session_healthy: bool,
+) -> PersistentRetainedControlReplayDispositionV1 {
+    match stage {
+        PersistentRetainedControlReplayCustodyStageV1::Input
+            if loan_succeeded && cancellation_succeeded && session_healthy =>
+        {
+            PersistentRetainedControlReplayDispositionV1::RetryableInput
+        }
+        PersistentRetainedControlReplayCustodyStageV1::Input if cancellation_succeeded => {
+            PersistentRetainedControlReplayDispositionV1::TerminalInput
+        }
+        PersistentRetainedControlReplayCustodyStageV1::Input
+        | PersistentRetainedControlReplayCustodyStageV1::Attached => {
+            PersistentRetainedControlReplayDispositionV1::TerminalAttached
+        }
+        PersistentRetainedControlReplayCustodyStageV1::Storage => {
+            PersistentRetainedControlReplayDispositionV1::TerminalStorage
+        }
+        PersistentRetainedControlReplayCustodyStageV1::Data => {
+            PersistentRetainedControlReplayDispositionV1::TerminalData
+        }
+    }
+}
+
+fn persistent_retained_control_replay_input_failure_v1(
+    error: ComputeAqlQueueSessionErrorV1,
+    input: Gfx942PersistentComputeInputV1,
+    retryable: bool,
+) -> Gfx942PersistentComputeBindFailureV1 {
+    Gfx942PersistentComputeBindFailureV1 {
+        error,
+        custody: if retryable {
+            Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input)
+        } else {
+            Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                Gfx942PersistentComputeBindTerminalCustodyV1 { input: Some(input) },
+            )
+        },
+    }
+}
+
+struct PersistentRetainedControlReplayRequestV1 {
+    input: Gfx942PersistentComputeInputV1,
+    prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    dispatch: DispatchResourceOwnerV1,
+    initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
+    control_identity: PersistentFixedDispatchControlIdentityV1,
+    predecessor_generation: u64,
+}
+
+struct PersistentRetainedControlReplayDetachedV1 {
+    allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    dispatch: DispatchResourceOwnerV1,
+    authenticated_sha256: Option<[u8; 32]>,
+}
+
+struct PersistentRetainedControlReplayStorageV1 {
+    replay: PersistentRetainedControlReplayDetachedV1,
+    lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    initialized_content: Option<Gfx942DeviceContentDescriptorV1>,
+    control_identity: PersistentFixedDispatchControlIdentityV1,
+    predecessor_generation: u64,
+}
+
+struct PersistentRetainedControlReplayDataV1 {
+    replay: PersistentRetainedControlReplayDetachedV1,
+    data: Gfx942FixedDispatchDataV1,
+    control_identity: PersistentFixedDispatchControlIdentityV1,
+    predecessor_generation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PersistentRetainedControlReplayCommitV1 {
+    attachment_generation: u64,
+    next_attachment_generation: u64,
+    storage_identity: Gfx942DeviceMemoryIdentityV1,
+    effect: Gfx942PersistentComputeEffectV1,
+    predecessor_generation: u64,
+}
+
+enum PersistentRetainedControlReplayOutcomeV1 {
+    BeforeDetach {
+        request: PersistentRetainedControlReplayRequestV1,
+        error: ComputeAqlQueueSessionErrorV1,
+    },
+    AfterDetach {
+        replay: PersistentRetainedControlReplayDetachedV1,
+        custody: PersistentComputeTerminalNativeCustodyV1,
+        error: ComputeAqlQueueSessionErrorV1,
+    },
+    Ready(PersistentRetainedControlReplayDetachedV1),
+}
+
+enum PersistentRetainedControlReplayPipelineOutcomeV1<Request, Storage, Data, Attached, Error> {
+    BeforeDetach { request: Request, error: Error },
+    Storage { storage: Storage, error: Error },
+    Data { data: Data, error: Error },
+    Attached { attached: Attached, error: Error },
+    Ready(Attached),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_persistent_retained_control_replay_pipeline_v1<
+    Context,
+    Request,
+    Storage,
+    Data,
+    Attached,
+    Error,
+>(
+    context: &mut Context,
+    mut request: Request,
+    mapped_facts: impl FnOnce(&mut Context, &mut Request) -> Result<(), Error>,
+    detach: impl FnOnce(&mut Context, Request) -> Result<Storage, (Error, Request)>,
+    construct: impl FnOnce(&mut Context, Storage) -> Result<Data, (Error, Storage)>,
+    retain: impl FnOnce(&mut Context, Data) -> Result<Attached, (Error, Data)>,
+    final_audit: impl FnOnce(&mut Context, &Attached) -> Result<(), Error>,
+) -> PersistentRetainedControlReplayPipelineOutcomeV1<Request, Storage, Data, Attached, Error> {
+    if let Err(error) = mapped_facts(context, &mut request) {
+        return PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach { request, error };
+    }
+    let storage = match detach(context, request) {
+        Ok(storage) => storage,
+        Err((error, request)) => {
+            return PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach {
+                request,
+                error,
+            };
+        }
+    };
+    let data = match construct(context, storage) {
+        Ok(data) => data,
+        Err((error, storage)) => {
+            return PersistentRetainedControlReplayPipelineOutcomeV1::Storage { storage, error };
+        }
+    };
+    let attached = match retain(context, data) {
+        Ok(attached) => attached,
+        Err((error, data)) => {
+            return PersistentRetainedControlReplayPipelineOutcomeV1::Data { data, error };
+        }
+    };
+    if let Err(error) = final_audit(context, &attached) {
+        return PersistentRetainedControlReplayPipelineOutcomeV1::Attached { attached, error };
+    }
+    PersistentRetainedControlReplayPipelineOutcomeV1::Ready(attached)
+}
+
+enum PersistentRetainedControlReplayLoanResolutionV1<Request, Outcome, Error> {
+    Unopened {
+        request: Request,
+        error: Error,
+    },
+    Executed {
+        outcome: Outcome,
+        retake_error: Option<Error>,
+    },
+}
+
+fn resolve_persistent_retained_control_replay_loan_v1<Request, Outcome, Error>(
+    request: Option<Request>,
+    outcome: Option<Outcome>,
+    loan: Result<(), Error>,
+    missing_error: impl FnOnce() -> Error,
+) -> PersistentRetainedControlReplayLoanResolutionV1<Request, Outcome, Error> {
+    match outcome {
+        Some(outcome) => PersistentRetainedControlReplayLoanResolutionV1::Executed {
+            outcome,
+            retake_error: loan.err(),
+        },
+        None => PersistentRetainedControlReplayLoanResolutionV1::Unopened {
+            request: request.expect("unopened replay loan retains its request"),
+            error: loan.err().unwrap_or_else(missing_error),
+        },
+    }
+}
+
+fn persistent_compute_input_allocation_mut_v1(
+    input: &mut Gfx942PersistentComputeInputV1,
+) -> &mut Gfx942DirectionalQueuePersistentAllocationV1 {
+    match input {
+        Gfx942PersistentComputeInputV1::Uninitialized(allocation)
+        | Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) => allocation,
+        Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
+    }
+}
+
+fn quarantine_persistent_retained_control_replay_prepared_v1(
+    owner: &mut Gfx942PersistentDeviceAllocationV1,
+    prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+) -> PersistentComputeUseStateV1 {
+    match owner.quarantine_prepared(
+        prepared,
+        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+    ) {
+        Ok(()) => PersistentComputeUseStateV1::Quarantined,
+        Err(failure) => {
+            let (_, prepared) = failure.into_parts();
+            PersistentComputeUseStateV1::Prepared(prepared)
+        }
+    }
 }
 
 fn admit_sdma_publication_while_compute_detached(
@@ -9616,6 +9843,405 @@ impl ComputeAqlQueueSessionV1 {
         digest.finalize().into()
     }
 
+    #[allow(clippy::result_large_err)]
+    fn terminal_persistent_retained_control_replay_after_detach_v1(
+        &mut self,
+        mut replay: PersistentRetainedControlReplayDetachedV1,
+        custody: PersistentComputeTerminalNativeCustodyV1,
+        error: ComputeAqlQueueSessionErrorV1,
+        commit: PersistentRetainedControlReplayCommitV1,
+    ) -> Gfx942PersistentComputeBindFailureV1 {
+        let disposition = match &custody {
+            PersistentComputeTerminalNativeCustodyV1::Storage(_) => {
+                classify_persistent_retained_control_replay_failure_v1(
+                    PersistentRetainedControlReplayCustodyStageV1::Storage,
+                    false,
+                    false,
+                    false,
+                )
+            }
+            PersistentComputeTerminalNativeCustodyV1::Data(_) => {
+                classify_persistent_retained_control_replay_failure_v1(
+                    PersistentRetainedControlReplayCustodyStageV1::Data,
+                    false,
+                    false,
+                    false,
+                )
+            }
+            PersistentComputeTerminalNativeCustodyV1::Attached => {
+                classify_persistent_retained_control_replay_failure_v1(
+                    PersistentRetainedControlReplayCustodyStageV1::Attached,
+                    false,
+                    false,
+                    false,
+                )
+            }
+            _ => unreachable!("replay bind admits only pre-publication custody"),
+        };
+        debug_assert!(matches!(
+            (&custody, disposition),
+            (
+                PersistentComputeTerminalNativeCustodyV1::Storage(_),
+                PersistentRetainedControlReplayDispositionV1::TerminalStorage,
+            ) | (
+                PersistentComputeTerminalNativeCustodyV1::Data(_),
+                PersistentRetainedControlReplayDispositionV1::TerminalData,
+            ) | (
+                PersistentComputeTerminalNativeCustodyV1::Attached,
+                PersistentRetainedControlReplayDispositionV1::TerminalAttached,
+            )
+        ));
+        let state = quarantine_persistent_retained_control_replay_prepared_v1(
+            &mut replay.allocation.owner,
+            replay.prepared,
+        );
+        self.dispatch = Some(replay.dispatch);
+        self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+            allocation: replay.allocation,
+            authenticated_sha256: replay.authenticated_sha256,
+            state,
+            binding: PersistentComputeBindingKeyV1 {
+                queue: self.key,
+                attachment_generation: commit.attachment_generation,
+            },
+            storage_identity: commit.storage_identity,
+            effect: commit.effect,
+            predecessor_dispatch_generation: Some(commit.predecessor_generation),
+            terminal_custody: Some(custody),
+        });
+        self.next_persistent_compute_generation = commit.next_attachment_generation;
+        self.poison_terminal();
+        Gfx942PersistentComputeBindFailureV1 {
+            error,
+            custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+            ),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn finish_persistent_retained_control_replay_before_detach_v1(
+        &mut self,
+        request: PersistentRetainedControlReplayRequestV1,
+        error: ComputeAqlQueueSessionErrorV1,
+        loan_succeeded: bool,
+        commit: PersistentRetainedControlReplayCommitV1,
+    ) -> Gfx942PersistentComputeBindFailureV1 {
+        let PersistentRetainedControlReplayRequestV1 {
+            mut input,
+            prepared,
+            dispatch,
+            initialized_content: _,
+            control_identity: _,
+            predecessor_generation: _,
+        } = request;
+        self.dispatch = Some(dispatch);
+        let cancellation = persistent_compute_input_allocation_mut_v1(&mut input)
+            .owner
+            .cancel_prepared(prepared);
+        let cancellation_succeeded = cancellation.is_ok();
+        let disposition = classify_persistent_retained_control_replay_failure_v1(
+            PersistentRetainedControlReplayCustodyStageV1::Input,
+            loan_succeeded,
+            cancellation_succeeded,
+            !self.terminal_poisoned,
+        );
+        match (disposition, cancellation) {
+            (PersistentRetainedControlReplayDispositionV1::RetryableInput, Ok(())) => {
+                persistent_retained_control_replay_input_failure_v1(error, input, true)
+            }
+            (PersistentRetainedControlReplayDispositionV1::TerminalInput, Ok(())) => {
+                self.poison_terminal();
+                persistent_retained_control_replay_input_failure_v1(error, input, false)
+            }
+            (PersistentRetainedControlReplayDispositionV1::TerminalAttached, Err(failure)) => {
+                let (_, prepared) = failure.into_parts();
+                let (mut allocation, authenticated_sha256, _) = input.into_parts();
+                let state = quarantine_persistent_retained_control_replay_prepared_v1(
+                    &mut allocation.owner,
+                    prepared,
+                );
+                self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                    allocation,
+                    authenticated_sha256,
+                    state,
+                    binding: PersistentComputeBindingKeyV1 {
+                        queue: self.key,
+                        attachment_generation: commit.attachment_generation,
+                    },
+                    storage_identity: commit.storage_identity,
+                    effect: commit.effect,
+                    predecessor_dispatch_generation: Some(commit.predecessor_generation),
+                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
+                });
+                self.next_persistent_compute_generation = commit.next_attachment_generation;
+                self.poison_terminal();
+                Gfx942PersistentComputeBindFailureV1 {
+                    error,
+                    custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                        Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+                    ),
+                }
+            }
+            _ => unreachable!("replay failure disposition matches exact cancellation custody"),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn bind_retained_persistent_fixed_dispatch_control_replay_v1(
+        &mut self,
+        request: PersistentRetainedControlReplayRequestV1,
+        commit: PersistentRetainedControlReplayCommitV1,
+    ) -> Result<Gfx942PreparedPersistentComputeDispatchV1, Gfx942PersistentComputeBindFailureV1>
+    {
+        let mut request = Some(request);
+        let mut outcome = None;
+        let fused_loan = self.with_live_queue_memory_model(|memory| {
+            let pipeline = execute_persistent_retained_control_replay_pipeline_v1(
+                memory,
+                request
+                    .take()
+                    .expect("opened replay loan consumes its request exactly once"),
+                |memory, replay_request| {
+                    let allocation =
+                        persistent_compute_input_allocation_mut_v1(&mut replay_request.input);
+                    let lease = allocation
+                        .owner
+                        .local_native_for_sdma()
+                        .expect("replay preflight validated attached local native custody");
+                    memory
+                        .mapped_gfx942_device_memory_facts(lease)
+                        .map(|_| ())
+                        .map_err(ComputeAqlQueueSessionErrorV1::from)
+                },
+                |_, mut replay_request| {
+                    let detached = {
+                        let allocation =
+                            persistent_compute_input_allocation_mut_v1(&mut replay_request.input);
+                        allocation
+                            .owner
+                            .detach_local_native_for_compute(&replay_request.prepared)
+                    };
+                    let lease = match detached {
+                        Ok(lease) => lease,
+                        Err(error) => {
+                            return Err((
+                                map_directional_persistent_sdma_use_error_v1(error),
+                                replay_request,
+                            ));
+                        }
+                    };
+                    let PersistentRetainedControlReplayRequestV1 {
+                        input,
+                        prepared,
+                        dispatch,
+                        initialized_content,
+                        control_identity,
+                        predecessor_generation,
+                    } = replay_request;
+                    let (allocation, authenticated_sha256, _) = input.into_parts();
+                    Ok(PersistentRetainedControlReplayStorageV1 {
+                        replay: PersistentRetainedControlReplayDetachedV1 {
+                            allocation,
+                            prepared,
+                            dispatch,
+                            authenticated_sha256,
+                        },
+                        lease,
+                        initialized_content,
+                        control_identity,
+                        predecessor_generation,
+                    })
+                },
+                |_, storage| {
+                    let PersistentRetainedControlReplayStorageV1 {
+                        replay,
+                        lease,
+                        initialized_content,
+                        control_identity,
+                        predecessor_generation,
+                    } = storage;
+                    let data = match initialized_content {
+                        Some(content) => {
+                            match Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(
+                                lease, content,
+                            ) {
+                                Ok(initialized) => Gfx942FixedDispatchDataV1::initialized(initialized),
+                                Err(lease) => {
+                                    return Err((
+                                        ComputeAqlQueueSessionErrorV1::Contract(
+                                            "persistent compute authenticated extent changed after preflight",
+                                        ),
+                                        PersistentRetainedControlReplayStorageV1 {
+                                            replay,
+                                            lease,
+                                            initialized_content,
+                                            control_identity,
+                                            predecessor_generation,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                        None => Gfx942FixedDispatchDataV1::uninitialized(lease),
+                    };
+                    Ok(PersistentRetainedControlReplayDataV1 {
+                        replay,
+                        data,
+                        control_identity,
+                        predecessor_generation,
+                    })
+                },
+                |memory, data| {
+                    let PersistentRetainedControlReplayDataV1 {
+                        mut replay,
+                        data,
+                        control_identity,
+                        predecessor_generation,
+                    } = data;
+                    if let Err((error, data)) = replay.dispatch.retain_persistent_replay_data_v1(
+                        memory,
+                        control_identity,
+                        data,
+                        predecessor_generation,
+                    ) {
+                        return Err((
+                            error.into(),
+                            PersistentRetainedControlReplayDataV1 {
+                                replay,
+                                data,
+                                control_identity,
+                                predecessor_generation,
+                            },
+                        ));
+                    }
+                    Ok(replay)
+                },
+                |memory, replay| {
+                    let device_authorities = replay.dispatch.device_authorities();
+                    memory
+                        .validate_persistent_replay_dispatch_memory(&device_authorities)
+                        .map_err(Into::into)
+                },
+            );
+            outcome = Some(match pipeline {
+                PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach {
+                    request,
+                    error,
+                } => PersistentRetainedControlReplayOutcomeV1::BeforeDetach { request, error },
+                PersistentRetainedControlReplayPipelineOutcomeV1::Storage { storage, error } => {
+                    PersistentRetainedControlReplayOutcomeV1::AfterDetach {
+                        replay: storage.replay,
+                        custody: PersistentComputeTerminalNativeCustodyV1::Storage(
+                            Gfx942SdmaBufferStorageV1::Device(storage.lease),
+                        ),
+                        error,
+                    }
+                }
+                PersistentRetainedControlReplayPipelineOutcomeV1::Data { data, error } => {
+                    PersistentRetainedControlReplayOutcomeV1::AfterDetach {
+                        replay: data.replay,
+                        custody: PersistentComputeTerminalNativeCustodyV1::Data(vec![data.data]),
+                        error,
+                    }
+                }
+                PersistentRetainedControlReplayPipelineOutcomeV1::Attached {
+                    attached,
+                    error,
+                } => PersistentRetainedControlReplayOutcomeV1::AfterDetach {
+                    replay: attached,
+                    custody: PersistentComputeTerminalNativeCustodyV1::Attached,
+                    error,
+                },
+                PersistentRetainedControlReplayPipelineOutcomeV1::Ready(replay) => {
+                    PersistentRetainedControlReplayOutcomeV1::Ready(replay)
+                }
+            });
+            Ok(())
+        });
+
+        let (outcome, loan_error) = match resolve_persistent_retained_control_replay_loan_v1(
+            request,
+            outcome,
+            fused_loan,
+            || {
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent replay foundation loan did not execute",
+                )
+            },
+        ) {
+            PersistentRetainedControlReplayLoanResolutionV1::Unopened { request, error } => {
+                return Err(
+                    self.finish_persistent_retained_control_replay_before_detach_v1(
+                        request, error, false, commit,
+                    ),
+                );
+            }
+            PersistentRetainedControlReplayLoanResolutionV1::Executed {
+                outcome,
+                retake_error,
+            } => (outcome, retake_error),
+        };
+        let loan_succeeded = loan_error.is_none();
+        match outcome {
+            PersistentRetainedControlReplayOutcomeV1::BeforeDetach { request, error } => Err(self
+                .finish_persistent_retained_control_replay_before_detach_v1(
+                    request,
+                    loan_error.unwrap_or(error),
+                    loan_succeeded,
+                    commit,
+                )),
+            PersistentRetainedControlReplayOutcomeV1::AfterDetach {
+                replay,
+                custody,
+                error,
+            } => Err(
+                self.terminal_persistent_retained_control_replay_after_detach_v1(
+                    replay,
+                    custody,
+                    loan_error.unwrap_or(error),
+                    commit,
+                ),
+            ),
+            PersistentRetainedControlReplayOutcomeV1::Ready(replay) => {
+                if let Some(error) = loan_error {
+                    return Err(
+                        self.terminal_persistent_retained_control_replay_after_detach_v1(
+                            replay,
+                            PersistentComputeTerminalNativeCustodyV1::Attached,
+                            error,
+                            commit,
+                        ),
+                    );
+                }
+                let binding = PersistentComputeBindingKeyV1 {
+                    queue: self.key,
+                    attachment_generation: commit.attachment_generation,
+                };
+                self.dispatch = Some(replay.dispatch);
+                self.detached_data_count = 0;
+                self.detached_dispatch_generation = None;
+                self.detached_data_identities.clear();
+                self.detached_next_insertion_index = None;
+                self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                    allocation: replay.allocation,
+                    authenticated_sha256: replay.authenticated_sha256,
+                    state: PersistentComputeUseStateV1::Prepared(replay.prepared),
+                    binding,
+                    storage_identity: commit.storage_identity,
+                    effect: commit.effect,
+                    predecessor_dispatch_generation: Some(commit.predecessor_generation),
+                    terminal_custody: None,
+                });
+                self.next_persistent_compute_generation = commit.next_attachment_generation;
+                Ok(Gfx942PreparedPersistentComputeDispatchV1 {
+                    binding,
+                    thread_affinity: PhantomData,
+                })
+            }
+        }
+    }
+
     /// Detaches one exactly completed and recycled fixed batch while keeping
     /// the native queue and all queue resources live.
     #[allow(clippy::result_large_err)]
@@ -9829,6 +10455,27 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
+        if let Some(dispatch) = self.dispatch.take() {
+            let predecessor_generation = detached_generation
+                .expect("persistent replay was preflighted with a recycled predecessor");
+            return self.bind_retained_persistent_fixed_dispatch_control_replay_v1(
+                PersistentRetainedControlReplayRequestV1 {
+                    input,
+                    prepared,
+                    dispatch,
+                    initialized_content,
+                    control_identity,
+                    predecessor_generation,
+                },
+                PersistentRetainedControlReplayCommitV1 {
+                    attachment_generation,
+                    next_attachment_generation,
+                    storage_identity,
+                    effect,
+                    predecessor_generation,
+                },
+            );
+        }
         let validation = {
             let lease = allocation
                 .owner
@@ -9976,51 +10623,22 @@ impl ComputeAqlQueueSessionV1 {
                 });
             }
         };
-        let retained_dispatch = self.dispatch.take();
-        let replaying_retained_control = retained_dispatch.is_some();
-        let (prepared_dispatch, failed_retained_control) = {
+        let prepared_dispatch = {
             let memory = &mut self
                 .engine
                 .as_mut()
                 .expect("model loan requires queue engine")
                 .backend
                 .session;
-            match retained_dispatch {
-                Some(mut dispatch) => {
-                    let predecessor_generation = detached_generation
-                        .expect("persistent replay was preflighted with a predecessor");
-                    match dispatch.retain_persistent_replay_data_v1(
-                        memory,
-                        control_identity,
-                        data,
-                        predecessor_generation,
-                    ) {
-                        Ok(()) => (Ok(dispatch), None),
-                        Err((error, data)) => (
-                            Err(super::dispatch_binding::PersistentFixedDispatchPreparationFailureV1 {
-                                error,
-                                data: vec![data],
-                            }),
-                            Some(dispatch),
-                        ),
-                    }
-                }
-                None => (
-                    prepare_persistent_fixed_dispatch_resources_v1(
-                        memory,
-                        programs,
-                        packets,
-                        data,
-                        detached_generation,
-                        control_identity,
-                    ),
-                    None,
-                ),
-            }
+            prepare_persistent_fixed_dispatch_resources_v1(
+                memory,
+                programs,
+                packets,
+                data,
+                detached_generation,
+                control_identity,
+            )
         };
-        if let Some(dispatch) = failed_retained_control {
-            self.dispatch = Some(dispatch);
-        }
         let retake = self.retake_model_ownership_after_live_mutation(loan);
         let prepared_dispatch = match (prepared_dispatch, retake) {
             (Ok(dispatch), Ok(())) => Ok(dispatch),
@@ -10078,11 +10696,7 @@ impl ComputeAqlQueueSessionV1 {
             .expect("checked queue engine")
             .backend
             .session;
-        let validation = if replaying_retained_control {
-            memory.validate_persistent_replay_dispatch_memory(&device_authorities)
-        } else {
-            memory.validate_live_queue_dispatch_memory(&device_authorities)
-        };
+        let validation = memory.validate_live_queue_dispatch_memory(&device_authorities);
         if let Err(error) = validation {
             allocation
                 .owner
@@ -17271,10 +17885,420 @@ mod tests {
         assert!(!body.contains("engine.create(key)"));
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RetainedReplayInjectedStageV1 {
+        MappedFacts,
+        Detach,
+        AuthenticatedConstruction,
+        Retain,
+        FinalAudit,
+    }
+
+    struct RetainedReplayScriptV1 {
+        fail: Option<RetainedReplayInjectedStageV1>,
+        trace: Vec<RetainedReplayInjectedStageV1>,
+    }
+
+    struct RetainedReplayScriptRequestV1(u64);
+    struct RetainedReplayScriptStorageV1(u64);
+    struct RetainedReplayScriptDataV1(u64);
+    struct RetainedReplayScriptAttachedV1(u64);
+
+    type RetainedReplayScriptOutcomeV1 = PersistentRetainedControlReplayPipelineOutcomeV1<
+        RetainedReplayScriptRequestV1,
+        RetainedReplayScriptStorageV1,
+        RetainedReplayScriptDataV1,
+        RetainedReplayScriptAttachedV1,
+        RetainedReplayInjectedStageV1,
+    >;
+
+    fn run_retained_replay_script_v1(
+        fail: Option<RetainedReplayInjectedStageV1>,
+    ) -> (
+        RetainedReplayScriptOutcomeV1,
+        Vec<RetainedReplayInjectedStageV1>,
+    ) {
+        let mut script = RetainedReplayScriptV1 {
+            fail,
+            trace: Vec::new(),
+        };
+        let outcome = execute_persistent_retained_control_replay_pipeline_v1(
+            &mut script,
+            RetainedReplayScriptRequestV1(0x35),
+            |script, request| {
+                assert_eq!(request.0, 0x35);
+                script
+                    .trace
+                    .push(RetainedReplayInjectedStageV1::MappedFacts);
+                (script.fail != Some(RetainedReplayInjectedStageV1::MappedFacts))
+                    .then_some(())
+                    .ok_or(RetainedReplayInjectedStageV1::MappedFacts)
+            },
+            |script, request| {
+                assert_eq!(request.0, 0x35);
+                script.trace.push(RetainedReplayInjectedStageV1::Detach);
+                if script.fail == Some(RetainedReplayInjectedStageV1::Detach) {
+                    Err((RetainedReplayInjectedStageV1::Detach, request))
+                } else {
+                    Ok(RetainedReplayScriptStorageV1(request.0))
+                }
+            },
+            |script, storage| {
+                assert_eq!(storage.0, 0x35);
+                script
+                    .trace
+                    .push(RetainedReplayInjectedStageV1::AuthenticatedConstruction);
+                if script.fail == Some(RetainedReplayInjectedStageV1::AuthenticatedConstruction) {
+                    Err((
+                        RetainedReplayInjectedStageV1::AuthenticatedConstruction,
+                        storage,
+                    ))
+                } else {
+                    Ok(RetainedReplayScriptDataV1(storage.0))
+                }
+            },
+            |script, data| {
+                assert_eq!(data.0, 0x35);
+                script.trace.push(RetainedReplayInjectedStageV1::Retain);
+                if script.fail == Some(RetainedReplayInjectedStageV1::Retain) {
+                    Err((RetainedReplayInjectedStageV1::Retain, data))
+                } else {
+                    Ok(RetainedReplayScriptAttachedV1(data.0))
+                }
+            },
+            |script, attached| {
+                assert_eq!(attached.0, 0x35);
+                script.trace.push(RetainedReplayInjectedStageV1::FinalAudit);
+                (script.fail != Some(RetainedReplayInjectedStageV1::FinalAudit))
+                    .then_some(())
+                    .ok_or(RetainedReplayInjectedStageV1::FinalAudit)
+            },
+        );
+        (outcome, script.trace)
+    }
+
+    fn retained_replay_prepared_owner_fixture_v1(
+        queue: QueueKeyV1,
+        id: u64,
+    ) -> (
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    ) {
+        let (mut session, prepared, _) =
+            prepared_persistent_compute_cancellation_fixture(queue, id, None, Some(7));
+        let input = session
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect("fixture cancellation restores attached replay input");
+        let (mut allocation, _, _) = input.into_parts();
+        let request = Gfx942PersistentUseRequestV1::new(
+            Gfx942PersistentOperationV1::ComputeReadWrite,
+            0,
+            allocation.byte_len(),
+        )
+        .unwrap();
+        let reserved = allocation.owner.reserve(request, None).unwrap();
+        let prepared = allocation.owner.prepare(reserved).unwrap();
+        (allocation, prepared)
+    }
+
+    #[test]
+    fn retained_control_replay_script_executes_the_production_pipeline_and_preserves_stage_custody()
+    {
+        let stages = [
+            RetainedReplayInjectedStageV1::MappedFacts,
+            RetainedReplayInjectedStageV1::Detach,
+            RetainedReplayInjectedStageV1::AuthenticatedConstruction,
+            RetainedReplayInjectedStageV1::Retain,
+            RetainedReplayInjectedStageV1::FinalAudit,
+        ];
+        for (index, failed_stage) in stages.into_iter().enumerate() {
+            let (outcome, trace) = run_retained_replay_script_v1(Some(failed_stage));
+            assert_eq!(trace, stages[..=index]);
+            match (failed_stage, outcome) {
+                (
+                    RetainedReplayInjectedStageV1::MappedFacts
+                    | RetainedReplayInjectedStageV1::Detach,
+                    PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach {
+                        request,
+                        error,
+                    },
+                ) => {
+                    assert_eq!(request.0, 0x35);
+                    assert_eq!(error, failed_stage);
+                }
+                (
+                    RetainedReplayInjectedStageV1::AuthenticatedConstruction,
+                    PersistentRetainedControlReplayPipelineOutcomeV1::Storage { storage, error },
+                ) => {
+                    assert_eq!(storage.0, 0x35);
+                    assert_eq!(error, failed_stage);
+                }
+                (
+                    RetainedReplayInjectedStageV1::Retain,
+                    PersistentRetainedControlReplayPipelineOutcomeV1::Data { data, error },
+                ) => {
+                    assert_eq!(data.0, 0x35);
+                    assert_eq!(error, failed_stage);
+                }
+                (
+                    RetainedReplayInjectedStageV1::FinalAudit,
+                    PersistentRetainedControlReplayPipelineOutcomeV1::Attached { attached, error },
+                ) => {
+                    assert_eq!(attached.0, 0x35);
+                    assert_eq!(error, failed_stage);
+                }
+                _ => panic!("injected replay stage returned the wrong custody"),
+            }
+        }
+
+        let (outcome, trace) = run_retained_replay_script_v1(None);
+        assert_eq!(trace, stages);
+        let PersistentRetainedControlReplayPipelineOutcomeV1::Ready(attached) = outcome else {
+            panic!("clean replay pipeline must reach Ready")
+        };
+        assert_eq!(attached.0, 0x35);
+    }
+
+    #[test]
+    fn retained_control_replay_loan_resolution_distinguishes_open_retake_and_ready() {
+        let unopened: PersistentRetainedControlReplayLoanResolutionV1<
+            RetainedReplayScriptRequestV1,
+            RetainedReplayScriptAttachedV1,
+            &'static str,
+        > = resolve_persistent_retained_control_replay_loan_v1(
+            Some(RetainedReplayScriptRequestV1(0x41)),
+            None,
+            Err("loan open"),
+            || "missing",
+        );
+        let PersistentRetainedControlReplayLoanResolutionV1::Unopened { request, error } = unopened
+        else {
+            panic!("unopened loan must retain input custody")
+        };
+        assert_eq!(request.0, 0x41);
+        assert_eq!(error, "loan open");
+
+        for loan in [Ok(()), Err("loan retake")] {
+            let resolution: PersistentRetainedControlReplayLoanResolutionV1<
+                RetainedReplayScriptRequestV1,
+                RetainedReplayScriptAttachedV1,
+                &'static str,
+            > = resolve_persistent_retained_control_replay_loan_v1(
+                None,
+                Some(RetainedReplayScriptAttachedV1(0x42)),
+                loan,
+                || "missing",
+            );
+            let PersistentRetainedControlReplayLoanResolutionV1::Executed {
+                outcome,
+                retake_error,
+            } = resolution
+            else {
+                panic!("executed loan must preserve its move-only outcome")
+            };
+            assert_eq!(outcome.0, 0x42);
+            assert_eq!(retake_error, loan.err());
+        }
+    }
+
+    #[test]
+    fn retained_control_replay_terminal_custody_variants_preserve_exact_native_stage() {
+        let queue = test_queue_key(181, 1);
+        let (mut storage_allocation, storage_prepared) =
+            retained_replay_prepared_owner_fixture_v1(queue, 8181);
+        let storage_identity = storage_allocation
+            .owner
+            .local_native_for_sdma()
+            .unwrap()
+            .storage_identity();
+        let storage = storage_allocation
+            .owner
+            .detach_local_native_for_compute(&storage_prepared)
+            .unwrap();
+        let custody = PersistentComputeTerminalNativeCustodyV1::Storage(
+            Gfx942SdmaBufferStorageV1::Device(storage),
+        );
+        assert_eq!(
+            custody.stage(),
+            crate::Gfx942PersistentComputeTerminalStageV1::StorageDetached
+        );
+        let PersistentComputeTerminalNativeCustodyV1::Storage(Gfx942SdmaBufferStorageV1::Device(
+            storage,
+        )) = custody
+        else {
+            unreachable!()
+        };
+        assert_eq!(storage.storage_identity(), storage_identity);
+
+        let (mut data_allocation, data_prepared) =
+            retained_replay_prepared_owner_fixture_v1(queue, 8282);
+        let data_identity = data_allocation
+            .owner
+            .local_native_for_sdma()
+            .unwrap()
+            .storage_identity();
+        let data = Gfx942FixedDispatchDataV1::uninitialized(
+            data_allocation
+                .owner
+                .detach_local_native_for_compute(&data_prepared)
+                .unwrap(),
+        );
+        let custody = PersistentComputeTerminalNativeCustodyV1::Data(vec![data]);
+        assert_eq!(
+            custody.stage(),
+            crate::Gfx942PersistentComputeTerminalStageV1::DataDetached
+        );
+        let PersistentComputeTerminalNativeCustodyV1::Data(data) = custody else {
+            unreachable!()
+        };
+        assert_eq!(data.len(), 1);
+        assert_eq!(
+            data[0].sdma_storage_identity(),
+            Gfx942SdmaBufferStorageIdentityV1::Device(data_identity)
+        );
+
+        assert_eq!(
+            PersistentComputeTerminalNativeCustodyV1::Attached.stage(),
+            crate::Gfx942PersistentComputeTerminalStageV1::Attached
+        );
+    }
+
+    #[test]
+    fn retained_control_replay_cancellation_and_quarantine_preserve_prepared_authority() {
+        let queue = test_queue_key(182, 1);
+        let (mut exact, exact_prepared) = retained_replay_prepared_owner_fixture_v1(queue, 8383);
+        let exact_sequence = exact_prepared.sequence();
+        let (mut substituted, substituted_prepared) =
+            retained_replay_prepared_owner_fixture_v1(queue, 8484);
+
+        let cancellation = substituted
+            .owner
+            .cancel_prepared(exact_prepared)
+            .expect_err("a substituted owner cannot cancel the exact replay use");
+        let (_, exact_prepared) = cancellation.into_parts();
+        assert_eq!(exact_prepared.sequence(), exact_sequence);
+        let state = quarantine_persistent_retained_control_replay_prepared_v1(
+            &mut substituted.owner,
+            exact_prepared,
+        );
+        let PersistentComputeUseStateV1::Prepared(exact_prepared) = state else {
+            panic!("failed quarantine must preserve Prepared authority")
+        };
+        assert_eq!(exact_prepared.sequence(), exact_sequence);
+        assert_eq!(substituted.owner.quarantine_reason(), None);
+        exact.owner.cancel_prepared(exact_prepared).unwrap();
+        substituted
+            .owner
+            .cancel_prepared(substituted_prepared)
+            .unwrap();
+
+        let (mut exact, exact_prepared) = retained_replay_prepared_owner_fixture_v1(queue, 8585);
+        let state = quarantine_persistent_retained_control_replay_prepared_v1(
+            &mut exact.owner,
+            exact_prepared,
+        );
+        assert!(matches!(state, PersistentComputeUseStateV1::Quarantined));
+        assert_eq!(
+            exact.owner.quarantine_reason(),
+            Some(Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss)
+        );
+    }
+
+    #[test]
+    fn retained_control_replay_public_input_failure_is_retryable_only_for_clean_round_trip() {
+        for (id, retryable) in [(8686, true), (8787, false)] {
+            let queue = test_queue_key(183, 1);
+            let (mut allocation, prepared) = retained_replay_prepared_owner_fixture_v1(queue, id);
+            let expected_identity = allocation.attachment.storage_identity;
+            allocation.owner.cancel_prepared(prepared).unwrap();
+            let failure = persistent_retained_control_replay_input_failure_v1(
+                ComputeAqlQueueSessionErrorV1::Contract("replay fault injection"),
+                Gfx942PersistentComputeInputV1::Uninitialized(allocation),
+                retryable,
+            );
+            let (_, custody) = failure.into_parts();
+            let input = match (retryable, custody) {
+                (true, Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input)) => input,
+                (false, Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(terminal)) => {
+                    assert!(terminal.retains_prebinding_input());
+                    terminal
+                        .input
+                        .expect("terminal input custody remains exact")
+                }
+                _ => panic!("public replay failure returned the wrong custody class"),
+            };
+            let (allocation, _, _) = input.into_parts();
+            assert_eq!(allocation.attachment.storage_identity, expected_identity);
+        }
+    }
+
     #[test]
     fn persistent_control_replay_uses_the_active_queue_currentness_policy() {
         let source = include_str!("queue_live.rs");
         let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let replay = production
+            .split("fn bind_retained_persistent_fixed_dispatch_control_replay_v1")
+            .nth(1)
+            .unwrap()
+            .split("/// Detaches one exactly completed and recycled fixed batch")
+            .next()
+            .unwrap();
+        assert_eq!(replay.matches("with_live_queue_memory_model").count(), 1);
+        let mapped = replay.find("mapped_gfx942_device_memory_facts").unwrap();
+        let detach = replay.find("detach_local_native_for_compute").unwrap();
+        let construct = replay
+            .find("Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer")
+            .unwrap();
+        let retain = replay.find("retain_persistent_replay_data_v1").unwrap();
+        let replay_validation = replay
+            .find("validate_persistent_replay_dispatch_memory")
+            .unwrap();
+        let loan_close = replay
+            .find("resolve_persistent_retained_control_replay_loan_v1")
+            .unwrap();
+        let commit = replay
+            .find("state: PersistentComputeUseStateV1::Prepared(replay.prepared)")
+            .unwrap();
+        assert!(mapped < detach);
+        assert!(detach < construct);
+        assert!(construct < retain);
+        assert!(retain < replay_validation);
+        assert!(replay_validation < loan_close);
+        assert!(loan_close < commit);
+        assert_eq!(
+            replay
+                .matches("restore_model_ownership_for_live_mutation")
+                .count(),
+            0
+        );
+        assert_eq!(
+            replay
+                .matches("retake_model_ownership_after_live_mutation")
+                .count(),
+            0
+        );
+        assert!(replay.contains("let mut request = Some(request)"));
+        assert!(replay.contains("let mut outcome = None"));
+        assert!(replay.contains("PersistentRetainedControlReplayOutcomeV1::Ready(replay)"));
+        assert!(replay.contains("PersistentComputeTerminalNativeCustodyV1::Storage"));
+        assert!(replay.contains("PersistentComputeTerminalNativeCustodyV1::Data"));
+        assert!(replay.contains("PersistentComputeTerminalNativeCustodyV1::Attached"));
+        assert!(
+            replay.contains("predecessor_dispatch_generation: Some(commit.predecessor_generation)")
+        );
+        assert!(replay.contains("queue: self.key"));
+        assert!(replay.contains("attachment_generation: commit.attachment_generation"));
+        assert!(replay.contains("self.dispatch = Some(replay.dispatch)"));
+        assert!(replay.contains("self.detached_data_count = 0"));
+        assert!(replay.contains("self.detached_dispatch_generation = None"));
+        assert!(replay.contains("self.detached_data_identities.clear()"));
+        assert!(replay.contains("self.detached_next_insertion_index = None"));
+        assert!(replay.contains("storage_identity: commit.storage_identity"));
+        assert!(replay.contains("effect: commit.effect"));
+        assert!(replay.contains("terminal_custody: None"));
+        assert!(replay.contains("self.next_persistent_compute_generation ="));
+        assert!(!replay.contains("prepare_persistent_fixed_dispatch_resources_v1"));
+
         let bind = production
             .split("pub fn bind_directional_persistent_fixed_dispatch_v1")
             .nth(1)
@@ -17283,18 +18307,37 @@ mod tests {
             .next()
             .unwrap();
         let retained = bind
-            .find("let retained_dispatch = self.dispatch.take()")
+            .find("if let Some(dispatch) = self.dispatch.take()")
             .unwrap();
-        let replay_mode = bind
-            .find("let replaying_retained_control = retained_dispatch.is_some()")
+        let replay_call = bind
+            .find("bind_retained_persistent_fixed_dispatch_control_replay_v1")
             .unwrap();
-        let replay_validation = bind
-            .find("validate_persistent_replay_dispatch_memory")
-            .unwrap();
-        let initial_validation = bind.find("validate_live_queue_dispatch_memory").unwrap();
-        assert!(retained < replay_mode);
-        assert!(replay_mode < replay_validation);
-        assert!(replay_mode < initial_validation);
+        let initial_start = bind.find("let validation = {").unwrap();
+        assert!(retained < replay_call);
+        assert!(replay_call < initial_start);
+        let initial = &bind[initial_start..];
+        assert_eq!(initial.matches("with_live_queue_memory_model").count(), 1);
+        assert_eq!(
+            initial
+                .matches("restore_model_ownership_for_live_mutation")
+                .count(),
+            1
+        );
+        assert_eq!(
+            initial
+                .matches("retake_model_ownership_after_live_mutation")
+                .count(),
+            1
+        );
+        assert_eq!(
+            initial
+                .matches("validate_live_queue_dispatch_memory")
+                .count(),
+            1
+        );
+        assert!(initial.contains("prepare_persistent_fixed_dispatch_resources_v1"));
+        assert!(!initial.contains("validate_persistent_replay_dispatch_memory"));
+        assert!(!initial.contains("retain_persistent_replay_data_v1"));
 
         let release = production
             .split("pub fn release_retained_persistent_fixed_dispatch_control_v1")
@@ -17328,5 +18371,81 @@ mod tests {
             .unwrap();
         assert!(ordinary_rebind.contains("validate_live_queue_dispatch_memory"));
         assert!(!ordinary_rebind.contains("validate_persistent_replay_dispatch_memory"));
+    }
+
+    #[test]
+    fn retained_control_replay_failure_matrix_requires_an_exact_clean_round_trip() {
+        for loan_succeeded in [false, true] {
+            for cancellation_succeeded in [false, true] {
+                for session_healthy in [false, true] {
+                    let observed = classify_persistent_retained_control_replay_failure_v1(
+                        PersistentRetainedControlReplayCustodyStageV1::Input,
+                        loan_succeeded,
+                        cancellation_succeeded,
+                        session_healthy,
+                    );
+                    let expected = if loan_succeeded && cancellation_succeeded && session_healthy {
+                        PersistentRetainedControlReplayDispositionV1::RetryableInput
+                    } else if cancellation_succeeded {
+                        PersistentRetainedControlReplayDispositionV1::TerminalInput
+                    } else {
+                        PersistentRetainedControlReplayDispositionV1::TerminalAttached
+                    };
+                    assert_eq!(observed, expected);
+                }
+            }
+        }
+
+        for (stage, expected) in [
+            (
+                PersistentRetainedControlReplayCustodyStageV1::Storage,
+                PersistentRetainedControlReplayDispositionV1::TerminalStorage,
+            ),
+            (
+                PersistentRetainedControlReplayCustodyStageV1::Data,
+                PersistentRetainedControlReplayDispositionV1::TerminalData,
+            ),
+            (
+                PersistentRetainedControlReplayCustodyStageV1::Attached,
+                PersistentRetainedControlReplayDispositionV1::TerminalAttached,
+            ),
+        ] {
+            for loan_succeeded in [false, true] {
+                for cancellation_succeeded in [false, true] {
+                    for session_healthy in [false, true] {
+                        assert_eq!(
+                            classify_persistent_retained_control_replay_failure_v1(
+                                stage,
+                                loan_succeeded,
+                                cancellation_succeeded,
+                                session_healthy,
+                            ),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retained_control_replay_authority_carriers_are_move_only_and_private() {
+        let source = include_str!("queue_live.rs");
+        for carrier in [
+            "PersistentRetainedControlReplayRequestV1",
+            "PersistentRetainedControlReplayDetachedV1",
+            "PersistentRetainedControlReplayOutcomeV1",
+        ] {
+            assert!(
+                source.contains(&format!("struct {carrier}"))
+                    || source.contains(&format!("enum {carrier}"))
+            );
+            assert!(!source.contains(&format!("pub struct {carrier}")));
+            assert!(!source.contains(&format!("pub enum {carrier}")));
+            assert!(!source.contains(&format!("#[derive(Clone)]\nstruct {carrier}")));
+            assert!(!source.contains(&format!("#[derive(Clone)]\nenum {carrier}")));
+            assert!(!source.contains(&format!("#[derive(Clone, Copy)]\nstruct {carrier}")));
+            assert!(!source.contains(&format!("#[derive(Clone, Copy)]\nenum {carrier}")));
+        }
     }
 }
