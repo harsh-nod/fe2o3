@@ -15194,6 +15194,67 @@ mod tests {
         assert!(fused.contains("Self::Scripted(driver)"));
     }
 
+    #[test]
+    fn r26_measured_copies_route_through_fused_async_single_submit() {
+        let benchmark = include_str!("../examples/gfx942-runtime-r26-inplace-benchmark.rs");
+        let measured_copy = benchmark
+            .split("fn run_copy_v1(")
+            .nth(1)
+            .unwrap()
+            .split("struct LaunchTimingV1")
+            .next()
+            .unwrap();
+        assert!(measured_copy.contains(".copy_async(stream, source, destination, &[])"));
+        assert!(measured_copy.contains("wait_for_copy_v1("));
+        assert!(!measured_copy.contains("execute_synchronous_directional_sdma_v1"));
+
+        let iteration = benchmark
+            .split("fn iteration(")
+            .nth(1)
+            .unwrap()
+            .split("fn shutdown(")
+            .next()
+            .unwrap();
+        assert_eq!(iteration.matches("run_copy_v1(").count(), 2);
+        assert!(iteration.contains("region(self.upload, RuntimeAccessV1::Read)"));
+        assert!(iteration.contains("region(self.download, RuntimeAccessV1::Write)"));
+
+        assert!(benchmark.contains("GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1"));
+        let one_mib = 1024_u64 * 1024;
+        assert!(one_mib <= u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1));
+
+        let seam = include_str!("kfd_backend/kfd_backend_sdma_seam.rs");
+        let submit = seam
+            .split("pub(super) fn submit(")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) fn execute_synchronous_single(")
+            .next()
+            .unwrap();
+        let single = submit
+            .split("DirectionalSdmaRequestPlanV1::Single(_)")
+            .nth(1)
+            .unwrap()
+            .split("DirectionalSdmaRequestPlanV1::Window(_)")
+            .next()
+            .unwrap();
+        assert!(single.contains("queue.submit_directional_persistent_sdma_copy_v1("));
+        assert!(!single.contains("execute_synchronous_directional_persistent_sdma_copy_for_v1"));
+
+        let live = include_str!("../../fe2o3-kfd/src/queue_live.rs");
+        let fused_async = live
+            .split("pub fn submit_directional_persistent_sdma_copy_v1(")
+            .nth(1)
+            .unwrap()
+            .split("pub fn execute_synchronous_directional_persistent_sdma_copy_for_v1(")
+            .next()
+            .unwrap();
+        assert_eq!(fused_async.matches("with_sdma_owner_memory").count(), 1);
+        assert!(fused_async.contains("prepare_admitted_directional_persistent_sdma_request_v1"));
+        assert!(fused_async.contains("handoff.publish(owner, memory)"));
+        assert!(!fused_async.contains("wait_for_in_current_scope"));
+    }
+
     fn scripted_submit_step_v1(
         direction: Gfx942PersistentSdmaDirectionV1,
         host_offset: u64,

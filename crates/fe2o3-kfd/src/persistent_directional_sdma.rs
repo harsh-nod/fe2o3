@@ -2963,6 +2963,18 @@ mod tests {
                 .count(),
             1
         );
+        let admitted_preparation = live
+            .split("fn prepare_admitted_directional_persistent_sdma_request_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn prepare_directional_persistent_sdma_request_v1")
+            .next()
+            .unwrap();
+        assert!(admitted_preparation.contains("allocation.owner.reserve("));
+        assert!(admitted_preparation.contains("allocation.owner.prepare("));
+        assert!(admitted_preparation.contains("allocation.owner.detach_local_native_for_sdma()"));
+        assert!(!admitted_preparation.contains("with_sdma_owner_memory"));
+        assert!(!admitted_preparation.contains("check_queue_operational_currentness"));
 
         let submission = live
             .split("pub fn submit_directional_persistent_sdma_copy_v1")
@@ -2971,55 +2983,55 @@ mod tests {
             .split("pub fn execute_synchronous_directional_persistent_sdma_copy_for_v1")
             .next()
             .unwrap();
-        assert_eq!(
-            submission
-                .matches("check_directional_persistent_sdma_operational_currentness")
-                .count(),
-            2
-        );
-        assert_eq!(
-            submission
-                .matches("check_queue_operational_currentness")
-                .count(),
-            1
-        );
-        let shared_close_open = submission
+        assert_eq!(submission.matches("with_sdma_owner_memory").count(), 1);
+        assert!(!submission.contains("check_directional_persistent_sdma_operational_currentness"));
+        let admission = submission
+            .find("admit_directional_persistent_sdma_request_v1")
+            .unwrap();
+        let loan = submission.find("with_sdma_owner_memory").unwrap();
+        let opening = submission
             .find("if let Err(error) = memory.check_queue_operational_currentness()")
+            .unwrap();
+        let request_preparation = submission
+            .find("prepare_admitted_directional_persistent_sdma_request_v1")
+            .unwrap();
+        let lower_preparation = submission.find("prepare_single_recoverable").unwrap();
+        let prepublication = submission[opening + 1..]
+            .find("if let Err(error) = memory.check_queue_operational_currentness()")
+            .map(|offset| opening + 1 + offset)
             .unwrap();
         let handoff = submission
             .find("DirectionalPersistentSdmaSinglePreparedHandoffV1")
             .unwrap();
         let publication = submission.find("handoff.publish(owner, memory)").unwrap();
-        let failed_prepare = submission.find("if !handoff_attempted").unwrap();
-        let handoff_failure = submission.find("let Some((handoff_direction").unwrap();
-        let missing_publication = submission
-            .find("directional persistent SDMA handoff did not publish")
-            .unwrap();
         let final_close = submission
-            .rfind("check_directional_persistent_sdma_operational_currentness")
+            .rfind("memory.check_queue_operational_currentness()")
             .unwrap();
-        assert!(shared_close_open < handoff);
+        assert!(admission < loan);
+        assert!(loan < opening);
+        assert!(opening < request_preparation);
+        assert!(request_preparation < lower_preparation);
+        assert!(lower_preparation < prepublication);
+        assert!(prepublication < handoff);
         assert!(handoff < publication);
         let handoff_to_publication = &submission[handoff..publication];
         assert!(!handoff_to_publication.contains("return Err"));
         assert!(!handoff_to_publication.contains('?'));
         assert!(!handoff_to_publication.contains("check_"));
-        assert!(publication < failed_prepare);
-        assert!(failed_prepare < handoff_failure);
-        assert!(handoff_failure < missing_publication);
-        assert!(missing_publication < final_close);
-        let failed_prepare_path = &submission[failed_prepare..handoff_failure];
-        assert_eq!(
-            failed_prepare_path
-                .matches("check_directional_persistent_sdma_operational_currentness")
-                .count(),
-            1
-        );
-        let handoff_failure_path = &submission[handoff_failure..final_close];
-        assert!(
-            handoff_failure_path.contains("terminal_prepared_directional_persistent_sdma_failure")
-        );
-        assert!(handoff_failure_path.contains("prepared_without_handoff"));
+        assert!(publication < final_close);
+        assert!(submission.contains("OpeningCurrentnessLost"));
+        assert!(submission.contains("RequestPreparationRejected"));
+        assert!(submission.contains("LowerPreparationRejected"));
+        assert!(submission.contains("finish_asynchronous_directional_persistent_sdma_single_v1"));
+        let finish = live
+            .split("fn finish_asynchronous_directional_persistent_sdma_single_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn finish_directional_persistent_sdma_publication_transition")
+            .next()
+            .unwrap();
+        assert!(finish.contains("loan_error.is_none() && preparation_succeeded"));
+        assert!(finish.contains("loan_error.is_none() && closing_currentness_succeeded"));
         assert!(!submission.contains("self.check_currentness()"));
         assert!(submission.contains("prepare_single_recoverable"));
         assert!(!submission.contains("vec![request]"));
