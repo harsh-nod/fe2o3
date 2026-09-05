@@ -21,8 +21,9 @@ approximately 3.00x to 3.03x slower than HIP E2E.
 - Device: host GPU 2, AMD Instinct MI300X, `gfx942:xnack-`, PCI
   `0000:46:00.0`, unique ID `0xd2e26fef80cf5c33`, KFD GPU ID `29122`, NUMA
   node 0.
-- Rust: `1.97.1 (8bab26f4f 2026-07-14)`; Cargo:
-  `1.97.1 (c980f4866 2026-06-30)`.
+- Archived caller-cwd fields, not build identity: Rust
+  `1.97.1 (8bab26f4f 2026-07-14)` and Cargo
+  `1.97.1 (c980f4866 2026-06-30)`. See the correction below.
 - Runner SHA-256:
   `126c69a2193437d9da996b927eb8dd2af35f75b5583f1f6c961d012049e3a5fd`;
   host-guard SHA-256:
@@ -60,8 +61,19 @@ although the pinned HIP source is identical in both archives, SHA-256
 `da7839dbbf12b18421e01c32e35d3b33935846deeef6d0210dfa725179bed542`.
 The HSA source is also identical, SHA-256
 `a1470c846474dcb10354202a5abd028a7ef9f13e9f36271eedec557953ff523e`.
-R32 used Rust/Cargo 1.96 nightly while R33 used 1.97.1, adding a toolchain
-confounder to the cross-revision comparison.
+Toolchain-provenance correction: the runner used for R32 and R33 invoked the
+rustup shims for the recorded `rustc` and `cargo` fields from the caller's
+working directory, while the actual Cargo build ran from the private archived
+source tree. The differing recorded values therefore describe caller-cwd
+rustup resolution and do not authenticate either build compiler. Both measured
+commits contain the same `nightly-2026-04-03` `rust-toolchain.toml`, so their
+archived-tree builds were expected to select that pinned toolchain, but the old
+archives do not independently prove it. Commit
+`71cbe8e8cb2147aaad076fda84a44bd4875f08ec` corrects future capture by resolving
+and validating both versions from the archived source-tree cwd under the same
+clean environment used for the build. It retains the V4 fields and schema, so
+this correction does not invalidate either archive or alter any numerical
+result in this note.
 
 ## Method and path audit
 
@@ -278,8 +290,9 @@ trap - EXIT
 
 The paired comparison unit is one matching Latin slot, so every aggregate has
 only `n=3` descriptive effects. R32 and R33 were separate runs rather than an
-interleaved cross-revision experiment, their Rust toolchains differ, and the
-raw samples are not ordinal pairs. The HIP sources match but the HIP executable
+interleaved cross-revision experiment, their recorded caller-cwd Rust fields
+differ without establishing actual build-toolchain identity, and the raw
+samples are not ordinal pairs. The HIP sources match but the HIP executable
 bytes do not; only the HSA control executable is byte-identical across the two
 archives.
 
