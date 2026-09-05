@@ -48,7 +48,7 @@ SCHEMA_METRICS = {
     ),
 }
 
-R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v3"
+R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v4"
 R26_SYSTEM_IDENTITY_SCHEMA = "fe2o3.r26-system-identity.v1"
 R26_MANIFEST_SCHEMA = "fe2o3.r26-evidence-manifest.v1"
 R26_TOPOLOGY_SCHEMA = "fe2o3.r26-host-topology.v1"
@@ -63,7 +63,9 @@ R26_LAUNCH_TIMING_PHASES = (
     "publication",
     "publish_to_completion",
     "completed_readback",
-    "recycle",
+    "completion_signal_recycle",
+    "completion_detach_restore",
+    "recycle_inclusive",
 )
 R26_SUMMARIES = ("min", "mean", "max", "p50", "p95")
 R26_COUNTERBALANCE_DESIGN = "cyclic-latin-square-3"
@@ -142,6 +144,7 @@ R26_ROW_FIELDS = (
     "samples",
     "iterations_per_sample",
     "sample_value",
+    "recycle_inclusive_sample_value",
     "trimming",
     "input_pattern",
     "pattern_start",
@@ -199,6 +202,7 @@ R26_FIXED_ROW = {
     "samples": "30",
     "iterations_per_sample": "10",
     "sample_value": "integer-average-ns-over-10-iterations",
+    "recycle_inclusive_sample_value": "sum-of-component-integer-averages-ns",
     "trimming": "none",
     "input_pattern": "alternating-full-a-b",
     "pattern_start": "a",
@@ -1763,13 +1767,25 @@ def _check_r26_inplace_rows(
                         f"backend kfd nested preparation sample {index} exceeds "
                         "inclusive preparation"
                     )
+                completion_recycle = r26_checked_sum(
+                    (
+                        launch_samples["completion_signal_recycle"][index],
+                        launch_samples["completion_detach_restore"][index],
+                    ),
+                    "completion recycle components",
+                )
+                if completion_recycle != launch_samples["recycle_inclusive"][index]:
+                    raise CheckError(
+                        f"backend kfd completion recycle components sample {index} "
+                        "do not equal inclusive recycle"
+                    )
                 critical_path = r26_checked_sum(
                     (
                         launch_samples["preparation"][index],
                         launch_samples["native_binding"][index],
                         launch_samples["publication"][index],
                         launch_samples["publish_to_completion"][index],
-                        launch_samples["recycle"][index],
+                        launch_samples["recycle_inclusive"][index],
                     ),
                     "launch critical-path",
                 )

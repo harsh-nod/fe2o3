@@ -488,6 +488,8 @@ pub struct KfdProfileHostTimingV1 {
     pub publication_ns: u64,
     pub publish_to_completion_ns: u64,
     pub completed_readback_ns: u64,
+    /// Inclusive completion cleanup: signal recycle plus any persistent
+    /// detach, frontier retirement, and allocation-owner restoration.
     pub recycle_ns: u64,
 }
 

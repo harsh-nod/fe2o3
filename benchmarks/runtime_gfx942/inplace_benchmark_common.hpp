@@ -25,7 +25,7 @@ constexpr std::size_t kValidatedIterations =
 constexpr std::size_t kPatternAIterations = kValidatedIterations / 2;
 constexpr std::size_t kPatternBIterations = kValidatedIterations / 2;
 
-constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v3";
+constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v4";
 constexpr char kKernel[] = "inplace_transform";
 constexpr char kKernelDescriptor[] = "inplace_transform.kd";
 constexpr std::uint32_t kHsaKernargAlignment = 16;
@@ -184,6 +184,7 @@ inline void report(const char *backend, const char *promotion,
       "bytes=%zu elements=%zu workgroup=%u warmups=%zu samples=%zu "
       "iterations_per_sample=%zu "
       "sample_value=integer-average-ns-over-10-iterations "
+      "recycle_inclusive_sample_value=sum-of-component-integer-averages-ns "
       "trimming=none input_pattern=alternating-full-a-b pattern_start=a "
       "validation=every-element-every-iteration validated_iterations=%zu "
       "pattern_a_iterations=%zu pattern_b_iterations=%zu timing=host-monotonic "
@@ -210,9 +211,11 @@ inline void report(const char *backend, const char *promotion,
       " promotion_samples_ns=n/a promotion_min_ns=n/a promotion_mean_ns=n/a "
       "promotion_max_ns=n/a promotion_p50_ns=n/a promotion_p95_ns=n/a");
   constexpr const char *kKfdLaunchTimingPhases[] = {
-      "preparation",          "bound_snapshot", "authority",
-      "native_binding",       "publication",    "publish_to_completion",
-      "completed_readback",   "recycle",
+      "preparation",              "bound_snapshot",
+      "authority",                "native_binding",
+      "publication",              "publish_to_completion",
+      "completed_readback",       "completion_signal_recycle",
+      "completion_detach_restore", "recycle_inclusive",
   };
   for (const char *phase : kKfdLaunchTimingPhases)
     print_unavailable_phase(phase);

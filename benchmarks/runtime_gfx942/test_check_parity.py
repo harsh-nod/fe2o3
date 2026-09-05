@@ -38,6 +38,10 @@ def summary_fields(phase: str, values: list[int]) -> dict[str, str]:
 def valid_launch_timing_values(phase: str) -> list[int]:
     if phase == "completed_readback":
         return [0] * 30
+    if phase == "completion_signal_recycle":
+        return [60 + index for index in range(30)]
+    if phase == "completion_detach_restore":
+        return [40] * 30
     base = {
         "preparation": 250,
         "bound_snapshot": 40,
@@ -615,25 +619,25 @@ class R26CheckerTests(unittest.TestCase):
         output = self.check(valid_log())
         self.assertEqual(output[-1], "validation_status=pass")
         self.assertNotIn("parity", " ".join(output))
-        self.assertEqual(len(output), 18)
+        self.assertEqual(len(output), 20)
         self.assertEqual(
             output[0],
-            "schema=fe2o3.r26-inplace-benchmark.v3 "
+            "schema=fe2o3.r26-inplace-benchmark.v4 "
             "comparison=kfd-over-reference reference=hsa phase=h2d statistic=p50_ns "
             "kfd_over_reference_p50_ratio=1.000000 lower_is_better=true "
             "evidence_only=true",
         )
         self.assertEqual(
             output[8],
-            "schema=fe2o3.r26-inplace-benchmark.v3 "
+            "schema=fe2o3.r26-inplace-benchmark.v4 "
             "comparison=promotion-authentication-share phase=promotion-over-h2d "
             "statistic=p50_ns promotion_over_h2d_p50_ratio=0.506903 "
             "lower_is_better=true evidence_only=true",
         )
         self.assertEqual(
             output[-2],
-            "schema=fe2o3.r26-inplace-benchmark.v3 "
-            "comparison=kfd-host-launch-timing phase=recycle statistic=p50_ns "
+            "schema=fe2o3.r26-inplace-benchmark.v4 "
+            "comparison=kfd-host-launch-timing phase=recycle_inclusive statistic=p50_ns "
             "value=114 evidence_only=true",
         )
 
@@ -666,11 +670,11 @@ class R26CheckerTests(unittest.TestCase):
         ):
             self.check(lines)
 
-    def test_rejects_v2_r26_schema_instead_of_mixing_row_contracts(self) -> None:
+    def test_rejects_v3_r26_schema_instead_of_mixing_recycle_contracts(self) -> None:
         lines = valid_log()
         lines[0] = lines[0].replace(
+            "schema=fe2o3.r26-inplace-benchmark.v4",
             "schema=fe2o3.r26-inplace-benchmark.v3",
-            "schema=fe2o3.r26-inplace-benchmark.v2",
         )
         with self.assertRaisesRegex(CHECKER.CheckError, "unexpected R26 context line"):
             self.check(lines)
@@ -1101,13 +1105,33 @@ class R26CheckerTests(unittest.TestCase):
             "native_binding",
             "publication",
             "publish_to_completion",
-            "recycle",
         ):
             update_backend_phase(lines, "kfd", phase, [400] * 30)
+        update_backend_phase(lines, "kfd", "completion_signal_recycle", [200] * 30)
+        update_backend_phase(lines, "kfd", "completion_detach_restore", [200] * 30)
+        update_backend_phase(lines, "kfd", "recycle_inclusive", [400] * 30)
         with self.assertRaisesRegex(
             CHECKER.CheckError, "launch critical-path sample 0 exceeds"
         ):
             self.check(lines)
+
+    def test_rejects_inconsistent_or_overflowing_recycle_components(self) -> None:
+        lines = valid_log()
+        update_backend_phase(
+            lines, "kfd", "recycle_inclusive", [99 + index for index in range(30)]
+        )
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "components sample 0 do not equal inclusive recycle"
+        ):
+            self.check(lines)
+
+        half = CHECKER.R26_MAX_NANOSECONDS // 2
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "completion recycle components timing overflow"
+        ):
+            CHECKER.r26_checked_sum(
+                (half, half + 2), "completion recycle components"
+            )
 
     def test_rejects_reference_kfd_launch_timing_measurement(self) -> None:
         lines = valid_log()
@@ -1347,7 +1371,7 @@ class R26CheckerTests(unittest.TestCase):
             output,
             expected_performance
             + [
-                "schema=fe2o3.r26-inplace-benchmark.v3 "
+                "schema=fe2o3.r26-inplace-benchmark.v4 "
                 "counterbalance_design=cyclic-latin-square-3 "
                 "counterbalance_slots=3 "
                 f"counterbalance_set_id={'a' * 64} "

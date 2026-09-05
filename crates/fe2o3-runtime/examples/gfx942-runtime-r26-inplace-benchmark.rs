@@ -36,7 +36,7 @@ mod enabled {
     const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
     const COMPLETION_WAIT_SLICE: Duration = Duration::from_micros(50);
     const DEVICE_ALIGNMENT: u64 = 4096;
-    const LAUNCH_TIMING_PHASES: [&str; 8] = [
+    const LAUNCH_TIMING_PHASES: [&str; 10] = [
         "preparation",
         "bound_snapshot",
         "authority",
@@ -44,8 +44,13 @@ mod enabled {
         "publication",
         "publish_to_completion",
         "completed_readback",
-        "recycle",
+        "completion_signal_recycle",
+        "completion_detach_restore",
+        "recycle_inclusive",
     ];
+    const COMPLETION_SIGNAL_RECYCLE_INDEX: usize = 7;
+    const COMPLETION_DETACH_RESTORE_INDEX: usize = 8;
+    const RECYCLE_INCLUSIVE_INDEX: usize = 9;
 
     type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 
@@ -177,7 +182,9 @@ mod enabled {
             publication,
             publish_to_completion,
             completed_readback,
-            recycle,
+            completion_signal_recycle,
+            completion_detach_restore,
+            recycle_inclusive,
         ] = phases;
         if completed_readback != 0 {
             return Err("R26 persistent launch performed a completed readback");
@@ -189,7 +196,9 @@ mod enabled {
             native_binding,
             publication,
             publish_to_completion,
-            recycle,
+            completion_signal_recycle,
+            completion_detach_restore,
+            recycle_inclusive,
         ]
         .contains(&0)
         {
@@ -201,12 +210,18 @@ mod enabled {
         if nested_preparation > preparation {
             return Err("R26 nested preparation timing exceeds inclusive preparation");
         }
+        let component_recycle = completion_signal_recycle
+            .checked_add(completion_detach_restore)
+            .ok_or("R26 completion recycle component timing overflow")?;
+        if component_recycle != recycle_inclusive {
+            return Err("R26 completion recycle components do not equal inclusive recycle");
+        }
         let critical_path = [
             preparation,
             native_binding,
             publication,
             publish_to_completion,
-            recycle,
+            recycle_inclusive,
         ]
         .into_iter()
         .try_fold(0_u128, u128::checked_add)
@@ -266,7 +281,10 @@ mod enabled {
 
         fn average(self) -> BenchmarkResult<IterationTimingV1> {
             let divisor = ITERATIONS_PER_SAMPLE as u128;
-            let launch_phases = self.launch_phases.map(|value| value / divisor);
+            let mut launch_phases = self.launch_phases.map(|value| value / divisor);
+            launch_phases[RECYCLE_INCLUSIVE_INDEX] = launch_phases[COMPLETION_SIGNAL_RECYCLE_INDEX]
+                .checked_add(launch_phases[COMPLETION_DETACH_RESTORE_INDEX])
+                .ok_or("averaged completion recycle timing overflow")?;
             let timing = IterationTimingV1 {
                 h2d: self.h2d / divisor,
                 compute: self.compute / divisor,
@@ -480,6 +498,8 @@ mod enabled {
                 performance.publication().as_nanos(),
                 performance.publish_to_completion().as_nanos(),
                 performance.completed_readback().as_nanos(),
+                performance.completion_signal_recycle().as_nanos(),
+                performance.completion_detach_restore().as_nanos(),
                 performance.recycle().as_nanos(),
             ];
             Ok(LaunchTimingV1 {
@@ -686,7 +706,7 @@ mod enabled {
         let pattern_a_iterations = validated_iterations.div_ceil(2);
         let pattern_b_iterations = validated_iterations / 2;
         let mut row = format!(
-            "backend=kfd schema=fe2o3.r26-inplace-benchmark.v3 device_index=0 unique_id={unique_id:016x} uuid=GPU-{unique_id:016x} target=gfx942:xnack- xnack=disabled kernel={GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1} bytes={GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1} elements={GFX942_INPLACE_TRANSFORM_QUALIFICATION_ELEMENTS_V1} workgroup=256 warmups={WARMUPS} samples={SAMPLES} iterations_per_sample={ITERATIONS_PER_SAMPLE} sample_value=integer-average-ns-over-10-iterations trimming=none input_pattern=alternating-full-a-b pattern_start=a validation=every-element-every-iteration validated_iterations={validated_iterations} pattern_a_iterations={pattern_a_iterations} pattern_b_iterations={pattern_b_iterations} timing=host-monotonic interphase_control=e2e-h2d-compute-d2h promotion=full-h2d-to-compute-ready data_path=persistent-device-reused control_path=persistent-control-replayed user_data_materializations=0 input_a_sha256={} output_a_sha256={} input_b_sha256={} output_b_sha256={}",
+            "backend=kfd schema=fe2o3.r26-inplace-benchmark.v4 device_index=0 unique_id={unique_id:016x} uuid=GPU-{unique_id:016x} target=gfx942:xnack- xnack=disabled kernel={GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1} bytes={GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1} elements={GFX942_INPLACE_TRANSFORM_QUALIFICATION_ELEMENTS_V1} workgroup=256 warmups={WARMUPS} samples={SAMPLES} iterations_per_sample={ITERATIONS_PER_SAMPLE} sample_value=integer-average-ns-over-10-iterations recycle_inclusive_sample_value=sum-of-component-integer-averages-ns trimming=none input_pattern=alternating-full-a-b pattern_start=a validation=every-element-every-iteration validated_iterations={validated_iterations} pattern_a_iterations={pattern_a_iterations} pattern_b_iterations={pattern_b_iterations} timing=host-monotonic interphase_control=e2e-h2d-compute-d2h promotion=full-h2d-to-compute-ready data_path=persistent-device-reused control_path=persistent-control-replayed user_data_materializations=0 input_a_sha256={} output_a_sha256={} input_b_sha256={} output_b_sha256={}",
             hex(GFX942_INPLACE_TRANSFORM_INPUT_A_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_OUTPUT_A_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_INPUT_B_SHA256_V1),
@@ -697,11 +717,9 @@ mod enabled {
         append_phase(&mut row, "d2h", &d2h, false)?;
         append_phase(&mut row, "e2e", &e2e, false)?;
         append_phase(&mut row, "promotion", &promotion, false)?;
-        for ((phase, values), allow_zero) in LAUNCH_TIMING_PHASES
-            .iter()
-            .zip(&launch_phases)
-            .zip([false, false, false, false, false, false, true, false])
-        {
+        for ((phase, values), allow_zero) in LAUNCH_TIMING_PHASES.iter().zip(&launch_phases).zip([
+            false, false, false, false, false, false, true, false, false, false,
+        ]) {
             append_phase(&mut row, phase, values, allow_zero)?;
         }
         println!("{row}");
@@ -713,7 +731,7 @@ mod enabled {
         use super::*;
 
         const CONSISTENT_PHASES: [u128; LAUNCH_TIMING_PHASES.len()] =
-            [100, 40, 50, 20, 10, 30, 0, 5];
+            [100, 40, 50, 20, 10, 30, 0, 3, 2, 5];
 
         #[test]
         fn accepts_exact_nested_and_exclusive_launch_timing() {
@@ -736,11 +754,42 @@ mod enabled {
                 validate_launch_timing_v1(164, CONSISTENT_PHASES),
                 Err("R26 launch critical-path timing exceeds inclusive compute duration")
             );
-            let phases = [u128::MAX, 1, 1, 1, 1, 1, 0, 1];
+            let phases = [u128::MAX, 1, 1, 1, 1, 1, 0, 1, 1, 2];
             assert_eq!(
                 validate_launch_timing_v1(u128::MAX, phases),
                 Err("R26 launch critical-path timing overflow")
             );
+        }
+
+        #[test]
+        fn rejects_inconsistent_or_overflowing_recycle_components() {
+            let mut phases = CONSISTENT_PHASES;
+            phases[9] = 4;
+            assert_eq!(
+                validate_launch_timing_v1(165, phases),
+                Err("R26 completion recycle components do not equal inclusive recycle")
+            );
+            let phases = [100, 40, 50, 20, 10, 30, 0, u128::MAX, 1, 5];
+            assert_eq!(
+                validate_launch_timing_v1(u128::MAX, phases),
+                Err("R26 completion recycle component timing overflow")
+            );
+        }
+
+        #[test]
+        fn sample_average_derives_inclusive_recycle_after_component_rounding() {
+            let accumulator = SampleAccumulatorV1 {
+                h2d: 10,
+                compute: 10,
+                d2h: 10,
+                e2e: 30,
+                promotion: 10,
+                launch_phases: [10, 10, 10, 10, 10, 10, 0, 619, 439, 1_058],
+            };
+            let averaged = accumulator.average().unwrap();
+            assert_eq!(averaged.launch.phases[COMPLETION_SIGNAL_RECYCLE_INDEX], 61);
+            assert_eq!(averaged.launch.phases[COMPLETION_DETACH_RESTORE_INDEX], 43);
+            assert_eq!(averaged.launch.phases[RECYCLE_INCLUSIVE_INDEX], 104);
         }
     }
 }

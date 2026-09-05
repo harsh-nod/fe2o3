@@ -169,8 +169,10 @@ impl std::error::Error for KfdRuntimeBackendErrorV1 {}
 /// Host-side phase durations for the most recently completed direct-KFD launch.
 ///
 /// `preparation` encloses `bound_snapshot` and `authority`. `native_binding`,
-/// `publication`, `publish_to_completion`, and `recycle` are mutually exclusive
-/// portions of the successful persistent-launch critical path.
+/// `publication`, `publish_to_completion`, and the inclusive `recycle` are
+/// mutually exclusive portions of the successful launch critical path. For a
+/// persistent launch, `recycle` is the sum of `completion_signal_recycle` and
+/// `completion_detach_restore`; ordinary launches have no detach/restore phase.
 ///
 /// `publish_to_completion` begins after the doorbell publication call returns
 /// and ends when completion is first observed. It is the nearest available KFD
@@ -184,7 +186,8 @@ pub struct KfdRuntimeLaunchPerformanceV1 {
     publication: Duration,
     publish_to_completion: Duration,
     completed_readback: Duration,
-    recycle: Duration,
+    completion_signal_recycle: Duration,
+    completion_detach_restore: Duration,
     data_path: KfdRuntimeLaunchDataPathV1,
     user_data_materializations: u64,
     persistent_control_reused: bool,
@@ -273,8 +276,27 @@ impl KfdRuntimeLaunchPerformanceV1 {
         self.completed_readback
     }
 
+    /// Returns the inclusive successful completion-cleanup interval.
+    ///
+    /// This is the sum of [`Self::completion_signal_recycle`] and
+    /// [`Self::completion_detach_restore`].
     pub const fn recycle(self) -> Duration {
-        self.recycle
+        self.completion_signal_recycle
+            .saturating_add(self.completion_detach_restore)
+    }
+
+    /// Returns time spent recycling the completed dispatch signal.
+    pub const fn completion_signal_recycle(self) -> Duration {
+        self.completion_signal_recycle
+    }
+
+    /// Returns time spent after signal recycle, including the handoff into
+    /// persistent-data detach, frontier retirement, and allocation-owner
+    /// restoration.
+    ///
+    /// This is zero for nonpersistent launches.
+    pub const fn completion_detach_restore(self) -> Duration {
+        self.completion_detach_restore
     }
 
     /// Returns the address-free user-data storage path used by the launch.
@@ -6432,7 +6454,8 @@ impl KfdRuntimeBackendV1 {
             Err(detail) => return Err(self.terminal_error(detail)),
         };
         active.performance.completed_readback = Duration::ZERO;
-        active.performance.recycle = recycle;
+        active.performance.completion_signal_recycle = recycle;
+        active.performance.completion_detach_restore = Duration::ZERO;
         for writeback in &active.writebacks {
             self.native_dirty_extents = self
                 .native_dirty_extents
@@ -6506,13 +6529,24 @@ impl KfdRuntimeBackendV1 {
             .as_mut()
             .expect("persistent completion retains its queue")
             .recycle_directional_persistent_fixed_dispatch_v1(completed);
-        let recycled = match recycle {
-            Ok(recycled) => recycled,
+        match recycle {
+            Ok(recycled) => {
+                let completion_signal_recycle = recycle_started.elapsed();
+                active.performance.completion_signal_recycle += completion_signal_recycle;
+                self.finish_persistent_full_range_recycled_v1(
+                    active,
+                    allocation,
+                    access,
+                    recycled,
+                    recycle_started,
+                    completion_signal_recycle,
+                )
+            }
             Err(failure) => {
                 let detail = failure.error().to_string();
                 let (_, custody) = failure.into_parts();
-                active.performance.recycle += recycle_started.elapsed();
-                return match custody {
+                active.performance.completion_signal_recycle += recycle_started.elapsed();
+                match custody {
                     Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(completed) => {
                         self.retain_terminal_sdma_custody_v1(
                             KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeCompleted(completed),
@@ -6529,10 +6563,9 @@ impl KfdRuntimeBackendV1 {
                             "KFD persistent-compute completion recycle: {detail}"
                         )))
                     }
-                };
+                }
             }
-        };
-        self.finish_persistent_full_range_recycled_v1(active, allocation, access, recycled)
+        }
     }
 
     fn finish_persistent_full_range_recycled_v1(
@@ -6541,8 +6574,9 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
         access: RuntimeAccessV1,
         recycled: Gfx942RecycledPersistentComputeDispatchV1,
+        recycle_started: Instant,
+        completion_signal_recycle: Duration,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let recycle_started = Instant::now();
         let detach = self
             .queue
             .as_mut()
@@ -6553,7 +6587,11 @@ impl KfdRuntimeBackendV1 {
             Err(failure) => {
                 let detail = failure.error().to_string();
                 let (_, custody) = failure.into_parts();
-                active.performance.recycle += recycle_started.elapsed();
+                active.performance.completion_detach_restore +=
+                    completion_detach_restore_duration_v1(
+                        recycle_started.elapsed(),
+                        completion_signal_recycle,
+                    );
                 return match custody {
                     Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(recycled) => {
                         self.retain_terminal_sdma_custody_v1(
@@ -6599,8 +6637,11 @@ impl KfdRuntimeBackendV1 {
             input,
             actual_effect,
         )?;
-        let recycle = active.performance.recycle + recycle_started.elapsed();
-        self.finish_restored_persistent_compute_v1(active, allocation, recycle)
+        let completion_detach_restore = completion_detach_restore_duration_v1(
+            recycle_started.elapsed(),
+            completion_signal_recycle,
+        );
+        self.finish_restored_persistent_compute_v1(active, allocation, completion_detach_restore)
     }
 
     #[cfg(test)]
@@ -6614,7 +6655,8 @@ impl KfdRuntimeBackendV1 {
             KfdRuntimeLaunchDataPathV1::Materialized
         );
         active.performance.completed_readback = Duration::ZERO;
-        active.performance.recycle = Duration::ZERO;
+        active.performance.completion_signal_recycle = Duration::ZERO;
+        active.performance.completion_detach_restore = Duration::ZERO;
         let compute_lane = self.selected_compute_lane;
         let module = self
             .kernels
@@ -6653,10 +6695,10 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         mut active: ActiveSubmissionV1,
         allocation: u64,
-        recycle: Duration,
+        completion_detach_restore: Duration,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         active.performance.completed_readback = Duration::ZERO;
-        active.performance.recycle = recycle;
+        active.performance.completion_detach_restore += completion_detach_restore;
         debug_assert_eq!(active.performance.user_data_materializations, 0);
         debug_assert_eq!(
             active.performance.data_path,
@@ -8123,7 +8165,7 @@ fn profile_host_timing_v1(performance: KfdRuntimeLaunchPerformanceV1) -> KfdProf
         publication_ns: duration_nanoseconds_v1(performance.publication),
         publish_to_completion_ns: duration_nanoseconds_v1(performance.publish_to_completion),
         completed_readback_ns: duration_nanoseconds_v1(performance.completed_readback),
-        recycle_ns: duration_nanoseconds_v1(performance.recycle),
+        recycle_ns: duration_nanoseconds_v1(performance.recycle()),
     }
 }
 
@@ -8134,6 +8176,15 @@ fn record_initial_persistent_timing_v1(
 ) {
     performance.native_binding = native_binding;
     performance.publication = publication;
+}
+
+fn completion_detach_restore_duration_v1(
+    recycle_inclusive: Duration,
+    completion_signal_recycle: Duration,
+) -> Duration {
+    recycle_inclusive
+        .checked_sub(completion_signal_recycle)
+        .expect("continuous recycle timing cannot precede its signal-recycle boundary")
 }
 
 fn duration_nanoseconds_v1(duration: Duration) -> u64 {
@@ -14949,6 +15000,43 @@ mod tests {
         performance.publication += Duration::from_nanos(13);
         assert_eq!(performance.native_binding(), Duration::from_nanos(7));
         assert_eq!(performance.publication(), Duration::from_nanos(24));
+    }
+
+    #[test]
+    fn launch_recycle_timing_is_the_inclusive_sum_of_its_components() {
+        let performance = KfdRuntimeLaunchPerformanceV1 {
+            completion_signal_recycle: Duration::from_nanos(61),
+            completion_detach_restore: Duration::from_nanos(43),
+            ..KfdRuntimeLaunchPerformanceV1::default()
+        };
+        assert_eq!(
+            performance.completion_signal_recycle(),
+            Duration::from_nanos(61)
+        );
+        assert_eq!(
+            performance.completion_detach_restore(),
+            Duration::from_nanos(43)
+        );
+        assert_eq!(performance.recycle(), Duration::from_nanos(104));
+        assert_eq!(profile_host_timing_v1(performance).recycle_ns, 104);
+    }
+
+    #[test]
+    fn continuous_recycle_timing_assigns_handoff_to_detach_restore() {
+        let completion_signal_recycle = Duration::from_nanos(61);
+        let handoff = Duration::from_nanos(7);
+        let detach_restore = Duration::from_nanos(43);
+        let recycle_inclusive = completion_signal_recycle + handoff + detach_restore;
+        let completion_detach_restore =
+            completion_detach_restore_duration_v1(recycle_inclusive, completion_signal_recycle);
+        let performance = KfdRuntimeLaunchPerformanceV1 {
+            completion_signal_recycle,
+            completion_detach_restore,
+            ..KfdRuntimeLaunchPerformanceV1::default()
+        };
+
+        assert_eq!(completion_detach_restore, handoff + detach_restore);
+        assert_eq!(performance.recycle(), recycle_inclusive);
     }
 
     fn scripted_submit_step_v1(

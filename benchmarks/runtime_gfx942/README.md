@@ -358,18 +358,26 @@ comparators retain one device allocation but report promotion as unavailable.
 Setup, final validation, and release occur outside the enclosing E2E interval
 for every backend.
 
-The V3 KFD row records `control_path=persistent-control-replayed` only after
+The V4 KFD row records `control_path=persistent-control-replayed` only after
 every measured launch confirms reuse of the retained dispatch control. It also
 retains host-monotonic launch timings; the HSA and HIP comparators report the
 KFD-specific control path as `n/a`. `preparation` is an
 inclusive interval that encloses the `bound_snapshot` and `authority`
 subintervals; their sum must not exceed it. The remaining persistent-launch
 critical path is exclusive: `native_binding` stops before `publication`, which
-is followed by `publish_to_completion` and `recycle`. The checker requires the
-sum of `preparation` and those four exclusive intervals to fit inside the
-inclusive compute sample. `completed_readback` is exactly zero because this
-persistent device path does no completed host readback. These observations are
-host timings for diagnosis, not device-clock kernel durations.
+is followed by `publish_to_completion` and `recycle_inclusive`.
+`recycle_inclusive` must equal the overflow-checked sum of
+`completion_signal_recycle` and `completion_detach_restore` for every sample;
+the second component begins at the exact signal-recycle timing boundary, so it
+also includes the handoff into detach. Both components must be nonzero on this
+persistent path. The checker requires
+the sum of `preparation` and the four exclusive critical-path intervals to fit
+inside the inclusive compute sample. Component durations use the declared
+integer average; `recycle_inclusive` is then derived from those two averaged
+components so independent integer rounding cannot invalidate the equality.
+`completed_readback` is exactly zero
+because this persistent device path does no completed host readback. These
+observations are host timings for diagnosis, not device-clock kernel durations.
 
 One run contains three separate cyclic Latin-square slots. Each slot retains
 30 samples per backend without cross-slot aggregation. The set checker emits
