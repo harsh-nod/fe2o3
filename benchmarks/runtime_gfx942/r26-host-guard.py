@@ -320,7 +320,7 @@ def topology_record(
 
     fields = {
         "schema": TOPOLOGY_SCHEMA,
-        "placement": "numactl-physcpubind-membind-v1",
+        "placement": "taskset-cpulist-then-numactl-physcpubind-membind-v1",
         "gpu_index": str(gpu_index),
         "pci_bdf": normalized_bdf,
         "unique_id": normalized_unique_id,

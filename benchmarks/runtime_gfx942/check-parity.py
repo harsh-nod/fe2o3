@@ -166,7 +166,7 @@ R26_FIXED_CONTEXT = {
     ),
     "execution_environment": R26_EXECUTION_ENVIRONMENT,
     "telemetry_command": "rocm-smi-showuse-showclocks-showpower",
-    "placement": "numactl-physcpubind-membind-v1",
+    "placement": "taskset-cpulist-then-numactl-physcpubind-membind-v1",
     "interference_monitor": "selected-kfd-gpu-process-tree-census-v1",
     "monitor_interval_us": "2000",
     "monitor_maximum_gap_us": "10000",

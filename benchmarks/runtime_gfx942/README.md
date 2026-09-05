@@ -368,8 +368,10 @@ makes no runtime-wide parity or speedup claim.
 Qualification runs in a minimal declared environment, builds Rust from a
 private snapshot of the exact Git commit, seals its fixture, helpers, sources,
 and binaries, and records start/end kernel, driver, ROCm, loader, GPU, PCI, KFD,
-and NUMA identities. Each backend is pinned to GPU-local CPUs. A separate CPU
-samples `/sys/class/kfd/kfd/proc` every 2 ms, rejects foreign selected-GPU
+and NUMA identities. Each child first restores the topology-approved GPU-local
+CPU mask with `taskset`, then `numactl` binds that same mask and the GPU-local
+memory node. A separate CPU samples `/sys/class/kfd/kfd/proc` every 2 ms,
+rejects foreign selected-GPU
 queues or a gap above 10 ms, and must observe a target-owned queue before a row
 can be released. This is bounded sampled interference detection, not proof that
 no queue existed between censuses.

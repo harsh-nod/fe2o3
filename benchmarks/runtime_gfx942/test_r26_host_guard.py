@@ -127,6 +127,10 @@ class TopologyTests(unittest.TestCase):
         prefix, observed = fields(record)
         self.assertEqual(prefix, "topology")
         self.assertEqual(observed["schema"], GUARD.TOPOLOGY_SCHEMA)
+        self.assertEqual(
+            observed["placement"],
+            "taskset-cpulist-then-numactl-physcpubind-membind-v1",
+        )
         self.assertEqual(observed["pci_bdf"], fixture.bdf)
         self.assertEqual(observed["unique_id"], fixture.unique_id)
         self.assertEqual(observed["measurement_cpu_list"], "0-7")

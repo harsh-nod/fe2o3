@@ -153,8 +153,8 @@ for tool in /usr/bin/awk /usr/bin/base64 /usr/bin/cat /usr/bin/chmod /usr/bin/cm
   /usr/bin/cp /usr/bin/dirname /usr/bin/env /usr/bin/find /usr/bin/g++ /usr/bin/git \
   /usr/bin/grep /usr/bin/ldd /usr/bin/mkdir /usr/bin/mktemp /usr/bin/mv \
   /usr/bin/numactl /usr/bin/python3 /usr/bin/readelf /usr/bin/sed \
-  /usr/bin/sha256sum /usr/bin/tar /usr/bin/tee /usr/bin/timeout /usr/bin/tr /usr/bin/true \
-  /usr/bin/zstd /usr/sbin/modinfo; do
+  /usr/bin/sha256sum /usr/bin/tar /usr/bin/taskset /usr/bin/tee /usr/bin/timeout \
+  /usr/bin/tr /usr/bin/true /usr/bin/zstd /usr/sbin/modinfo; do
   [[ -x "${tool}" ]] || {
     printf 'missing fixed executable: %s\n' "${tool}" >&2
     exit 2
@@ -432,7 +432,9 @@ readonly topology_sha256
   printf 'R26 host topology has malformed placement fields\n' >&2
   exit 2
 }
-"${qualification_env[@]}" /usr/bin/numactl \
+"${qualification_env[@]}" /usr/bin/taskset --cpu-list "${observer_cpu}" \
+  /usr/bin/taskset --cpu-list "${measurement_cpu_list}" \
+  /usr/bin/numactl \
   --physcpubind="${measurement_cpu_list}" \
   --membind="${topology_numa_node}" /usr/bin/true
 
@@ -508,7 +510,7 @@ readonly system_identity_collector_sha256
 print_context() {
   local slot="$1"
   local backend_order="$2"
-  printf 'context schema=fe2o3.r26-inplace-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_index=%s unique_id=%s uuid=%s bytes=%s elements=%s workgroup=%s warmups=%s samples=%s iterations_per_sample=%s kernel=inplace_transform max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s cargo=%s hipcc=%s cxx=%s hsaco_sha256=%s kernel_source_sha256=%s kernel_policy_sha256=%s fixture_recipe_sha256=%s fixture_producer_clang=AMD_clang_version_22.0.0git_(https://github.com/RadeonOpenCompute/llvm-project_roc-7.2.0_26014_7b800a19466229b8479a78de19143dc33c3ab9b5) fixture_rebuild=not-run-on-measurement-host kfd_binary_sha256=%s hsa_binary_sha256=%s hip_binary_sha256=%s hsa_source_sha256=%s hip_source_sha256=%s common_header_sha256=%s checker_sha256=%s runner_sha256=%s host_guard_sha256=%s system_identity_collector_sha256=%s build_environment=%s execution_environment=%s telemetry_command=rocm-smi-showuse-showclocks-showpower placement=numactl-physcpubind-membind-v1 interference_monitor=selected-kfd-gpu-process-tree-census-v1 monitor_interval_us=%s monitor_maximum_gap_us=%s topology_sha256=%s counterbalance_design=%s counterbalance_slots=3 counterbalance_slot=%s counterbalance_set_id=%s backend_order=%s\n' \
+  printf 'context schema=fe2o3.r26-inplace-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_index=%s unique_id=%s uuid=%s bytes=%s elements=%s workgroup=%s warmups=%s samples=%s iterations_per_sample=%s kernel=inplace_transform max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s cargo=%s hipcc=%s cxx=%s hsaco_sha256=%s kernel_source_sha256=%s kernel_policy_sha256=%s fixture_recipe_sha256=%s fixture_producer_clang=AMD_clang_version_22.0.0git_(https://github.com/RadeonOpenCompute/llvm-project_roc-7.2.0_26014_7b800a19466229b8479a78de19143dc33c3ab9b5) fixture_rebuild=not-run-on-measurement-host kfd_binary_sha256=%s hsa_binary_sha256=%s hip_binary_sha256=%s hsa_source_sha256=%s hip_source_sha256=%s common_header_sha256=%s checker_sha256=%s runner_sha256=%s host_guard_sha256=%s system_identity_collector_sha256=%s build_environment=%s execution_environment=%s telemetry_command=rocm-smi-showuse-showclocks-showpower placement=taskset-cpulist-then-numactl-physcpubind-membind-v1 interference_monitor=selected-kfd-gpu-process-tree-census-v1 monitor_interval_us=%s monitor_maximum_gap_us=%s topology_sha256=%s counterbalance_design=%s counterbalance_slots=3 counterbalance_slot=%s counterbalance_set_id=%s backend_order=%s\n' \
     "${git_commit}" "${gpu_index}" "${unique_id}" "${uuid}" \
     "${bytes}" "${elements}" "${workgroup}" "${warmups}" "${samples}" \
     "${iterations_per_sample}" "${max_busy}" "${phase_timeout}" \
@@ -543,6 +545,7 @@ run_backend() {
   case "${backend}" in
     kfd)
       command=("${qualification_env[@]}"
+        /usr/bin/taskset --cpu-list "${measurement_cpu_list}"
         /usr/bin/numactl --physcpubind="${measurement_cpu_list}"
         --membind="${topology_numa_node}"
         /usr/bin/timeout --foreground --signal=TERM --kill-after=5s
@@ -551,6 +554,7 @@ run_backend() {
     hsa)
       command=("${qualification_env[@]}"
         HSA_XNACK=0 ROCR_VISIBLE_DEVICES="${gpu_index}"
+        /usr/bin/taskset --cpu-list "${measurement_cpu_list}"
         /usr/bin/numactl --physcpubind="${measurement_cpu_list}"
         --membind="${topology_numa_node}"
         /usr/bin/timeout --foreground --signal=TERM --kill-after=5s "${phase_timeout}s"
@@ -559,6 +563,7 @@ run_backend() {
     hip)
       command=("${qualification_env[@]}"
         HSA_XNACK=0 HIP_VISIBLE_DEVICES="${gpu_index}"
+        /usr/bin/taskset --cpu-list "${measurement_cpu_list}"
         /usr/bin/numactl --physcpubind="${measurement_cpu_list}"
         --membind="${topology_numa_node}"
         /usr/bin/timeout --foreground --signal=TERM --kill-after=5s "${phase_timeout}s"

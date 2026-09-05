@@ -50,7 +50,7 @@ def sealed_record(prefix: str, fields: dict[str, str], digest_field: str) -> str
 def valid_topology(slot: int, backend: str, edge: str) -> tuple[str, str]:
     inner = {
         "schema": CHECKER.R26_TOPOLOGY_SCHEMA,
-        "placement": "numactl-physcpubind-membind-v1",
+        "placement": CHECKER.R26_FIXED_CONTEXT["placement"],
         "gpu_index": "0",
         "pci_bdf": "0000:05:00.0",
         "unique_id": "0x0123456789abcdef",
@@ -509,7 +509,7 @@ def valid_log(
         "system_identity_collector_sha256": "b" * 64,
         "execution_environment": CHECKER.R26_EXECUTION_ENVIRONMENT,
         "telemetry_command": "rocm-smi-showuse-showclocks-showpower",
-        "placement": "numactl-physcpubind-membind-v1",
+        "placement": CHECKER.R26_FIXED_CONTEXT["placement"],
         "interference_monitor": "selected-kfd-gpu-process-tree-census-v1",
         "monitor_interval_us": "2000",
         "monitor_maximum_gap_us": "10000",

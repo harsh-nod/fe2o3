@@ -66,8 +66,27 @@ class R26RunnerContractTests(unittest.TestCase):
         self.assertIn('readonly rust_tool_path="${build_home}/.cargo/bin"', self.source)
         self.assertIn('"${rust_build_env[@]}" "${cargo_executable}" build', self.source)
         self.assertIn('"${native_build_env[@]}" /usr/bin/g++', self.source)
-        self.assertIn('"${qualification_env[@]}" /usr/bin/numactl', self.source)
+        self.assertIn(
+            '"${qualification_env[@]}" /usr/bin/taskset --cpu-list "${observer_cpu}"',
+            self.source,
+        )
         self.assertIn('--membind="${topology_numa_node}" /usr/bin/true', self.source)
+        self.assertIn("/usr/bin/taskset", self.source)
+        self.assertEqual(
+            self.source.count('/usr/bin/taskset --cpu-list "${measurement_cpu_list}"'),
+            4,
+        )
+        self.assertEqual(
+            self.source.count(
+                '/usr/bin/taskset --cpu-list "${measurement_cpu_list}"\n'
+                "        /usr/bin/numactl"
+            ),
+            3,
+        )
+        self.assertIn(
+            "placement=taskset-cpulist-then-numactl-physcpubind-membind-v1",
+            self.source,
+        )
 
     def test_context_authenticates_collector_and_declares_build_contract(self) -> None:
         self.assertIn("system_identity_collector_sha256=%s", self.source)
