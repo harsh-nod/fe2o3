@@ -507,6 +507,7 @@ def valid_log(
         "hip_binary_sha256": "4" * 64,
         "hsa_source_sha256": "5" * 64,
         "hip_source_sha256": "6" * 64,
+        "binary_reader_sha256": "b" * 64,
         "common_header_sha256": "7" * 64,
         "checker_sha256": "8" * 64,
         "runner_sha256": "9" * 64,

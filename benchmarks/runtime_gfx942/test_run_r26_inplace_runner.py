@@ -11,6 +11,7 @@ import unittest
 
 RUNNER = pathlib.Path(__file__).with_name("run-r26-inplace-mi300x.sh")
 HSA_COMPARATOR = pathlib.Path(__file__).with_name("inplace_transform_hsa.cpp")
+COMMON_HEADER = pathlib.Path(__file__).with_name("inplace_benchmark_common.hpp")
 
 
 class R26RunnerContractTests(unittest.TestCase):
@@ -18,6 +19,7 @@ class R26RunnerContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = RUNNER.read_text(encoding="utf-8")
         cls.hsa_source = HSA_COMPARATOR.read_text(encoding="utf-8")
+        cls.common_source = COMMON_HEADER.read_text(encoding="utf-8")
 
     def test_shell_is_syntactically_valid(self) -> None:
         subprocess.run(["/usr/bin/bash", "-n", str(RUNNER)], check=True)
@@ -27,6 +29,7 @@ class R26RunnerContractTests(unittest.TestCase):
             "inplace_transform.hsaco",
             "inplace_transform_hsa.cpp",
             "inplace_transform_hip.cpp",
+            "bounded_binary_file_reader.hpp",
             "inplace_benchmark_common.hpp",
             "check-parity.py",
             "r26-host-guard.py",
@@ -142,15 +145,31 @@ class R26RunnerContractTests(unittest.TestCase):
 
     def test_hsa_comparator_reads_one_bounded_exact_size_code_object(self) -> None:
         self.assertIn("kMaximumHsacoBytes", self.hsa_source)
-        self.assertIn("std::ios::binary | std::ios::ate", self.hsa_source)
-        self.assertIn(
-            "const std::streamoff byte_count = input.tellg()", self.hsa_source
-        )
-        self.assertIn("input.read(bytes.data()", self.hsa_source)
-        self.assertIn("input.gcount() != expected_byte_count", self.hsa_source)
-        self.assertIn("input.read(&trailing_byte, 1)", self.hsa_source)
-        self.assertIn("input.gcount() != 0 || !input.eof()", self.hsa_source)
+        self.assertIn("fe2o3::r26::read_bounded_binary_file", self.hsa_source)
+        self.assertIn('#include "bounded_binary_file_reader.hpp"', self.hsa_source)
         self.assertNotIn("istreambuf_iterator", self.hsa_source)
+
+    def test_hsa_comparator_resolves_the_code_object_descriptor_symbol(self) -> None:
+        self.assertIn(
+            'constexpr char kKernelDescriptor[] = "inplace_transform.kd"',
+            self.common_source,
+        )
+        self.assertIn(
+            "constexpr std::uint32_t kHsaKernargAlignment = 16",
+            self.common_source,
+        )
+        self.assertIn(
+            "kernel.executable, fe2o3::r26::kKernelDescriptor, &gpu, &symbol",
+            self.hsa_source,
+        )
+        self.assertIn(
+            "kernel.kernarg_alignment != fe2o3::r26::kHsaKernargAlignment",
+            self.hsa_source,
+        )
+        self.assertNotIn(
+            "kernel.executable, fe2o3::r26::kKernel, &gpu, &symbol",
+            self.hsa_source,
+        )
 
     def test_rocm_smi_and_persistence_tools_use_fixed_environments(self) -> None:
         rocm_invocations = [

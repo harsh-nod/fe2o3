@@ -6,10 +6,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <limits>
 #include <vector>
 
+#include "bounded_binary_file_reader.hpp"
 #include "inplace_benchmark_common.hpp"
 
 #define HSA_CHECK(call)                                                        \
@@ -117,32 +117,27 @@ void queue_error(hsa_status_t status, hsa_queue_t *, void *) {
 }
 
 std::vector<char> read_binary(const char *path) {
-  std::ifstream input(path, std::ios::binary | std::ios::ate);
-  if (!input) {
+  std::vector<char> bytes;
+  const auto status =
+      fe2o3::r26::read_bounded_binary_file(path, kMaximumHsacoBytes, &bytes);
+  if (status == fe2o3::r26::BoundedBinaryFileReadStatus::OpenFailed) {
     std::fprintf(stderr, "could not open HSACO: %s\n", path);
     std::exit(2);
   }
-  const std::streamoff byte_count = input.tellg();
-  if (byte_count <= 0 || byte_count > kMaximumHsacoBytes) {
+  if (status == fe2o3::r26::BoundedBinaryFileReadStatus::InvalidSize) {
     std::fprintf(stderr, "HSACO size is empty or exceeds the limit: %s\n",
                  path);
     std::exit(2);
   }
-  input.seekg(0, std::ios::beg);
-  if (!input) {
+  if (status == fe2o3::r26::BoundedBinaryFileReadStatus::SeekFailed) {
     std::fprintf(stderr, "could not seek HSACO: %s\n", path);
     std::exit(2);
   }
-  std::vector<char> bytes(static_cast<std::size_t>(byte_count));
-  const auto expected_byte_count = static_cast<std::streamsize>(byte_count);
-  input.read(bytes.data(), expected_byte_count);
-  if (!input || input.gcount() != expected_byte_count) {
+  if (status == fe2o3::r26::BoundedBinaryFileReadStatus::ReadFailed) {
     std::fprintf(stderr, "could not read nonempty HSACO: %s\n", path);
     std::exit(2);
   }
-  char trailing_byte = 0;
-  input.read(&trailing_byte, 1);
-  if (input.gcount() != 0 || !input.eof() || input.bad()) {
+  if (status == fe2o3::r26::BoundedBinaryFileReadStatus::ChangedOrReadFailed) {
     std::fprintf(stderr, "HSACO changed or failed while reading: %s\n", path);
     std::exit(2);
   }
@@ -186,7 +181,7 @@ Kernel load_kernel(const std::vector<char> &code_object, hsa_agent_t gpu) {
 
   hsa_executable_symbol_t symbol{};
   HSA_CHECK(hsa_executable_get_symbol_by_name(
-      kernel.executable, fe2o3::r26::kKernel, &gpu, &symbol));
+      kernel.executable, fe2o3::r26::kKernelDescriptor, &gpu, &symbol));
   HSA_CHECK(hsa_executable_symbol_get_info(
       symbol, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_OBJECT, &kernel.object));
   HSA_CHECK(hsa_executable_symbol_get_info(
@@ -202,7 +197,8 @@ Kernel load_kernel(const std::vector<char> &code_object, hsa_agent_t gpu) {
       symbol, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_PRIVATE_SEGMENT_SIZE,
       &kernel.private_segment_size));
   if (kernel.object == 0 || kernel.kernarg_size != 16 ||
-      kernel.kernarg_alignment != 8 || kernel.group_segment_size != 0 ||
+      kernel.kernarg_alignment != fe2o3::r26::kHsaKernargAlignment ||
+      kernel.group_segment_size != 0 ||
       kernel.private_segment_size != 0) {
     std::fputs("HSA kernel metadata does not match the frozen R26 ABI\n",
                stderr);

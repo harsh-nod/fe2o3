@@ -27,6 +27,8 @@ constexpr std::size_t kPatternBIterations = kValidatedIterations / 2;
 
 constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v1";
 constexpr char kKernel[] = "inplace_transform";
+constexpr char kKernelDescriptor[] = "inplace_transform.kd";
+constexpr std::uint32_t kHsaKernargAlignment = 16;
 constexpr char kInputASha256[] =
     "ce96f8d88572648c07a6c03d7ce49af52c637af65267645eafdd2193ee6e49b7";
 constexpr char kOutputASha256[] =
