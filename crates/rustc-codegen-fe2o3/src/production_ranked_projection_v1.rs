@@ -4242,6 +4242,8 @@ fn project_rust_bounds_checks(
             .map(|index| index.map(|index| index.value))
             .collect()
     };
+    // Separate MIR `Len` temporaries for one stable slice describe one ranked extent.
+    let mut slice_extents = vec![None; function.locals().len()];
     let mut checks = Vec::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let guard = match block.terminator().kind() {
@@ -4403,6 +4405,35 @@ fn project_rust_bounds_checks(
             *slot = Some(value);
             Ok(value)
         };
+        let prior_extent = *slice_extents.get(slice_local.index() as usize).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a Rust bounds-check slice outside the semantic local table",
+            ),
+        )?;
+        if prior_extent.is_some() {
+            let slice_definition = definitions.get(slice_local.index() as usize).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a Rust bounds-check slice outside the semantic local table",
+                ),
+            )?;
+            let stable = match function.locals()[slice_local.index() as usize].role() {
+                SemanticLocalRoleV1::Argument(_) => slice_definition.count == 0,
+                _ => slice_definition.count == 1,
+            };
+            if !stable {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "repeated Rust bounds checks derive an extent from a mutable slice local",
+                ));
+            }
+        }
+        let index = unknown_for(index_local)?;
+        let extent = if let Some(extent) = prior_extent {
+            extent
+        } else {
+            let extent = unknown_for(length_local)?;
+            slice_extents[slice_local.index() as usize] = Some(extent);
+            extent
+        };
         checks.try_reserve(1).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
                 "Rust bounds-check projection storage cannot be reserved",
@@ -4412,8 +4443,8 @@ fn project_rust_bounds_checks(
             access_block,
             slice_local,
             index_local,
-            index: unknown_for(index_local)?,
-            extent: unknown_for(length_local)?,
+            index,
+            extent,
             must_authorize_access,
         });
     }

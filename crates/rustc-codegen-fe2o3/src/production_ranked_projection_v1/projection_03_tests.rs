@@ -497,6 +497,124 @@
         )
     }
 
+    fn repeated_bounds_check_function(
+        same_slice: bool,
+        redefine_slice: bool,
+    ) -> SemanticFunctionDeclV1 {
+        let primary_slice = SemanticLocalIdV1::from_index(1);
+        let second_slice = if same_slice {
+            primary_slice
+        } else {
+            SemanticLocalIdV1::from_index(9)
+        };
+        let source_slice = SemanticLocalIdV1::from_index(8);
+        let scalar_place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
+        let slice_place = |local| SemanticPlaceV1::new(local, vec![], ARRAY_TYPE).unwrap();
+        let operand = |local| SemanticOperandV1::Copy(scalar_place(local));
+        let assign_slice = |destination| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                slice_place(destination),
+                SemanticRvalueV1::new(
+                    ARRAY_TYPE,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(slice_place(source_slice))),
+                ),
+            )))
+        };
+        let guard_statements = |slice, index, length, condition, value| {
+            vec![
+                statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    scalar_place(index),
+                    SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(value))),
+                ))),
+                statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    scalar_place(length),
+                    SemanticRvalueV1::new(
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Length(slice_place(slice)),
+                    ),
+                ))),
+                statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    scalar_place(condition),
+                    SemanticRvalueV1::new(
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: operand(index),
+                            right: operand(length),
+                        },
+                    ),
+                ))),
+            ]
+        };
+        let mut first = vec![assign_slice(primary_slice)];
+        if !same_slice {
+            first.push(assign_slice(second_slice));
+        }
+        first.extend(guard_statements(
+            primary_slice,
+            SemanticLocalIdV1::from_index(4),
+            SemanticLocalIdV1::from_index(5),
+            SemanticLocalIdV1::from_index(2),
+            0,
+        ));
+        let mut second = Vec::new();
+        if redefine_slice {
+            second.push(assign_slice(primary_slice));
+        }
+        second.extend(guard_statements(
+            second_slice,
+            SemanticLocalIdV1::from_index(7),
+            SemanticLocalIdV1::from_index(6),
+            SemanticLocalIdV1::from_index(3),
+            1,
+        ));
+        projection_function_with_locals(
+            vec![
+                block(
+                    120,
+                    first,
+                    SemanticTerminatorKindV1::Assert {
+                        condition: operand(SemanticLocalIdV1::from_index(2)),
+                        expected: true,
+                        message: SemanticAssertMessageV1::BoundsCheck {
+                            length: operand(SemanticLocalIdV1::from_index(5)),
+                            index: operand(SemanticLocalIdV1::from_index(4)),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(
+                    121,
+                    second,
+                    SemanticTerminatorKindV1::Assert {
+                        condition: operand(SemanticLocalIdV1::from_index(3)),
+                        expected: true,
+                        message: SemanticAssertMessageV1::BoundsCheck {
+                            length: operand(SemanticLocalIdV1::from_index(6)),
+                            index: operand(SemanticLocalIdV1::from_index(7)),
+                        },
+                        target: cfg_edge(SemanticEdgeRoleV1::AssertSuccess, 2),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(122, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(123, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(124, ARRAY_TYPE, SemanticLocalRoleV1::Temporary),
+                local(125, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(126, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(127, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(128, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(129, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(130, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(131, ARRAY_TYPE, SemanticLocalRoleV1::Temporary),
+                local(132, ARRAY_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        )
+    }
+
     fn project_test_bounds_checks(
         function: &SemanticFunctionDeclV1,
         first_argument: usize,
