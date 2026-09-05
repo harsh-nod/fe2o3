@@ -9,9 +9,9 @@ directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
 chunking, R21 runtime scripted-failure-seam, R22 batched directional
 persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
 portable-progress, R25 persistent-compute storage-bridge, R27 persistent
-dispatch-control, R28 persistent-hot-currentness-scope, and R30 bound
-host-content-certificate models. The authenticated runner proves 621
-obligations and rejects 304
+dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
+host-content-certificate, and R31 single-packet/window-refinement models. The
+authenticated runner proves 662 obligations and rejects 307
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1323,6 +1323,62 @@ production runtime refines either finite model.
 | Executable certificate model | **Checked** | Fourteen focused Rust transition tests; no Rust-to-Verus correspondence theorem. |
 | Coupled boundary countermodels | **Rejected** | Three pinned mutated transition bodies fail their named invalidation, precheck-clear, and currentness-before-mismatch postconditions. |
 | SHA-256 correctness, coherent-write truth, DMA/HSA completion or visibility, currentness truth, executable Rust refinement, runtime/KFD/HSA/HIP, firmware, hardware, liveness, parity, or performance | **Not established** | Explicitly outside the R30 proof boundary. |
+
+## R31 single-packet/window refinement
+
+`r31_single_packet_window_refinement_v1.rs` proves 41 obligations for an
+independent finite relation between a bounded R19-shaped single-copy lifecycle
+and the corresponding one-element R22-shaped window lifecycle. The request is
+nonempty, in range at both endpoints, and no larger than
+`0x003f_ffe0` bytes. Projection retains the queue, storage, generation, range,
+direction, certificate, completion, custody, authority, lease, ticket,
+currentness-count, mutation, retirement, digest, and terminal-stage
+coordinates while fixing the normalized window request count to one.
+
+Single and one-element-window transitions are defined independently. Generic
+submit, poll, and promotion theorems establish their lockstep projection, and
+complete H2D and D2H trace theorems compose those steps. Successful publication
+owns exactly one packet, ticket, and lease. The modeled production envelope
+records three directional and one queue operational checks for publication and
+two queue operational checks for a pending or completed poll. These are
+abstract event counts, not observations that Linux or hardware performed the
+checks.
+
+H2D request construction preserves an exact bound host-content certificate.
+D2H destination construction invalidates it; retry after that construction
+remains invalidated, while a rejection before request construction preserves
+the prior certificate. Closing ambiguity conservatively records possible D2H
+host mutation because native publication may already have occurred. Exact
+completion retains direction, byte count, both
+offsets, and packet count one across normalization. Full-H2D promotion evaluates
+opening and closing currentness before certificate mismatch classification.
+Mismatch is retryable without retirement. Either ambiguity retains completion
+and retires nothing in exact stage-specific terminal custody. Success alone
+retires the frontier once and mints compute-ready state carrying the bound
+abstract digest.
+
+The executable R31 model has 16 focused Rust tests. Three pinned standalone
+transition-coupled mutations respectively retain the certificate and deny
+possible host mutation across D2H closing ambiguity, swap completion offsets during normalization, and
+retire completion before closing-currentness classification. Each fails only
+at its named postcondition and imports no positive proof source.
+
+The formal models do not import or prove equivalence to the executable R19 or
+R22 state machines. They also do not represent heap allocation, so the proof
+does not establish an allocation-free fast path. Requests, certificates,
+digests, currentness outcomes, completion observations, and mutation reports
+are contracted mathematical inputs. There is no Rust-to-Verus, source-to-ISA,
+KFD, HSA, HIP, driver, firmware, hardware, progress, liveness, parity, or
+performance refinement.
+
+## R31 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Bounded one-request normalization, independent submit/poll/promotion lockstep, exact packet/ticket/lease cardinality, operational-check event counts, H2D certificate preservation, D2H invalidation, exact completion metadata, ambiguity custody, and success-only retirement | **Proved** | Forty-one obligations in `r31_single_packet_window_refinement_v1.rs`; finite mathematical values and contracted observations only. |
+| Executable single/window model | **Checked** | Sixteen focused Rust transition tests; no Rust-to-Verus correspondence theorem. |
+| Coupled boundary countermodels | **Rejected** | Three pinned mutated transition bodies fail their named invalidation, completion-offset, and promotion-retirement postconditions. |
+| Allocation behavior, currentness/completion truth, executable Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R31 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

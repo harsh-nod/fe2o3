@@ -32,6 +32,7 @@ r25_persistent_compute_storage_bridge_proof="$script_dir/r25_persistent_compute_
 r27_persistent_dispatch_control_proof="$script_dir/r27_persistent_dispatch_control_v1.rs"
 r28_persistent_hot_currentness_scope_proof="$script_dir/r28_persistent_hot_currentness_scope_v1.rs"
 r30_bound_host_content_certificate_proof="$script_dir/r30_bound_host_content_certificate_v1.rs"
+r31_single_packet_window_refinement_proof="$script_dir/r31_single_packet_window_refinement_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -336,6 +337,9 @@ negative_r28_close_without_full_audit="$script_dir/negative/r28_persistent_hot_c
 negative_r30_destination_without_invalidation="$script_dir/negative/r30_bound_host_content_certificate_v1_destination_without_invalidation.rs"
 negative_r30_write_without_precheck_clear="$script_dir/negative/r30_bound_host_content_certificate_v1_write_without_precheck_clear.rs"
 negative_r30_promotion_early_mismatch="$script_dir/negative/r30_bound_host_content_certificate_v1_promotion_early_mismatch.rs"
+negative_r31_completion_offset_substitution="$script_dir/negative/r31_single_packet_window_refinement_v1_completion_offset_substitution.rs"
+negative_r31_d2h_without_invalidation="$script_dir/negative/r31_single_packet_window_refinement_v1_d2h_without_invalidation.rs"
+negative_r31_promotion_early_retirement="$script_dir/negative/r31_single_packet_window_refinement_v1_promotion_early_retirement.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -389,6 +393,7 @@ expected_r25_persistent_compute_storage_bridge=$(read_pin "$pin_dir/R25_PERSISTE
 expected_r27_persistent_dispatch_control=$(read_pin "$pin_dir/R27_PERSISTENT_DISPATCH_CONTROL_SHA256")
 expected_r28_persistent_hot_currentness_scope=$(read_pin "$pin_dir/R28_PERSISTENT_HOT_CURRENTNESS_SCOPE_SHA256")
 expected_r30_bound_host_content_certificate=$(read_pin "$pin_dir/R30_BOUND_HOST_CONTENT_CERTIFICATE_SHA256")
+expected_r31_single_packet_window_refinement=$(read_pin "$pin_dir/R31_SINGLE_PACKET_WINDOW_REFINEMENT_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -693,6 +698,9 @@ expected_negative_r28_close_without_full_audit=$(read_pin "$pin_dir/NEGATIVE_R28
 expected_negative_r30_destination_without_invalidation=$(read_pin "$pin_dir/NEGATIVE_R30_DESTINATION_WITHOUT_INVALIDATION_SHA256")
 expected_negative_r30_write_without_precheck_clear=$(read_pin "$pin_dir/NEGATIVE_R30_WRITE_WITHOUT_PRECHECK_CLEAR_SHA256")
 expected_negative_r30_promotion_early_mismatch=$(read_pin "$pin_dir/NEGATIVE_R30_PROMOTION_EARLY_MISMATCH_SHA256")
+expected_negative_r31_completion_offset_substitution=$(read_pin "$pin_dir/NEGATIVE_R31_COMPLETION_OFFSET_SUBSTITUTION_SHA256")
+expected_negative_r31_d2h_without_invalidation=$(read_pin "$pin_dir/NEGATIVE_R31_D2H_WITHOUT_INVALIDATION_SHA256")
+expected_negative_r31_promotion_early_retirement=$(read_pin "$pin_dir/NEGATIVE_R31_PROMOTION_EARLY_RETIREMENT_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -749,6 +757,7 @@ check_sources() {
     check_digest "$expected_r27_persistent_dispatch_control" "$r27_persistent_dispatch_control_proof"
     check_digest "$expected_r28_persistent_hot_currentness_scope" "$r28_persistent_hot_currentness_scope_proof"
     check_digest "$expected_r30_bound_host_content_certificate" "$r30_bound_host_content_certificate_proof"
+    check_digest "$expected_r31_single_packet_window_refinement" "$r31_single_packet_window_refinement_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1053,6 +1062,9 @@ check_sources() {
     check_digest "$expected_negative_r30_destination_without_invalidation" "$negative_r30_destination_without_invalidation"
     check_digest "$expected_negative_r30_write_without_precheck_clear" "$negative_r30_write_without_precheck_clear"
     check_digest "$expected_negative_r30_promotion_early_mismatch" "$negative_r30_promotion_early_mismatch"
+    check_digest "$expected_negative_r31_completion_offset_substitution" "$negative_r31_completion_offset_substitution"
+    check_digest "$expected_negative_r31_d2h_without_invalidation" "$negative_r31_d2h_without_invalidation"
+    check_digest "$expected_negative_r31_promotion_early_retirement" "$negative_r31_promotion_early_retirement"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1090,6 +1102,7 @@ check_sources
     "$r27_persistent_dispatch_control_proof" \
     "$r28_persistent_hot_currentness_scope_proof" \
     "$r30_bound_host_content_certificate_proof" \
+    "$r31_single_packet_window_refinement_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1390,7 +1403,10 @@ check_sources
     "$negative_r28_close_without_full_audit" \
     "$negative_r30_destination_without_invalidation" \
     "$negative_r30_write_without_precheck_clear" \
-    "$negative_r30_promotion_early_mismatch"
+    "$negative_r30_promotion_early_mismatch" \
+    "$negative_r31_completion_offset_substitution" \
+    "$negative_r31_d2h_without_invalidation" \
+    "$negative_r31_promotion_early_retirement"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1518,6 +1534,7 @@ check_positive "$r25_persistent_compute_storage_bridge_proof" 'verification resu
 check_positive "$r27_persistent_dispatch_control_proof" 'verification results:: 20 verified, 0 errors' r27-persistent-dispatch-control
 check_positive "$r28_persistent_hot_currentness_scope_proof" 'verification results:: 31 verified, 0 errors' r28-persistent-hot-currentness-scope
 check_positive "$r30_bound_host_content_certificate_proof" 'verification results:: 38 verified, 0 errors' r30-bound-host-content-certificate
+check_positive "$r31_single_packet_window_refinement_proof" 'verification results:: 41 verified, 0 errors' r31-single-packet-window-refinement
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1822,13 +1839,16 @@ check_negative "$negative_r28_close_without_full_audit" mutated_close_performs_o
 check_negative "$negative_r30_destination_without_invalidation" mutated_destination_invalidates_before_possible_mutation_v1 r30-destination-without-invalidation
 check_negative "$negative_r30_write_without_precheck_clear" mutated_opening_ambiguity_clears_before_currentness_v1 r30-write-without-precheck-clear
 check_negative "$negative_r30_promotion_early_mismatch" mutated_closing_ambiguity_precedes_certificate_mismatch_v1 r30-promotion-early-mismatch
+check_negative "$negative_r31_completion_offset_substitution" mutated_completion_projection_retains_exact_offsets_v1 r31-completion-offset-substitution
+check_negative "$negative_r31_d2h_without_invalidation" mutated_d2h_closing_ambiguity_invalidates_before_possible_mutation_v1 r31-d2h-without-invalidation
+check_negative "$negative_r31_promotion_early_retirement" mutated_closing_ambiguity_retains_completion_without_retirement_v1 r31-promotion-early-retirement
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 mutations=304'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 mutations=307'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
