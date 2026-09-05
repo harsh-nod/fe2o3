@@ -21,7 +21,8 @@ use fe2o3_runtime_model::{
 use sha2::{Digest, Sha256};
 
 use super::completion::{
-    COMPLETION_SIGNAL_ARENA_BYTES_V1, CompletionPacketTemplateV1, CompletionSignalArenaOwnerV1,
+    COMPLETION_SIGNAL_ARENA_BYTES_V1, CompletionCurrentnessHandoffV1, CompletionPacketTemplateV1,
+    CompletionPollWithCurrentnessHandoffV1, CompletionSignalArenaOwnerV1,
     Gfx942BarrierProbeRecycleObservationV1, Gfx942BarrierProbeV1, Gfx942BarrierProbeWaitFailureV1,
     Gfx942CompletedBarrierProbeV1, Gfx942CompletedBatchV1, Gfx942CompletionBatchV1,
     Gfx942CompletionErrorV1, Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1,
@@ -51,11 +52,11 @@ use super::submit::{
 };
 use super::*;
 use crate::persistent_allocation::{
-    Gfx942PersistentDependencyFrontierV1, Gfx942PersistentDeviceAllocationV1,
-    Gfx942PersistentOperationV1, Gfx942PersistentPreparedV1, Gfx942PersistentQuarantineReasonV1,
-    Gfx942PersistentUseErrorV1, Gfx942PersistentUseLeaseV1, Gfx942PersistentUseRequestV1,
-    cancel_prepared_local_sdma_pair_v1, detach_local_native_pair_for_sdma_v1,
-    quarantine_published_local_sdma_pair_v1,
+    Gfx942PersistentCompletedV1, Gfx942PersistentDependencyFrontierV1,
+    Gfx942PersistentDeviceAllocationV1, Gfx942PersistentOperationV1, Gfx942PersistentPreparedV1,
+    Gfx942PersistentQuarantineReasonV1, Gfx942PersistentUseErrorV1, Gfx942PersistentUseLeaseV1,
+    Gfx942PersistentUseRequestV1, cancel_prepared_local_sdma_pair_v1,
+    detach_local_native_pair_for_sdma_v1, quarantine_published_local_sdma_pair_v1,
 };
 use crate::persistent_compute::{
     Gfx942CompletedPersistentComputeDispatchV1, Gfx942PersistentComputeBindFailureCustodyV1,
@@ -63,7 +64,8 @@ use crate::persistent_compute::{
     Gfx942PersistentComputeCancelFailureV1, Gfx942PersistentComputeCompletedV1,
     Gfx942PersistentComputeDetachFailureV1, Gfx942PersistentComputeDispatchV1,
     Gfx942PersistentComputeEffectV1, Gfx942PersistentComputeExecutionFailureV1,
-    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollFailureV1,
+    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollAndRecycleFailureV1,
+    Gfx942PersistentComputePollAndRecycleV1, Gfx942PersistentComputePollFailureV1,
     Gfx942PersistentComputePollV1, Gfx942PersistentComputeReadyFailureCustodyV1,
     Gfx942PersistentComputeReadyFailureV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
     Gfx942PersistentComputeReadyV1, Gfx942PersistentComputeRecycleFailureV1,
@@ -537,6 +539,15 @@ impl NativeCompletionSignalBackendV1 for LinuxCompletionSignalBackendV1<'_> {
                 &self.exception.shadows,
             )
             .map_err(|_| Gfx942CompletionErrorV1::Currentness)
+    }
+
+    fn observe_one_acquire_in_current_scope(
+        &mut self,
+        slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
+        self.memory
+            .observe_one_aql_completion_signal_in_current_scope(self.signals, slot_index)
+            .map_err(|_| Gfx942CompletionErrorV1::Observation)
     }
 
     fn observe_batch_acquire_in_current_scope(
@@ -2846,6 +2857,75 @@ enum PersistentRetainedControlReplayLoanResolutionV1<Request, Outcome, Error> {
         outcome: Outcome,
         retake_error: Option<Error>,
     },
+}
+
+enum PersistentComputeCompletionObservationV1<Completed> {
+    Pending(Gfx942CompletionBatchV1<1>),
+    Ready(Completed),
+}
+
+struct PersistentComputeCompletedTransitionV1<Completed> {
+    binding: PersistentComputeBindingKeyV1,
+    attachment: PersistentComputeAttachmentV1,
+    completed_use: Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+    generation: u64,
+    completed: Completed,
+}
+
+#[allow(clippy::large_enum_variant)]
+enum PersistentComputePollTransitionV1<Pending, Ready> {
+    Pending(Pending),
+    Ready(Ready),
+}
+
+enum PersistentComputePollAndRecycleTransitionV1<Pending, Recycled, Midpoint> {
+    Pending(Pending),
+    Recycled {
+        recycled: Recycled,
+        completion_observed_at: Midpoint,
+    },
+}
+
+enum PersistentComputePollAndRecycleTransitionFailureV1<PollFailure, RecycleFailure> {
+    Poll(PollFailure),
+    Recycle(RecycleFailure),
+}
+
+fn execute_persistent_compute_poll_and_recycle_v1<
+    Context,
+    Pending,
+    Completed,
+    Recycled,
+    Midpoint,
+    PollFailure,
+    RecycleFailure,
+>(
+    context: &mut Context,
+    poll: impl FnOnce(
+        &mut Context,
+    ) -> Result<PersistentComputePollTransitionV1<Pending, Completed>, PollFailure>,
+    midpoint: impl FnOnce(&mut Context) -> Midpoint,
+    recycle: impl FnOnce(&mut Context, Completed) -> Result<Recycled, RecycleFailure>,
+) -> Result<
+    PersistentComputePollAndRecycleTransitionV1<Pending, Recycled, Midpoint>,
+    PersistentComputePollAndRecycleTransitionFailureV1<PollFailure, RecycleFailure>,
+> {
+    let completed =
+        match poll(context).map_err(PersistentComputePollAndRecycleTransitionFailureV1::Poll)? {
+            PersistentComputePollTransitionV1::Pending(pending) => {
+                return Ok(PersistentComputePollAndRecycleTransitionV1::Pending(
+                    pending,
+                ));
+            }
+            PersistentComputePollTransitionV1::Ready(completed) => completed,
+        };
+    let completion_observed_at = midpoint(context);
+    let recycled = recycle(context, completed)
+        .map_err(PersistentComputePollAndRecycleTransitionFailureV1::Recycle)?;
+    Ok(PersistentComputePollAndRecycleTransitionV1::Recycled {
+        recycled,
+        completion_observed_at,
+    })
 }
 
 fn resolve_persistent_retained_control_replay_loan_v1<Request, Outcome, Error>(
@@ -11060,13 +11140,25 @@ impl ComputeAqlQueueSessionV1 {
         ))
     }
 
-    /// Polls one published persistent-compute dispatch, retaining all custody
-    /// in either returned typestate.
     #[allow(clippy::result_large_err)]
-    pub fn poll_directional_persistent_fixed_dispatch_v1(
+    fn poll_directional_persistent_fixed_dispatch_inner_v1<Completed>(
         &mut self,
         dispatch_receipt: Gfx942PersistentComputeDispatchV1,
-    ) -> Result<Gfx942PersistentComputePollV1, Gfx942PersistentComputePollFailureV1> {
+        observe: impl FnOnce(
+            &mut Self,
+            Gfx942CompletionBatchV1<1>,
+        ) -> Result<
+            PersistentComputeCompletionObservationV1<Completed>,
+            (ComputeAqlQueueSessionErrorV1, Gfx942CompletionBatchV1<1>),
+        >,
+        into_completed: impl FnOnce(Completed) -> Gfx942CompletedBatchV1<1>,
+    ) -> Result<
+        PersistentComputePollTransitionV1<
+            Gfx942PersistentComputeDispatchV1,
+            PersistentComputeCompletedTransitionV1<Completed>,
+        >,
+        Gfx942PersistentComputePollFailureV1,
+    > {
         let binding = dispatch_receipt.binding;
         if binding.queue != self.key {
             return Err(Gfx942PersistentComputePollFailureV1 {
@@ -11152,75 +11244,19 @@ impl ComputeAqlQueueSessionV1 {
                 retained: None,
             });
         }
-        match self.poll_completion_batch_with_progress_retaining(completion) {
-            Ok(Gfx942CompletionPollWithProgressV1::Pending { batch, .. }) => {
+        let completed = match observe(self, completion) {
+            Ok(PersistentComputeCompletionObservationV1::Pending(batch)) => {
                 attachment.state = PersistentComputeUseStateV1::Published(published);
                 self.persistent_compute = Some(attachment);
-                Ok(Gfx942PersistentComputePollV1::Pending(
+                return Ok(PersistentComputePollTransitionV1::Pending(
                     Gfx942PersistentComputeDispatchV1 {
                         binding,
                         batch: wrap_published(batch, generation),
                         thread_affinity: PhantomData,
                     },
-                ))
+                ));
             }
-            Ok(Gfx942CompletionPollWithProgressV1::Ready { completed, .. }) => {
-                let completed = wrap_completed(completed, generation);
-                if self
-                    .dispatch
-                    .as_mut()
-                    .expect("persistent dispatch retained")
-                    .mark_completed(generation)
-                    .is_err()
-                {
-                    let _ = attachment.allocation.owner.quarantine_published(
-                        published,
-                        Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
-                    );
-                    attachment.terminal_custody = Some(
-                        PersistentComputeTerminalNativeCustodyV1::Completed(completed),
-                    );
-                    self.persistent_compute = Some(attachment);
-                    self.poison_terminal();
-                    return Err(Gfx942PersistentComputePollFailureV1 {
-                        error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
-                        recovered: None,
-                        retained: None,
-                    });
-                }
-                match attachment.allocation.owner.complete(published) {
-                    Ok(completed_use) => {
-                        attachment.state = PersistentComputeUseStateV1::Completed(completed_use);
-                        self.persistent_compute = Some(attachment);
-                        Ok(Gfx942PersistentComputePollV1::Ready(
-                            Gfx942CompletedPersistentComputeDispatchV1 {
-                                binding,
-                                completed,
-                                thread_affinity: PhantomData,
-                            },
-                        ))
-                    }
-                    Err(failure) => {
-                        let (_, published) = failure.into_parts();
-                        let _ = attachment.allocation.owner.quarantine_published(
-                            published,
-                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
-                        );
-                        attachment.terminal_custody = Some(
-                            PersistentComputeTerminalNativeCustodyV1::Completed(completed),
-                        );
-                        self.persistent_compute = Some(attachment);
-                        self.poison_terminal();
-                        Err(Gfx942PersistentComputePollFailureV1 {
-                            error: ComputeAqlQueueSessionErrorV1::Contract(
-                                "persistent compute completion ledger transition",
-                            ),
-                            recovered: None,
-                            retained: None,
-                        })
-                    }
-                }
-            }
+            Ok(PersistentComputeCompletionObservationV1::Ready(completed)) => completed,
             Err((error, completion)) => {
                 let batch = wrap_published(completion, generation);
                 let _ = attachment.allocation.owner.quarantine_published(
@@ -11231,12 +11267,253 @@ impl ComputeAqlQueueSessionV1 {
                     Some(PersistentComputeTerminalNativeCustodyV1::Published(batch));
                 self.persistent_compute = Some(attachment);
                 self.poison_terminal();
-                Err(Gfx942PersistentComputePollFailureV1 {
+                return Err(Gfx942PersistentComputePollFailureV1 {
                     error,
                     recovered: None,
                     retained: None,
-                })
+                });
             }
+        };
+        if self
+            .dispatch
+            .as_mut()
+            .expect("persistent dispatch retained")
+            .mark_completed(generation)
+            .is_err()
+        {
+            let completed = wrap_completed(into_completed(completed), generation);
+            let _ = attachment.allocation.owner.quarantine_published(
+                published,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+            );
+            attachment.terminal_custody = Some(
+                PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+            );
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputePollFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                recovered: None,
+                retained: None,
+            });
+        }
+        let completed_use = match attachment.allocation.owner.complete(published) {
+            Ok(completed_use) => completed_use,
+            Err(failure) => {
+                let (_, published) = failure.into_parts();
+                let completed = wrap_completed(into_completed(completed), generation);
+                let _ = attachment.allocation.owner.quarantine_published(
+                    published,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                );
+                attachment.terminal_custody = Some(
+                    PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+                );
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputePollFailureV1 {
+                    error: ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent compute completion ledger transition",
+                    ),
+                    recovered: None,
+                    retained: None,
+                });
+            }
+        };
+        Ok(PersistentComputePollTransitionV1::Ready(
+            PersistentComputeCompletedTransitionV1 {
+                binding,
+                attachment,
+                completed_use,
+                generation,
+                completed,
+            },
+        ))
+    }
+
+    /// Polls one published persistent-compute dispatch, retaining all custody
+    /// in either returned typestate.
+    #[allow(clippy::result_large_err)]
+    pub fn poll_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        dispatch_receipt: Gfx942PersistentComputeDispatchV1,
+    ) -> Result<Gfx942PersistentComputePollV1, Gfx942PersistentComputePollFailureV1> {
+        let transition = self.poll_directional_persistent_fixed_dispatch_inner_v1(
+            dispatch_receipt,
+            |session, completion| {
+                session
+                    .poll_completion_batch_with_progress_retaining(completion)
+                    .map(|poll| match poll {
+                        Gfx942CompletionPollWithProgressV1::Pending { batch, .. } => {
+                            PersistentComputeCompletionObservationV1::Pending(batch)
+                        }
+                        Gfx942CompletionPollWithProgressV1::Ready { completed, .. } => {
+                            PersistentComputeCompletionObservationV1::Ready(completed)
+                        }
+                    })
+            },
+            |completed| completed,
+        )?;
+        match transition {
+            PersistentComputePollTransitionV1::Pending(dispatch) => {
+                Ok(Gfx942PersistentComputePollV1::Pending(dispatch))
+            }
+            PersistentComputePollTransitionV1::Ready(PersistentComputeCompletedTransitionV1 {
+                binding,
+                mut attachment,
+                completed_use,
+                generation,
+                completed,
+            }) => {
+                attachment.state = PersistentComputeUseStateV1::Completed(completed_use);
+                self.persistent_compute = Some(attachment);
+                Ok(Gfx942PersistentComputePollV1::Ready(
+                    Gfx942CompletedPersistentComputeDispatchV1 {
+                        binding,
+                        completed: wrap_completed(completed, generation),
+                        thread_affinity: PhantomData,
+                    },
+                ))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    fn finish_directional_persistent_fixed_dispatch_recycle_inner_v1<Completed>(
+        &mut self,
+        binding: PersistentComputeBindingKeyV1,
+        mut attachment: PersistentComputeAttachmentV1,
+        completed_use: Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        generation: u64,
+        completed: Completed,
+        recycle: impl FnOnce(
+            &mut Self,
+            Completed,
+        ) -> Result<
+            Gfx942CompletionRecycleObservationV1,
+            (ComputeAqlQueueSessionErrorV1, Completed),
+        >,
+        into_completed: impl FnOnce(Completed) -> Gfx942CompletedBatchV1<1>,
+    ) -> Result<Gfx942RecycledPersistentComputeDispatchV1, Gfx942PersistentComputeRecycleFailureV1>
+    {
+        let recycle = match recycle(self, completed) {
+            Ok(recycle) => recycle,
+            Err((error, completed)) => {
+                let completed = wrap_completed(into_completed(completed), generation);
+                let _ = attachment.allocation.owner.quarantine_completed(
+                    completed_use,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                );
+                attachment.terminal_custody = Some(
+                    PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+                );
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                    error,
+                    recovered: None,
+                    retained: None,
+                });
+            }
+        };
+        if self
+            .dispatch
+            .as_mut()
+            .expect("persistent dispatch retained")
+            .mark_recycled(generation)
+            .is_err()
+        {
+            let _ = attachment.allocation.owner.quarantine_completed(
+                completed_use,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+            );
+            attachment.terminal_custody =
+                Some(PersistentComputeTerminalNativeCustodyV1::Recycled(recycle));
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                recovered: None,
+                retained: None,
+            });
+        }
+        attachment.state = PersistentComputeUseStateV1::Recycled(completed_use);
+        self.persistent_compute = Some(attachment);
+        Ok(Gfx942RecycledPersistentComputeDispatchV1 {
+            binding,
+            recycle,
+            thread_affinity: PhantomData,
+        })
+    }
+
+    /// Polls one published persistent-compute dispatch and, on Ready, recycles
+    /// its exact completion signal without reopening the just-closed
+    /// currentness envelope. Pending preserves the ordinary two-check poll.
+    #[allow(clippy::result_large_err)]
+    pub fn poll_and_recycle_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        dispatch_receipt: Gfx942PersistentComputeDispatchV1,
+    ) -> Result<
+        Gfx942PersistentComputePollAndRecycleV1,
+        Gfx942PersistentComputePollAndRecycleFailureV1,
+    > {
+        let transition = execute_persistent_compute_poll_and_recycle_v1(
+            self,
+            |session| {
+                session.poll_directional_persistent_fixed_dispatch_inner_v1(
+                    dispatch_receipt,
+                    |session, completion| {
+                        session
+                            .poll_completion_batch_with_current_handoff_retaining(completion)
+                            .map(|poll| match poll {
+                                CompletionPollWithCurrentnessHandoffV1::Pending {
+                                    batch, ..
+                                } => PersistentComputeCompletionObservationV1::Pending(batch),
+                                CompletionPollWithCurrentnessHandoffV1::Ready {
+                                    handoff, ..
+                                } => PersistentComputeCompletionObservationV1::Ready(handoff),
+                            })
+                    },
+                    CompletionCurrentnessHandoffV1::into_completed,
+                )
+            },
+            |_| Instant::now(),
+            |session, completed| {
+                let PersistentComputeCompletedTransitionV1 {
+                    binding,
+                    attachment,
+                    completed_use,
+                    generation,
+                    completed: handoff,
+                } = completed;
+                session.finish_directional_persistent_fixed_dispatch_recycle_inner_v1(
+                    binding,
+                    attachment,
+                    completed_use,
+                    generation,
+                    handoff,
+                    Self::recycle_completion_current_handoff_retaining,
+                    CompletionCurrentnessHandoffV1::into_completed,
+                )
+            },
+        );
+        match transition {
+            Ok(PersistentComputePollAndRecycleTransitionV1::Pending(dispatch)) => {
+                Ok(Gfx942PersistentComputePollAndRecycleV1::Pending(dispatch))
+            }
+            Ok(PersistentComputePollAndRecycleTransitionV1::Recycled {
+                recycled,
+                completion_observed_at,
+            }) => Ok(Gfx942PersistentComputePollAndRecycleV1::Recycled {
+                recycled,
+                completion_observed_at,
+            }),
+            Err(PersistentComputePollAndRecycleTransitionFailureV1::Poll(failure)) => Err(
+                Gfx942PersistentComputePollAndRecycleFailureV1::Poll(failure),
+            ),
+            Err(PersistentComputePollAndRecycleTransitionFailureV1::Recycle(failure)) => Err(
+                Gfx942PersistentComputePollAndRecycleFailureV1::Recycle(failure),
+            ),
         }
     }
 
@@ -11334,55 +11611,15 @@ impl ComputeAqlQueueSessionV1 {
                 retained: None,
             });
         }
-        match self.recycle_completion_batch_retaining(completion) {
-            Ok(recycle) => {
-                if self
-                    .dispatch
-                    .as_mut()
-                    .expect("persistent dispatch retained")
-                    .mark_recycled(generation)
-                    .is_err()
-                {
-                    let _ = attachment.allocation.owner.quarantine_completed(
-                        completed_use,
-                        Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
-                    );
-                    attachment.terminal_custody =
-                        Some(PersistentComputeTerminalNativeCustodyV1::Recycled(recycle));
-                    self.persistent_compute = Some(attachment);
-                    self.poison_terminal();
-                    return Err(Gfx942PersistentComputeRecycleFailureV1 {
-                        error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
-                        recovered: None,
-                        retained: None,
-                    });
-                }
-                attachment.state = PersistentComputeUseStateV1::Recycled(completed_use);
-                self.persistent_compute = Some(attachment);
-                Ok(Gfx942RecycledPersistentComputeDispatchV1 {
-                    binding,
-                    recycle,
-                    thread_affinity: PhantomData,
-                })
-            }
-            Err((error, completion)) => {
-                let completed = wrap_completed(completion, generation);
-                let _ = attachment.allocation.owner.quarantine_completed(
-                    completed_use,
-                    Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
-                );
-                attachment.terminal_custody = Some(
-                    PersistentComputeTerminalNativeCustodyV1::Completed(completed),
-                );
-                self.persistent_compute = Some(attachment);
-                self.poison_terminal();
-                Err(Gfx942PersistentComputeRecycleFailureV1 {
-                    error,
-                    recovered: None,
-                    retained: None,
-                })
-            }
-        }
+        self.finish_directional_persistent_fixed_dispatch_recycle_inner_v1(
+            binding,
+            attachment,
+            completed_use,
+            generation,
+            completion,
+            Self::recycle_completion_batch_retaining,
+            |completed| completed,
+        )
     }
 
     /// Detaches the recycled batch, restores the exact mapped HBM authority to
@@ -13226,6 +13463,58 @@ impl ComputeAqlQueueSessionV1 {
         result
     }
 
+    #[allow(clippy::result_large_err)]
+    fn poll_completion_batch_with_current_handoff_retaining(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<1>,
+    ) -> Result<
+        CompletionPollWithCurrentnessHandoffV1<1>,
+        (ComputeAqlQueueSessionErrorV1, Gfx942CompletionBatchV1<1>),
+    > {
+        if self.terminal_poisoned {
+            return Err((Gfx942CompletionErrorV1::Poisoned.into(), batch));
+        }
+        let result = {
+            let owner = &mut self.completion_owner;
+            let Some(engine) = self.engine.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine"),
+                    batch,
+                ));
+            };
+            if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("queue is not active"),
+                    batch,
+                ));
+            }
+            let Some(signals) = self.completion_signals.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                    batch,
+                ));
+            };
+            let Some(exception) = self.exception.as_ref() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue exception gate"),
+                    batch,
+                ));
+            };
+            let mut backend = LinuxCompletionSignalBackendV1 {
+                memory: &mut engine.backend.session,
+                signals,
+                exception,
+            };
+            owner
+                .observe_one_with_progress_current_handoff_retaining(batch, &mut backend)
+                .map_err(|(error, batch)| (error.into(), batch))
+        };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result
+    }
+
     fn check_timeout_observation_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
         if self.terminal_poisoned {
             return Err(Gfx942CompletionErrorV1::Currentness);
@@ -13586,6 +13875,61 @@ impl ComputeAqlQueueSessionV1 {
             owner
                 .recycle_retaining(completed, &mut backend)
                 .map_err(|(error, completed)| (error.into(), completed))
+        };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn recycle_completion_current_handoff_retaining<const N: usize>(
+        &mut self,
+        handoff: CompletionCurrentnessHandoffV1<N>,
+    ) -> Result<
+        Gfx942CompletionRecycleObservationV1,
+        (
+            ComputeAqlQueueSessionErrorV1,
+            CompletionCurrentnessHandoffV1<N>,
+        ),
+    > {
+        if self.terminal_poisoned {
+            return Err((Gfx942CompletionErrorV1::Poisoned.into(), handoff));
+        }
+        let result = {
+            let owner = &mut self.completion_owner;
+            let Some(engine) = self.engine.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine"),
+                    handoff,
+                ));
+            };
+            if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("queue is not active"),
+                    handoff,
+                ));
+            }
+            let Some(signals) = self.completion_signals.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                    handoff,
+                ));
+            };
+            let Some(exception) = self.exception.as_ref() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue exception gate"),
+                    handoff,
+                ));
+            };
+            let mut backend = LinuxCompletionSignalBackendV1 {
+                memory: &mut engine.backend.session,
+                signals,
+                exception,
+            };
+            owner
+                .recycle_current_handoff_retaining(handoff, &mut backend)
+                .map_err(|(error, handoff)| (error.into(), handoff))
         };
         if result.is_err() {
             self.poison_terminal();
@@ -18371,6 +18715,510 @@ mod tests {
             .unwrap();
         assert!(ordinary_rebind.contains("validate_live_queue_dispatch_memory"));
         assert!(!ordinary_rebind.contains("validate_persistent_replay_dispatch_memory"));
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CompletionRecycleScriptV1 {
+        Pending,
+        Ready,
+        PublishedStateFailure,
+        DispatchGenerationFailure,
+        CompletionObservationFailure,
+        DispatchCompletionFailure,
+        AllocationCompletionFailure,
+        SignalGenerationFailure,
+        SignalResetFailure,
+        ClosingCurrentnessFailure,
+        RecycleCurrentnessFailure,
+        RecycleInfrastructureFailure,
+        DispatchRecycleFailure,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CompletionRecycleScriptCustodyV1 {
+        Published(u64),
+        Completed(u64),
+        Recycled(u64),
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct CompletionRecycleScriptFailureV1 {
+        point: CompletionRecycleScriptV1,
+        custody: CompletionRecycleScriptCustodyV1,
+    }
+
+    struct CompletionRecycleScriptStateV1 {
+        script: CompletionRecycleScriptV1,
+        trace: Vec<&'static str>,
+    }
+
+    type CompletionRecycleScriptResultV1 = Result<
+        PersistentComputePollAndRecycleTransitionV1<u64, u64, u64>,
+        PersistentComputePollAndRecycleTransitionFailureV1<
+            CompletionRecycleScriptFailureV1,
+            CompletionRecycleScriptFailureV1,
+        >,
+    >;
+
+    fn execute_completion_recycle_script_v1(
+        script: CompletionRecycleScriptV1,
+    ) -> (CompletionRecycleScriptResultV1, Vec<&'static str>) {
+        const CUSTODY_ID: u64 = 73;
+        let mut state = CompletionRecycleScriptStateV1 {
+            script,
+            trace: Vec::new(),
+        };
+        let result = execute_persistent_compute_poll_and_recycle_v1(
+            &mut state,
+            |state| match state.script {
+                CompletionRecycleScriptV1::PublishedStateFailure => {
+                    state.trace.push("published-state-failure");
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Published(CUSTODY_ID),
+                    })
+                }
+                CompletionRecycleScriptV1::DispatchGenerationFailure => {
+                    state.trace.push("dispatch-generation-failure");
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Published(CUSTODY_ID),
+                    })
+                }
+                CompletionRecycleScriptV1::CompletionObservationFailure => {
+                    state
+                        .trace
+                        .extend(["check-a", "acquire", "observation-failure"]);
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Published(CUSTODY_ID),
+                    })
+                }
+                CompletionRecycleScriptV1::DispatchCompletionFailure => {
+                    state.trace.extend([
+                        "check-a",
+                        "acquire",
+                        "check-b",
+                        "dispatch-completion-failure",
+                    ]);
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(CUSTODY_ID),
+                    })
+                }
+                CompletionRecycleScriptV1::AllocationCompletionFailure => {
+                    state.trace.extend([
+                        "check-a",
+                        "acquire",
+                        "check-b",
+                        "dispatch-completed",
+                        "allocation-completion-failure",
+                    ]);
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(CUSTODY_ID),
+                    })
+                }
+                CompletionRecycleScriptV1::Pending => {
+                    state.trace.extend(["check-a", "acquire", "check-b"]);
+                    Ok(PersistentComputePollTransitionV1::Pending(CUSTODY_ID))
+                }
+                _ => {
+                    state.trace.extend([
+                        "check-a",
+                        "acquire",
+                        "check-b",
+                        "dispatch-completed",
+                        "allocation-completed",
+                    ]);
+                    Ok(PersistentComputePollTransitionV1::Ready(CUSTODY_ID))
+                }
+            },
+            |state| {
+                state.trace.push("midpoint");
+                101
+            },
+            |state, completed| match state.script {
+                CompletionRecycleScriptV1::Ready => {
+                    state.trace.extend([
+                        "reset",
+                        "check-c",
+                        "dispatch-recycled",
+                        "attachment-recycled",
+                    ]);
+                    Ok(completed)
+                }
+                CompletionRecycleScriptV1::SignalGenerationFailure => {
+                    state.trace.push("signal-generation-failure");
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(completed),
+                    })
+                }
+                CompletionRecycleScriptV1::SignalResetFailure => {
+                    state.trace.push("reset-failure");
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(completed),
+                    })
+                }
+                CompletionRecycleScriptV1::ClosingCurrentnessFailure => {
+                    state.trace.extend(["reset", "check-c-failure"]);
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(completed),
+                    })
+                }
+                CompletionRecycleScriptV1::RecycleCurrentnessFailure => {
+                    state.trace.push("recycle-currentness-failure");
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(completed),
+                    })
+                }
+                CompletionRecycleScriptV1::RecycleInfrastructureFailure => {
+                    state.trace.push("recycle-infrastructure-failure");
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Completed(completed),
+                    })
+                }
+                CompletionRecycleScriptV1::DispatchRecycleFailure => {
+                    state
+                        .trace
+                        .extend(["reset", "check-c", "dispatch-recycle-failure"]);
+                    Err(CompletionRecycleScriptFailureV1 {
+                        point: state.script,
+                        custody: CompletionRecycleScriptCustodyV1::Recycled(completed),
+                    })
+                }
+                _ => unreachable!("poll-stage scripts never reach recycle"),
+            },
+        );
+        (result, state.trace)
+    }
+
+    #[test]
+    fn persistent_completion_recycle_driver_executes_required_paths() {
+        let (pending, trace) =
+            execute_completion_recycle_script_v1(CompletionRecycleScriptV1::Pending);
+        assert!(matches!(
+            pending,
+            Ok(PersistentComputePollAndRecycleTransitionV1::Pending(73))
+        ));
+        assert_eq!(trace, ["check-a", "acquire", "check-b"]);
+
+        let (ready, trace) = execute_completion_recycle_script_v1(CompletionRecycleScriptV1::Ready);
+        assert!(matches!(
+            ready,
+            Ok(PersistentComputePollAndRecycleTransitionV1::Recycled {
+                recycled: 73,
+                completion_observed_at: 101,
+            })
+        ));
+        assert_eq!(
+            trace,
+            [
+                "check-a",
+                "acquire",
+                "check-b",
+                "dispatch-completed",
+                "allocation-completed",
+                "midpoint",
+                "reset",
+                "check-c",
+                "dispatch-recycled",
+                "attachment-recycled",
+            ]
+        );
+
+        for (script, expected_trace, expected_custody) in [
+            (
+                CompletionRecycleScriptV1::CompletionObservationFailure,
+                &["check-a", "acquire", "observation-failure"][..],
+                CompletionRecycleScriptCustodyV1::Published(73),
+            ),
+            (
+                CompletionRecycleScriptV1::SignalResetFailure,
+                &[
+                    "check-a",
+                    "acquire",
+                    "check-b",
+                    "dispatch-completed",
+                    "allocation-completed",
+                    "midpoint",
+                    "reset-failure",
+                ][..],
+                CompletionRecycleScriptCustodyV1::Completed(73),
+            ),
+            (
+                CompletionRecycleScriptV1::ClosingCurrentnessFailure,
+                &[
+                    "check-a",
+                    "acquire",
+                    "check-b",
+                    "dispatch-completed",
+                    "allocation-completed",
+                    "midpoint",
+                    "reset",
+                    "check-c-failure",
+                ][..],
+                CompletionRecycleScriptCustodyV1::Completed(73),
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchRecycleFailure,
+                &[
+                    "check-a",
+                    "acquire",
+                    "check-b",
+                    "dispatch-completed",
+                    "allocation-completed",
+                    "midpoint",
+                    "reset",
+                    "check-c",
+                    "dispatch-recycle-failure",
+                ][..],
+                CompletionRecycleScriptCustodyV1::Recycled(73),
+            ),
+        ] {
+            let (result, trace) = execute_completion_recycle_script_v1(script);
+            let failure = match result {
+                Err(PersistentComputePollAndRecycleTransitionFailureV1::Poll(failure))
+                    if script == CompletionRecycleScriptV1::CompletionObservationFailure =>
+                {
+                    failure
+                }
+                Err(PersistentComputePollAndRecycleTransitionFailureV1::Recycle(failure)) => {
+                    failure
+                }
+                _ => panic!("script returned the wrong transition"),
+            };
+            assert_eq!(failure.point, script);
+            assert_eq!(failure.custody, expected_custody);
+            assert_eq!(trace, expected_trace);
+        }
+    }
+
+    #[test]
+    fn persistent_completion_recycle_driver_exhausts_failure_custody_matrix() {
+        for (script, expected_custody, poll_failure) in [
+            (
+                CompletionRecycleScriptV1::PublishedStateFailure,
+                CompletionRecycleScriptCustodyV1::Published(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchGenerationFailure,
+                CompletionRecycleScriptCustodyV1::Published(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::CompletionObservationFailure,
+                CompletionRecycleScriptCustodyV1::Published(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchCompletionFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::AllocationCompletionFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::SignalGenerationFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::SignalResetFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::ClosingCurrentnessFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::RecycleCurrentnessFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::RecycleInfrastructureFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchRecycleFailure,
+                CompletionRecycleScriptCustodyV1::Recycled(73),
+                false,
+            ),
+        ] {
+            let (result, _) = execute_completion_recycle_script_v1(script);
+            let (failure, actual_poll_failure) = match result {
+                Err(PersistentComputePollAndRecycleTransitionFailureV1::Poll(failure)) => {
+                    (failure, true)
+                }
+                Err(PersistentComputePollAndRecycleTransitionFailureV1::Recycle(failure)) => {
+                    (failure, false)
+                }
+                Ok(_) => panic!("failure script unexpectedly succeeded"),
+            };
+            assert_eq!(failure.point, script);
+            assert_eq!(failure.custody, expected_custody);
+            assert_eq!(actual_poll_failure, poll_failure);
+        }
+    }
+
+    #[test]
+    fn persistent_completion_recycle_fused_route_has_one_ordered_handoff() {
+        let production = include_str!("queue_live.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let fused = production
+            .split("pub fn poll_and_recycle_directional_persistent_fixed_dispatch_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn recycle_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        assert_eq!(
+            fused
+                .matches("poll_completion_batch_with_current_handoff_retaining")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fused
+                .matches("finish_directional_persistent_fixed_dispatch_recycle_inner_v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fused
+                .matches("Self::recycle_completion_current_handoff_retaining")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fused
+                .matches("execute_persistent_compute_poll_and_recycle_v1")
+                .count(),
+            1
+        );
+        assert!(!fused.contains("recycle_completion_batch_retaining"));
+        assert!(!fused.contains("Vec<"));
+        assert!(!fused.contains("Box<"));
+        assert!(!fused.contains("dyn "));
+
+        let shared_poll = production
+            .split("fn poll_directional_persistent_fixed_dispatch_inner_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn poll_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        let preflight = shared_poll.find("let generation_is_current").unwrap();
+        let observe = shared_poll
+            .find("let completed = match observe(self")
+            .unwrap();
+        let dispatch_completed = shared_poll.find(".mark_completed(generation)").unwrap();
+        let allocation_completed = shared_poll
+            .find("attachment.allocation.owner.complete(published)")
+            .unwrap();
+        assert!(preflight < observe);
+        assert!(observe < dispatch_completed);
+        assert!(dispatch_completed < allocation_completed);
+
+        let driver = production
+            .split("fn execute_persistent_compute_poll_and_recycle_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn resolve_persistent_retained_control_replay_loan_v1")
+            .next()
+            .unwrap();
+        let driver_poll = driver.find("let completed").unwrap();
+        let midpoint = driver.find("let completion_observed_at").unwrap();
+        let driver_recycle = driver.find("let recycled = recycle").unwrap();
+        assert!(driver_poll < midpoint);
+        assert!(midpoint < driver_recycle);
+
+        let shared_recycle = production
+            .split("fn finish_directional_persistent_fixed_dispatch_recycle_inner_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn poll_and_recycle_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        let native_recycle = shared_recycle
+            .find("let recycle = match recycle(self")
+            .unwrap();
+        let dispatch_recycled = shared_recycle.find(".mark_recycled(generation)").unwrap();
+        let attachment_recycled = shared_recycle
+            .find("attachment.state = PersistentComputeUseStateV1::Recycled")
+            .unwrap();
+        assert!(native_recycle < dispatch_recycled);
+        assert!(dispatch_recycled < attachment_recycled);
+
+        assert!(!production.contains("PersistentCompletionRecycleFailurePointV1"));
+        assert!(!production.contains("persistent_completion_recycle_failure_stage_v1"));
+        assert!(!production.contains("persistent_completion_recycle_terminal_custody_v1"));
+        assert_eq!(
+            shared_poll
+                .matches("PersistentComputeTerminalNativeCustodyV1::Published")
+                .count(),
+            3
+        );
+        assert_eq!(
+            shared_poll
+                .matches("PersistentComputeTerminalNativeCustodyV1::Completed")
+                .count(),
+            2
+        );
+        assert_eq!(
+            shared_recycle
+                .matches("PersistentComputeTerminalNativeCustodyV1::Completed")
+                .count(),
+            1
+        );
+        assert_eq!(
+            shared_recycle
+                .matches("PersistentComputeTerminalNativeCustodyV1::Recycled")
+                .count(),
+            1
+        );
+
+        let split_poll = production
+            .split("pub fn poll_directional_persistent_fixed_dispatch_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn finish_directional_persistent_fixed_dispatch_recycle_inner_v1")
+            .next()
+            .unwrap();
+        assert_eq!(
+            split_poll
+                .matches("poll_directional_persistent_fixed_dispatch_inner_v1")
+                .count(),
+            1
+        );
+        let split_recycle = production
+            .split("pub fn recycle_directional_persistent_fixed_dispatch_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn detach_recycled_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        assert_eq!(
+            split_recycle
+                .matches("finish_directional_persistent_fixed_dispatch_recycle_inner_v1")
+                .count(),
+            1
+        );
     }
 
     #[test]

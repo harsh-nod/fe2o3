@@ -38,15 +38,16 @@ use fe2o3_kfd::{
     Gfx942FixedDispatchPacketV1, Gfx942NativeXgmiSdmaQueueV1,
     Gfx942PersistentComputeBindFailureCustodyV1, Gfx942PersistentComputeBindTerminalCustodyV1,
     Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeEffectV1,
-    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollV1,
-    Gfx942PersistentComputeReadyTerminalCustodyV1, Gfx942PersistentComputeTerminalCustodyV1,
-    Gfx942PersistentComputeTransitionFailureCustodyV1, Gfx942PersistentSdmaDirectionV1,
-    Gfx942PreparedPersistentComputeDispatchV1, Gfx942RecycledDispatchWriteRequestV1,
-    Gfx942RecycledPersistentComputeDispatchV1, Gfx942SdmaBufferV1, Gfx942SdmaCopyTicketV1,
-    Gfx942SdmaMemoryPoolObservationV1, Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiCopyFailureV1,
-    Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1, Gfx942XgmiMappedDeviceMemoryV1,
-    Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
-    OpenedKfd, SharedGttMemorySessionV1,
+    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollAndRecycleFailureV1,
+    Gfx942PersistentComputePollAndRecycleV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
+    Gfx942PersistentComputeTerminalCustodyV1, Gfx942PersistentComputeTransitionFailureCustodyV1,
+    Gfx942PersistentSdmaDirectionV1, Gfx942PreparedPersistentComputeDispatchV1,
+    Gfx942RecycledDispatchWriteRequestV1, Gfx942RecycledPersistentComputeDispatchV1,
+    Gfx942SdmaBufferV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaMemoryPoolObservationV1,
+    Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1,
+    Gfx942XgmiMapRecoveryV1, Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiSdmaCopyRequestV1,
+    Gfx942XgmiUnmapRecoveryV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd,
+    SharedGttMemorySessionV1,
 };
 use fe2o3_profiler_protocol::{
     KfdProfileAccessV1, KfdProfileAtomicContractV1, KfdProfileAtomicOperationV1,
@@ -5112,10 +5113,10 @@ impl KfdRuntimeBackendV1 {
                         .queue
                         .as_mut()
                         .expect("persistent submission retains its queue")
-                        .poll_directional_persistent_fixed_dispatch_v1(dispatch);
+                        .poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch);
                     let poll = match poll {
                         Ok(poll) => poll,
-                        Err(failure) => {
+                        Err(Gfx942PersistentComputePollAndRecycleFailureV1::Poll(failure)) => {
                             let detail = failure.error().to_string();
                             let (_, custody) = failure.into_parts();
                             return match custody {
@@ -5143,9 +5144,37 @@ impl KfdRuntimeBackendV1 {
                                 }
                             };
                         }
+                        Err(Gfx942PersistentComputePollAndRecycleFailureV1::Recycle(failure)) => {
+                            let detail = failure.error().to_string();
+                            let (_, custody) = failure.into_parts();
+                            return match custody {
+                                Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(
+                                    completed,
+                                ) => {
+                                    backend.retain_terminal_sdma_custody_v1(
+                                        KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeCompleted(
+                                            completed,
+                                        ),
+                                    );
+                                    Err(backend.terminal_error(format!(
+                                        "KFD persistent-compute completion recycle returned foreign retryable custody: {detail}"
+                                    )))
+                                }
+                                Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(
+                                    custody,
+                                ) => {
+                                    backend.retain_terminal_sdma_custody_v1(
+                                        KfdRuntimeTerminalSdmaCustodyV1::PersistentCompute(custody),
+                                    );
+                                    Err(backend.terminal_error(format!(
+                                        "KFD persistent-compute completion recycle: {detail}"
+                                    )))
+                                }
+                            };
+                        }
                     };
                     match poll {
-                        Gfx942PersistentComputePollV1::Pending(dispatch) => {
+                        Gfx942PersistentComputePollAndRecycleV1::Pending(dispatch) => {
                             active.execution = Some(ActiveComputeExecutionV1::Persistent {
                                 allocation,
                                 access,
@@ -5154,10 +5183,22 @@ impl KfdRuntimeBackendV1 {
                             backend.active = Some(active);
                             Ok(BackendPollV1::Pending)
                         }
-                        Gfx942PersistentComputePollV1::Ready(completed) => {
-                            active.performance.publish_to_completion = active.published_at.elapsed();
-                            backend.finish_persistent_full_range_completed_v1(
-                                active, allocation, access, completed,
+                        Gfx942PersistentComputePollAndRecycleV1::Recycled {
+                            recycled,
+                            completion_observed_at,
+                        } => {
+                            active.performance.publish_to_completion = completion_observed_at
+                                .saturating_duration_since(active.published_at);
+                            let completion_signal_recycle = completion_observed_at.elapsed();
+                            active.performance.completion_signal_recycle +=
+                                completion_signal_recycle;
+                            backend.finish_persistent_full_range_recycled_v1(
+                                active,
+                                allocation,
+                                access,
+                                recycled,
+                                completion_observed_at,
+                                completion_signal_recycle,
                             )
                         }
                     }
@@ -6632,58 +6673,6 @@ impl KfdRuntimeBackendV1 {
         }));
         active.execution = None;
         Ok(status)
-    }
-
-    fn finish_persistent_full_range_completed_v1(
-        &mut self,
-        mut active: ActiveSubmissionV1,
-        allocation: u64,
-        access: RuntimeAccessV1,
-        completed: Gfx942CompletedPersistentComputeDispatchV1,
-    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        let recycle_started = Instant::now();
-        let recycle = self
-            .queue
-            .as_mut()
-            .expect("persistent completion retains its queue")
-            .recycle_directional_persistent_fixed_dispatch_v1(completed);
-        match recycle {
-            Ok(recycled) => {
-                let completion_signal_recycle = recycle_started.elapsed();
-                active.performance.completion_signal_recycle += completion_signal_recycle;
-                self.finish_persistent_full_range_recycled_v1(
-                    active,
-                    allocation,
-                    access,
-                    recycled,
-                    recycle_started,
-                    completion_signal_recycle,
-                )
-            }
-            Err(failure) => {
-                let detail = failure.error().to_string();
-                let (_, custody) = failure.into_parts();
-                active.performance.completion_signal_recycle += recycle_started.elapsed();
-                match custody {
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(completed) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeCompleted(completed),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion recycle returned foreign retryable custody: {detail}"
-                        )))
-                    }
-                    Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(custody) => {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::PersistentCompute(custody),
-                        );
-                        Err(self.terminal_error(format!(
-                            "KFD persistent-compute completion recycle: {detail}"
-                        )))
-                    }
-                }
-            }
-        }
     }
 
     fn finish_persistent_full_range_recycled_v1(
@@ -15196,6 +15185,8 @@ mod tests {
 
     #[test]
     fn r26_measured_copies_route_through_fused_async_single_submit() {
+        let source = include_str!("kfd_backend.rs");
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
         let benchmark = include_str!("../examples/gfx942-runtime-r26-inplace-benchmark.rs");
         let measured_copy = benchmark
             .split("fn run_copy_v1(")
@@ -15207,6 +15198,16 @@ mod tests {
         assert!(measured_copy.contains(".copy_async(stream, source, destination, &[])"));
         assert!(measured_copy.contains("wait_for_copy_v1("));
         assert!(!measured_copy.contains("execute_synchronous_directional_sdma_v1"));
+
+        let measured_compute = benchmark
+            .split("fn run_compute_v1(")
+            .nth(1)
+            .unwrap()
+            .split("fn observe_launch_timing_v1(")
+            .next()
+            .unwrap();
+        assert_eq!(measured_compute.matches(".launch(").count(), 1);
+        assert_eq!(measured_compute.matches(".wait(").count(), 1);
 
         let iteration = benchmark
             .split("fn iteration(")
@@ -15253,6 +15254,43 @@ mod tests {
         assert!(fused_async.contains("prepare_admitted_directional_persistent_sdma_request_v1"));
         assert!(fused_async.contains("handoff.publish(owner, memory)"));
         assert!(!fused_async.contains("wait_for_in_current_scope"));
+
+        assert_eq!(
+            production
+                .matches(".poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            production
+                .matches(".poll_directional_persistent_fixed_dispatch_v1(dispatch)")
+                .count(),
+            0
+        );
+        assert_eq!(
+            production
+                .matches(".recycle_directional_persistent_fixed_dispatch_v1(completed)")
+                .count(),
+            0
+        );
+        let persistent_completion = production
+            .split(".poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch)")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]\n                ActiveComputeExecutionV1::ScriptedPersistent")
+            .next()
+            .unwrap();
+        let midpoint = persistent_completion
+            .find(".saturating_duration_since(active.published_at)")
+            .unwrap();
+        let recycle = persistent_completion
+            .find("completion_signal_recycle = completion_observed_at.elapsed()")
+            .unwrap();
+        let detach = persistent_completion
+            .find("finish_persistent_full_range_recycled_v1")
+            .unwrap();
+        assert!(midpoint < recycle);
+        assert!(recycle < detach);
     }
 
     fn scripted_submit_step_v1(

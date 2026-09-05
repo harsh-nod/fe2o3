@@ -458,6 +458,32 @@ pub enum Gfx942CompletionPollWithProgressV1<const N: usize> {
     },
 }
 
+/// Crate-private, move-only proof that one exact completed batch was observed
+/// inside a successful currentness envelope. It may only be consumed by the
+/// immediate recycle continuation; public callers never receive this proof.
+#[must_use = "the current completion handoff must be recycled or retained as completed custody"]
+#[derive(Debug)]
+pub(super) struct CompletionCurrentnessHandoffV1<const N: usize> {
+    completed: Gfx942CompletedBatchV1<N>,
+}
+
+pub(super) enum CompletionPollWithCurrentnessHandoffV1<const N: usize> {
+    Pending {
+        batch: Gfx942CompletionBatchV1<N>,
+        progress: Gfx942CompletionProgressV1,
+    },
+    Ready {
+        handoff: CompletionCurrentnessHandoffV1<N>,
+        progress: Gfx942CompletionProgressV1,
+    },
+}
+
+impl<const N: usize> CompletionCurrentnessHandoffV1<N> {
+    pub(super) fn into_completed(self) -> Gfx942CompletedBatchV1<N> {
+        self.completed
+    }
+}
+
 /// Addressless completion-signal state retained in a terminal timeout snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gfx942TimeoutSignalObservationV1 {
@@ -641,6 +667,10 @@ impl std::error::Error for Gfx942CompletionErrorV1 {}
 
 pub(super) trait NativeCompletionSignalBackendV1 {
     fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1>;
+    fn observe_one_acquire_in_current_scope(
+        &mut self,
+        slot_index: u32,
+    ) -> Result<AqlCompletionObservationV1, Gfx942CompletionErrorV1>;
     fn observe_batch_acquire_in_current_scope(
         &mut self,
         slot_indices: &[u32],
@@ -654,6 +684,16 @@ pub(super) trait NativeCompletionSignalBackendV1 {
         let observations = self.observe_batch_acquire_in_current_scope(slot_indices)?;
         self.check_currentness()?;
         Ok(observations)
+    }
+
+    fn observe_one_acquire(
+        &mut self,
+        slot_index: u32,
+    ) -> Result<AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
+        self.check_currentness()?;
+        let observation = self.observe_one_acquire_in_current_scope(slot_index)?;
+        self.check_currentness()?;
+        Ok(observation)
     }
 
     fn reset_pending_release(&mut self, slot_index: u32) -> Result<(), Gfx942CompletionErrorV1>;
@@ -1108,10 +1148,33 @@ impl CompletionSignalArenaOwnerV1 {
         Gfx942CompletionPollWithProgressV1<N>,
         (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<N>),
     > {
-        if let Err(error) = self.require_ready() {
-            return Err((error, batch));
+        match self.observe_once_with_progress_current_handoff_retaining(batch, backend) {
+            Ok(CompletionPollWithCurrentnessHandoffV1::Pending { batch, progress }) => {
+                Ok(Gfx942CompletionPollWithProgressV1::Pending { batch, progress })
+            }
+            Ok(CompletionPollWithCurrentnessHandoffV1::Ready { handoff, progress }) => {
+                Ok(Gfx942CompletionPollWithProgressV1::Ready {
+                    completed: handoff.into_completed(),
+                    progress,
+                })
+            }
+            Err(failure) => Err(failure),
         }
-        if let Err(error) = self.validate_published(&batch.retention) {
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_once_with_progress_current_handoff_retaining<
+        const N: usize,
+        B: NativeCompletionSignalBackendV1,
+    >(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+        backend: &mut B,
+    ) -> Result<
+        CompletionPollWithCurrentnessHandoffV1<N>,
+        (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<N>),
+    > {
+        if let Err(error) = self.validate_observation_preflight(&batch) {
             return Err((error, batch));
         }
         let slot_indices: Vec<u32> = batch
@@ -1121,8 +1184,8 @@ impl CompletionSignalArenaOwnerV1 {
             .map(|slot| slot.index)
             .collect();
         let observations = match backend.observe_batch_acquire(&slot_indices) {
-            Ok(observations) if observations.len() == N => observations,
-            Ok(_) | Err(Gfx942CompletionErrorV1::Observation) => {
+            Ok(observations) => observations,
+            Err(Gfx942CompletionErrorV1::Observation) => {
                 self.phase = CompletionOwnerPhaseV1::Poisoned;
                 return Err((Gfx942CompletionErrorV1::Observation, batch));
             }
@@ -1135,12 +1198,42 @@ impl CompletionSignalArenaOwnerV1 {
                 return Err((Gfx942CompletionErrorV1::Observation, batch));
             }
         };
+        self.classify_completion_observations(batch, observations)
+    }
+
+    fn validate_observation_preflight<const N: usize>(
+        &self,
+        batch: &Gfx942CompletionBatchV1<N>,
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        self.require_ready()?;
+        self.validate_published(&batch.retention)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn classify_completion_observations<const N: usize, I>(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+        observations: I,
+    ) -> Result<
+        CompletionPollWithCurrentnessHandoffV1<N>,
+        (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<N>),
+    >
+    where
+        I: IntoIterator<Item = AqlCompletionObservationV1>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let mut observations = observations.into_iter();
+        if observations.len() != N {
+            self.phase = CompletionOwnerPhaseV1::Poisoned;
+            return Err((Gfx942CompletionErrorV1::Observation, batch));
+        }
         let mut completed_count = 0_u16;
         let mut pending_count = 0_u16;
         let mut first_pending_batch_index = None;
-        for (batch_index, (slot, observation)) in
-            batch.retention.slots.iter().zip(observations).enumerate()
-        {
+        for (batch_index, slot) in batch.retention.slots.iter().enumerate() {
+            let observation = observations
+                .next()
+                .expect("exact completion observation cardinality checked");
             match observation {
                 AqlCompletionObservationV1::Pending => {
                     pending_count += 1;
@@ -1161,6 +1254,7 @@ impl CompletionSignalArenaOwnerV1 {
                 }
             }
         }
+        debug_assert!(observations.next().is_none());
         let progress = Gfx942CompletionProgressV1 {
             packet_count: N as u16,
             completed_count,
@@ -1168,18 +1262,110 @@ impl CompletionSignalArenaOwnerV1 {
             first_pending_batch_index,
         };
         if pending_count != 0 {
-            return Ok(Gfx942CompletionPollWithProgressV1::Pending { batch, progress });
+            return Ok(CompletionPollWithCurrentnessHandoffV1::Pending { batch, progress });
         }
         for slot in batch.retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Completed {
                 batch_id: batch.retention.batch_id,
             };
         }
-        Ok(Gfx942CompletionPollWithProgressV1::Ready {
-            completed: Gfx942CompletedBatchV1 {
-                retention: batch.retention,
+        Ok(CompletionPollWithCurrentnessHandoffV1::Ready {
+            handoff: CompletionCurrentnessHandoffV1 {
+                completed: Gfx942CompletedBatchV1 {
+                    retention: batch.retention,
+                },
             },
             progress,
+        })
+    }
+
+    /// One-packet specialization used by persistent full-range compute. It
+    /// preserves the exact generic completion semantics without constructing
+    /// either a slot-index or observation `Vec` on the hot path.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_one_with_progress_current_handoff_retaining<
+        B: NativeCompletionSignalBackendV1,
+    >(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<1>,
+        backend: &mut B,
+    ) -> Result<
+        CompletionPollWithCurrentnessHandoffV1<1>,
+        (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<1>),
+    > {
+        if let Err(error) = self.validate_observation_preflight(&batch) {
+            return Err((error, batch));
+        }
+        let observation = match backend.observe_one_acquire(batch.retention.slots[0].index) {
+            Ok(observation) => observation,
+            Err(Gfx942CompletionErrorV1::Currentness) => {
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((Gfx942CompletionErrorV1::Currentness, batch));
+            }
+            Err(_) => {
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((Gfx942CompletionErrorV1::Observation, batch));
+            }
+        };
+        self.classify_completion_observations(batch, core::iter::once(observation))
+    }
+
+    /// Recycles a batch whose exact completion and closing currentness check
+    /// immediately precede this call in one private queue orchestration. The
+    /// handoff replaces only recycle's duplicate opening currentness check.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn recycle_current_handoff_retaining<
+        const N: usize,
+        B: NativeCompletionSignalBackendV1,
+    >(
+        &mut self,
+        handoff: CompletionCurrentnessHandoffV1<N>,
+        backend: &mut B,
+    ) -> Result<
+        Gfx942CompletionRecycleObservationV1,
+        (Gfx942CompletionErrorV1, CompletionCurrentnessHandoffV1<N>),
+    > {
+        let CompletionCurrentnessHandoffV1 { completed } = handoff;
+        if let Err(error) = self.require_ready() {
+            return Err((error, CompletionCurrentnessHandoffV1 { completed }));
+        }
+        if let Err(error) = self.validate_completed(&completed.retention) {
+            return Err((error, CompletionCurrentnessHandoffV1 { completed }));
+        }
+        if completed.retention.slots.iter().any(|slot| {
+            self.slots[slot.index as usize]
+                .generation
+                .checked_add(1)
+                .is_none()
+        }) {
+            self.phase = CompletionOwnerPhaseV1::Poisoned;
+            return Err((
+                Gfx942CompletionErrorV1::SignalGenerationExhausted,
+                CompletionCurrentnessHandoffV1 { completed },
+            ));
+        }
+        for slot in completed.retention.slots.iter() {
+            if backend.reset_pending_release(slot.index).is_err() {
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((
+                    Gfx942CompletionErrorV1::Recycle,
+                    CompletionCurrentnessHandoffV1 { completed },
+                ));
+            }
+        }
+        if let Err(error) = self.checked_currentness(backend) {
+            // A successful reset cannot be authenticated after currentness is
+            // lost. Retain Completed custody and poison rather than claiming
+            // that the signal slot is safely reusable.
+            return Err((error, CompletionCurrentnessHandoffV1 { completed }));
+        }
+        for slot in completed.retention.slots.iter() {
+            let record = &mut self.slots[slot.index as usize];
+            record.generation += 1;
+            record.phase = CompletionSlotPhaseV1::Available;
+        }
+        Ok(Gfx942CompletionRecycleObservationV1 {
+            packet_count: N as u16,
         })
     }
 
@@ -1511,10 +1697,12 @@ mod tests {
 
     struct MockBackend {
         values: [i64; COMPLETION_SIGNAL_CAPACITY_V1],
+        trace: Vec<&'static str>,
         currentness_calls: usize,
         fail_currentness_at: Option<usize>,
         observe_calls: usize,
         fail_observe_at: Option<usize>,
+        extra_batch_observation: Option<AqlCompletionObservationV1>,
         reset_calls: usize,
         fail_reset_at: Option<usize>,
     }
@@ -1574,10 +1762,12 @@ mod tests {
         fn pending() -> Self {
             Self {
                 values: [AMD_SIGNAL_VALUE_PENDING_V1; COMPLETION_SIGNAL_CAPACITY_V1],
+                trace: Vec::new(),
                 currentness_calls: 0,
                 fail_currentness_at: None,
                 observe_calls: 0,
                 fail_observe_at: None,
+                extra_batch_observation: None,
                 reset_calls: 0,
                 fail_reset_at: None,
             }
@@ -1586,6 +1776,7 @@ mod tests {
 
     impl NativeCompletionSignalBackendV1 for MockBackend {
         fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
+            self.trace.push("currentness");
             self.currentness_calls += 1;
             if self.fail_currentness_at == Some(self.currentness_calls) {
                 Err(Gfx942CompletionErrorV1::Currentness)
@@ -1594,10 +1785,25 @@ mod tests {
             }
         }
 
+        fn observe_one_acquire_in_current_scope(
+            &mut self,
+            slot_index: u32,
+        ) -> Result<AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
+            self.trace.push("acquire");
+            self.observe_calls += 1;
+            if self.fail_observe_at == Some(self.observe_calls) {
+                return Err(Gfx942CompletionErrorV1::Observation);
+            }
+            Ok(classify_acquired_completion_value_v1(
+                self.values[slot_index as usize],
+            ))
+        }
+
         fn observe_batch_acquire_in_current_scope(
             &mut self,
             slot_indices: &[u32],
         ) -> Result<Vec<AqlCompletionObservationV1>, Gfx942CompletionErrorV1> {
+            self.trace.push("acquire");
             let mut observations = Vec::with_capacity(slot_indices.len());
             for &slot_index in slot_indices {
                 self.observe_calls += 1;
@@ -1608,6 +1814,7 @@ mod tests {
                     self.values[slot_index as usize],
                 ));
             }
+            observations.extend(self.extra_batch_observation);
             Ok(observations)
         }
 
@@ -1615,6 +1822,7 @@ mod tests {
             &mut self,
             slot_index: u32,
         ) -> Result<(), Gfx942CompletionErrorV1> {
+            self.trace.push("reset");
             self.reset_calls += 1;
             if self.fail_reset_at == Some(self.reset_calls) {
                 return Err(Gfx942CompletionErrorV1::Recycle);
@@ -2096,6 +2304,214 @@ mod tests {
     }
 
     #[test]
+    fn ready_currentness_handoff_removes_exactly_one_recycle_opening_check() {
+        let mut fused_owner = owner();
+        let fused_batch = publish(&mut fused_owner, [template(0)]);
+        let mut fused_backend = MockBackend::pending();
+        fused_backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        let handoff = match fused_owner
+            .observe_one_with_progress_current_handoff_retaining(fused_batch, &mut fused_backend)
+            .unwrap()
+        {
+            CompletionPollWithCurrentnessHandoffV1::Ready { handoff, progress } => {
+                assert_eq!(progress.completed_count(), 1);
+                handoff
+            }
+            CompletionPollWithCurrentnessHandoffV1::Pending { .. } => {
+                panic!("completed batch remained pending")
+            }
+        };
+        fused_backend.trace.push("dispatch-completed");
+        fused_backend.trace.push("allocation-completed");
+        let recycled = fused_owner
+            .recycle_current_handoff_retaining(handoff, &mut fused_backend)
+            .unwrap();
+        fused_backend.trace.push("dispatch-recycled");
+        fused_backend.trace.push("attachment-recycled");
+        assert_eq!(recycled.packet_count(), 1);
+        assert_eq!(
+            fused_backend.trace,
+            [
+                "currentness",
+                "acquire",
+                "currentness",
+                "dispatch-completed",
+                "allocation-completed",
+                "reset",
+                "currentness",
+                "dispatch-recycled",
+                "attachment-recycled",
+            ]
+        );
+        assert_eq!(fused_backend.currentness_calls, 3);
+        assert_eq!(fused_backend.observe_calls, 1);
+        assert_eq!(fused_backend.reset_calls, 1);
+        fused_owner.ensure_releasable().unwrap();
+
+        let mut split_owner = owner();
+        let split_batch = publish(&mut split_owner, [template(0)]);
+        let mut split_backend = MockBackend::pending();
+        split_backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+        let completed = match split_owner
+            .observe_once_with_progress_retaining(split_batch, &mut split_backend)
+            .unwrap()
+        {
+            Gfx942CompletionPollWithProgressV1::Ready { completed, .. } => completed,
+            Gfx942CompletionPollWithProgressV1::Pending { .. } => {
+                panic!("completed split batch remained pending")
+            }
+        };
+        split_owner
+            .recycle_retaining(completed, &mut split_backend)
+            .unwrap();
+        assert_eq!(split_backend.currentness_calls, 4);
+        assert_eq!(split_backend.observe_calls, 1);
+        assert_eq!(split_backend.reset_calls, 1);
+    }
+
+    #[test]
+    fn pending_currentness_handoff_preserves_the_two_check_no_reset_path() {
+        let mut owner = owner();
+        let batch = publish(&mut owner, [template(0)]);
+        let mut backend = MockBackend::pending();
+        let pending = owner
+            .observe_one_with_progress_current_handoff_retaining(batch, &mut backend)
+            .unwrap();
+        assert!(matches!(
+            pending,
+            CompletionPollWithCurrentnessHandoffV1::Pending { .. }
+        ));
+        assert_eq!(backend.trace, ["currentness", "acquire", "currentness"]);
+        assert_eq!(backend.currentness_calls, 2);
+        assert_eq!(backend.observe_calls, 1);
+        assert_eq!(backend.reset_calls, 0);
+    }
+
+    #[test]
+    fn currentness_handoff_failures_never_report_false_recycle() {
+        for fail_currentness_at in [1_usize, 2] {
+            let mut owner = owner();
+            let batch = publish(&mut owner, [template(0)]);
+            let mut backend = MockBackend::pending();
+            backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+            backend.fail_currentness_at = Some(fail_currentness_at);
+            assert!(matches!(
+                owner.observe_one_with_progress_current_handoff_retaining(batch, &mut backend),
+                Err((Gfx942CompletionErrorV1::Currentness, _))
+            ));
+            assert_eq!(backend.reset_calls, 0);
+            assert!(matches!(
+                owner.ensure_releasable(),
+                Err(Gfx942CompletionErrorV1::Poisoned)
+            ));
+        }
+
+        for (fail_reset_at, fail_currentness_at, expected, expected_trace) in [
+            (
+                Some(1_usize),
+                None,
+                Gfx942CompletionErrorV1::Recycle,
+                &["currentness", "acquire", "currentness", "reset"][..],
+            ),
+            (
+                None,
+                Some(3_usize),
+                Gfx942CompletionErrorV1::Currentness,
+                &[
+                    "currentness",
+                    "acquire",
+                    "currentness",
+                    "reset",
+                    "currentness",
+                ][..],
+            ),
+        ] {
+            let mut owner = owner();
+            let batch = publish(&mut owner, [template(0)]);
+            let mut backend = MockBackend::pending();
+            backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+            let handoff = match owner
+                .observe_one_with_progress_current_handoff_retaining(batch, &mut backend)
+                .unwrap()
+            {
+                CompletionPollWithCurrentnessHandoffV1::Ready { handoff, .. } => handoff,
+                CompletionPollWithCurrentnessHandoffV1::Pending { .. } => unreachable!(),
+            };
+            backend.fail_reset_at = fail_reset_at;
+            backend.fail_currentness_at = fail_currentness_at;
+            let (error, handoff) = owner
+                .recycle_current_handoff_retaining(handoff, &mut backend)
+                .unwrap_err();
+            assert_eq!(error, expected);
+            assert_eq!(handoff.into_completed().retention.batch_id, 1);
+            assert_eq!(backend.trace, expected_trace);
+            assert_eq!(backend.reset_calls, 1);
+            assert!(matches!(
+                owner.ensure_releasable(),
+                Err(Gfx942CompletionErrorV1::Poisoned)
+            ));
+        }
+    }
+
+    #[test]
+    fn substituted_handoff_identity_is_rejected_before_any_reset() {
+        for substitution in 0..4 {
+            let mut owner = owner();
+            let mut batch = publish(&mut owner, [template(0)]);
+            match substitution {
+                0 => batch.retention.queue.generation = QueueGenerationV1(6),
+                1 => batch.retention.signal_mapping.id = MappingIdV1(99),
+                2 => batch.retention.batch_id = 99,
+                3 => batch.retention.slots[0].generation += 1,
+                _ => unreachable!(),
+            }
+            let mut backend = MockBackend::pending();
+            backend.values[0] = AMD_SIGNAL_VALUE_COMPLETE_V1;
+            assert!(matches!(
+                owner.observe_one_with_progress_current_handoff_retaining(batch, &mut backend),
+                Err((Gfx942CompletionErrorV1::StaleBatchGeneration, _))
+            ));
+            assert_eq!(backend.currentness_calls, 0);
+            assert_eq!(backend.observe_calls, 0);
+            assert_eq!(backend.reset_calls, 0);
+        }
+    }
+
+    #[test]
+    fn completion_currentness_handoff_is_private_and_move_only() {
+        let production = include_str!("queue_completion.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let handoff = production
+            .split("pub(super) struct CompletionCurrentnessHandoffV1")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) enum CompletionPollWithCurrentnessHandoffV1")
+            .next()
+            .unwrap();
+        assert!(!handoff.contains("derive(Clone"));
+        assert!(!handoff.contains("derive(Copy"));
+        assert!(!production.contains("pub struct CompletionCurrentnessHandoffV1"));
+
+        let specialized = production
+            .split("fn observe_one_with_progress_current_handoff_retaining")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) fn recycle_current_handoff_retaining")
+            .next()
+            .unwrap();
+        assert!(specialized.contains("backend.observe_one_acquire("));
+        assert!(specialized.contains("self.validate_observation_preflight(&batch)"));
+        assert!(specialized.contains(
+            "self.classify_completion_observations(batch, core::iter::once(observation))"
+        ));
+        assert!(!specialized.contains("Vec<"));
+        assert!(!specialized.contains("Vec::"));
+        assert!(!specialized.contains("collect()"));
+    }
+
+    #[test]
     fn fault_timeout_and_ambiguous_observation_poison() {
         let mut fault_owner = owner();
         let fault_batch = publish(&mut fault_owner, [template(0), template(1)]);
@@ -2107,6 +2523,20 @@ mod tests {
         ));
         assert_eq!(
             fault_owner.ensure_releasable(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        );
+
+        let mut malformed_owner = owner();
+        let malformed_batch = publish(&mut malformed_owner, [template(0)]);
+        let mut malformed_backend = MockBackend::pending();
+        malformed_backend.values[0] = -7;
+        malformed_backend.extra_batch_observation = Some(AqlCompletionObservationV1::Completed);
+        assert!(matches!(
+            malformed_owner.observe_once(malformed_batch, &mut malformed_backend),
+            Err(Gfx942CompletionErrorV1::Observation)
+        ));
+        assert_eq!(
+            malformed_owner.ensure_releasable(),
             Err(Gfx942CompletionErrorV1::Poisoned)
         );
 

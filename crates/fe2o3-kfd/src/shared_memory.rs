@@ -2420,6 +2420,22 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
 
     /// Performs bounded acquire loads inside a currentness envelope owned by
     /// the retained queue-completion backend.
+    fn observe_completion_signal_in_current_scope(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let mapping = self.allocations[index]
+            .mapping
+            .as_mut()
+            .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        B::observe_completion_signal_acquire(mapping, requested, slot_index)
+    }
+
+    /// Performs bounded acquire loads inside a currentness envelope owned by
+    /// the retained queue-completion backend.
     fn observe_completion_signals_in_current_scope(
         &mut self,
         token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -4623,6 +4639,19 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<Vec<fe2o3_aql::AqlCompletionObservationV1>, MemorySessionError> {
         self.engine
             .observe_completion_signals_in_current_scope(&mut authority.token, slot_indices)
+    }
+
+    pub(crate) fn observe_one_aql_completion_signal_in_current_scope(
+        &mut self,
+        authority: &mut SharedGttQueueResourceAuthorityV1<
+            AqlCompletionSignalResourceRoleV1,
+            HostVisibleCoherentGttV1,
+            GttGpuAccessibleMutableV1,
+        >,
+        slot_index: u32,
+    ) -> Result<fe2o3_aql::AqlCompletionObservationV1, MemorySessionError> {
+        self.engine
+            .observe_completion_signal_in_current_scope(&mut authority.token, slot_index)
     }
 
     #[allow(dead_code)]

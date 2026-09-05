@@ -8,6 +8,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 use std::rc::Rc;
+use std::time::Instant;
 
 use fe2o3_runtime_model::QueueKeyV1;
 
@@ -377,6 +378,65 @@ pub enum Gfx942PersistentComputePollV1 {
     Pending(Gfx942PersistentComputeDispatchV1),
     Ready(Gfx942CompletedPersistentComputeDispatchV1),
 }
+
+/// One persistent-compute poll with immediate signal recycle on Ready.
+///
+/// `completion_observed_at` is captured after the completion and allocation
+/// ledgers advance but before the completion signal is reset. It preserves the
+/// runtime profiler boundary while the private currentness handoff remains
+/// inside the queue implementation.
+#[must_use = "pending custody must be polled again and recycled custody must be detached"]
+pub enum Gfx942PersistentComputePollAndRecycleV1 {
+    Pending(Gfx942PersistentComputeDispatchV1),
+    Recycled {
+        recycled: Gfx942RecycledPersistentComputeDispatchV1,
+        completion_observed_at: Instant,
+    },
+}
+
+/// Failure from the fused persistent-compute completion/recycle operation.
+///
+/// The variant identifies whether exact retryable custody, when any, remains
+/// Published or Completed. Terminal custody can additionally report Recycled
+/// after an unambiguous reset followed by a failed dispatch-ledger transition.
+#[must_use = "inspect the failure and retain any returned custody"]
+pub enum Gfx942PersistentComputePollAndRecycleFailureV1 {
+    Poll(Gfx942PersistentComputePollFailureV1),
+    Recycle(Gfx942PersistentComputeRecycleFailureV1),
+}
+
+impl Gfx942PersistentComputePollAndRecycleFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::Poll(failure) => failure.error(),
+            Self::Recycle(failure) => failure.error(),
+        }
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputePollAndRecycleFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputePollAndRecycleFailureV1")
+            .field(
+                "stage",
+                &match self {
+                    Self::Poll(_) => "poll",
+                    Self::Recycle(_) => "recycle",
+                },
+            )
+            .field("error", self.error())
+            .finish()
+    }
+}
+
+impl fmt::Display for Gfx942PersistentComputePollAndRecycleFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error().fmt(formatter)
+    }
+}
+
+impl std::error::Error for Gfx942PersistentComputePollAndRecycleFailureV1 {}
 
 /// Restored persistent ownership after exact compute completion and detach.
 #[must_use = "completed persistent compute ownership must be retired or reused"]
