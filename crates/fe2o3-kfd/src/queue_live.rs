@@ -87,7 +87,9 @@ use crate::persistent_directional_sdma::{
     Gfx942DirectionalPersistentSdmaPromotionFailureV1,
     Gfx942DirectionalPersistentSdmaSubmissionCustodyV1,
     Gfx942DirectionalPersistentSdmaSubmissionFailureV1,
-    Gfx942DirectionalPersistentSdmaSubmissionV1, Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
+    Gfx942DirectionalPersistentSdmaSubmissionV1,
+    Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1,
+    Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaTerminalStateV1,
     Gfx942DirectionalPersistentSdmaWindowCompletedV1,
     Gfx942DirectionalPersistentSdmaWindowCopyPollV1,
@@ -162,10 +164,10 @@ use crate::sdma::{
     MultiQueueSdmaSubmitFailureV1, PersistentSdmaWindowPollV1,
     PreparedPersistentSdmaWindowPublicationFailureV1, PreparedPersistentSdmaWindowV1,
     PreparedSdmaPublicationFailureV1, PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1,
-    allocate_device_buffer, allocate_host_buffer, exact_full_host_write_is_authenticatable,
-    persistent_sdma_window_packet_count, planned_ticket_matches_queue_occurrence, read_host_buffer,
-    release_buffer, striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated,
-    write_host_buffer,
+    SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer, allocate_host_buffer,
+    exact_full_host_write_is_authenticatable, persistent_sdma_window_packet_count,
+    planned_ticket_matches_queue_occurrence, read_host_buffer, release_buffer,
+    striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated, write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -1684,6 +1686,17 @@ struct DirectionalPersistentSdmaSinglePreparedHandoffV1 {
     prepared: PreparedSingleSdmaV1,
 }
 
+struct DirectionalPersistentSdmaPreparedRequestV1 {
+    allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    prepared_use: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+    request: Gfx942SdmaCopyRequestV1,
+}
+
 impl DirectionalPersistentSdmaSinglePreparedHandoffV1 {
     fn publish(
         self,
@@ -1702,6 +1715,35 @@ impl DirectionalPersistentSdmaSinglePreparedHandoffV1 {
         let publication = owner.submit_prepared_single_with_custody(memory, self.prepared);
         (self.direction, self.planned_ticket, publication)
     }
+}
+
+enum DirectionalPersistentSdmaSynchronousSingleOutcomeV1 {
+    PreparationRejected {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+        host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+        request: Gfx942SdmaCopyRequestV1,
+        error: ComputeAqlQueueSessionErrorV1,
+        owner_healthy: bool,
+        closing_currentness_succeeded: bool,
+    },
+    BeforePublication {
+        custody: DirectionalPersistentSdmaPreparedCustodyV1,
+        observation: DirectionalPersistentSdmaPublicationObservationV1,
+        error: ComputeAqlQueueSessionErrorV1,
+        preparation_succeeded: bool,
+        closing_currentness_succeeded: bool,
+    },
+    Published {
+        submission: Gfx942DirectionalPersistentSdmaSubmissionV1,
+        observation: DirectionalPersistentSdmaCompletionObservationV1,
+        error: Option<ComputeAqlQueueSessionErrorV1>,
+        final_currentness_succeeded: bool,
+    },
 }
 
 /// Move-only counterpart for a bounded directional packet window. The ticket
@@ -6096,10 +6138,8 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
-    /// Publishes one copy on the explicitly selected member of the attached
-    /// directional pair. Sequential uses may repeat or alternate direction.
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
-    pub fn submit_directional_persistent_sdma_copy_v1(
+    fn prepare_directional_persistent_sdma_request_v1(
         &mut self,
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
         direction: Gfx942PersistentSdmaDirectionV1,
@@ -6108,7 +6148,7 @@ impl ComputeAqlQueueSessionV1 {
         device_offset: u64,
         copy_bytes: u32,
     ) -> Result<
-        Gfx942DirectionalPersistentSdmaSubmissionV1,
+        DirectionalPersistentSdmaPreparedRequestV1,
         Gfx942DirectionalPersistentSdmaSubmissionFailureV1,
     > {
         let retryable =
@@ -6167,6 +6207,7 @@ impl ComputeAqlQueueSessionV1 {
                 ),
             });
         }
+
         let host_binding = Gfx942PersistentDirectionalSdmaHostBindingV1::capture(&host, self.key);
         let operation = match direction {
             Gfx942PersistentSdmaDirectionV1::HostToDevice => {
@@ -6237,6 +6278,58 @@ impl ComputeAqlQueueSessionV1 {
             device_offset,
             copy_bytes,
         );
+        Ok(DirectionalPersistentSdmaPreparedRequestV1 {
+            allocation,
+            prepared_use,
+            host_binding,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+            request,
+        })
+    }
+
+    /// Publishes one copy on the explicitly selected member of the attached
+    /// directional pair. Sequential uses may repeat or alternate direction.
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    pub fn submit_directional_persistent_sdma_copy_v1(
+        &mut self,
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host: Gfx942SdmaBufferV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+    ) -> Result<
+        Gfx942DirectionalPersistentSdmaSubmissionV1,
+        Gfx942DirectionalPersistentSdmaSubmissionFailureV1,
+    > {
+        let retryable =
+            |error, allocation, host| Gfx942DirectionalPersistentSdmaSubmissionFailureV1 {
+                error,
+                custody: Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable {
+                    allocation,
+                    host,
+                },
+            };
+        let DirectionalPersistentSdmaPreparedRequestV1 {
+            allocation,
+            prepared_use,
+            host_binding,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+            request,
+        } = self.prepare_directional_persistent_sdma_request_v1(
+            allocation,
+            direction,
+            host,
+            host_offset,
+            device_offset,
+            copy_bytes,
+        )?;
 
         let handoff_queue = allocation.attachment.queue;
         let handoff_native_queue_id = allocation.attachment.pair.queue_id(direction);
@@ -6380,6 +6473,448 @@ impl ComputeAqlQueueSessionV1 {
                 .unwrap_or_else(|| lower_error.into()),
             transition,
         )
+    }
+
+    /// Executes the runtime's bounded synchronous single-packet directional
+    /// copy without reopening the standalone asynchronous observation path.
+    ///
+    /// This hidden composition preserves the public submit/poll/wait surface.
+    /// One opening observation admits preparation; one owner-memory loan then
+    /// contains preparation, the prepublication observation, publication,
+    /// bounded completion observation, and the final observation before the
+    /// lower completed record is removed.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    pub fn execute_synchronous_directional_persistent_sdma_copy_for_v1(
+        &mut self,
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host: Gfx942SdmaBufferV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+        timeout: Duration,
+    ) -> Result<
+        Gfx942DirectionalPersistentSdmaCompletedV1,
+        Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1,
+    > {
+        let retryable =
+            |error, allocation, host| Gfx942DirectionalPersistentSdmaSubmissionFailureV1 {
+                error,
+                custody: Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable {
+                    allocation,
+                    host,
+                },
+            };
+        let prepared_request = match self.prepare_directional_persistent_sdma_request_v1(
+            allocation,
+            direction,
+            host,
+            host_offset,
+            device_offset,
+            copy_bytes,
+        ) {
+            Ok(prepared_request) => prepared_request,
+            Err(failure) => {
+                return Err(
+                    Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Submission(
+                        failure,
+                    ),
+                );
+            }
+        };
+        let DirectionalPersistentSdmaPreparedRequestV1 {
+            allocation,
+            prepared_use,
+            host_binding,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+            request,
+        } = prepared_request;
+
+        let handoff_queue = allocation.attachment.queue;
+        let handoff_native_queue_id = allocation.attachment.pair.queue_id(direction);
+        let mut allocation = Some(allocation);
+        let mut prepared_use = Some(prepared_use);
+        let mut request = Some(request);
+        let mut outcome = None;
+        let fused_operation = self.with_sdma_owner_memory(|owner, memory| {
+            let allocation = allocation
+                .take()
+                .expect("synchronous directional allocation consumed once");
+            let prepared_use = prepared_use
+                .take()
+                .expect("synchronous directional prepared use consumed once");
+            let request = request
+                .take()
+                .expect("synchronous directional request consumed once");
+            let prepared = match owner.prepare_single_recoverable(memory, request) {
+                Ok(prepared) => prepared,
+                Err((error, request)) => {
+                    let closing = memory.check_queue_operational_currentness();
+                    let closing_currentness_succeeded = closing.is_ok();
+                    let error = closing
+                        .err()
+                        .map(Into::into)
+                        .unwrap_or_else(|| error.into());
+                    outcome = Some(
+                        DirectionalPersistentSdmaSynchronousSingleOutcomeV1::PreparationRejected {
+                            allocation,
+                            prepared: prepared_use,
+                            host_binding,
+                            direction,
+                            host_offset,
+                            device_offset,
+                            copy_bytes,
+                            request,
+                            error,
+                            owner_healthy: !owner.is_poisoned(),
+                            closing_currentness_succeeded,
+                        },
+                    );
+                    return Ok(());
+                }
+            };
+            let planned_ticket = prepared.ticket();
+            let custody = DirectionalPersistentSdmaPreparedCustodyV1 {
+                allocation,
+                prepared: prepared_use,
+                planned_ticket,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+            };
+            if let Err(error) = memory.check_queue_operational_currentness() {
+                outcome = Some(
+                    DirectionalPersistentSdmaSynchronousSingleOutcomeV1::BeforePublication {
+                        custody,
+                        observation: DirectionalPersistentSdmaPublicationObservationV1::Recoverable(
+                            prepared.into_request(),
+                        ),
+                        error: error.into(),
+                        preparation_succeeded: false,
+                        closing_currentness_succeeded: false,
+                    },
+                );
+                return Ok(());
+            }
+            let handoff = DirectionalPersistentSdmaSinglePreparedHandoffV1 {
+                queue: handoff_queue,
+                native_queue_id: handoff_native_queue_id,
+                direction,
+                planned_ticket,
+                prepared,
+            };
+            let (direction, planned_ticket, publication) = handoff.publish(owner, memory);
+            match publication {
+                Err(PreparedSingleSdmaPublicationFailureV1::Recoverable { error, prepared }) => {
+                    let closing = memory.check_queue_operational_currentness();
+                    let closing_currentness_succeeded = closing.is_ok();
+                    let error = closing
+                        .err()
+                        .map(Into::into)
+                        .unwrap_or_else(|| error.into());
+                    outcome = Some(
+                        DirectionalPersistentSdmaSynchronousSingleOutcomeV1::BeforePublication {
+                            custody,
+                            observation:
+                                DirectionalPersistentSdmaPublicationObservationV1::Recoverable(
+                                    prepared.into_request(),
+                                ),
+                            error,
+                            preparation_succeeded: !owner.is_poisoned(),
+                            closing_currentness_succeeded,
+                        },
+                    );
+                }
+                Err(PreparedSingleSdmaPublicationFailureV1::Retained { error, ticket }) => {
+                    let closing = memory.check_queue_operational_currentness();
+                    let closing_currentness_succeeded = closing.is_ok();
+                    let error = closing
+                        .err()
+                        .map(Into::into)
+                        .unwrap_or_else(|| error.into());
+                    outcome = Some(
+                        DirectionalPersistentSdmaSynchronousSingleOutcomeV1::BeforePublication {
+                            custody,
+                            observation: DirectionalPersistentSdmaPublicationObservationV1::Retained(
+                                ticket,
+                            ),
+                            error,
+                            preparation_succeeded: true,
+                            closing_currentness_succeeded,
+                        },
+                    );
+                }
+                Ok(ticket) => {
+                    let DirectionalPersistentSdmaPreparedCustodyV1 {
+                        mut allocation,
+                        prepared,
+                        host_binding,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                        ..
+                    } = custody;
+                    let published = allocation
+                        .owner
+                        .publish(prepared)
+                        .expect("confirmed synchronous publication advances prepared use");
+                    let submission = Gfx942DirectionalPersistentSdmaSubmissionV1 {
+                        allocation,
+                        published,
+                        ticket,
+                        host_binding,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    };
+                    if ticket != planned_ticket
+                        || !planned_ticket_matches_queue_occurrence(
+                            planned_ticket,
+                            handoff_queue,
+                            handoff_native_queue_id,
+                        )
+                    {
+                        let final_currentness = memory.check_queue_operational_currentness();
+                        let final_currentness_succeeded = final_currentness.is_ok();
+                        let error = final_currentness.err().map(Into::into).unwrap_or(
+                            ComputeAqlQueueSessionErrorV1::Contract(
+                                "directional persistent SDMA synchronous publication ticket identity",
+                            ),
+                        );
+                        outcome = Some(
+                            DirectionalPersistentSdmaSynchronousSingleOutcomeV1::Published {
+                                submission,
+                                observation:
+                                    DirectionalPersistentSdmaCompletionObservationV1::QueueRetained,
+                                error: Some(error),
+                                final_currentness_succeeded,
+                            },
+                        );
+                        return Ok(());
+                    }
+                    let (observation, error, final_currentness_succeeded) =
+                        match owner.wait_for_in_current_scope_with_final_currentness(
+                            memory,
+                            ticket,
+                            timeout,
+                        ) {
+                            SingleSdmaWaitInCurrentScopeV1::Completed(completed) => (
+                                DirectionalPersistentSdmaCompletionObservationV1::Completed(
+                                    completed,
+                                ),
+                                None,
+                                true,
+                            ),
+                            SingleSdmaWaitInCurrentScopeV1::Timeout => (
+                                DirectionalPersistentSdmaCompletionObservationV1::Timeout,
+                                Some(ComputeAqlQueueSessionErrorV1::Sdma(
+                                    Gfx942SdmaErrorV1::Timeout,
+                                )),
+                                true,
+                            ),
+                            SingleSdmaWaitInCurrentScopeV1::QueueRetained(error) => (
+                                DirectionalPersistentSdmaCompletionObservationV1::QueueRetained,
+                                Some(error.into()),
+                                true,
+                            ),
+                            SingleSdmaWaitInCurrentScopeV1::FinalCurrentnessLost(error) => (
+                                DirectionalPersistentSdmaCompletionObservationV1::QueueRetained,
+                                Some(error.into()),
+                                false,
+                            ),
+                        };
+                    outcome = Some(
+                        DirectionalPersistentSdmaSynchronousSingleOutcomeV1::Published {
+                            submission,
+                            observation,
+                            error,
+                            final_currentness_succeeded,
+                        },
+                    );
+                }
+            }
+            Ok(())
+        });
+
+        let loan_error = fused_operation.err();
+        let Some(outcome) = outcome else {
+            let failure = self.terminal_prepared_directional_persistent_sdma_failure(
+                loan_error.unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "synchronous directional persistent SDMA operation did not execute",
+                )),
+                allocation.expect("unopened synchronous loan retains allocation"),
+                prepared_use.expect("unopened synchronous loan retains prepared use"),
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                request.expect("unopened synchronous loan retains request"),
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            );
+            return Err(
+                Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Submission(failure),
+            );
+        };
+        match outcome {
+            DirectionalPersistentSdmaSynchronousSingleOutcomeV1::PreparationRejected {
+                allocation,
+                prepared,
+                host_binding,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                request,
+                error,
+                owner_healthy,
+                closing_currentness_succeeded,
+            } => {
+                if loan_error.is_none() && owner_healthy && closing_currentness_succeeded {
+                    match restore_directional_persistent_sdma_request_v1(
+                        allocation,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                        host_binding,
+                        request,
+                    ) {
+                        Ok((mut allocation, host)) => {
+                            allocation
+                                .owner
+                                .cancel_prepared(prepared)
+                                .expect("private synchronous prepared use must cancel");
+                            return Err(
+                                Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Submission(
+                                    retryable(error, allocation, host),
+                                ),
+                            );
+                        }
+                        Err((allocation, request)) => {
+                            let failure = self
+                                .terminal_prepared_directional_persistent_sdma_failure(
+                                    ComputeAqlQueueSessionErrorV1::Contract(
+                                        "synchronous directional persistent SDMA preparation restoration",
+                                    ),
+                                    allocation,
+                                    prepared,
+                                    direction,
+                                    host_offset,
+                                    device_offset,
+                                    copy_bytes,
+                                    host_binding,
+                                    request,
+                                    Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                                );
+                            return Err(
+                                Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Submission(
+                                    failure,
+                                ),
+                            );
+                        }
+                    }
+                }
+                let failure = self.terminal_prepared_directional_persistent_sdma_failure(
+                    loan_error.unwrap_or(error),
+                    allocation,
+                    prepared,
+                    direction,
+                    host_offset,
+                    device_offset,
+                    copy_bytes,
+                    host_binding,
+                    request,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                );
+                Err(
+                    Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Submission(
+                        failure,
+                    ),
+                )
+            }
+            DirectionalPersistentSdmaSynchronousSingleOutcomeV1::BeforePublication {
+                custody,
+                observation,
+                error,
+                preparation_succeeded,
+                closing_currentness_succeeded,
+            } => {
+                let enclosing_operation_succeeded = loan_error.is_none() && preparation_succeeded;
+                let transition = transition_directional_persistent_sdma_publication_v1(
+                    custody,
+                    observation,
+                    enclosing_operation_succeeded,
+                    loan_error.is_none() && closing_currentness_succeeded,
+                );
+                let error = loan_error.unwrap_or(error);
+                match self
+                    .finish_directional_persistent_sdma_publication_transition(error, transition)
+                {
+                    Ok(_) => unreachable!("prepublication outcome cannot publish"),
+                    Err(failure) => Err(
+                        Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Submission(
+                            failure,
+                        ),
+                    ),
+                }
+            }
+            DirectionalPersistentSdmaSynchronousSingleOutcomeV1::Published {
+                submission,
+                observation,
+                error,
+                final_currentness_succeeded,
+            } => {
+                let transition = transition_directional_persistent_sdma_completion_v1(
+                    submission,
+                    observation,
+                    loan_error.is_none() && final_currentness_succeeded,
+                );
+                match transition {
+                    DirectionalPersistentSdmaCompletionTransitionV1::Completed(completed) => {
+                        Ok(completed)
+                    }
+                    DirectionalPersistentSdmaCompletionTransitionV1::Timeout(submission) => Err(
+                        Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Execution(
+                            Gfx942DirectionalPersistentSdmaExecutionFailureV1 {
+                                error: error.unwrap_or(ComputeAqlQueueSessionErrorV1::Sdma(
+                                    Gfx942SdmaErrorV1::Timeout,
+                                )),
+                                custody: Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(
+                                    submission,
+                                ),
+                            },
+                        ),
+                    ),
+                    DirectionalPersistentSdmaCompletionTransitionV1::ProcessTeardown(custody) => {
+                        let failure = self
+                            .terminal_directional_persistent_sdma_execution_transition(
+                            loan_error.or(error).unwrap_or(
+                                ComputeAqlQueueSessionErrorV1::Contract(
+                                    "synchronous directional persistent SDMA completion identity",
+                                ),
+                            ),
+                            custody,
+                        );
+                        Err(
+                            Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1::Execution(
+                                failure,
+                            ),
+                        )
+                    }
+                    DirectionalPersistentSdmaCompletionTransitionV1::Pending(_) => {
+                        unreachable!("bounded synchronous wait cannot return pending success")
+                    }
+                }
+            }
+        }
     }
 
     /// Observes one directional persistent copy without blocking.

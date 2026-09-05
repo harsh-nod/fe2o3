@@ -77,7 +77,8 @@ use kfd_backend_sdma_seam::ScriptedSdmaDriverV1;
 use kfd_backend_sdma_seam::{
     DirectionalSdmaCompletedOwnerV1, DirectionalSdmaCopyRequestV1, DirectionalSdmaDeviceOwnerV1,
     DirectionalSdmaExecutionFailureV1, DirectionalSdmaPairOwnerV1, DirectionalSdmaPollV1,
-    DirectionalSdmaRequestPlanV1, DirectionalSdmaSubmissionOwnerV1, PersistentComputeReadyOwnerV1,
+    DirectionalSdmaRequestPlanV1, DirectionalSdmaSubmissionOwnerV1,
+    DirectionalSdmaSynchronousExecutionFailureV1, PersistentComputeReadyOwnerV1,
     PersistentComputeReadyTransitionFailureV1, SameDeviceSdmaCompletedOwnerV1,
     SameDeviceSdmaCopyRequestV1, SameDeviceSdmaExecutionFailureV1, SameDeviceSdmaPairOwnerV1,
     SameDeviceSdmaPollV1, SameDeviceSdmaSubmissionOwnerV1, SdmaBufferOwnerV1, SdmaRecycleFailureV1,
@@ -4432,48 +4433,48 @@ impl KfdRuntimeBackendV1 {
             device_offset,
             copy_bytes,
         };
-        let submission = match self.directional_sdma_ops_v1().submit(
+        let completed = match self.directional_sdma_ops_v1().execute_synchronous_single(
             DirectionalSdmaPairOwnerV1 { device, host },
             direction,
-            DirectionalSdmaRequestPlanV1::Single(request),
+            request,
+            Duration::from_secs(30),
         ) {
-            Ok(submission) => submission,
+            Ok(completed) => completed,
             Err(failure) => {
                 return match failure {
-                    SdmaTransitionFailureV1::Retryable { detail, custody } => {
+                    DirectionalSdmaSynchronousExecutionFailureV1::RetryableBeforePublication {
+                        detail,
+                        pair,
+                    } => {
                         let host =
-                            self.restore_synchronous_directional_storage_v1(allocation, custody)?;
+                            self.restore_synchronous_directional_storage_v1(allocation, pair)?;
                         self.recycle_transient_sdma_buffer_v1(host, operation)?;
                         Err(Self::rejected(
                             KfdRuntimeBackendErrorKindV1::Native,
                             format!("KFD {operation} publication: {detail}"),
                         ))
                     }
-                    SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
+                    DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
+                        detail,
+                        submission,
+                    } => {
+                        self.retain_terminal_sdma_custody_v1(
+                            KfdRuntimeTerminalSdmaCustodyV1::Pending(submission),
+                        );
+                        Err(self.terminal_error(format!(
+                            "KFD {operation} completion became ambiguous: {detail}"
+                        )))
+                    }
+                    DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+                        detail,
+                        custody,
+                    } => {
                         self.retain_sdma_seam_terminal_v1(custody);
-                        Err(self.terminal_error(format!("KFD {operation} publication: {detail}")))
+                        Err(self.terminal_error(format!(
+                            "KFD {operation} execution became ambiguous: {detail}"
+                        )))
                     }
                 };
-            }
-        };
-        let completed = match self
-            .directional_sdma_ops_v1()
-            .wait(submission, Duration::from_secs(30))
-        {
-            Ok(completed) => completed,
-            Err(DirectionalSdmaExecutionFailureV1::Retryable { detail, submission }) => {
-                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Pending(
-                    submission,
-                ));
-                return Err(self.terminal_error(format!(
-                    "KFD {operation} completion became ambiguous: {detail}"
-                )));
-            }
-            Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown { detail, custody }) => {
-                self.retain_sdma_seam_terminal_v1(custody);
-                return Err(self.terminal_error(format!(
-                    "KFD {operation} completion became ambiguous: {detail}"
-                )));
             }
         };
         if completed.direction() != direction
@@ -15162,6 +15163,35 @@ mod tests {
 
         assert_eq!(completion_detach_restore, handoff + detach_restore);
         assert_eq!(performance.recycle(), recycle_inclusive);
+    }
+
+    #[test]
+    fn synchronous_directional_runtime_routes_only_through_fused_single_execute() {
+        let source = include_str!("kfd_backend.rs");
+        let synchronous = source
+            .split("fn execute_synchronous_directional_sdma_v1(")
+            .nth(1)
+            .unwrap()
+            .split("fn upload_sdma_range_v1(")
+            .next()
+            .unwrap();
+        assert!(synchronous.contains(".execute_synchronous_single("));
+        assert!(!synchronous.contains(".submit("));
+        assert!(!synchronous.contains(".wait("));
+        assert!(synchronous.contains(".retire(completed)"));
+
+        let seam = include_str!("kfd_backend/kfd_backend_sdma_seam.rs");
+        let fused = seam
+            .split("pub(super) fn execute_synchronous_single(")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) fn poll(")
+            .next()
+            .unwrap();
+        assert!(
+            fused.contains("queue.execute_synchronous_directional_persistent_sdma_copy_for_v1(")
+        );
+        assert!(fused.contains("Self::Scripted(driver)"));
     }
 
     fn scripted_submit_step_v1(

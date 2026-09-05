@@ -1044,6 +1044,27 @@ pub(crate) enum PreparedSingleSdmaPublicationFailureV1 {
     },
 }
 
+/// Result of waiting after publication while the caller retains one admitted
+/// operational-currentness scope. The completed record is removed only after
+/// the final currentness observation succeeds.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum SingleSdmaWaitInCurrentScopeV1 {
+    Completed(Gfx942SdmaCompletedCopyV1),
+    Timeout,
+    QueueRetained(Gfx942SdmaErrorV1),
+    FinalCurrentnessLost(Gfx942SdmaErrorV1),
+}
+
+fn close_single_sdma_wait_failure_currentness(
+    memory: &mut SharedGttMemorySessionV1,
+    error: Gfx942SdmaErrorV1,
+) -> SingleSdmaWaitInCurrentScopeV1 {
+    match memory.check_queue_operational_currentness() {
+        Ok(()) => SingleSdmaWaitInCurrentScopeV1::QueueRetained(error),
+        Err(error) => SingleSdmaWaitInCurrentScopeV1::FinalCurrentnessLost(error.into()),
+    }
+}
+
 impl PreparedSdmaBatchV1 {
     pub(crate) fn exact_single_ticket(&self) -> Option<Gfx942SdmaCopyTicketV1> {
         let [ticket] = self.tickets.as_slice() else {
@@ -2872,6 +2893,80 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory.check_queue_operational_currentness()?;
         let record = self.records[slot].take().expect("completed SDMA record");
         Ok(Gfx942SdmaCompletedCopyV1 {
+            source: record.source,
+            destination: record.destination,
+            copy_bytes: record.copy_bytes,
+            source_offset: record.source_offset,
+            destination_offset: record.destination_offset,
+        })
+    }
+
+    fn wait_for_in_current_scope_with_final_currentness(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+        timeout: Duration,
+    ) -> SingleSdmaWaitInCurrentScopeV1 {
+        if let Err(error) = self.require_live() {
+            return close_single_sdma_wait_failure_currentness(memory, error);
+        }
+        let slot = match self.validate_ticket(ticket) {
+            Ok(slot) => slot,
+            Err(error) => return close_single_sdma_wait_failure_currentness(memory, error),
+        };
+        let expected = self.records[slot]
+            .as_ref()
+            .expect("validated SDMA record")
+            .completion_value;
+        let deadline = match Instant::now().checked_add(timeout) {
+            Some(deadline) => deadline,
+            None => {
+                return close_single_sdma_wait_failure_currentness(
+                    memory,
+                    Gfx942SdmaErrorV1::Contract("SDMA wait deadline"),
+                );
+            }
+        };
+        let mut wait = MonotonicWaitV1::until(deadline);
+        loop {
+            let observed = match memory.observe_mapped_host_visible_i64_at_in_current_scope(
+                self.completions
+                    .as_mut()
+                    .expect("validated SDMA ticket retains completion arena"),
+                (slot * 8) as u64,
+            ) {
+                Ok(observed) => observed,
+                Err(error) => {
+                    return close_single_sdma_wait_failure_currentness(memory, error.into());
+                }
+            };
+            if observed == i64::from(expected) {
+                break;
+            }
+            if observed != 0 {
+                self.poisoned = true;
+                return close_single_sdma_wait_failure_currentness(
+                    memory,
+                    Gfx942SdmaErrorV1::Contract("unexpected SDMA completion value"),
+                );
+            }
+            if wait.expired() {
+                return match memory.check_queue_operational_currentness() {
+                    Ok(()) => SingleSdmaWaitInCurrentScopeV1::Timeout,
+                    Err(error) => {
+                        SingleSdmaWaitInCurrentScopeV1::FinalCurrentnessLost(error.into())
+                    }
+                };
+            }
+            wait.pause();
+        }
+        if let Err(error) = memory.check_queue_operational_currentness() {
+            return SingleSdmaWaitInCurrentScopeV1::FinalCurrentnessLost(error.into());
+        }
+        let record = self.records[slot]
+            .take()
+            .expect("final-current completed SDMA record");
+        SingleSdmaWaitInCurrentScopeV1::Completed(Gfx942SdmaCompletedCopyV1 {
             source: record.source,
             destination: record.destination,
             copy_bytes: record.copy_bytes,
@@ -4822,6 +4917,20 @@ impl Gfx942SdmaQueueSetV1 {
     ) -> Result<Gfx942SdmaCompletedCopyV1, Gfx942SdmaErrorV1> {
         self.owner_for_ticket(ticket)?
             .wait_for(memory, ticket, timeout)
+    }
+
+    pub(crate) fn wait_for_in_current_scope_with_final_currentness(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+        timeout: Duration,
+    ) -> SingleSdmaWaitInCurrentScopeV1 {
+        match self.owner_for_ticket(ticket) {
+            Ok(owner) => {
+                owner.wait_for_in_current_scope_with_final_currentness(memory, ticket, timeout)
+            }
+            Err(error) => close_single_sdma_wait_failure_currentness(memory, error),
+        }
     }
 
     pub(crate) fn wait_many_for(
