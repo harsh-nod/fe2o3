@@ -19,6 +19,7 @@ fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
 fe2o3-worker-v3-verification-client.workspace = true
+tempfile = "=3.21.0"
 
 [lib]
 name = "fe2o3_worker_v3_verification_service"

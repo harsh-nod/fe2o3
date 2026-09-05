@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{IoSlice, IoSliceMut, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -40,20 +41,23 @@ use fe2o3_worker_v3_verification_protocol::{
     WorkerV3VerificationTerminalDispositionV2, WorkerV3VerificationTerminalFrameV2,
 };
 use fe2o3_worker_v3_verification_service::{
-    WorkerV3VerificationBeginOutcomeV2, WorkerV3VerificationCallerV1,
-    WorkerV3VerificationChallengeReplayGuardV1, WorkerV3VerificationChallengeReservationProviderV2,
-    WorkerV3VerificationCurrentRecordOutcomeV2, WorkerV3VerificationMeasurementResolverV1,
-    WorkerV3VerificationPolicyResolverV1, WorkerV3VerificationRejectionReasonV1,
-    WorkerV3VerificationRejectionReasonV2, WorkerV3VerificationServiceErrorV1,
-    WorkerV3VerificationServiceErrorV2, begin_worker_v3_verification_session_until_v2,
-    begin_worker_v3_verification_session_v2, prepare_worker_v3_verification_receiver_v1,
+    WorkerV3VerificationAcceptedServiceEndpointV2, WorkerV3VerificationBeginOutcomeV2,
+    WorkerV3VerificationCallerV1, WorkerV3VerificationChallengeReplayGuardV1,
+    WorkerV3VerificationChallengeReservationProviderV2, WorkerV3VerificationCurrentRecordOutcomeV2,
+    WorkerV3VerificationMeasurementResolverV1, WorkerV3VerificationPolicyResolverV1,
+    WorkerV3VerificationRejectionReasonV1, WorkerV3VerificationRejectionReasonV2,
+    WorkerV3VerificationServiceErrorV1, WorkerV3VerificationServiceErrorV2,
+    begin_worker_v3_verification_accepted_session_until_v2,
+    begin_worker_v3_verification_session_until_v2, begin_worker_v3_verification_session_v2,
+    prepare_worker_v3_verification_receiver_v1,
 };
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 use rustix::io::Errno;
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
-    SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType, recv, recvmsg, send,
-    sendmsg, shutdown, socketpair,
+    SendAncillaryMessage, SendFlags, Shutdown, SocketAddrUnix, SocketFlags, SocketType,
+    accept_with, bind, connect, listen, recv, recvmsg, send, sendmsg, shutdown, socket_with,
+    socketpair,
 };
 use sha2::{Digest, Sha256};
 
@@ -373,6 +377,24 @@ fn pair() -> (OwnedFd, OwnedFd) {
     pair
 }
 
+fn prepared_path_listener() -> (tempfile::TempDir, PathBuf, OwnedFd) {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("service.sock");
+    let address = SocketAddrUnix::new(&path).unwrap();
+    let listener = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    bind(&listener, &address).unwrap();
+    prepare_worker_v3_verification_receiver_v1(&listener).unwrap();
+    assert!(rustix::net::sockopt::socket_passcred(&listener).unwrap());
+    listen(&listener, 1).unwrap();
+    (root, path, listener)
+}
+
 fn admission_state(
     request: &WorkerV3VerificationRequestV1,
 ) -> (FixedPolicy, FixedMeasurement, ReplayGuard) {
@@ -457,6 +479,205 @@ fn exact_two_phase_session_returns_only_opaque_authority_free_application_bytes(
         b"opaque-application-decision"
     );
     assert!(!terminal.grants_authority());
+}
+
+#[test]
+fn connected_path_session_preserves_process_credentials_across_every_v2_phase() {
+    let request = verification_request(41);
+    let (_root, path, listener) = prepared_path_listener();
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("cross_process_connected_path_client_helper")
+        .arg("--ignored")
+        .env("FE2O3_WORKER_V3_CONNECTED_PATH_CLIENT", &path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let child_pid = child.id();
+    let service = accept_with(&listener, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK).unwrap();
+    assert!(rustix::net::sockopt::socket_passcred(&service).unwrap());
+    let service = WorkerV3VerificationAcceptedServiceEndpointV2::admit(service, &path).unwrap();
+    assert_eq!(service.caller().pid(), child_pid);
+
+    let (mut policy, mut measurement, mut replay) = admission_state(&request);
+    let mut reservations = FixedReservations::available(0xa1, 0xa2);
+    let deadline = Instant::now().checked_add(Duration::from_secs(5)).unwrap();
+    let begin = begin_worker_v3_verification_accepted_session_until_v2(
+        service,
+        deadline,
+        &mut policy,
+        &mut measurement,
+        &mut replay,
+        &mut reservations,
+    )
+    .unwrap();
+    let WorkerV3VerificationBeginOutcomeV2::Reserved(pending) = begin else {
+        panic!("valid connected-path Begin was rejected");
+    };
+    assert_eq!(pending.caller().pid(), child_pid);
+    let current = pending.receive_current_record().unwrap();
+    let WorkerV3VerificationCurrentRecordOutcomeV2::Ready(terminal) = current else {
+        panic!("valid connected-path current record was rejected");
+    };
+    terminal
+        .send_application_response(b"connected-path-application-decision".to_vec())
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "connected-path client failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "subprocess helper for the connected-path session test"]
+fn cross_process_connected_path_client_helper() {
+    let Some(path) = std::env::var_os("FE2O3_WORKER_V3_CONNECTED_PATH_CLIENT") else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let client = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    connect(&client, &SocketAddrUnix::new(&path).unwrap()).unwrap();
+    let client =
+        WorkerV3VerificationClientV2::admit_connected_path(client, &path, Duration::from_secs(5))
+            .unwrap();
+    let request = verification_request(41);
+    let outcome = client.begin(request.clone(), snapshots(&request)).unwrap();
+    let ClientBeginOutcomeV2::Reserved(begin) = outcome else {
+        panic!("valid connected-path Begin was rejected");
+    };
+    let (challenge, pending) = begin.into_parts();
+    assert_eq!(challenge.reservation_identity(), &[0xa2; 32]);
+    let fixture = CurrentRecordFixture::new();
+    let (verification, attestation) = fixture.records(*challenge.as_bytes());
+    let terminal = pending
+        .submit_current_record(
+            *verification.canonical_bytes(),
+            *attestation.canonical_bytes(),
+        )
+        .unwrap();
+    assert_eq!(
+        terminal.disposition(),
+        WorkerV3VerificationTerminalDispositionV2::ApplicationResponse
+    );
+    assert_eq!(
+        terminal.application_response_bytes(),
+        b"connected-path-application-decision"
+    );
+}
+
+#[test]
+fn accepted_path_admission_rejects_unnamed_abstract_and_named_client_substitutions() {
+    let (service, _client) = pair();
+    let original = service.as_raw_fd();
+    let failure = WorkerV3VerificationAcceptedServiceEndpointV2::admit(
+        service,
+        Path::new("/run/fe2o3/worker-v3-verifier.sock"),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        failure.source_error(),
+        WorkerV3VerificationServiceErrorV1::InvalidControl(_)
+    ));
+    let retained = failure.into_control();
+    assert_eq!(retained.as_raw_fd(), original);
+    rustix::io::fcntl_getfd(&retained).unwrap();
+
+    let (_root, path, listener) = prepared_path_listener();
+    let client = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    connect(&client, &SocketAddrUnix::new(&path).unwrap()).unwrap();
+    let service = accept_with(&listener, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK).unwrap();
+    let wrong_path = path.with_file_name("other.sock");
+    let failure =
+        WorkerV3VerificationAcceptedServiceEndpointV2::admit(service, &wrong_path).unwrap_err();
+    assert!(matches!(
+        failure.source_error(),
+        WorkerV3VerificationServiceErrorV1::InvalidControl(_)
+    ));
+
+    let (_root, path, listener) = prepared_path_listener();
+    let client = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let client_path = path.with_file_name("client.sock");
+    bind(&client, &SocketAddrUnix::new(client_path).unwrap()).unwrap();
+    connect(&client, &SocketAddrUnix::new(&path).unwrap()).unwrap();
+    let service = accept_with(&listener, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK).unwrap();
+    let client_failure =
+        WorkerV3VerificationClientV2::admit_connected_path(client, &path, Duration::from_secs(1))
+            .unwrap_err();
+    let service_failure =
+        WorkerV3VerificationAcceptedServiceEndpointV2::admit(service, &path).unwrap_err();
+    assert!(matches!(
+        client_failure.source_error(),
+        WorkerV3VerificationClientErrorV2::InvalidConnectedPathPeer
+    ));
+    assert!(matches!(
+        service_failure.source_error(),
+        WorkerV3VerificationServiceErrorV1::InvalidControl(_)
+    ));
+
+    let abstract_name = format!("fe2o3-worker-v3-path-test-{}", std::process::id());
+    let address = SocketAddrUnix::new_abstract_name(abstract_name.as_bytes()).unwrap();
+    let listener = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    bind(&listener, &address).unwrap();
+    prepare_worker_v3_verification_receiver_v1(&listener).unwrap();
+    assert!(rustix::net::sockopt::socket_passcred(&listener).unwrap());
+    listen(&listener, 1).unwrap();
+    let client = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    connect(&client, &address).unwrap();
+    let service = accept_with(&listener, SocketFlags::CLOEXEC | SocketFlags::NONBLOCK).unwrap();
+    let client_failure = WorkerV3VerificationClientV2::admit_connected_path(
+        client,
+        Path::new("/run/fe2o3/worker-v3-verifier.sock"),
+        Duration::from_secs(1),
+    )
+    .unwrap_err();
+    let service_failure = WorkerV3VerificationAcceptedServiceEndpointV2::admit(
+        service,
+        Path::new("/run/fe2o3/worker-v3-verifier.sock"),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        client_failure.source_error(),
+        WorkerV3VerificationClientErrorV2::InvalidConnectedPathPeer
+    ));
+    assert!(matches!(
+        service_failure.source_error(),
+        WorkerV3VerificationServiceErrorV1::InvalidControl(_)
+    ));
 }
 
 #[test]

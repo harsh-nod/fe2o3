@@ -23,6 +23,15 @@ retains it unchanged for Begin, current-record submission, terminal receipt, and
 `admit` timeout entrypoint computes one deadline and delegates to `admit_until`; it does not restart
 the timeout after admission work.
 
+`admit_connected_path` and `admit_connected_path_until` are explicit alternatives for an already
+connected pathname service. They do not discover or connect an endpoint. They require the client
+side to remain unnamed and the peer address to exactly match a caller-supplied, lexically validated
+canonical absolute filesystem pathname, while the existing `admit` entrypoints continue to require
+unnamed endpoints on both sides. The path variants also enable `SO_PASSCRED`, snapshot the service's
+connection-time `SO_PEERCRED`, and require every response packet to carry exactly matching
+kernel-stamped `SCM_CREDENTIALS`. This continuity check does not decide whether that process
+identity is authorized and does not grant verification authority.
+
 The pending session accepts only the exact fixed-size current-record verification and attestation
 arrays, sends their canonical V2 frame, closes the write half, and accepts one bounded terminal
 packet followed by exact peer EOF. Phase packets cannot carry descriptors or other ancillary data.

@@ -59,3 +59,21 @@ receiver-owned payload custody where the socket result is recoverable. The respo
 this crate does not treat application bytes, canonical compiler records, or successful transport as
 theorem, currentness, load, launch, or protected-key authority. V1 remains available and unchanged
 for its one-shot framing-only exchange.
+
+## Connected pathname admission
+
+`WorkerV3VerificationAcceptedServiceEndpointV2::admit` is the explicit V2 admission boundary for
+an already accepted pathname connection. It requires the local address to exactly match a
+caller-supplied, lexically validated canonical absolute filesystem pathname, an unnamed client
+address, exact nonblocking close-on-exec read/write custody, and `SO_PASSCRED` inherited from a
+listener prepared before `listen` and `accept`. Admission snapshots the connecting process's
+`SO_PEERCRED`; Begin and current-record packets must retain exact kernel-stamped `SCM_CREDENTIALS`
+continuity with that snapshot.
+
+`begin_worker_v3_verification_accepted_session_until_v2` consumes only that admitted endpoint. It
+does not discover a path, create or connect a socket, listen, or accept. The process whose identity
+must be observed must therefore perform `connect` itself, and the service process whose identity
+must be observed by the client must create the listener itself. Passing a connected descriptor to
+another process does not update Linux's connection-time `SO_PEERCRED` snapshot; a later packet from
+that process fails the per-message credential check. The existing unnamed V1 and V2 entrypoints
+remain strict and unchanged.

@@ -3,6 +3,7 @@ use std::fmt;
 use std::io::IoSliceMut;
 use std::mem::MaybeUninit;
 use std::os::fd::OwnedFd;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use fe2o3_worker_v3_verification_protocol::{
@@ -18,9 +19,9 @@ use crate::service::{
     RetainedWorkerV3VerificationPayloadV1, WorkerV3VerificationCallerV1,
     WorkerV3VerificationChallengeReplayGuardV1, WorkerV3VerificationMeasurementResolverV1,
     WorkerV3VerificationPolicyResolverV1, WorkerV3VerificationRejectionReasonV1,
-    WorkerV3VerificationServiceErrorV1, caller_identity, capture_payload, object_key,
-    receive_request, require_passcred, require_peer_write_eof, send_response, validate_control,
-    wait_for,
+    WorkerV3VerificationServiceErrorV1, caller_identity, canonical_filesystem_unix_address,
+    capture_payload, object_key, receive_request, require_passcred, require_peer_write_eof,
+    send_response, validate_accepted_control, validate_control, wait_for,
 };
 
 /// Required fail-closed source of service-owned current-record challenge reservations.
@@ -117,6 +118,119 @@ impl WorkerV3VerificationBeginOutcomeV2 {
     }
 }
 
+/// Move-only admitted service side of one connected filesystem-path V2 endpoint.
+///
+/// Admission requires exact nonblocking close-on-exec read/write custody, a connected Unix
+/// `SOCK_SEQPACKET`, a local address exactly matching the caller-supplied canonical absolute
+/// filesystem path, an unnamed peer address, and `SO_PASSCRED` already enabled by the listener
+/// before `listen` and `accept`. It snapshots the connecting process identity from `SO_PEERCRED`;
+/// every later request packet must carry matching kernel-stamped `SCM_CREDENTIALS`.
+///
+/// This type neither creates nor discovers a listener and grants no verification authority.
+pub struct WorkerV3VerificationAcceptedServiceEndpointV2 {
+    control: OwnedFd,
+    caller: WorkerV3VerificationCallerV1,
+    expected_service_address: rustix::net::SocketAddrAny,
+}
+
+impl WorkerV3VerificationAcceptedServiceEndpointV2 {
+    /// Admits one supervisor-provisioned accepted connection without receiving protocol bytes.
+    ///
+    /// The listener must have been prepared with
+    /// [`crate::prepare_worker_v3_verification_receiver_v1`] before the client could connect.
+    /// `expected_service_path` is validated lexically and matched exactly against the accepted
+    /// endpoint's local address. Failure retains ownership of `control`.
+    pub fn admit(
+        control: OwnedFd,
+        expected_service_path: &Path,
+    ) -> Result<Self, WorkerV3VerificationAcceptedServiceAdmissionFailureV2> {
+        let admitted = (|| {
+            let expected_service_address = canonical_filesystem_unix_address(expected_service_path)
+                .ok_or(WorkerV3VerificationServiceErrorV1::InvalidControl(
+                    "expected service path is not a canonical absolute filesystem pathname",
+                ))?;
+            validate_accepted_control(&control, &expected_service_address)?;
+            require_passcred(&control)?;
+            let caller = caller_identity(&control)?;
+            Ok((caller, expected_service_address))
+        })();
+        match admitted {
+            Ok((caller, expected_service_address)) => Ok(Self {
+                control,
+                caller,
+                expected_service_address,
+            }),
+            Err(source) => {
+                Err(WorkerV3VerificationAcceptedServiceAdmissionFailureV2 { control, source })
+            }
+        }
+    }
+
+    /// Returns the connection-time client identity captured from `SO_PEERCRED`.
+    pub const fn caller(&self) -> WorkerV3VerificationCallerV1 {
+        self.caller
+    }
+
+    /// Reports that connected endpoint admission grants no verification authority.
+    pub const fn grants_authority(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Debug for WorkerV3VerificationAcceptedServiceEndpointV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3VerificationAcceptedServiceEndpointV2")
+            .field("caller", &self.caller)
+            .field("authority", &"none")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Failed connected-filesystem-path service admission retaining the accepted endpoint.
+pub struct WorkerV3VerificationAcceptedServiceAdmissionFailureV2 {
+    control: OwnedFd,
+    source: WorkerV3VerificationServiceErrorV1,
+}
+
+impl WorkerV3VerificationAcceptedServiceAdmissionFailureV2 {
+    /// Returns the exact admission error.
+    pub const fn source_error(&self) -> &WorkerV3VerificationServiceErrorV1 {
+        &self.source
+    }
+
+    /// Returns ownership of the rejected accepted endpoint.
+    pub fn into_control(self) -> OwnedFd {
+        self.control
+    }
+}
+
+impl fmt::Debug for WorkerV3VerificationAcceptedServiceAdmissionFailureV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerV3VerificationAcceptedServiceAdmissionFailureV2")
+            .field("source", &self.source)
+            .field("endpoint_retained", &true)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for WorkerV3VerificationAcceptedServiceAdmissionFailureV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "V2 connected-path service admission failed with endpoint retained: {}",
+            self.source
+        )
+    }
+}
+
+impl Error for WorkerV3VerificationAcceptedServiceAdmissionFailureV2 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// Begins one multi-phase V2 session under one absolute deadline.
 ///
 /// The Begin wire payload is the exact canonical V1 request, preserving its caller nonce and
@@ -176,6 +290,78 @@ where
     validate_control(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
     require_passcred(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
     let caller = caller_identity(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
+    begin_admitted_worker_v3_verification_session_until_v2(
+        control,
+        caller,
+        deadline,
+        policy_resolver,
+        measurement_resolver,
+        replay_guard,
+        challenge_provider,
+    )
+}
+
+/// Begins one V2 session on an explicitly admitted filesystem-path accepted connection.
+///
+/// The endpoint remains already connected; this function performs no discovery, `connect`,
+/// `listen`, or `accept`. The exact caller-supplied deadline is shared by every V2 phase. Existing
+/// unnamed V2 entrypoints remain unchanged and do not accept pathname endpoints.
+pub fn begin_worker_v3_verification_accepted_session_until_v2<P, M, R, C>(
+    endpoint: WorkerV3VerificationAcceptedServiceEndpointV2,
+    deadline: Instant,
+    policy_resolver: &mut P,
+    measurement_resolver: &mut M,
+    replay_guard: &mut R,
+    challenge_provider: &mut C,
+) -> Result<WorkerV3VerificationBeginOutcomeV2, WorkerV3VerificationServiceErrorV2>
+where
+    P: WorkerV3VerificationPolicyResolverV1,
+    M: WorkerV3VerificationMeasurementResolverV1,
+    R: WorkerV3VerificationChallengeReplayGuardV1,
+    C: WorkerV3VerificationChallengeReservationProviderV2,
+{
+    require_deadline(deadline)?;
+    let WorkerV3VerificationAcceptedServiceEndpointV2 {
+        control,
+        caller,
+        expected_service_address,
+    } = endpoint;
+    validate_accepted_control(&control, &expected_service_address)
+        .map_err(WorkerV3VerificationServiceErrorV2::V1)?;
+    require_passcred(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)?;
+    if caller_identity(&control).map_err(WorkerV3VerificationServiceErrorV2::V1)? != caller {
+        return Err(WorkerV3VerificationServiceErrorV2::V1(
+            WorkerV3VerificationServiceErrorV1::InvalidControl(
+                "accepted control SO_PEERCRED changed after admission",
+            ),
+        ));
+    }
+    begin_admitted_worker_v3_verification_session_until_v2(
+        control,
+        caller,
+        deadline,
+        policy_resolver,
+        measurement_resolver,
+        replay_guard,
+        challenge_provider,
+    )
+}
+
+fn begin_admitted_worker_v3_verification_session_until_v2<P, M, R, C>(
+    control: OwnedFd,
+    caller: WorkerV3VerificationCallerV1,
+    deadline: Instant,
+    policy_resolver: &mut P,
+    measurement_resolver: &mut M,
+    replay_guard: &mut R,
+    challenge_provider: &mut C,
+) -> Result<WorkerV3VerificationBeginOutcomeV2, WorkerV3VerificationServiceErrorV2>
+where
+    P: WorkerV3VerificationPolicyResolverV1,
+    M: WorkerV3VerificationMeasurementResolverV1,
+    R: WorkerV3VerificationChallengeReplayGuardV1,
+    C: WorkerV3VerificationChallengeReservationProviderV2,
+{
     let (request_bytes, descriptors) = receive_request(&control, caller, deadline)
         .map_err(WorkerV3VerificationServiceErrorV2::V1)?;
     let request = WorkerV3VerificationRequestV1::decode_canonical(&request_bytes)
