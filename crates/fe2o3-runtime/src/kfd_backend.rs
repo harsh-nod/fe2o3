@@ -183,6 +183,42 @@ pub struct KfdRuntimeLaunchPerformanceV1 {
     recycle: Duration,
     data_path: KfdRuntimeLaunchDataPathV1,
     user_data_materializations: u64,
+    ready_promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
+}
+
+/// Address-free host observation of one successful authenticated H2D-ready
+/// promotion.
+///
+/// `authentication` is a sub-interval of the H2D completion observation. It is
+/// not subtracted from the inclusive H2D duration seen by runtime callers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KfdRuntimeReadyPromotionPerformanceV1 {
+    ordinal: u64,
+    content_ordinal: u32,
+    authenticated_bytes: u64,
+    authentication: Duration,
+}
+
+impl KfdRuntimeReadyPromotionPerformanceV1 {
+    /// Returns the monotonic successful-promotion ordinal for this backend.
+    pub const fn ordinal(self) -> u64 {
+        self.ordinal
+    }
+
+    /// Returns the stable content-role ordinal authenticated by the promotion.
+    pub const fn content_ordinal(self) -> u32 {
+        self.content_ordinal
+    }
+
+    /// Returns the exact nonempty byte extent authenticated by the promotion.
+    pub const fn authenticated_bytes(self) -> u64 {
+        self.authenticated_bytes
+    }
+
+    /// Returns host time spent in the promotion/authentication transition.
+    pub const fn authentication(self) -> Duration {
+        self.authentication
+    }
 }
 
 /// Address-free user-data storage path observed for a completed launch.
@@ -242,6 +278,11 @@ impl KfdRuntimeLaunchPerformanceV1 {
     /// included in this counter.
     pub const fn user_data_materializations(self) -> u64 {
         self.user_data_materializations
+    }
+
+    /// Returns the exact H2D-ready promotion consumed by the persistent launch.
+    pub const fn ready_promotion(self) -> Option<KfdRuntimeReadyPromotionPerformanceV1> {
+        self.ready_promotion
     }
 }
 
@@ -382,6 +423,10 @@ enum KfdRuntimeLaunchGateV1 {
     Semantic(Box<dyn KfdRuntimeSemanticLaunchAuthorityV1>),
     #[cfg(feature = "hardware-qualification")]
     ExactGfx942Vecadd(crate::qualification_gfx942_vecadd_v1::AdmittedGfx942VecaddQualificationV1),
+    #[cfg(feature = "hardware-qualification")]
+    ExactGfx942InplaceTransform(
+        crate::qualification_gfx942_inplace_transform_v1::AdmittedGfx942InplaceTransformQualificationV1,
+    ),
 }
 
 impl fmt::Debug for KfdRuntimeLaunchGateV1 {
@@ -396,6 +441,10 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             }
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942InplaceTransform(_) => {
+                formatter.write_str("ExactGfx942InplaceTransform")
+            }
         }
     }
 }
@@ -407,6 +456,10 @@ impl KfdRuntimeLaunchGateV1 {
             Self::Semantic(authority) => authority.authorize_launch_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942InplaceTransform(admitted) => {
+                admitted.authorizes_kfd_request_v1(request)
+            }
         })
         .unwrap_or(false)
     }
@@ -505,10 +558,16 @@ enum KfdRuntimeSdmaStorageV1 {
     Synthetic,
     Host(SdmaBufferOwnerV1),
     Device(Box<DirectionalSdmaDeviceOwnerV1>),
-    H2dReady(Box<PersistentComputeReadyOwnerV1>),
+    H2dReady(Box<PersistentComputeReadyStorageV1>),
     ComputeInFlight(u64),
     DemotedDevice(SdmaBufferOwnerV1),
     InFlight(KfdRuntimeSdmaInFlightV1),
+}
+
+#[derive(Debug)]
+struct PersistentComputeReadyStorageV1 {
+    owner: PersistentComputeReadyOwnerV1,
+    promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
 }
 
 impl KfdRuntimeSdmaStorageV1 {
@@ -525,10 +584,18 @@ impl KfdRuntimeSdmaStorageV1 {
             return None;
         };
         Some(PersistentComputeReadyFactsV1 {
-            logical_bytes: ready.byte_len(),
-            physical_bytes: ready.physical_byte_len(),
-            authenticated_sha256: ready.authenticated_sha256(),
+            logical_bytes: ready.owner.byte_len(),
+            physical_bytes: ready.owner.physical_byte_len(),
+            authenticated_sha256: ready.owner.authenticated_sha256(),
         })
+    }
+
+    #[cfg(test)]
+    fn ready_promotion_performance_v1(&self) -> Option<KfdRuntimeReadyPromotionPerformanceV1> {
+        let Self::H2dReady(ready) = self else {
+            return None;
+        };
+        ready.promotion
     }
 }
 
@@ -640,7 +707,7 @@ enum ActiveComputeExecutionV1 {
     ScriptedPersistentPrepared {
         allocation: u64,
         access: RuntimeAccessV1,
-        ready: Box<PersistentComputeReadyOwnerV1>,
+        ready: Box<PersistentComputeReadyStorageV1>,
         profile: PersistentPublicationProfileV1,
     },
     #[cfg(test)]
@@ -1283,6 +1350,8 @@ pub struct KfdRuntimeBackendV1 {
     sdma_dependency_retain_counts: HashMap<u64, usize>,
     quiescent_sdma_submissions: HashSet<u64>,
     last_launch_performance: Option<KfdRuntimeLaunchPerformanceV1>,
+    next_ready_promotion_ordinal: Option<u64>,
+    last_ready_promotion_performance: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
     staged_context_bytes: u64,
     sdma_enabled: bool,
@@ -1360,6 +1429,10 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             )
             .field("compute_lanes", &(1 + self.auxiliary_compute_lanes.len()))
             .field("last_launch_performance", &self.last_launch_performance)
+            .field(
+                "last_ready_promotion_performance",
+                &self.last_ready_promotion_performance,
+            )
             .field("staged_context_bytes", &self.staged_context_bytes)
             .field("sdma_enabled", &self.sdma_enabled)
             .field("staging_budgets", &self.staging_budgets)
@@ -1420,6 +1493,28 @@ impl KfdRuntimeBackendV1 {
         Self::open_default_with_gate(
             device_unique_id,
             KfdRuntimeLaunchGateV1::ExactGfx942Vecadd(admitted),
+        )
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    /// Opens the exact repository-owned gfx942 in-place-transform qualification backend.
+    ///
+    /// This constructor re-admits and retains one source-authenticated fixture,
+    /// then accepts only its fixed ABI, two pinned initial images, whole-buffer
+    /// read/write effect, and launch geometry. It grants no production authority.
+    pub fn open_gfx942_inplace_transform_qualification_v1(
+        device_unique_id: u64,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let admitted = crate::qualification_gfx942_inplace_transform_v1::admit_gfx942_inplace_transform_qualification_v1()
+            .map_err(|error| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                    error.to_string(),
+                )
+            })?;
+        Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::ExactGfx942InplaceTransform(admitted),
         )
     }
 
@@ -1566,6 +1661,8 @@ impl KfdRuntimeBackendV1 {
             sdma_dependency_retain_counts: HashMap::new(),
             quiescent_sdma_submissions: HashSet::new(),
             last_launch_performance: None,
+            next_ready_promotion_ordinal: Some(0),
+            last_ready_promotion_performance: None,
             staging_budgets,
             staged_context_bytes: 0,
             sdma_enabled: false,
@@ -3033,6 +3130,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         active: &ActiveSdmaCopyV1,
         ready: PersistentComputeReadyOwnerV1,
+        promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
         host: SdmaBufferOwnerV1,
         bytes: Arc<[u8]>,
         sha256: [u8; 32],
@@ -3064,12 +3162,33 @@ impl KfdRuntimeBackendV1 {
             .allocations
             .get_mut(&active.destination)
             .expect("authenticated H2D destination remains indexed");
-        destination.sdma_storage = KfdRuntimeSdmaStorageV1::H2dReady(Box::new(ready));
+        destination.sdma_storage =
+            KfdRuntimeSdmaStorageV1::H2dReady(Box::new(PersistentComputeReadyStorageV1 {
+                owner: ready,
+                promotion,
+            }));
         destination.bytes = bytes;
         destination.content_sha256 = Some(sha256);
         destination.last_full_host_write = None;
         destination.sdma_shadow_dirty = false;
         Ok(())
+    }
+
+    fn observe_ready_promotion_performance_v1(
+        &mut self,
+        content: Gfx942DeviceContentDescriptorV1,
+        authentication: Duration,
+    ) -> Option<KfdRuntimeReadyPromotionPerformanceV1> {
+        let ordinal = self.next_ready_promotion_ordinal?;
+        self.next_ready_promotion_ordinal = ordinal.checked_add(1);
+        let observation = KfdRuntimeReadyPromotionPerformanceV1 {
+            ordinal,
+            content_ordinal: content.role().ordinal(),
+            authenticated_bytes: content.byte_len(),
+            authentication,
+        };
+        self.last_ready_promotion_performance = Some(observation);
+        Some(observation)
     }
 
     fn finish_sdma_copy_v1(
@@ -3114,12 +3233,19 @@ impl KfdRuntimeBackendV1 {
         if let Some((content, bytes, sha256)) =
             self.full_h2d_ready_provenance_v1(&active, direction)
         {
+            let promotion_started = Instant::now();
             match self
                 .directional_sdma_ops_v1()
                 .promote_full_h2d_to_compute_ready(completed, content)
             {
                 Ok((ready, host)) => {
-                    self.restore_h2d_ready_storage_v1(&active, ready, host, bytes, sha256)?;
+                    let promotion = self.observe_ready_promotion_performance_v1(
+                        content,
+                        promotion_started.elapsed(),
+                    );
+                    self.restore_h2d_ready_storage_v1(
+                        &active, ready, promotion, host, bytes, sha256,
+                    )?;
                     return self.finish_sdma_window_progress_v1(active);
                 }
                 Err(PersistentComputeReadyTransitionFailureV1::Recovered { pair }) => {
@@ -3634,7 +3760,7 @@ impl KfdRuntimeBackendV1 {
             KfdRuntimeSdmaStorageV1::H2dReady(ready) => *ready,
             _ => unreachable!("preflighted H2D-ready storage remains ready"),
         };
-        let device = ready.normalize();
+        let device = ready.owner.normalize();
         let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
             matches!(
                 record.sdma_storage,
@@ -3658,7 +3784,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         allocation: u64,
         submission: u64,
-    ) -> Result<PersistentComputeReadyOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    ) -> Result<PersistentComputeReadyStorageV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
         let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
             Self::rejected(
@@ -3685,13 +3811,15 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         allocation: u64,
         submission: u64,
-        ready: PersistentComputeReadyOwnerV1,
+        ready: PersistentComputeReadyStorageV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
             matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == submission)
         });
         if !slot_matches {
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Ready(ready));
+            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Ready(
+                ready.owner,
+            ));
             return Err(self.terminal_error(
                 "persistent-compute rejection restoration slot changed unexpectedly",
             ));
@@ -3708,13 +3836,17 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
         submission: u64,
         input: Gfx942PersistentComputeInputV1,
+        promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         match input {
             Gfx942PersistentComputeInputV1::Initialized(ready) => self
                 .restore_h2d_ready_after_compute_rejection_v1(
                     allocation,
                     submission,
-                    PersistentComputeReadyOwnerV1::from_native(ready),
+                    PersistentComputeReadyStorageV1 {
+                        owner: PersistentComputeReadyOwnerV1::from_native(ready),
+                        promotion,
+                    },
                 ),
             Gfx942PersistentComputeInputV1::Uninitialized(device) => {
                 self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(
@@ -4679,7 +4811,7 @@ impl KfdRuntimeBackendV1 {
                     active.execution = Some(ActiveComputeExecutionV1::ScriptedPersistent {
                         allocation,
                         access,
-                        device: Box::new((*ready).normalize()),
+                        device: Box::new(ready.owner.normalize()),
                     });
                     backend.observe_persistent_dispatch_published_v1(
                         active.id,
@@ -5738,6 +5870,7 @@ impl KfdRuntimeBackendV1 {
             )
         })?;
         let ready = self.take_h2d_ready_for_compute_v1(persistent.allocation, id)?;
+        performance.ready_promotion = ready.promotion;
         let publication_profile = PersistentPublicationProfileV1 {
             launch: profile_launch,
             semantic_contract: profile_semantic_contract,
@@ -5770,7 +5903,7 @@ impl KfdRuntimeBackendV1 {
                 });
                 return Ok(());
             }
-            let device = Box::new(ready.normalize());
+            let device = Box::new(ready.owner.normalize());
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
@@ -5798,13 +5931,20 @@ impl KfdRuntimeBackendV1 {
             );
             return Ok(());
         }
+        let PersistentComputeReadyStorageV1 {
+            owner: ready,
+            promotion,
+        } = ready;
         let ready = match ready.into_native() {
             Ok(ready) => ready,
             Err(ready) => {
                 self.restore_h2d_ready_after_compute_rejection_v1(
                     persistent.allocation,
                     id,
-                    ready,
+                    PersistentComputeReadyStorageV1 {
+                        owner: ready,
+                        promotion,
+                    },
                 )?;
                 return Err(Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -5835,6 +5975,7 @@ impl KfdRuntimeBackendV1 {
                             persistent.allocation,
                             id,
                             recovered,
+                            promotion,
                         )?;
                         Err(Self::rejected(
                             KfdRuntimeBackendErrorKindV1::Native,
@@ -6221,6 +6362,16 @@ impl KfdRuntimeBackendV1 {
     /// Returns phase timings for the latest successfully completed launch.
     pub const fn last_launch_performance_v1(&self) -> Option<KfdRuntimeLaunchPerformanceV1> {
         self.last_launch_performance
+    }
+
+    /// Returns the most recent successful authenticated H2D-ready promotion.
+    ///
+    /// This observation contains no allocation, queue, or native address. Its
+    /// authentication duration remains included in caller-observed H2D time.
+    pub const fn last_ready_promotion_performance_v1(
+        &self,
+    ) -> Option<KfdRuntimeReadyPromotionPerformanceV1> {
+        self.last_ready_promotion_performance
     }
 
     /// Observes the queue-owned SDMA memory pool without changing custody.
@@ -13957,7 +14108,10 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                     match result {
                         Ok(input) => {
                             self.restore_persistent_compute_input_v1(
-                                allocation, submission, input,
+                                allocation,
+                                submission,
+                                input,
+                                active.performance.ready_promotion,
                             )?;
                             return Ok(self.settle_cancelled_persistent_prepared_v1(active));
                         }
@@ -14769,6 +14923,15 @@ mod tests {
         backend.scripted_drop_disarmed = true;
     }
 
+    fn ready_promotion_observation_v1(ordinal: u64) -> KfdRuntimeReadyPromotionPerformanceV1 {
+        KfdRuntimeReadyPromotionPerformanceV1 {
+            ordinal,
+            content_ordinal: 0,
+            authenticated_bytes: HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+            authentication: Duration::from_nanos(ordinal + 1),
+        }
+    }
+
     #[test]
     fn scripted_sdma_cross_driver_and_mixed_pair_mismatches_retain_without_consuming_fifo() {
         let mut left = ScriptedSdmaDriverV1::new([ScriptedSdmaStepV1::Promote(
@@ -14869,6 +15032,33 @@ mod tests {
                 "scripted Drop case {case} did not terminate through SIGABRT"
             );
         }
+    }
+
+    #[test]
+    fn ready_promotion_observation_is_monotonic_and_exhaustion_is_nonmutating() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let role = Gfx942DeviceContentRoleV1::new([0x26; 32], 7).unwrap();
+        let content = Gfx942DeviceContentDescriptorV1::new(role, 4096, [0x37; 32]).unwrap();
+        let first = backend
+            .observe_ready_promotion_performance_v1(content, Duration::from_nanos(11))
+            .unwrap();
+        let second = backend
+            .observe_ready_promotion_performance_v1(content, Duration::from_nanos(13))
+            .unwrap();
+        assert_eq!(first.ordinal(), 0);
+        assert_eq!(second.ordinal(), 1);
+        assert_eq!(second.content_ordinal(), 7);
+        assert_eq!(second.authenticated_bytes(), 4096);
+        assert_eq!(second.authentication(), Duration::from_nanos(13));
+        assert_eq!(backend.last_ready_promotion_performance_v1(), Some(second));
+
+        backend.next_ready_promotion_ordinal = None;
+        assert_eq!(
+            backend.observe_ready_promotion_performance_v1(content, Duration::from_nanos(17)),
+            None
+        );
+        assert_eq!(backend.last_ready_promotion_performance_v1(), Some(second));
+        backend.shutdown_native_v1().unwrap();
     }
 
     #[test]
@@ -15030,6 +15220,14 @@ mod tests {
         assert_eq!(ready.physical_bytes, ready.logical_bytes);
         let expected_sha256: [u8; 32] = Sha256::digest(&expected).into();
         assert_eq!(ready.authenticated_sha256, expected_sha256);
+        let promotion = backend.last_ready_promotion_performance_v1().unwrap();
+        assert_eq!(promotion.ordinal(), 0);
+        assert_eq!(promotion.content_ordinal(), 0);
+        assert_eq!(promotion.authenticated_bytes(), ready.logical_bytes);
+        assert_eq!(
+            destination.sdma_storage.ready_promotion_performance_v1(),
+            Some(promotion)
+        );
         assert_eq!(destination.bytes.as_ref(), expected);
         assert_eq!(
             destination.content_sha256,
@@ -15059,6 +15257,12 @@ mod tests {
                 .persistent_compute_ready_facts_v1(),
             Some(ready)
         );
+        assert_eq!(
+            backend.allocations[&device]
+                .sdma_storage
+                .ready_promotion_performance_v1(),
+            Some(promotion)
+        );
 
         backend.normalize_h2d_ready_v1(device).unwrap();
         let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&device].sdma_storage
@@ -15070,6 +15274,58 @@ mod tests {
             backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
             2
         );
+        clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
+    }
+
+    #[test]
+    fn scripted_recovered_ready_promotion_preserves_prior_observation_and_h2d_success() {
+        let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+        let mut steps = vec![
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len,
+            },
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+            ScriptedSdmaStepV1::PromoteComputeReady(ScriptedFailureModeV1::Retryable),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        let prior_promotion = ready_promotion_observation_v1(60);
+        backend.last_ready_promotion_performance = Some(prior_promotion);
+        backend.next_ready_promotion_ordinal = Some(61);
+        let expected = vec![0x4d; byte_len];
+        backend.write_allocation_v1(host, 0, &expected).unwrap();
+        let (source, destination) =
+            scripted_copy_regions_v1(host, device, u64::try_from(byte_len).unwrap());
+        let submission = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        assert_eq!(
+            backend.last_ready_promotion_performance_v1(),
+            Some(prior_promotion)
+        );
+        assert_eq!(backend.next_ready_promotion_ordinal, Some(61));
+        let KfdRuntimeSdmaStorageV1::Device(device_owner) =
+            &backend.allocations[&device].sdma_storage
+        else {
+            panic!("recovered promotion must restore physical device custody")
+        };
+        assert_eq!(device_owner.scripted_bytes().unwrap(), expected);
         clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
     }
 
@@ -15095,6 +15351,9 @@ mod tests {
             ScriptedSdmaStepV1::PromoteComputeReady(ScriptedFailureModeV1::ProcessTeardown),
         ];
         let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        let prior_promotion = ready_promotion_observation_v1(40);
+        backend.last_ready_promotion_performance = Some(prior_promotion);
+        backend.next_ready_promotion_ordinal = Some(41);
         backend
             .write_allocation_v1(host, 0, &vec![0x6b; byte_len])
             .unwrap();
@@ -15113,6 +15372,11 @@ mod tests {
         ));
         assert!(backend.terminal);
         assert!(backend.terminal_sdma_custody.is_some());
+        assert_eq!(
+            backend.last_ready_promotion_performance_v1(),
+            Some(prior_promotion)
+        );
+        assert_eq!(backend.next_ready_promotion_ordinal, Some(41));
         assert!(!backend.active_sdma.contains_key(&submission));
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
@@ -15217,6 +15481,9 @@ mod tests {
             ScriptedSdmaStepV1::PromoteComputeReadyForeignQueue,
         ];
         let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        let prior_promotion = ready_promotion_observation_v1(50);
+        backend.last_ready_promotion_performance = Some(prior_promotion);
+        backend.next_ready_promotion_ordinal = Some(51);
         backend
             .write_allocation_v1(host, 0, &vec![0x7c; byte_len])
             .unwrap();
@@ -15232,6 +15499,11 @@ mod tests {
                 if error.kind() == KfdRuntimeBackendErrorKindV1::Terminal
         ));
         assert!(backend.terminal);
+        assert_eq!(
+            backend.last_ready_promotion_performance_v1(),
+            Some(prior_promotion)
+        );
+        assert_eq!(backend.next_ready_promotion_ordinal, Some(51));
         assert!(matches!(
             backend.terminal_sdma_custody,
             Some(KfdRuntimeTerminalSdmaCustodyV1::Completed(
@@ -15292,7 +15564,7 @@ mod tests {
         assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
 
         let ready = backend.take_h2d_ready_for_compute_v1(device, 101).unwrap();
-        let physical = ready.normalize();
+        let physical = ready.owner.normalize();
         backend
             .restore_persistent_compute_completion_v1(
                 device,
@@ -15317,12 +15589,15 @@ mod tests {
             panic!("scripted cycle must retain scripted storage")
         };
         backend.allocations.get_mut(&device).unwrap().sdma_storage =
-            KfdRuntimeSdmaStorageV1::H2dReady(Box::new(PersistentComputeReadyOwnerV1::Scripted {
-                device: physical,
-                authenticated_sha256: expected_sha256,
+            KfdRuntimeSdmaStorageV1::H2dReady(Box::new(PersistentComputeReadyStorageV1 {
+                owner: PersistentComputeReadyOwnerV1::Scripted {
+                    device: physical,
+                    authenticated_sha256: expected_sha256,
+                },
+                promotion: None,
             }));
         let ready = backend.take_h2d_ready_for_compute_v1(device, 102).unwrap();
-        let physical = ready.normalize();
+        let physical = ready.owner.normalize();
         backend
             .restore_persistent_compute_completion_v1(
                 device,
@@ -15379,6 +15654,7 @@ mod tests {
             .copy_async_v1(stream, source, destination, &[])
             .unwrap();
         assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let promotion = backend.last_ready_promotion_performance_v1().unwrap();
         let module = backend
             .load_module_v1(7, &synthetic_cov6::module())
             .unwrap();
@@ -15424,6 +15700,7 @@ mod tests {
             KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
         );
         assert_eq!(performance.user_data_materializations(), 0);
+        assert_eq!(performance.ready_promotion(), Some(promotion));
 
         for submission in [copy, compute] {
             backend.release_submission_v1(submission).unwrap();
@@ -15477,6 +15754,7 @@ mod tests {
             .sdma_storage
             .persistent_compute_ready_facts_v1()
             .unwrap();
+        let promotion = backend.last_ready_promotion_performance_v1().unwrap();
         let expected_sha256: [u8; 32] = Sha256::digest(&expected).into();
         assert_eq!(ready.authenticated_sha256, expected_sha256);
 
@@ -15504,6 +15782,7 @@ mod tests {
             active.execution,
             Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. })
         ));
+        assert_eq!(active.performance.ready_promotion(), Some(promotion));
         assert_eq!(backend.compute_completion_reservations, 1);
         assert_eq!(backend.stream_compute_lanes.get(&stream), Some(&0));
         assert_eq!(backend.last_launch_performance_v1(), None);
@@ -15524,6 +15803,12 @@ mod tests {
                 .sdma_storage
                 .persistent_compute_ready_facts_v1(),
             Some(ready)
+        );
+        assert_eq!(
+            backend.allocations[&device]
+                .sdma_storage
+                .ready_promotion_performance_v1(),
+            Some(promotion)
         );
         assert_eq!(
             backend.allocations[&device].content_sha256,
@@ -15878,7 +16163,7 @@ mod tests {
             .restore_persistent_compute_completion_v1(
                 device,
                 202,
-                ready.normalize(),
+                ready.owner.normalize(),
                 Gfx942PersistentComputeEffectV1::Read,
             )
             .unwrap_err();

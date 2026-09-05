@@ -1,0 +1,653 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from contextlib import ExitStack
+from unittest import mock
+
+
+GUARD_PATH = pathlib.Path(__file__).with_name("r26-host-guard.py")
+SPEC = importlib.util.spec_from_file_location("fe2o3_r26_host_guard", GUARD_PATH)
+assert SPEC is not None and SPEC.loader is not None
+GUARD = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = GUARD
+SPEC.loader.exec_module(GUARD)
+
+
+class TopologyFixture:
+    bdf = "0000:05:00.0"
+    unique_id = "0x6ced1647a296545c"
+
+    def __init__(self, root: pathlib.Path) -> None:
+        self.pci_root = root / "pci"
+        self.topology_root = root / "topology"
+        self.status_path = root / "status"
+        device = self.pci_root / self.bdf
+        device.mkdir(parents=True)
+        (device / "vendor").write_text("0x1002\n", encoding="ascii")
+        (device / "unique_id").write_text(
+            self.unique_id.removeprefix("0x") + "\n", encoding="ascii"
+        )
+        (device / "numa_node").write_text("0\n", encoding="ascii")
+        (device / "local_cpulist").write_text("0-7\n", encoding="ascii")
+        nodes = self.topology_root / "nodes"
+        cpu = nodes / "0"
+        cpu.mkdir(parents=True)
+        (cpu / "gpu_id").write_text("0\n", encoding="ascii")
+        (cpu / "properties").write_text("cpu_cores_count 8\n", encoding="ascii")
+        gpu = nodes / "2"
+        gpu.mkdir()
+        (gpu / "gpu_id").write_text("28851\n", encoding="ascii")
+        (gpu / "properties").write_text(
+            "domain 0\n"
+            "location_id 1280\n"
+            f"unique_id {int(self.unique_id, 16)}\n"
+            "vendor_id 4098\n"
+            "gfx_target_version 90402\n",
+            encoding="ascii",
+        )
+        self.status_path.write_text(
+            "Name:\ttest\nCpus_allowed_list:\t0-7,48-55\nMems_allowed_list:\t0-1\n",
+            encoding="ascii",
+        )
+
+    def record(self) -> str:
+        return GUARD.topology_record(
+            gpu_index=0,
+            pci_bdf=self.bdf,
+            unique_id=self.unique_id,
+            pci_root=self.pci_root,
+            topology_root=self.topology_root,
+            status_path=self.status_path,
+        )
+
+
+def fields(record: str) -> tuple[str, dict[str, str]]:
+    prefix, *tokens = record.split()
+    return prefix, dict(token.split("=", 1) for token in tokens)
+
+
+def write_process(
+    proc_root: pathlib.Path,
+    pid: int,
+    *,
+    ppid: int,
+    process_group: int,
+    start_time: int,
+) -> None:
+    directory = proc_root / str(pid)
+    directory.mkdir(parents=True)
+    tail = [
+        "S",
+        str(ppid),
+        str(process_group),
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0",
+        str(start_time),
+    ]
+    (directory / "stat").write_text(
+        f"{pid} (test process) {' '.join(tail)}\n", encoding="ascii"
+    )
+
+
+def write_queue(kfd_root: pathlib.Path, pid: int, queue: int, gpu_id: int) -> None:
+    directory = kfd_root / str(pid) / "queues" / str(queue)
+    directory.mkdir(parents=True)
+    (directory / "gpuid").write_text(f"{gpu_id}\n", encoding="ascii")
+
+
+class TopologyTests(unittest.TestCase):
+    def test_exact_topology_produces_sealed_placement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TopologyFixture(pathlib.Path(temporary))
+            record = fixture.record()
+        prefix, observed = fields(record)
+        self.assertEqual(prefix, "topology")
+        self.assertEqual(observed["schema"], GUARD.TOPOLOGY_SCHEMA)
+        self.assertEqual(observed["pci_bdf"], fixture.bdf)
+        self.assertEqual(observed["unique_id"], fixture.unique_id)
+        self.assertEqual(observed["measurement_cpu_list"], "0-7")
+        self.assertEqual(observed["observer_cpu"], "48")
+        self.assertEqual(observed["kfd_node"], "2")
+        self.assertEqual(observed["kfd_gpu_id"], "28851")
+        digest = observed.pop("topology_sha256")
+        payload = GUARD._record("topology", observed) + "\n"
+        self.assertEqual(digest, hashlib.sha256(payload.encode()).hexdigest())
+
+    def test_reserves_one_local_cpu_when_no_nonlocal_cpu_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TopologyFixture(pathlib.Path(temporary))
+            fixture.status_path.write_text(
+                "Cpus_allowed_list:\t0-7\nMems_allowed_list:\t0\n",
+                encoding="ascii",
+            )
+            _, observed = fields(fixture.record())
+        self.assertEqual(observed["measurement_cpu_list"], "0-6")
+        self.assertEqual(observed["observer_cpu"], "7")
+
+    def test_rejects_identity_and_kfd_location_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TopologyFixture(pathlib.Path(temporary))
+            device = fixture.pci_root / fixture.bdf
+            (device / "unique_id").write_text("0123456789abcdef\n", encoding="ascii")
+            with self.assertRaisesRegex(GUARD.GuardError, "PCI unique ID"):
+                fixture.record()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TopologyFixture(pathlib.Path(temporary))
+            properties = fixture.topology_root / "nodes" / "2" / "properties"
+            properties.write_text(
+                properties.read_text(encoding="ascii").replace(
+                    "location_id 1280", "location_id 9728"
+                ),
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(GUARD.GuardError, "one exact KFD node"):
+                fixture.record()
+
+    def test_rejects_disallowed_local_cpu_or_memory_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TopologyFixture(pathlib.Path(temporary))
+            fixture.status_path.write_text(
+                "Cpus_allowed_list:\t48-55\nMems_allowed_list:\t0-1\n",
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(GUARD.GuardError, "local CPU"):
+                fixture.record()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TopologyFixture(pathlib.Path(temporary))
+            fixture.status_path.write_text(
+                "Cpus_allowed_list:\t0-7\nMems_allowed_list:\t1\n",
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(GUARD.GuardError, "Mems_allowed_list"):
+                fixture.record()
+
+
+class QueueCensusTests(unittest.TestCase):
+    def test_whitelists_target_tree_and_rejects_only_foreign_selected_gpu(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_process(proc_root, 101, ppid=100, process_group=100, start_time=1001)
+            write_process(proc_root, 200, ppid=1, process_group=200, start_time=2000)
+            write_process(proc_root, 201, ppid=1, process_group=201, start_time=2001)
+            write_queue(kfd_root, 100, 0, 28851)
+            write_queue(kfd_root, 101, 1, 28851)
+            write_queue(kfd_root, 200, 2, 28851)
+            write_queue(kfd_root, 201, 3, 23018)
+            foreign = GUARD.foreign_selected_gpu_queues(
+                kfd_proc_root=kfd_root,
+                proc_root=proc_root,
+                selected_gpu_id=28851,
+                root_pid=100,
+                root_start_time=1000,
+            )
+            target, classified_foreign = GUARD.classify_selected_gpu_queues(
+                kfd_proc_root=kfd_root,
+                proc_root=proc_root,
+                selected_gpu_id=28851,
+                root_pid=100,
+                root_start_time=1000,
+            )
+        self.assertEqual(foreign, [(200, 2)])
+        self.assertEqual(target, [(100, 0), (101, 1)])
+        self.assertEqual(classified_foreign, foreign)
+
+    def test_pid_reuse_is_not_whitelisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=2000)
+            write_queue(kfd_root, 100, 0, 28851)
+            foreign = GUARD.foreign_selected_gpu_queues(
+                kfd_proc_root=kfd_root,
+                proc_root=proc_root,
+                selected_gpu_id=28851,
+                root_pid=100,
+                root_start_time=1000,
+            )
+        self.assertEqual(foreign, [(100, 0)])
+
+    def test_missing_process_for_queue_owner_is_foreign(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 101, 0, 28851)
+            target, foreign = GUARD.classify_selected_gpu_queues(
+                kfd_proc_root=kfd_root,
+                proc_root=proc_root,
+                selected_gpu_id=28851,
+                root_pid=100,
+                root_start_time=1000,
+            )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [(101, 0)])
+
+    def test_cadence_fails_closed_on_large_or_nonmonotonic_gap(self) -> None:
+        self.assertEqual(GUARD.MAX_OBSERVATION_GAP_NS, 10_000_000)
+        cadence = GUARD.ObservationCadence(GUARD.MAX_OBSERVATION_GAP_NS)
+        cadence.observe(100)
+        cadence.observe(2_000_100)
+        with self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"):
+            cadence.observe(12_000_101)
+        nonmonotonic = GUARD.ObservationCadence(10)
+        nonmonotonic.observe(1)
+        with self.assertRaisesRegex(GUARD.GuardError, "did not advance"):
+            nonmonotonic.observe(1)
+
+
+class MonitorCommandTests(unittest.TestCase):
+    def monitor_argv(
+        self,
+        *,
+        kfd_root: pathlib.Path,
+        output: pathlib.Path,
+        command: list[str],
+    ) -> list[str]:
+        observer_cpu = min(os.sched_getaffinity(0))
+        return [
+            sys.executable,
+            str(GUARD_PATH),
+            "monitor",
+            "--gpu-id",
+            "28851",
+            "--observer-cpu",
+            str(observer_cpu),
+            "--target-output",
+            str(output),
+            "--kfd-proc-root",
+            str(kfd_root),
+            "--",
+            *command,
+        ]
+
+    def run_monitor(
+        self, temporary: pathlib.Path, command: list[str], *, foreign: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        kfd_root = temporary / "kfd-proc"
+        kfd_root.mkdir()
+        if foreign:
+            write_queue(kfd_root, 1, 0, 28851)
+        output = temporary / "target.out"
+        return subprocess.run(
+            self.monitor_argv(kfd_root=kfd_root, output=output, command=command),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def deterministic_monitor_argv(
+        self,
+        *,
+        kfd_root: pathlib.Path,
+        output: pathlib.Path,
+        command: list[str],
+    ) -> list[str]:
+        observer_cpu = min(os.sched_getaffinity(0))
+        program = """
+import importlib.util
+import pathlib
+import signal
+import sys
+
+spec = importlib.util.spec_from_file_location("fe2o3_r26_guard_child", sys.argv[1])
+guard = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = guard
+spec.loader.exec_module(guard)
+now_ns = 0
+
+def clock():
+    global now_ns
+    now_ns += guard.POLL_INTERVAL_NS
+    return now_ns
+
+try:
+    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, guard._raise_signal_error)
+    print(guard.monitor_target(
+        selected_gpu_id=28851,
+        observer_cpu=int(sys.argv[4]),
+        target_output=pathlib.Path(sys.argv[3]),
+        command=sys.argv[5:],
+        kfd_proc_root=pathlib.Path(sys.argv[2]),
+        proc_root=pathlib.Path("/proc"),
+        clock=clock,
+    ))
+except guard.GuardError as error:
+    print(f"r26-host-guard: {error}", file=sys.stderr)
+    raise SystemExit(2)
+"""
+        return [
+            sys.executable,
+            "-c",
+            program,
+            str(GUARD_PATH),
+            str(kfd_root),
+            str(output),
+            str(observer_cpu),
+            *command,
+        ]
+
+    def monitor_direct(
+        self,
+        temporary: pathlib.Path,
+        command: list[str],
+        *,
+        target_observed: bool = True,
+    ) -> str:
+        kfd_root = temporary / "kfd-proc"
+        kfd_root.mkdir()
+        observer_cpu = min(os.sched_getaffinity(0))
+        now_ns = 0
+
+        def deterministic_clock() -> int:
+            nonlocal now_ns
+            now_ns += GUARD.POLL_INTERVAL_NS
+            return now_ns
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(GUARD.os, "sched_setaffinity"))
+            stack.enter_context(
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                )
+            )
+            if target_observed:
+                stack.enter_context(
+                    mock.patch.object(
+                        GUARD,
+                        "classify_selected_gpu_queues",
+                        return_value=([(123, 0)], []),
+                    )
+                )
+            return GUARD.monitor_target(
+                selected_gpu_id=28851,
+                observer_cpu=observer_cpu,
+                target_output=temporary / "target.out",
+                command=command,
+                kfd_proc_root=kfd_root,
+                proc_root=pathlib.Path("/proc"),
+                clock=deterministic_clock,
+            )
+
+    def test_monitor_buffers_target_output_until_clean_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            result = self.monitor_direct(
+                root,
+                [
+                    sys.executable,
+                    "-c",
+                    "import time; time.sleep(0.03); print('backend=kfd')",
+                ],
+            )
+            target_output = root / "target.out"
+            retained_output = target_output.read_text(encoding="ascii")
+        prefix, observed = fields(result)
+        self.assertEqual(prefix, "monitor")
+        self.assertEqual(observed["status"], "clean")
+        self.assertEqual(observed["foreign_selected_queues"], "0")
+        self.assertGreater(int(observed["target_selected_queue_observations"]), 0)
+        self.assertGreaterEqual(int(observed["observations"]), 2)
+        self.assertEqual(retained_output, "backend=kfd\n")
+        self.assertEqual(
+            observed["target_output_sha256"],
+            hashlib.sha256(retained_output.encode()).hexdigest(),
+        )
+
+    def test_empty_queue_view_cannot_certify_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            with self.assertRaisesRegex(GUARD.GuardError, "no target-owned"):
+                self.monitor_direct(
+                    root,
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.02); print('backend=kfd')",
+                    ],
+                    target_observed=False,
+                )
+            self.assertFalse((root / "target.out").exists())
+
+    def test_monitor_accepts_an_ancestry_owned_child_queue(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            def __init__(self) -> None:
+                self.polls = 0
+
+            def poll(self) -> int | None:
+                self.polls += 1
+                return None if self.polls == 1 else 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            now_ns = 0
+            process = FakeProcess()
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                self.assertTrue(start_new_session)
+                write_process(
+                    proc_root, 100, ppid=1, process_group=100, start_time=1000
+                )
+                write_process(
+                    proc_root, 101, ppid=100, process_group=100, start_time=1001
+                )
+                write_queue(kfd_root, 101, 0, 28851)
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return process
+
+            def clock() -> int:
+                nonlocal now_ns
+                now_ns += GUARD.POLL_INTERVAL_NS
+                return now_ns
+
+            observer_cpu = min(os.sched_getaffinity(0))
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+            ):
+                record = GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    clock=clock,
+                    sleeper=lambda _seconds: None,
+                )
+        _, observed = fields(record)
+        self.assertEqual(observed["target_selected_queue_observations"], "2")
+
+    def test_final_census_duration_participates_in_cadence(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            def __init__(self) -> None:
+                self.polls = 0
+
+            def poll(self) -> int | None:
+                self.polls += 1
+                return None if self.polls == 1 else 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            now_ns = 0
+            census = 0
+            process = FakeProcess()
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                self.assertTrue(start_new_session)
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return process
+
+            def classify(
+                **_arguments: object,
+            ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+                nonlocal census, now_ns
+                census += 1
+                now_ns += (
+                    GUARD.POLL_INTERVAL_NS
+                    if census == 1
+                    else GUARD.MAX_OBSERVATION_GAP_NS + 1
+                )
+                return [(100, 0)], []
+
+            observer_cpu = min(os.sched_getaffinity(0))
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    return_value=GUARD.ProcessObservation(1, 100, 1000),
+                ),
+                mock.patch.object(
+                    GUARD, "classify_selected_gpu_queues", side_effect=classify
+                ),
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    clock=lambda: now_ns,
+                    sleeper=lambda _seconds: None,
+                )
+            self.assertEqual(census, 2)
+            self.assertFalse(output.exists())
+
+    def test_foreign_queue_fails_without_releasable_target_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            result = self.run_monitor(
+                root,
+                [sys.executable, "-c", "import time; time.sleep(2); print('bad')"],
+                foreign=True,
+            )
+            output_exists = (root / "target.out").exists()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("selected-GPU queue exists before target launch", result.stderr)
+        self.assertFalse(output_exists)
+
+    def test_nonzero_target_fails_without_releasable_target_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            with self.assertRaisesRegex(GUARD.GuardError, "status 3"):
+                self.monitor_direct(
+                    root,
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.02); print('bad'); raise SystemExit(3)",
+                    ],
+                )
+            output_exists = (root / "target.out").exists()
+        self.assertFalse(output_exists)
+
+    def test_termination_cleans_target_group_and_buffered_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            pid_file = root / "target.pid"
+            command = [
+                sys.executable,
+                "-c",
+                (
+                    "import os,pathlib,time; "
+                    f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+                    "time.sleep(10)"
+                ),
+            ]
+            monitor = subprocess.Popen(
+                self.deterministic_monitor_argv(
+                    kfd_root=kfd_root, output=output, command=command
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 2
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertTrue(pid_file.exists())
+            target_pid = int(pid_file.read_text(encoding="ascii"))
+            monitor.terminate()
+            stdout, stderr = monitor.communicate(timeout=7)
+            target_exists = pathlib.Path(f"/proc/{target_pid}").exists()
+            output_exists = output.exists()
+        self.assertEqual(monitor.returncode, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("interrupted by signal", stderr)
+        self.assertFalse(output_exists)
+        self.assertFalse(target_exists)
+
+
+if __name__ == "__main__":
+    unittest.main()

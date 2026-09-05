@@ -329,3 +329,52 @@ currently fail closed.
 
 HSA/HIP results remain qualification/oracle evidence and do not identify
 production backend alternatives.
+
+## Persistent In-place Compute Qualification
+
+R26 compares one exact persistent-buffer workload across direct KFD, raw HSA
+AQL, and HIP module launch on one idle MI300X GPU:
+
+```sh
+mkdir -p /tmp/fe2o3-r26-evidence
+FE2O3_R26_GPU_INDEX=6 \
+FE2O3_R26_OUTPUT_DIR=/tmp/fe2o3-r26-evidence \
+  benchmarks/runtime_gfx942/run-r26-inplace-mi300x.sh
+```
+
+Choose a physical GPU that has no existing KFD queues; the example index is
+not a portable default. The runner uses one 1 MiB `u32` allocation, a
+262,144-work-item grid, workgroups of 256, 10 warmups, and 30 untrimmed samples
+of 10 iterations. Every iteration alternates one of two complete input images,
+runs the SHA-pinned `inplace_transform` artifact, copies the result back, and
+validates every element. H2D, compute, D2H, and enclosing E2E samples use the
+same host-monotonic phase boundaries in all three implementations.
+
+The KFD lane promotes the complete H2D result into the runtime's authenticated
+persistent device allocation and launches compute against that same HBM
+storage without a second user-data materialization. Its nested promotion
+sample measures the full-H2D-to-compute-ready transition. The HSA and HIP
+comparators retain one device allocation but report promotion as unavailable.
+Setup, final validation, and release occur outside the enclosing E2E interval
+for every backend.
+
+One run contains three separate cyclic Latin-square slots. Each slot retains
+30 samples per backend without cross-slot aggregation. The set checker emits
+slot-qualified KFD/HSA and KFD/HIP p50 ratios for every phase plus the KFD
+promotion share, followed by a manifest over all three exact slot hashes. These
+are descriptive, non-gating comparisons; R26 rejects parity thresholds and
+makes no runtime-wide parity or speedup claim.
+
+Qualification runs in a minimal declared environment, builds Rust from a
+private snapshot of the exact Git commit, seals its fixture, helpers, sources,
+and binaries, and records start/end kernel, driver, ROCm, loader, GPU, PCI, KFD,
+and NUMA identities. Each backend is pinned to GPU-local CPUs. A separate CPU
+samples `/sys/class/kfd/kfd/proc` every 2 ms, rejects foreign selected-GPU
+queues or a gap above 10 ms, and must observe a target-owned queue before a row
+can be released. This is bounded sampled interference detection, not proof that
+no queue existed between censuses.
+
+The runner writes nothing durable on an incomplete or failed run. On success it
+revalidates staged copies of all three logs, byte-compares the regenerated set
+report, and atomically publishes one external evidence directory. The output
+directory must be outside the checkout.
