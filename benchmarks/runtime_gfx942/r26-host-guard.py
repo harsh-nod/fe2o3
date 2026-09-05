@@ -66,8 +66,8 @@ class ObservationCadence:
             self.observed_maximum_gap_ns = max(self.observed_maximum_gap_ns, gap)
             if gap > self.maximum_gap_ns:
                 raise GuardError(
-                    "queue census observation gap exceeded "
-                    f"{self.maximum_gap_ns // 1000} microseconds"
+                    f"queue census observation {self.observations + 1} gap exceeded: "
+                    f"observed_ns={gap} maximum_ns={self.maximum_gap_ns}"
                 )
         self.previous_ns = now_ns
         self.observations += 1
@@ -511,6 +511,13 @@ def monitor_target(
 
     process: subprocess.Popen[bytes] | None = None
     try:
+        try:
+            os.sched_setaffinity(0, {observer_cpu})
+            if os.sched_getaffinity(0) != {observer_cpu}:
+                raise GuardError("queue observer affinity did not take effect")
+        except OSError as error:
+            raise GuardError(f"cannot pin queue observer: {error}") from error
+
         cadence = ObservationCadence(MAX_OBSERVATION_GAP_NS)
         existing = selected_gpu_queue_owners(kfd_proc_root, selected_gpu_id)
         cadence.observe(clock())
@@ -537,13 +544,6 @@ def monitor_target(
                 )
             except OSError as error:
                 raise GuardError(f"cannot start target command: {error}") from error
-
-            try:
-                os.sched_setaffinity(0, {observer_cpu})
-                if os.sched_getaffinity(0) != {observer_cpu}:
-                    raise GuardError("queue observer affinity did not take effect")
-            except OSError as error:
-                raise GuardError(f"cannot pin queue observer: {error}") from error
 
             root = _read_process(proc_root, process.pid)
             if root is None:

@@ -261,7 +261,10 @@ class QueueCensusTests(unittest.TestCase):
         cadence = GUARD.ObservationCadence(GUARD.MAX_OBSERVATION_GAP_NS)
         cadence.observe(100)
         cadence.observe(2_000_100)
-        with self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"):
+        with self.assertRaisesRegex(
+            GUARD.GuardError,
+            r"observation 3 gap exceeded: observed_ns=10000001 maximum_ns=10000000",
+        ):
             cadence.observe(12_000_101)
         nonmonotonic = GUARD.ObservationCadence(10)
         nonmonotonic.observe(1)
@@ -427,6 +430,107 @@ except guard.GuardError as error:
             observed["target_output_sha256"],
             hashlib.sha256(retained_output.encode()).hexdigest(),
         )
+
+    def test_observer_is_pinned_before_the_prelaunch_census(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            order: list[str] = []
+            observer_cpu = min(os.sched_getaffinity(0))
+
+            def set_affinity(_pid: int, cpus: set[int]) -> None:
+                self.assertEqual(cpus, {observer_cpu})
+                order.append("set-affinity")
+
+            def get_affinity(_pid: int) -> set[int]:
+                order.append("get-affinity")
+                return {observer_cpu}
+
+            def initial_census(
+                _root: pathlib.Path, _gpu_id: int
+            ) -> list[tuple[int, int]]:
+                order.append("initial-census")
+                raise GUARD.GuardError("stop after initial census")
+
+            with (
+                mock.patch.object(GUARD.os, "sched_setaffinity", set_affinity),
+                mock.patch.object(GUARD.os, "sched_getaffinity", get_affinity),
+                mock.patch.object(
+                    GUARD, "selected_gpu_queue_owners", side_effect=initial_census
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "stop after initial census"),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=root / "target.out",
+                    command=["fixed-target"],
+                    kfd_proc_root=root / "kfd-proc",
+                    proc_root=root / "proc",
+                )
+        self.assertEqual(order, ["set-affinity", "get-affinity", "initial-census"])
+
+    def test_launch_delay_remains_part_of_the_census_gap(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            now_ns = 0
+            process = FakeProcess()
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                nonlocal now_ns
+                self.assertTrue(start_new_session)
+                now_ns += GUARD.MAX_OBSERVATION_GAP_NS + 1
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return process
+
+            observer_cpu = min(os.sched_getaffinity(0))
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    return_value=GUARD.ProcessObservation(1, 100, 1000),
+                ),
+                mock.patch.object(
+                    GUARD,
+                    "classify_selected_gpu_queues",
+                    return_value=([(100, 0)], []),
+                ),
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                self.assertRaisesRegex(
+                    GUARD.GuardError,
+                    r"observation 2 gap exceeded: observed_ns=10000001 maximum_ns=10000000",
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    clock=lambda: now_ns,
+                    sleeper=lambda _seconds: None,
+                )
+            self.assertFalse(output.exists())
 
     def test_empty_queue_view_cannot_certify_success(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
