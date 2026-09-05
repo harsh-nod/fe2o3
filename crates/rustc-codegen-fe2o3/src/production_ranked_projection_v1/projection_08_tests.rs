@@ -1,3 +1,173 @@
+    fn ordinary_component_payload_fixture(
+    ) -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1) {
+        let mut types = projection_types();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(140)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(140)),
+            SemanticTypeLayoutV1::new(Some(8), 4).unwrap(),
+            SemanticTypeShapeV1::enum_type(
+                SCALAR_TYPE,
+                vec![
+                    SemanticEnumVariantV1::new(
+                        0,
+                        SemanticAggregateTypeV1::new(vec![]).unwrap(),
+                    ),
+                    SemanticEnumVariantV1::new(
+                        1,
+                        SemanticAggregateTypeV1::new(vec![SCALAR_TYPE]).unwrap(),
+                    ),
+                ],
+            )
+            .unwrap(),
+        ));
+        let carrier = typed_assignment(
+            1,
+            ENUM_TYPE,
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(
+                    SemanticAggregateKindV1::EnumVariant(1),
+                    vec![constant(7)],
+                )
+                .unwrap(),
+            ),
+        );
+        let discriminant = enum_discriminant(
+            SemanticLocalIdV1::from_index(1),
+            SemanticLocalIdV1::from_index(2),
+        );
+        let payload_place = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Downcast(1), ENUM_TYPE)
+                    .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), SCALAR_TYPE)
+                    .unwrap(),
+            ],
+            SCALAR_TYPE,
+        )
+        .unwrap();
+        let payload = typed_assignment(
+            3,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(payload_place)),
+        );
+        let switch = SemanticTerminatorKindV1::SwitchInt {
+            discriminant: typed_operand(2, SCALAR_TYPE),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![
+                    SemanticSwitchTargetV1::new(
+                        0,
+                        cfg_edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                    ),
+                    SemanticSwitchTargetV1::new(
+                        1,
+                        cfg_edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                    ),
+                ],
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+            )
+            .unwrap(),
+        };
+        let function = projection_function_with_locals(
+            vec![
+                block(140, vec![carrier, discriminant], switch),
+                block(
+                    141,
+                    vec![payload],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 2)),
+                ),
+                block(142, vec![], SemanticTerminatorKindV1::Return),
+                block(143, vec![], SemanticTerminatorKindV1::Unreachable),
+            ],
+            vec![
+                local(140, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(141, ENUM_TYPE, SemanticLocalRoleV1::Temporary),
+                local(142, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(143, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        (types, function)
+    }
+
+    #[test]
+    fn ordinary_component_payload_requires_exact_variant_local_and_dominance() {
+        let (types, function) = ordinary_component_payload_fixture();
+        let dominance = SemanticEnumPayloadDominanceV1::analyze(&function, &types).unwrap();
+        let definitions = local_definition_counts(&function);
+        let escaped = vec![false; function.locals().len()];
+        let payloads = vec![
+            None,
+            Some(ProductionRankedValueV1::Argument(7)),
+            None,
+            None,
+        ];
+        let exact = PendingEnumPayloadLoadV1 {
+            carrier: 1,
+            variant: 1,
+            destination: 3,
+            use_block: 1,
+            statement: 0,
+        };
+        let projected = bind_component_index_enum_payloads_v1(
+            &function,
+            &payloads,
+            &definitions,
+            &escaped,
+            &[exact],
+            &dominance,
+        )
+        .unwrap();
+        assert_eq!(
+            projected[3].map(|projected| projected.value),
+            Some(ProductionRankedValueV1::Argument(7)),
+        );
+
+        for hostile in [
+            PendingEnumPayloadLoadV1 {
+                use_block: 2,
+                ..exact
+            },
+            PendingEnumPayloadLoadV1 {
+                variant: 0,
+                ..exact
+            },
+        ] {
+            assert!(
+                bind_component_index_enum_payloads_v1(
+                    &function,
+                    &payloads,
+                    &definitions,
+                    &escaped,
+                    &[hostile],
+                    &dominance,
+                )
+                .is_err(),
+            );
+        }
+
+        let mismatched_payloads = vec![
+            None,
+            None,
+            Some(ProductionRankedValueV1::Argument(7)),
+            None,
+        ];
+        let mismatched_local = PendingEnumPayloadLoadV1 {
+            carrier: 2,
+            ..exact
+        };
+        assert!(
+            bind_component_index_enum_payloads_v1(
+                &function,
+                &mismatched_payloads,
+                &definitions,
+                &escaped,
+                &[mismatched_local],
+                &dominance,
+            )
+            .is_err(),
+        );
+    }
+
     #[test]
     fn mutated_option_discriminants_do_not_mint_switch_predicates() {
         let predicate = GuardPredicateV1 {

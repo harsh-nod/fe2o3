@@ -40,6 +40,7 @@ use fe2o3_device::sync::syncthreads;
     feature = "blocked_multi_lane",
     feature = "blocked_multi_block",
     feature = "blocked_multi_lane_dynamic_grid",
+    feature = "block_component_index",
     feature = "write_only_blocked",
     feature = "write_only_blocked_dynamic_grid",
     feature = "write_only_tiled",
@@ -74,6 +75,7 @@ use fe2o3_device::{DynamicLds, WorkgroupCollectives, WorkgroupLdsScope};
     feature = "blocked_multi_lane",
     feature = "blocked_multi_block",
     feature = "blocked_multi_lane_dynamic_grid",
+    feature = "block_component_index",
     feature = "write_only_grid_exclusive",
     feature = "write_only_blocked",
     feature = "write_only_blocked_dynamic_grid",
@@ -558,13 +560,33 @@ pub fn blocked_multi_lane_dynamic_grid(mut output: DisjointSlice<f32, Blocked<In
 
 #[kernel(
     typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
 )]
 #[cfg(feature = "blocked")]
 pub fn blocked(mut output: DisjointSlice<f32, Blocked<Index1D, 1, 2>>) {
     if let Some(block) = thread::index_1d().checked_block::<1, 2>() {
         if let Some(element) = output.get_block_mut(&block, 1) {
             *element = 1.0;
+        }
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+)]
+#[cfg(feature = "block_component_index")]
+pub fn block_component_index(
+    input: &[u64],
+    mut output: DisjointSlice<u64, Blocked<Index1D, 16, 4>>,
+) {
+    let current = thread::index_1d();
+    let component = current.get();
+    if let Some(block) = current.checked_block::<16, 4>() {
+        if let Some(index) = block.component_index(component) {
+            if let Some(element) = output.get_block_mut(&block, 3) {
+                *element = input[index];
+            }
         }
     }
 }

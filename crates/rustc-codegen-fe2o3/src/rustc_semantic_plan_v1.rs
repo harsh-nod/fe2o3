@@ -3612,6 +3612,7 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV4 => 117,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
+        ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
             let base = match schema {
                 #[cfg(test)]

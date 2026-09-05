@@ -38,6 +38,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V10: u16 = 10;
 pub const INERT_SEMANTIC_MIR_VERSION_V11: u16 = 11;
 pub const INERT_SEMANTIC_MIR_VERSION_V12: u16 = 12;
 pub const INERT_SEMANTIC_MIR_VERSION_V13: u16 = 13;
+pub const INERT_SEMANTIC_MIR_VERSION_V14: u16 = 14;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -58,6 +59,7 @@ pub enum SemanticMirWireVersionV1 {
     V11,
     V12,
     V13,
+    V14,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -75,6 +77,7 @@ impl SemanticMirWireVersionV1 {
             Self::V11 => INERT_SEMANTIC_MIR_VERSION_V11,
             Self::V12 => INERT_SEMANTIC_MIR_VERSION_V12,
             Self::V13 => INERT_SEMANTIC_MIR_VERSION_V13,
+            Self::V14 => INERT_SEMANTIC_MIR_VERSION_V14,
         }
     }
 
@@ -92,6 +95,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V11 => Some(Self::V11),
             INERT_SEMANTIC_MIR_VERSION_V12 => Some(Self::V12),
             INERT_SEMANTIC_MIR_VERSION_V13 => Some(Self::V13),
+            INERT_SEMANTIC_MIR_VERSION_V14 => Some(Self::V14),
             _ => None,
         }
     }
@@ -5557,6 +5561,14 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         raw_index: SemanticTypeIdV1,
         index_space: SemanticDisjointIndexSpaceV1,
     },
+    /// Projects one ordinary index from an immutable blocked ownership witness.
+    DisjointBlockComponentIndex {
+        block_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+        lanes_per_block: u64,
+        elements_per_lane: u64,
+    },
     DisjointIndexCheckedShift {
         input_witness: SemanticTypeIdV1,
         output_witness: SemanticTypeIdV1,
@@ -6118,13 +6130,22 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V13, limits)
     }
 
+    /// Admits under the exact closed V14 schema that retains V13 and adds
+    /// checked component projection from an immutable disjoint-block witness.
+    pub fn admit_exact_v14(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V14, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
     /// workgroup pipelines occur together, V10 for target-neutral scans, and
     /// V11 when the compiler trap terminal is present, V12 for checked
-    /// volatile loads, and V13 for compiler-owned workgroup LDS scope
-    /// acquisition.
+    /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
+    /// and V14 for checked disjoint-block component projection.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7554,6 +7575,23 @@ fn record_intrinsic_capability_claims(
             index_space,
             ..
         } => claims.claim_mapping(index_witness, index_space),
+        SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+            block_witness,
+            index_space,
+            lanes_per_block,
+            elements_per_lane,
+            ..
+        } => {
+            let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                lanes_per_block,
+                elements_per_lane,
+            };
+            index_space == expected
+                && lanes_per_block != 0
+                && elements_per_lane != 0
+                && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                && claims.claim_mapping(block_witness, expected)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
             disjoint_slice,
             index_space,
@@ -8513,6 +8551,28 @@ fn compiler_intrinsic_signature_matches(
                 && output == raw_index
                 && transparent_index_witness_matches(request, index_witness, raw_index)
                 && shared_reference_to(request, inputs[0], index_witness)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+            block_witness,
+            raw_index,
+            index_space,
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            inputs.len() == 2
+                && shared_reference_to(request, inputs[0], block_witness)
+                && inputs[1] == raw_index
+                && is_unsigned_integer_with_bits(request, raw_index, 64)
+                && index_space
+                    == SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block,
+                        elements_per_lane,
+                    }
+                && lanes_per_block != 0
+                && elements_per_lane != 0
+                && lanes_per_block.checked_mul(elements_per_lane).is_some()
+                && disjoint_block_witness_matches(request, block_witness, raw_index)
+                && option_value_result_matches(request, output, raw_index)
         }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
             disjoint_slice,
@@ -15849,6 +15909,14 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(index_witness);
             pending.push_back(raw_index);
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+            block_witness,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(block_witness);
+            pending.push_back(raw_index);
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
             disjoint_slice,
             index_witness,
@@ -16553,6 +16621,17 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         )
     }) {
         required = required.max(SemanticMirWireVersionV1::V13);
+    }
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex { .. },
+                ..
+            }
+        )
+    }) {
+        required = required.max(SemanticMirWireVersionV1::V14);
     }
     required
 }
@@ -17400,6 +17479,7 @@ fn encode_compiler_intrinsic_operation(
             if wire_version != SemanticMirWireVersionV1::V11
                 && wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
+                && wire_version != SemanticMirWireVersionV1::V14
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17409,7 +17489,9 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(64)
         }
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
-            if wire_version != SemanticMirWireVersionV1::V13 {
+            if wire_version != SemanticMirWireVersionV1::V13
+                && wire_version != SemanticMirWireVersionV1::V14
+            {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
                     required: SemanticMirWireVersionV1::V13,
@@ -17488,6 +17570,7 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
             if wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
+                && wire_version != SemanticMirWireVersionV1::V14
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17755,6 +17838,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V11
                 && wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
+                && wire_version != SemanticMirWireVersionV1::V14
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17778,6 +17862,7 @@ fn encode_compiler_intrinsic_operation(
                 && wire_version != SemanticMirWireVersionV1::V11
                 && wire_version != SemanticMirWireVersionV1::V12
                 && wire_version != SemanticMirWireVersionV1::V13
+                && wire_version != SemanticMirWireVersionV1::V14
             {
                 return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                     requested: wire_version,
@@ -17993,6 +18078,26 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(index_witness.0)?;
             writer.u32(raw_index.0)?;
             encode_disjoint_index_space(writer, index_space)
+        }
+        SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+            block_witness,
+            raw_index,
+            index_space,
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            if wire_version != SemanticMirWireVersionV1::V14 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V14,
+                });
+            }
+            writer.u8(67)?;
+            writer.u32(block_witness.0)?;
+            writer.u32(raw_index.0)?;
+            encode_disjoint_index_space(writer, index_space)?;
+            writer.u64(lanes_per_block)?;
+            writer.u64(elements_per_lane)
         }
         SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
             input_witness,
@@ -20523,6 +20628,229 @@ mod private_tests {
         ));
     }
 
+    fn disjoint_block_component_index_signature_fixture()
+    -> (InertSemanticMirRequestV1, [SemanticTypeIdV1; 9]) {
+        let raw = SemanticTypeIdV1::from_index(0);
+        let marker = SemanticTypeIdV1::from_index(1);
+        let block = SemanticTypeIdV1::from_index(2);
+        let shared_block = SemanticTypeIdV1::from_index(3);
+        let mutable_block = SemanticTypeIdV1::from_index(4);
+        let discriminant = SemanticTypeIdV1::from_index(5);
+        let option_raw = SemanticTypeIdV1::from_index(6);
+        let u32_type = SemanticTypeIdV1::from_index(7);
+        let option_u32 = SemanticTypeIdV1::from_index(8);
+        let reference = |mutability| {
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    block,
+                    SemanticPointerKindV1::Reference,
+                    mutability,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            )
+        };
+        let option = |payload| {
+            SemanticTypeShapeV1::enum_type(
+                discriminant,
+                vec![
+                    SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    SemanticEnumVariantV1::new(
+                        1,
+                        SemanticAggregateTypeV1::new(vec![payload]).unwrap(),
+                    ),
+                ],
+            )
+            .unwrap()
+        };
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([121; 32])),
+            vec![
+                test_type(
+                    122,
+                    SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 64,
+                    }),
+                ),
+                test_type(
+                    123,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Unit,
+                ),
+                test_type(
+                    124,
+                    SemanticTypeLayoutV1::aggregate(
+                        Some(16),
+                        8,
+                        SemanticAggregateLayoutV1::new(vec![0, 8, 16], vec![]).unwrap(),
+                    )
+                    .unwrap(),
+                    SemanticTypeShapeV1::Aggregate(
+                        SemanticAggregateTypeV1::new(vec![raw, raw, marker]).unwrap(),
+                    ),
+                ),
+                test_type(
+                    125,
+                    SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                    reference(SemanticMutabilityV1::Immutable),
+                ),
+                test_type(
+                    126,
+                    SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                    reference(SemanticMutabilityV1::Mutable),
+                ),
+                test_type(
+                    127,
+                    SemanticTypeLayoutV1::new(Some(1), 1).unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 8,
+                    }),
+                ),
+                test_type(
+                    128,
+                    SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
+                    option(raw),
+                ),
+                test_type(
+                    129,
+                    SemanticTypeLayoutV1::new(Some(4), 4).unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32,
+                    }),
+                ),
+                test_type(
+                    130,
+                    SemanticTypeLayoutV1::new(Some(8), 4).unwrap(),
+                    option(u32_type),
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        (
+            request,
+            [
+                raw,
+                marker,
+                block,
+                shared_block,
+                mutable_block,
+                discriminant,
+                option_raw,
+                u32_type,
+                option_u32,
+            ],
+        )
+    }
+
+    #[test]
+    fn disjoint_block_component_index_requires_exact_signature_and_geometry() {
+        let (
+            request,
+            [
+                raw,
+                marker,
+                block,
+                shared_block,
+                mutable_block,
+                _,
+                option_raw,
+                u32_type,
+                option_u32,
+            ],
+        ) = disjoint_block_component_index_signature_fixture();
+        let value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+        let abi = |receiver, component, output| {
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256([131; 32]),
+                SemanticLayoutIdentityV1::from_sha256([132; 32]),
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                vec![value(receiver), value(component)],
+                value(output),
+            )
+            .unwrap()
+        };
+        let operation = |block_witness, index_space, lanes_per_block, elements_per_lane| {
+            SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                block_witness,
+                raw_index: raw,
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+            }
+        };
+        let exact = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: 16,
+            elements_per_lane: 4,
+        };
+        assert!(compiler_intrinsic_signature_matches(
+            &request,
+            operation(block, exact, 16, 4),
+            &abi(shared_block, raw, option_raw),
+        ));
+        for hostile_abi in [
+            abi(mutable_block, raw, option_raw),
+            abi(raw, raw, option_raw),
+            abi(shared_block, u32_type, option_raw),
+            abi(shared_block, raw, raw),
+            abi(shared_block, raw, option_u32),
+        ] {
+            assert!(!compiler_intrinsic_signature_matches(
+                &request,
+                operation(block, exact, 16, 4),
+                &hostile_abi,
+            ));
+        }
+        for hostile in [
+            operation(marker, exact, 16, 4),
+            operation(
+                block,
+                SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: 8,
+                    elements_per_lane: 8,
+                },
+                16,
+                4,
+            ),
+            operation(
+                block,
+                SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: 0,
+                    elements_per_lane: 4,
+                },
+                0,
+                4,
+            ),
+            operation(
+                block,
+                SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: u64::MAX,
+                    elements_per_lane: 2,
+                },
+                u64::MAX,
+                2,
+            ),
+        ] {
+            assert!(!compiler_intrinsic_signature_matches(
+                &request,
+                hostile,
+                &abi(shared_block, raw, option_raw),
+            ));
+        }
+    }
+
     #[test]
     fn disjoint_mapping_claims_bind_witnesses_and_slices_request_wide() {
         let raw = SemanticTypeIdV1::from_index(0);
@@ -20625,6 +20953,16 @@ mod private_tests {
                 disjoint_slice: slice,
                 block_witness: block,
                 element,
+                raw_index: raw,
+                index_space: mapping,
+                lanes_per_block: 16,
+                elements_per_lane: 4,
+            },
+            &mut claims,
+        ));
+        assert!(record_intrinsic_capability_claims(
+            SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                block_witness: block,
                 raw_index: raw,
                 index_space: mapping,
                 lanes_per_block: 16,

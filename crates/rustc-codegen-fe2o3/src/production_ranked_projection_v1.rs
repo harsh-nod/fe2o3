@@ -168,6 +168,12 @@ struct ProjectedDisjointIndexV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedOrdinaryIndexV1 {
+    value: ProductionRankedValueV1,
+    availability: SemanticEnumPayloadAvailabilityV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CapabilityAvailabilityV1 {
     Option(SemanticOptionAvailabilityV1),
     EnumPayload(SemanticEnumPayloadAvailabilityV1),
@@ -257,6 +263,7 @@ struct CheckedReferencesV1 {
 
 struct IntrinsicProjectionV1 {
     index_values: Vec<Option<ProjectedDisjointIndexV1>>,
+    ordinary_index_values: Vec<Option<ProjectedOrdinaryIndexV1>>,
     local_contracts: ProjectionLocalContractsV1,
     guarded_accesses: Vec<GuardedRankedAccessV1>,
     option_predicates: Vec<Option<GuardPredicateV1>>,
@@ -3053,10 +3060,17 @@ fn project_and_verify_ranked_root_v1(
         &mut next_value,
         &mut discarded_ir,
     )?;
-    let bounds_checks = project_rust_bounds_checks(
+    let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
         function,
         intrinsic.extent_argument_count,
         &intrinsic.index_values,
+        &intrinsic.ordinary_index_values,
+        Some(
+            &intrinsic
+                .local_contracts
+                .checked_references
+                .enum_payload_dominance,
+        ),
         &mut entry_operations,
         &mut next_value,
     )?;
@@ -4154,10 +4168,31 @@ fn production_access_sources(
     Ok(retained)
 }
 
+#[cfg(test)]
 fn project_rust_bounds_checks(
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
     known_indices: &[Option<ProjectedDisjointIndexV1>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
+    project_rust_bounds_checks_with_ordinary_v1(
+        function,
+        first_argument,
+        known_indices,
+        &[],
+        None,
+        operations,
+        next_value,
+    )
+}
+
+fn project_rust_bounds_checks_with_ordinary_v1(
+    function: &SemanticFunctionDeclV1,
+    first_argument: usize,
+    known_indices: &[Option<ProjectedDisjointIndexV1>],
+    ordinary_indices: &[Option<ProjectedOrdinaryIndexV1>],
+    enum_payload_dominance: Option<&SemanticEnumPayloadDominanceV1>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
@@ -4229,6 +4264,11 @@ fn project_rust_bounds_checks(
             })?;
     }
 
+    if !ordinary_indices.is_empty() && ordinary_indices.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "ordinary intrinsic index facts do not match the semantic local table",
+        ));
+    }
     let mut local_values = if known_indices.is_empty() {
         vec![None; function.locals().len()]
     } else {
@@ -4382,6 +4422,39 @@ fn project_rust_bounds_checks(
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
+        }
+        if let Some(ordinary) = ordinary_indices
+            .get(index_local.index() as usize)
+            .copied()
+            .flatten()
+        {
+            let Some(enum_payload_dominance) = enum_payload_dominance else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "ordinary enum index facts lack enum-dominance evidence",
+                ));
+            };
+            if !enum_payload_dominance.allows(
+                ordinary.availability,
+                SemanticBlockIdV1::from_index(block_index as u32),
+            ) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "an ordinary enum index payload is used outside its authenticated variant edge",
+                ));
+            }
+            let slot = local_values.get_mut(index_local.index() as usize).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "an ordinary enum index payload is outside the semantic local table",
+                ),
+            )?;
+            match *slot {
+                None => *slot = Some(ordinary.value),
+                Some(existing) if existing == ordinary.value => {}
+                Some(_) => {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "an ordinary enum index payload conflicts with index capability authority",
+                    ));
+                }
+            }
         }
         let mut unknown_for = |local: SemanticLocalIdV1| {
             let slot = local_values.get_mut(local.index() as usize).ok_or(
@@ -6498,9 +6571,6 @@ fn blocked_mapping_fits_launch_v1(
     let Some(block_elements) = lanes_per_block.checked_mul(elements_per_lane) else {
         return false;
     };
-    if lanes_per_block == 1 {
-        return true;
-    }
     let Some(upper_bound) = linear_launch_upper_bound else {
         return false;
     };
@@ -7182,7 +7252,7 @@ fn project_intrinsic_contracts(
     }
 
     enum_payload_stores.sort_unstable_by_key(|store| (store.carrier, store.variant));
-    for load in enum_payload_loads {
+    for load in enum_payload_loads.iter().copied() {
         let key = (load.carrier, load.variant);
         let first =
             enum_payload_stores.partition_point(|store| (store.carrier, store.variant) < key);
@@ -7622,6 +7692,23 @@ fn project_intrinsic_contracts(
             "capability worklist exceeded its charged def-use edges",
         ));
     }
+
+    let ordinary_index_values = project_disjoint_block_component_indices_v1(
+        callables,
+        function,
+        linear_launch_upper_bound,
+        constants,
+        &index_values,
+        &local_definitions,
+        &scalar_inventory.address_escaped,
+        &enum_payload_loads,
+        &option_dominance,
+        &enum_payload_dominance,
+        &mut option_predicates,
+        operations,
+        next_value,
+        ranked_ir,
+    )?;
 
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
@@ -8605,6 +8692,7 @@ fn project_intrinsic_contracts(
         project_generated_terminator_effects_v1(types, function, callables)?;
     Ok(IntrinsicProjectionV1 {
         index_values,
+        ordinary_index_values,
         local_contracts,
         extent_argument_count: if guarded_accesses.is_empty()
             && direct_read_effects.iter().all(Option::is_none)
@@ -17985,6 +18073,329 @@ fn projected_disjoint_operand_v1(
     Ok(projected)
 }
 
+fn push_projected_index_constant_v1(
+    value: u64,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    reserve_operation(operations)?;
+    let result = next_value_id(next_value)?;
+    operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+    push_ranked_ir(
+        ranked_ir,
+        &format!("  %{} = kernel.index_constant {value}\n", result.get()),
+    )?;
+    Ok(ProductionRankedValueV1::Local(result))
+}
+
+fn push_projected_index_binary_v1(
+    kind: IndexBinaryKindAttr,
+    lhs: ProductionRankedValueV1,
+    rhs: ProductionRankedValueV1,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    reserve_operation(operations)?;
+    let result = next_value_id(next_value)?;
+    operations.push(ProductionRankedOperationV1::IndexBinary {
+        result,
+        kind,
+        lhs,
+        rhs,
+    });
+    push_ranked_ir(
+        ranked_ir,
+        &format!(
+            "  %{} = kernel.index_binary {kind:?} {}, {}\n",
+            result.get(),
+            ranked_value_text_v1(lhs),
+            ranked_value_text_v1(rhs),
+        ),
+    )?;
+    Ok(ProductionRankedValueV1::Local(result))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_disjoint_block_component_indices_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    linear_launch_upper_bound: Option<u64>,
+    constants: &[Option<u64>],
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    local_definitions: &[u8],
+    address_escaped: &[bool],
+    enum_payload_loads: &[PendingEnumPayloadLoadV1],
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    option_predicates: &mut [Option<GuardPredicateV1>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<Vec<Option<ProjectedOrdinaryIndexV1>>, ProductionRankedProjectionErrorV1> {
+    let local_count = function.locals().len();
+    if index_values.len() != local_count
+        || local_definitions.len() != local_count
+        || address_escaped.len() != local_count
+        || option_predicates.len() != local_count
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "component-index projection inventories do not match the semantic local table",
+        ));
+    }
+    let mut option_payload_values = vec![None; local_count];
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                    index_space,
+                    lanes_per_block,
+                    elements_per_lane,
+                    ..
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: *lanes_per_block,
+            elements_per_lane: *elements_per_lane,
+        };
+        if *index_space != expected
+            || !blocked_mapping_fits_launch_v1(
+                linear_launch_upper_bound,
+                *lanes_per_block,
+                *elements_per_lane,
+            )
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "component-index blocked geometry is malformed or exceeds the authenticated launch",
+            ));
+        }
+        let destination = simple_call_destination(call)?.index() as usize;
+        if local_definitions.get(destination).copied() != Some(1)
+            || address_escaped.get(destination).copied() != Some(false)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a component-index Option result lacks one stable local destination",
+            ));
+        }
+        if option_payload_values[destination].is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple component-index payloads target one semantic local",
+            ));
+        }
+        let block_index_value = projected_disjoint_operand_v1(
+            call,
+            0,
+            index_values,
+            option_dominance,
+            enum_payload_dominance,
+            block_index,
+        )?;
+        if block_index_value.mapping != expected {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "component-index receiver mapping identity changed",
+            ));
+        }
+        let component = if let Some(component) = call
+            .arguments()
+            .get(1)
+            .and_then(|operand| constant_operand_value(operand, constants))
+        {
+            push_projected_index_constant_v1(component, operations, next_value, ranked_ir)?
+        } else {
+            let component_local = call
+                .arguments()
+                .get(1)
+                .and_then(simple_operand_local)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a component-index operand is not one exact scalar local or constant",
+                ))?;
+            let component = index_values
+                .get(component_local.index() as usize)
+                .copied()
+                .flatten()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a component-index scalar lacks exact ranked value provenance",
+                ))?;
+            if !component.availability.is_none_or(|availability| {
+                capability_availability_allows(
+                    option_dominance,
+                    enum_payload_dominance,
+                    availability,
+                    SemanticBlockIdV1::from_index(block_index as u32),
+                )
+            }) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a component-index scalar is used outside its authenticated source region",
+                ));
+            }
+            component.value
+        };
+        let lanes =
+            push_projected_index_constant_v1(*lanes_per_block, operations, next_value, ranked_ir)?;
+        let elements = push_projected_index_constant_v1(
+            *elements_per_lane,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let block_elements = lanes_per_block.checked_mul(*elements_per_lane).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "component-index blocked dimensions overflow u64",
+            ),
+        )?;
+        let block_elements =
+            push_projected_index_constant_v1(block_elements, operations, next_value, ranked_ir)?;
+        let block_number = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Divide,
+            block_index_value.value,
+            lanes,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let lane = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Remainder,
+            block_index_value.value,
+            lanes,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let block_base = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Multiply,
+            block_number,
+            block_elements,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let component_base = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Multiply,
+            component,
+            lanes,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let component_index = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Add,
+            block_base,
+            component_base,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let component_index = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Add,
+            component_index,
+            lane,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let predicate = option_predicates.get_mut(destination).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a component-index Option result is outside the semantic local table",
+            ),
+        )?;
+        if predicate.is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple predicates target one component-index Option local",
+            ));
+        }
+        *predicate = Some(GuardPredicateV1 {
+            comparisons: vec![(component, elements)],
+        });
+        option_payload_values[destination] = Some(component_index);
+    }
+
+    bind_component_index_enum_payloads_v1(
+        function,
+        &option_payload_values,
+        local_definitions,
+        address_escaped,
+        enum_payload_loads,
+        enum_payload_dominance,
+    )
+}
+
+fn bind_component_index_enum_payloads_v1(
+    function: &SemanticFunctionDeclV1,
+    option_payload_values: &[Option<ProductionRankedValueV1>],
+    local_definitions: &[u8],
+    address_escaped: &[bool],
+    enum_payload_loads: &[PendingEnumPayloadLoadV1],
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+) -> Result<Vec<Option<ProjectedOrdinaryIndexV1>>, ProductionRankedProjectionErrorV1> {
+    let local_count = function.locals().len();
+    if option_payload_values.len() != local_count
+        || local_definitions.len() != local_count
+        || address_escaped.len() != local_count
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "component-index enum-payload inventories do not match the semantic local table",
+        ));
+    }
+    let mut ordinary_index_values = vec![None; local_count];
+    for load in enum_payload_loads {
+        let Some(payload) = option_payload_values.get(load.carrier).copied().flatten() else {
+            continue;
+        };
+        if load.variant != 1
+            || local_definitions.get(load.carrier).copied() != Some(1)
+            || local_definitions.get(load.destination).copied() != Some(1)
+            || address_escaped.get(load.destination).copied() != Some(false)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a component-index payload load changed carrier, variant, or local custody",
+            ));
+        }
+        let availability = enum_payload_dominance
+            .availability(
+                SemanticLocalIdV1::from_index(load.carrier as u32),
+                load.variant,
+            )
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a component-index Some payload lacks an exact enum-dominance region",
+            ))?;
+        if !enum_payload_dominance.allows(
+            availability,
+            SemanticBlockIdV1::from_index(load.use_block as u32),
+        ) {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a component-index payload is loaded outside its authenticated Some edge",
+            ));
+        }
+        let projected = ProjectedOrdinaryIndexV1 {
+            value: payload,
+            availability,
+        };
+        let slot = ordinary_index_values.get_mut(load.destination).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a component-index payload destination is outside the semantic local table",
+            ),
+        )?;
+        match *slot {
+            None => *slot = Some(projected),
+            Some(existing) if existing == projected => {}
+            Some(_) => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "multiple component-index payloads reach one ordinary index local",
+                ));
+            }
+        }
+    }
+    Ok(ordinary_index_values)
+}
+
 fn capability_availability_allows(
     option: &SemanticOptionDominanceV1,
     enum_payload: &SemanticEnumPayloadDominanceV1,
@@ -21369,6 +21780,7 @@ fn project_direct_call_accesses(
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }

@@ -34,6 +34,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndexCheckedTiled2d,
     ThreadIndexCheckedRowStriped2d,
     DisjointIndexGet,
+    DisjointBlockComponentIndex,
     DisjointIndexCheckedShift,
     DisjointSliceLen,
     DisjointSliceGetMut,
@@ -200,6 +201,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DisjointIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet)
+            }
+            TrustedDeviceItem::DisjointBlockComponentIndex => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointBlockComponentIndex)
             }
             TrustedDeviceItem::DisjointIndexCheckedShift => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift)
@@ -521,6 +525,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet) => {
                 TrustedDeviceItem::DisjointIndexGet
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointBlockComponentIndex) => {
+                TrustedDeviceItem::DisjointBlockComponentIndex
             }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift) => {
                 TrustedDeviceItem::DisjointIndexCheckedShift
@@ -871,6 +878,10 @@ mod tests {
             (
                 TrustedDeviceItem::DisjointIndexGet,
                 ProductionTerminalExpansionV1::DisjointIndexGet,
+            ),
+            (
+                TrustedDeviceItem::DisjointBlockComponentIndex,
+                ProductionTerminalExpansionV1::DisjointBlockComponentIndex,
             ),
             (
                 TrustedDeviceItem::DisjointIndexCheckedShift,

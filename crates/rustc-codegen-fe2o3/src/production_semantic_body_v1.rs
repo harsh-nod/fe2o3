@@ -2172,6 +2172,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::DisjointBlockComponentIndex
         | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::WorkgroupPipelineStage
         | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
@@ -2346,6 +2347,10 @@ mod tests {
         );
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::DisjointSliceGetMut),
+            Some(2)
+        );
+        assert_eq!(
+            terminal_argument_count_v1(ProductionTerminalExpansionV1::DisjointBlockComponentIndex,),
             Some(2)
         );
     }

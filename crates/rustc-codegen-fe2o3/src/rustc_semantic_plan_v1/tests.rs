@@ -417,12 +417,13 @@
                 ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum,
                 ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum,
                 ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent,
+                ProductionTerminalExpansionV1::DisjointBlockComponentIndex,
             ]
             .map(|expansion| terminal_expansion_tag_for_schema_v1(
                 expansion,
                 TerminalIdentitySchemaV1::CombinedV4,
             )),
-            [113, 114, 115, 116, 117, 118],
+            [113, 114, 115, 116, 117, 118, 119],
         );
 
         let gfx950 = [

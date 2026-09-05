@@ -15990,6 +15990,102 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ty: Type::INDEX,
                 }
             }
+            SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+                ..
+            } => {
+                self.require_call_argument_count(block, call, 2)?;
+                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: *lanes_per_block,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if *index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "DisjointBlock::component_index mapping identity changed",
+                    ));
+                }
+                let witness = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                let raw = require_block_component_witness_v1(block, witness, expected)?;
+                let component =
+                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let component = self.coerce_index(block, operations, component)?;
+                let (component, _) = component
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let (index, present) = self.lower_block_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    *lanes_per_block,
+                    *elements_per_lane,
+                )?;
+                let result_type = destination.place().ty();
+                let (discriminant, variants) = semantic_enum_shape(self.types, result_type)?;
+                let [none, some] = variants else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "component-index result is not an exact two-variant Option",
+                    ));
+                };
+                if none.discriminant() != 0
+                    || !none.fields().fields().is_empty()
+                    || some.discriminant() != 1
+                    || some.fields().fields() != [call.arguments()[1].ty()]
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "component-index Option layout changed",
+                    ));
+                }
+                let discriminant_ty = lower_scalar_type(self.types, discriminant)?;
+                let none_discriminant = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Constant(integer_constant(&discriminant_ty, 0)?),
+                    )?
+                    .value()
+                    .expect("emitted None discriminant")
+                    .0;
+                let some_discriminant = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Constant(integer_constant(&discriminant_ty, 1)?),
+                    )?
+                    .value()
+                    .expect("emitted Some discriminant")
+                    .0;
+                let discriminant_value = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Select {
+                            condition: present,
+                            true_value: some_discriminant,
+                            false_value: none_discriminant,
+                        },
+                    )?
+                    .value()
+                    .expect("emitted component-index discriminant")
+                    .0;
+                ordinary_option_index_binding_v1(
+                    result_type,
+                    discriminant_value,
+                    discriminant_ty,
+                    index,
+                )
+            }
             SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
                 input_space,
                 output_space,
@@ -24238,6 +24334,56 @@ fn semantic_enum_shape(
     Ok((*discriminant, variants))
 }
 
+fn require_block_component_witness_v1(
+    block: SemanticBlockIdV1,
+    binding: SemanticValueBindingV1,
+    expected: SemanticDisjointIndexSpaceV1,
+) -> Result<ValueId, ProductionSemanticKirErrorV1> {
+    let SemanticValueBindingV1::ComponentWitness {
+        raw,
+        index_space: actual,
+        ..
+    } = binding
+    else {
+        return Err(unsupported(
+            0,
+            Some(block.index()),
+            None,
+            "DisjointBlock::component_index receiver lacks blocked ownership authority",
+        ));
+    };
+    if actual != expected {
+        return Err(unsupported(
+            0,
+            Some(block.index()),
+            None,
+            "DisjointBlock::component_index mapping identity changed",
+        ));
+    }
+    Ok(raw)
+}
+
+fn ordinary_option_index_binding_v1(
+    semantic_type: SemanticTypeIdV1,
+    discriminant: ValueId,
+    discriminant_ty: Type,
+    index: ValueId,
+) -> SemanticValueBindingV1 {
+    SemanticValueBindingV1::Enum {
+        discriminant,
+        discriminant_ty,
+        semantic_type,
+        variant: None,
+        payloads: BTreeMap::from([(
+            1,
+            vec![SemanticValueBindingV1::Value {
+                id: index,
+                ty: Type::INDEX,
+            }],
+        )]),
+    }
+}
+
 fn unique_enum_variant_with_field(
     variants: &[SemanticEnumVariantV1],
     field: SemanticTypeIdV1,
@@ -27227,6 +27373,84 @@ mod resource_tests {
             unavailable.value().unwrap_err(),
             "unmaterialized enum payload has no ordinary SSA representation"
         );
+    }
+
+    #[test]
+    fn block_component_projection_requires_exact_authority_and_returns_ordinary_enum_data() {
+        let block = SemanticBlockIdV1::from_index(3);
+        let exact = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: 16,
+            elements_per_lane: 4,
+        };
+        let availability = SemanticCapabilityAvailabilityV1::EnumPayload {
+            local: SemanticLocalIdV1::from_index(2),
+            variant: 1,
+        };
+        let witness = SemanticValueBindingV1::ComponentWitness {
+            raw: ValueId(7),
+            index_space: exact,
+            availability,
+        };
+        assert_eq!(
+            require_block_component_witness_v1(block, witness.clone(), exact).unwrap(),
+            ValueId(7)
+        );
+        assert!(matches!(
+            require_block_component_witness_v1(
+                block,
+                witness,
+                SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: 8,
+                    elements_per_lane: 8,
+                },
+            ),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "DisjointBlock::component_index mapping identity changed",
+                ..
+            })
+        ));
+        assert!(matches!(
+            require_block_component_witness_v1(
+                block,
+                SemanticValueBindingV1::Value {
+                    id: ValueId(7),
+                    ty: Type::INDEX,
+                },
+                exact,
+            ),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "DisjointBlock::component_index receiver lacks blocked ownership authority",
+                ..
+            })
+        ));
+
+        let option = ordinary_option_index_binding_v1(
+            SemanticTypeIdV1::from_index(9),
+            ValueId(10),
+            Type::Scalar(ScalarType::U8),
+            ValueId(11),
+        );
+        let SemanticValueBindingV1::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type,
+            variant,
+            payloads,
+        } = option
+        else {
+            panic!("component index must not become a compiler-issued optional capability")
+        };
+        assert_eq!(discriminant, ValueId(10));
+        assert_eq!(discriminant_ty, Type::Scalar(ScalarType::U8));
+        assert_eq!(semantic_type, SemanticTypeIdV1::from_index(9));
+        assert_eq!(variant, None);
+        assert!(matches!(
+            payloads.get(&1).map(Vec::as_slice),
+            Some([SemanticValueBindingV1::Value {
+                id: ValueId(11),
+                ty: Type::Scalar(ScalarType::Index),
+            }])
+        ));
     }
 
     #[test]

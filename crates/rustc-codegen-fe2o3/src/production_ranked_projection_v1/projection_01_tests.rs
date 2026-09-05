@@ -24,9 +24,17 @@
     fn blocked_launch_bound_checks_the_last_thread_and_component_without_wrapping() {
         assert!(blocked_mapping_fits_launch_v1(Some(64), 16, 4));
         assert!(!blocked_mapping_fits_launch_v1(None, 16, 4));
+        assert!(!blocked_mapping_fits_launch_v1(None, 1, 2));
         assert!(!blocked_mapping_fits_launch_v1(Some(64), 0, 4));
         assert!(!blocked_mapping_fits_launch_v1(Some(64), 16, 0));
         assert!(!blocked_mapping_fits_launch_v1(Some(64), u64::MAX, 2));
+        assert!(blocked_mapping_fits_launch_v1(Some(64), 1, 2));
+        assert!(blocked_mapping_fits_launch_v1(Some(1_u64 << 63), 1, 2));
+        assert!(!blocked_mapping_fits_launch_v1(
+            Some((1_u64 << 63) + 1),
+            1,
+            2,
+        ));
         assert!(blocked_mapping_fits_launch_v1(Some(1_u64 << 62), 16, 4));
         assert!(!blocked_mapping_fits_launch_v1(
             Some((1_u64 << 62) + 1),

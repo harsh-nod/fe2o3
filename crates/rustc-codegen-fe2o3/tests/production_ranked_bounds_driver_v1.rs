@@ -270,6 +270,70 @@ fn optimized_blocked_accessor_retains_its_checked_terminal() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn disjoint_block_component_index_extracts_as_checked_ordinary_data() {
+    let extracted = run_feature_extraction(&ScratchTarget::new(), "block_component_index");
+    let lines = extracted.stderr.lines().map(str::trim).collect::<Vec<_>>();
+    let result_for = |operation: &str| {
+        lines.iter().find_map(|line| {
+            let (result, actual) = line.split_once(" = ")?;
+            (actual == operation).then_some(result)
+        })
+    };
+    let lanes = result_for("kernel.index_constant 16");
+    let elements = result_for("kernel.index_constant 4");
+    let component_scaled =
+        lanes.and_then(|lanes| result_for(&format!("kernel.index_binary Multiply %0, {lanes}")));
+    let component_join = component_scaled.and_then(|component_scaled| {
+        lines.iter().find_map(|line| {
+            let (result, operation) = line.split_once(" = ")?;
+            (operation.starts_with("kernel.index_binary Add ")
+                && operation.ends_with(&format!(", {component_scaled}")))
+            .then_some(result)
+        })
+    });
+    let projected_index = component_join.and_then(|component_join| {
+        lines.iter().find_map(|line| {
+            let (result, operation) = line.split_once(" = ")?;
+            operation
+                .starts_with(&format!("kernel.index_binary Add {component_join}, "))
+                .then_some(result)
+        })
+    });
+    let fixed_offset = result_for("kernel.index_constant 48");
+    let fixed_index = fixed_offset.and_then(|fixed_offset| {
+        lines.iter().find_map(|line| {
+            let (result, operation) = line.split_once(" = ")?;
+            (operation.starts_with("kernel.index_binary Add ")
+                && operation.ends_with(&format!(", {fixed_offset}")))
+            .then_some(result)
+        })
+    });
+    assert!(
+        extracted.status.success()
+            && extracted
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && elements.is_some_and(|elements| lines
+                .iter()
+                .any(|line| *line == format!("kernel.cond_br %0 < {elements}")
+                    || line.starts_with(&format!("kernel.cond_br %0 < {elements} "))))
+            && component_scaled.is_some()
+            && projected_index.is_some_and(|index| lines
+                .iter()
+                .any(|line| line.starts_with("kernel.access Read ")
+                    && line.ends_with(&format!("[{index}]"))))
+            && fixed_index.is_some_and(|index| lines
+                .iter()
+                .any(|line| line.starts_with("kernel.access Write ")
+                    && line.ends_with(&format!("[{index}]"))))
+            && projected_index != fixed_index,
+        "checked component projection did not pass cross-crate production extraction:\n{}",
+        extracted.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn write_only_witness_mappings_retain_exact_ranked_predicates() {
     let target = ScratchTarget::new();
     for (feature, required) in [
