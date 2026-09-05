@@ -286,6 +286,28 @@ class R26SystemIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(IDENTITY.IdentityError, "unsupported envelope"):
             IDENTITY.parse_build_id_note(note + b"\x00")
 
+    def test_readelf_identity_accepts_the_ubuntu_2404_soname_dialect(self) -> None:
+        build_id = "ab" * 20
+
+        def fake_run(command: list[str], **_kwargs: object) -> bytes:
+            if "-dW" in command:
+                return (
+                    b" 0x000000000000000e (SONAME)             "
+                    b"Library soname: [libhsa-runtime64.so.1]\n"
+                )
+            return f"Build ID: {build_id}\n".encode()
+
+        with mock.patch.object(IDENTITY, "run", side_effect=fake_run):
+            self.assertEqual(
+                IDENTITY.readelf_identity(
+                    pathlib.Path("/usr/bin/readelf"),
+                    pathlib.Path("/opt/rocm/lib/libhsa-runtime64.so.1"),
+                    IDENTITY.HSA_SONAME,
+                    IDENTITY.command_environment(),
+                ),
+                build_id,
+            )
+
     def test_uses_fixed_tools_and_an_explicit_minimal_environment(self) -> None:
         self.assertEqual(IDENTITY.MODINFO_PATH, pathlib.Path("/usr/sbin/modinfo"))
         self.assertEqual(IDENTITY.LDD_PATH, pathlib.Path("/usr/bin/ldd"))

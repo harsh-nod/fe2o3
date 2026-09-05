@@ -485,7 +485,7 @@ def readelf_identity(
     dynamic = run([str(readelf), "-dW", str(path)], environment=environment).decode(
         "utf-8", "strict"
     )
-    sonames = re.findall(r"\(SONAME\).*Shared library: \[([^]]+)\]", dynamic)
+    sonames = re.findall(r"\(SONAME\)\s+Library soname: \[([^]\n]+)\]", dynamic)
     if sonames != [expected_soname]:
         raise IdentityError(f"runtime library has the wrong SONAME: {path}")
     return readelf_build_id(readelf, path, f"runtime library {path}", environment)
