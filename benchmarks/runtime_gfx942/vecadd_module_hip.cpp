@@ -26,6 +26,11 @@ namespace {
 
 constexpr unsigned int kWorkgroupSize = 256;
 constexpr std::size_t kQualifiedElementCount = 1048576;
+constexpr unsigned int kQualifiedBlockCount = static_cast<unsigned int>(
+    (kQualifiedElementCount + kWorkgroupSize - 1) / kWorkgroupSize);
+constexpr std::size_t kQualifiedGlobalExtent =
+    static_cast<std::size_t>(kQualifiedBlockCount) * kWorkgroupSize;
+static_assert(kQualifiedGlobalExtent == kQualifiedElementCount);
 
 bool parse_size(const char *name, const char *text, std::size_t *value) {
   errno = 0;
@@ -123,10 +128,9 @@ int main(int argc, char **argv) {
     std::uint64_t argument_length = length;
     void *arguments[] = {&device_a, &argument_length, &device_b,
                          &argument_length, &device_c, &argument_length};
-    const unsigned int grid = static_cast<unsigned int>(
-        (length + kWorkgroupSize - 1) / kWorkgroupSize * kWorkgroupSize);
-    return hipModuleLaunchKernel(function, grid, 1, 1, kWorkgroupSize, 1, 1, 0,
-                                 stream, arguments, nullptr);
+    return hipModuleLaunchKernel(function, kQualifiedBlockCount, 1, 1,
+                                 kWorkgroupSize, 1, 1, 0, stream, arguments,
+                                 nullptr);
   };
 
   const auto staged_iteration = [&]() -> hipError_t {

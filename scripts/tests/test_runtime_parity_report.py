@@ -171,6 +171,33 @@ def multi_device_rows() -> list[str]:
 
 
 class CheckParityTests(unittest.TestCase):
+    def test_vecadd_hip_launch_matches_the_kfd_global_extent(self) -> None:
+        repository = MODULE_PATH.parents[2]
+        hip_source = (MODULE_PATH.parent / "vecadd_module_hip.cpp").read_text(
+            encoding="utf-8"
+        )
+        kfd_source = (
+            repository
+            / "crates"
+            / "fe2o3-runtime"
+            / "src"
+            / "qualification_gfx942_vecadd_v1.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "grid: [GFX942_VECADD_QUALIFICATION_ELEMENTS_V1 as u32, 1, 1]",
+            kfd_source,
+        )
+        self.assertIn(
+            "static_assert(kQualifiedGlobalExtent == kQualifiedElementCount)",
+            hip_source,
+        )
+        self.assertIn(
+            "hipModuleLaunchKernel(function, kQualifiedBlockCount, 1, 1,",
+            hip_source,
+        )
+        self.assertNotIn("hipModuleLaunchKernel(function, grid", hip_source)
+
     def test_d2d_native_comparators_emit_the_checked_device_index_field(self) -> None:
         benchmark_dir = MODULE_PATH.parent
         for source_name in ("d2d_copy_hsa.cpp", "d2d_copy_hip.cpp"):
