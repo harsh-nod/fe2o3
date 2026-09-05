@@ -12,9 +12,10 @@ portable-progress, R25 persistent-compute storage-bridge, R27 persistent
 dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
 host-content-certificate, R31 single-packet/window-refinement, R32
 directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
-fused-asynchronous-directional-SDMA, and R35 fused-retained-control-replay
-models. The authenticated runner proves 808 obligations and rejects 322
-expected-negative mutations over finite abstract values and traces. The
+fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, and R36
+fused-completion-poll/recycle models. The authenticated runner proves 823
+obligations and rejects 326 expected-negative mutations over finite abstract
+values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
 lifecycle-history sequence lengths are not bounded by these proofs.
@@ -1695,6 +1696,61 @@ performance.
 | Executable fused replay model | **Checked** | Fourteen focused Rust tests, including 196,608-case exhaustive enumeration, explicit projection-boundary coverage, and move-only checks, plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Four pinned mutations fail their named omitted-retake, retry-after-detach, custody-substitution, and failed-quarantine-authority postconditions. |
 | Rust privacy/move semantics, concrete loans or allocation, currentness truth, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R35 proof boundary. |
+
+## R36 fused completion poll and recycle
+
+`r36_fused_completion_poll_recycle_v1.rs` proves 15 obligations for an
+independent finite comparison of abstract split poll-then-recycle and fused
+completion-poll/recycle compositions reviewed at production commit
+`d32aa6e61e49fb16e44ba3cd715563e9e452b23f`. All poll, recycle, midpoint, and
+currentness results are contracted mathematical observations.
+
+Pending returns exact Published custody after two currentness checks and does
+not capture a midpoint, reset a signal, or attempt either dispatch or
+attachment recycle. Ready advances the abstract dispatch-completion and
+allocation-completion stages before capturing the caller-supplied midpoint;
+any reset or later recycle event follows that midpoint. Successful split and
+fused paths preserve the same projected custody and logical ordering while
+performing exactly four and three abstract currentness checks respectively.
+The input-only fusion premise requires the removed split recycle-opening check
+to succeed only on Ready paths. It invokes neither execution relation and
+compares no output states.
+
+Poll failures route as Poll and retain Published custody through published
+state, dispatch-generation, and completion-observation failure, then Completed
+custody at dispatch- or allocation-completion failure. Failures reached after
+Ready route as Recycle. Signal-generation, signal-reset, closing-currentness,
+recycle-currentness, and recycle-infrastructure failures retain Completed
+custody. Dispatch-recycle failure retains Recycled custody after the signal
+reset. Successful retirement is ordered midpoint, reset, closing currentness,
+dispatch recycle, then attachment recycle. Every outcome has exactly one
+Published, Completed, or Recycled stage authority.
+
+The executable model has nine focused Rust tests. Its exhaustive test checks
+all 196 finite observation combinations and all 182 premise-admitted cases.
+Private Published/Completed/Recycled carriers have structural non-`Clone`
+checks, and a compile-fail doctest rejects cloning the public owning model.
+Verus mathematical values remain copyable and prove no Rust ownership or
+borrow property. Four standalone pinned countermodels cover recycle on Pending,
+midpoint capture before Ready, wrong reset-failure custody, and dispatch
+retirement before signal reset.
+
+The projection deliberately excludes the currentness-check count because that
+is the optimized coordinate, and it makes no claim about production/public
+error identity, real `Instant` values, or physical event timing. The separate
+successful-count theorem is a finite arithmetic fact, not latency or
+performance evidence. There is no Rust-to-Verus correspondence theorem and no
+proof that the executable model or production Rust refines the Verus machine.
+
+## R36 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Premised split/fused projected custody-and-ordering equivalence, Pending short-circuit, Ready midpoint placement, exact Published/Completed/Recycled failure custody, Poll/Recycle routing, one stage authority, and retirement ordering | **Proved** | Fifteen obligations in `r36_fused_completion_poll_recycle_v1.rs`; contracted finite observations and logical event indices only. |
+| Successful currentness-check reduction | **Proved** | Separate theorem establishes abstract four-to-three counts with successful observations; the count is excluded from the equivalence projection. |
+| Executable completion-poll/recycle model | **Checked** | Nine focused Rust tests, including all 196 finite cases and 182 premise-admitted cases, structural move-only checks, plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Four pinned mutations fail their named recycle-on-Pending, midpoint-before-Ready, failure-custody, and retirement-order postconditions. |
+| Production/public error identity, real clock values or physical timing, concrete currentness/completion truth, Rust privacy or borrow semantics, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R36 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

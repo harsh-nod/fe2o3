@@ -50,6 +50,7 @@ mod r32_directional_sdma_currentness_handoff;
 mod r33_fused_synchronous_directional_sdma;
 mod r34_fused_asynchronous_directional_sdma;
 mod r35_fused_retained_control_replay;
+mod r36_fused_completion_poll_recycle;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -87,6 +88,7 @@ pub use r32_directional_sdma_currentness_handoff::*;
 pub use r33_fused_synchronous_directional_sdma::*;
 pub use r34_fused_asynchronous_directional_sdma::*;
 pub use r35_fused_retained_control_replay::*;
+pub use r36_fused_completion_poll_recycle::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -151,6 +153,8 @@ mod r33_fused_synchronous_directional_sdma_tests;
 mod r34_fused_asynchronous_directional_sdma_tests;
 #[cfg(test)]
 mod r35_fused_retained_control_replay_tests;
+#[cfg(test)]
+mod r36_fused_completion_poll_recycle_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]
