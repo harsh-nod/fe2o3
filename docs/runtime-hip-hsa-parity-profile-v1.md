@@ -442,7 +442,7 @@ compute, production atomic/collective authority, broad Rust device language,
 and matched hardware qualification remain open. No R25 performance ratio or
 orders-of-magnitude claim exists without a retained matched measurement.
 
-## Current R26-R32 Status
+## Current R26-R35 Status
 
 R26 adds the matched, counterbalanced direct-KFD/raw-HSA/HIP qualification
 harness at exact commit `8953f757c6771823e5132708f45a43c32f459081` for one
@@ -483,18 +483,54 @@ slower than HIP E2E in every slot. These are `n=3` descriptive cross-revision
 effects for one workload, not a generic parity, application-speedup, or
 orders-of-magnitude result.
 
-The authenticated aggregate formal runner now includes the R27, R28, R30, R31,
-and R32 independent bounded models. Across the complete included proof set, 31
-positive sources establish 696 obligations and 310 pinned mutations are
-rejected; transcript SHA-256 is
-`cc0277abffd2a47a19525773b7d840e5ca5b0353cbccd5e6db9f358ca6b9e52a`.
-R32 contributes 34 obligations and three transition-coupled negatives for the
-mathematical shared-observation handoff relation. The proof inputs contract
-currentness, lower outcomes, identities, certificates, and ticket rosters;
-there is no Rust-to-Verus correspondence or proof of syscalls, driver,
-firmware, hardware, DMA visibility, liveness, parity, or performance.
+R33 adds a fused synchronous directional helper at production commit
+`f25000bec19d45229a4b9ab531457d70f7977e3d`, but the R26 harness uses the
+public asynchronous copy path and a separate wait. The retained
+[R33 control evidence](evidence/mi300x-r33-synchronous-fusion-regression-control-2026-09-05.md)
+therefore records a clean asynchronous-path regression control, not a measured
+execution or performance attribution for that helper. R34 fuses asynchronous
+single-copy admission, detach, lower preparation, publication, and custody
+recovery at production commit
+`b015b81f862220d48671e1c4809b8ce858a317e7`. Its retained
+[R34 evidence](evidence/mi300x-r34-asynchronous-single-copy-fusion-2026-09-05.md)
+reports a 4.71% median slotwise unadjusted E2E reduction against R33, led by
+D2H, while compute regressed by about 1%. That comparison's archived Rust
+version fields were later shown to describe the caller working directory rather
+than the private archived build tree, so they cannot establish build-toolchain
+identity.
 
-R26-R32 therefore improve one narrow persistent single-device path but do not
+R35 fuses the retained fixed-dispatch-control replay bind under one live queue
+memory-model loan at exact production commit
+`4b324bbd53e4c6e767c5c5f2f18817c133edbe03`. The matched
+[R35 evidence](evidence/mi300x-r35-retained-control-replay-fusion-2026-09-05.md)
+uses the corrected runner for both the exact unchanged-R34 baseline and R35.
+The directly enclosed native-binding p50 improved in all three slots by
+6.77%-10.19%, with a 7.03% median slotwise reduction. Median slotwise E2E
+movement was only 0.68% raw, 0.78% HSA-adjusted, and 0.82% HIP-adjusted. R35
+still measured 2.84x-2.88x slower than HIP E2E and 3.52x-3.55x slower than HIP
+compute. One elevated clean-monitor baseline compute slot and sequential
+revision ordering limit attribution. The result is descriptive for one
+workload, not causal, parity, orders-of-magnitude, or workload-general evidence.
+
+The authenticated aggregate formal runner through R35 includes the R27, R28,
+and R30-R35 independent bounded models. At exact proof commit
+[`91475313b441c6ab691e39fa7fe1bf2441827681`](https://github.com/harsh-nod/fe2o3/commit/91475313b441c6ab691e39fa7fe1bf2441827681),
+the complete included proof set establishes 808 obligations and rejects 322
+pinned expected-negative mutations; final transcript SHA-256 is
+`40090d573642767f00ac742264c97ecc177e5b6c8555d40a0813912ebf8c2ad5`.
+R33 contributes 45 obligations and four coupled negatives for the mathematical
+synchronous fusion relation. R34 contributes 54 obligations and four negatives
+for premised asynchronous fusion equivalence. R35 contributes 13 positive
+obligations and four standalone negatives. Unlike R34's external-equivalence
+relation, R35 proves only a premised projection of former and fused custody and
+exact commit coordinates; it excludes production/public error identity,
+terminal failure stage, internal authority labels, event indices, and loan and
+currentness counts from that relation. The proof inputs contract currentness,
+lower outcomes, identities, certificates, tickets, and loan results; there is
+no Rust-to-Verus correspondence or proof of syscalls, driver, firmware,
+hardware, DMA visibility, liveness, parity, or performance.
+
+R26-R35 therefore improve one narrow persistent single-device path but do not
 close the profile. Remaining blockers include ordinary public source-to-GPU
 execution authority; broader native scheduling and concurrency beyond the
 bounded two-lane, caller-flush path; full persistent memory, pool, and
