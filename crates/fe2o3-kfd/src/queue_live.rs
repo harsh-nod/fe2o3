@@ -160,11 +160,12 @@ use crate::sdma::{
     Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
     Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1, Gfx942SdmaUnpublishedCopyRequestV1,
     MultiQueueSdmaSubmitFailureV1, PersistentSdmaWindowPollV1,
-    PreparedPersistentSdmaWindowPublicationFailureV1, PreparedSdmaPublicationFailureV1,
-    PreparedSingleSdmaPublicationFailureV1, allocate_device_buffer, allocate_host_buffer,
-    exact_full_host_write_is_authenticatable, persistent_sdma_window_packet_count,
-    read_host_buffer, release_buffer, striped_sdma_queue_count_is_admitted,
-    write_full_host_buffer_authenticated, write_host_buffer,
+    PreparedPersistentSdmaWindowPublicationFailureV1, PreparedPersistentSdmaWindowV1,
+    PreparedSdmaPublicationFailureV1, PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1,
+    allocate_device_buffer, allocate_host_buffer, exact_full_host_write_is_authenticatable,
+    persistent_sdma_window_packet_count, planned_ticket_matches_queue_occurrence, read_host_buffer,
+    release_buffer, striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated,
+    write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -1669,6 +1670,75 @@ fn classify_sdma_batch_execution_finish(
             Gfx942SdmaBatchExecutionFinishV1::RecoverableTimeout
         }
         Some(_) => Gfx942SdmaBatchExecutionFinishV1::Terminal,
+    }
+}
+
+/// Move-only proof that successful directional preparation was closed by the
+/// same operational observation that authorizes the immediately following
+/// single-packet publication.
+struct DirectionalPersistentSdmaSinglePreparedHandoffV1 {
+    queue: QueueKeyV1,
+    native_queue_id: u32,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    planned_ticket: Gfx942SdmaCopyTicketV1,
+    prepared: PreparedSingleSdmaV1,
+}
+
+impl DirectionalPersistentSdmaSinglePreparedHandoffV1 {
+    fn publish(
+        self,
+        owner: &mut Gfx942SdmaQueueSetV1,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> (
+        Gfx942PersistentSdmaDirectionV1,
+        Gfx942SdmaCopyTicketV1,
+        Result<Gfx942SdmaCopyTicketV1, PreparedSingleSdmaPublicationFailureV1>,
+    ) {
+        debug_assert!(planned_ticket_matches_queue_occurrence(
+            self.planned_ticket,
+            self.queue,
+            self.native_queue_id,
+        ));
+        let publication = owner.submit_prepared_single_with_custody(memory, self.prepared);
+        (self.direction, self.planned_ticket, publication)
+    }
+}
+
+/// Move-only counterpart for a bounded directional packet window. The ticket
+/// roster allocation precedes the preparation envelope; this handoff only
+/// moves the already-populated roster into the publication transition.
+struct DirectionalPersistentSdmaWindowPreparedHandoffV1 {
+    queue: QueueKeyV1,
+    native_queue_id: u32,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    packet_count: usize,
+    planned_tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    prepared: PreparedPersistentSdmaWindowV1,
+}
+
+impl DirectionalPersistentSdmaWindowPreparedHandoffV1 {
+    fn publish(
+        self,
+        owner: &mut Gfx942SdmaQueueSetV1,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> (
+        Gfx942PersistentSdmaDirectionV1,
+        usize,
+        Vec<Gfx942SdmaCopyTicketV1>,
+        Result<Vec<Gfx942SdmaCopyTicketV1>, PreparedPersistentSdmaWindowPublicationFailureV1>,
+    ) {
+        debug_assert_eq!(self.planned_tickets.len(), self.packet_count);
+        debug_assert!(self.planned_tickets.iter().all(|ticket| {
+            planned_ticket_matches_queue_occurrence(*ticket, self.queue, self.native_queue_id)
+        }));
+        let publication =
+            owner.submit_prepared_persistent_window_with_custody(memory, self.prepared);
+        (
+            self.direction,
+            self.packet_count,
+            self.planned_tickets,
+            publication,
+        )
     }
 }
 
@@ -6168,75 +6238,59 @@ impl ComputeAqlQueueSessionV1 {
             copy_bytes,
         );
 
+        let handoff_queue = allocation.attachment.queue;
+        let handoff_native_queue_id = allocation.attachment.pair.queue_id(direction);
         let mut request = Some(request);
-        let mut preparation = None;
-        let prepare_operation = self.with_sdma_owner_memory(|owner, memory| {
-            preparation = Some(owner.prepare_single_recoverable(
+        let mut preparation_failure = None;
+        let mut prepared_without_handoff = None;
+        let mut handoff_attempted = false;
+        let mut publication = None;
+        let prepare_and_publish_operation = self.with_sdma_owner_memory(|owner, memory| {
+            match owner.prepare_single_recoverable(
                 memory,
                 request.take().expect("persistent request consumed once"),
-            ));
+            ) {
+                Ok(prepared) => {
+                    let planned_ticket = prepared.ticket();
+                    handoff_attempted = true;
+                    if let Err(error) = memory.check_queue_operational_currentness() {
+                        prepared_without_handoff = Some(prepared);
+                        return Err(error.into());
+                    }
+                    let handoff = DirectionalPersistentSdmaSinglePreparedHandoffV1 {
+                        queue: handoff_queue,
+                        native_queue_id: handoff_native_queue_id,
+                        direction,
+                        planned_ticket,
+                        prepared,
+                    };
+                    publication = Some(handoff.publish(owner, memory));
+                }
+                Err(failure) => preparation_failure = Some(failure),
+            }
             Ok(())
         });
-        let preparation = preparation.unwrap_or_else(|| {
-            Err((
-                Gfx942SdmaErrorV1::Contract(
-                    "directional persistent SDMA preparation did not execute",
-                ),
-                request.expect("unexecuted preparation retains request"),
-            ))
-        });
-        let closing_prepare = self.check_directional_persistent_sdma_operational_currentness();
-        let owner_poisoned = self
-            .sdma
-            .as_ref()
-            .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
-        let preparation_terminal = prepare_operation.is_err()
-            || closing_prepare.is_err()
-            || (preparation.is_err() && owner_poisoned);
-        let prepared_lower = match preparation {
-            Ok(prepared) if !preparation_terminal => prepared,
-            Ok(prepared) => {
-                return Err(self.terminal_prepared_directional_persistent_sdma_failure(
-                    prepare_operation
-                        .err()
-                        .or_else(|| closing_prepare.err())
-                        .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
-                            "directional persistent SDMA preparation poisoned its queue",
-                        )),
-                    allocation,
-                    prepared_use,
-                    direction,
-                    host_offset,
-                    device_offset,
-                    copy_bytes,
-                    host_binding,
-                    prepared.into_request(),
-                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-                ));
-            }
-            Err((error, request)) if !preparation_terminal => {
-                let (mut allocation, host) = restore_directional_persistent_sdma_request_v1(
-                    allocation,
-                    direction,
-                    host_offset,
-                    device_offset,
-                    copy_bytes,
-                    host_binding,
-                    request,
+        if !handoff_attempted {
+            let (lower_error, request) = preparation_failure.unwrap_or_else(|| {
+                (
+                    Gfx942SdmaErrorV1::Contract(
+                        "directional persistent SDMA preparation did not execute",
+                    ),
+                    request.expect("unexecuted preparation retains request"),
                 )
-                .unwrap_or_else(|_| unreachable!("exact prepared request must restore"));
-                allocation
-                    .owner
-                    .cancel_prepared(prepared_use)
-                    .expect("private prepared use must cancel");
-                return Err(retryable(error.into(), allocation, host));
-            }
-            Err((error, request)) => {
+            });
+            let closing_prepare = self.check_directional_persistent_sdma_operational_currentness();
+            let owner_poisoned = self
+                .sdma
+                .as_ref()
+                .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
+            if prepare_and_publish_operation.is_err() || closing_prepare.is_err() || owner_poisoned
+            {
                 return Err(self.terminal_prepared_directional_persistent_sdma_failure(
-                    prepare_operation
+                    prepare_and_publish_operation
                         .err()
                         .or_else(|| closing_prepare.err())
-                        .unwrap_or_else(|| error.into()),
+                        .unwrap_or_else(|| lower_error.into()),
                     allocation,
                     prepared_use,
                     direction,
@@ -6248,32 +6302,29 @@ impl ComputeAqlQueueSessionV1 {
                     Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
                 ));
             }
-        };
-
-        let planned_ticket = prepared_lower.ticket();
-        let mut prepared_lower = Some(prepared_lower);
-        let mut publication = None;
-        let publication_operation = self.with_sdma_owner_memory(|owner, memory| {
-            memory
-                .check_queue_operational_currentness()
-                .map_err(ComputeAqlQueueSessionErrorV1::from)?;
-            publication = Some(
-                owner.submit_prepared_single_with_custody(
-                    memory,
-                    prepared_lower
-                        .take()
-                        .expect("persistent preparation consumed once"),
-                ),
-            );
-            Ok(())
-        });
-        if publication.is_none() {
+            let (mut allocation, host) = restore_directional_persistent_sdma_request_v1(
+                allocation,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                host_binding,
+                request,
+            )
+            .unwrap_or_else(|_| unreachable!("exact prepared request must restore"));
+            allocation
+                .owner
+                .cancel_prepared(prepared_use)
+                .expect("private prepared use must cancel");
+            return Err(retryable(lower_error.into(), allocation, host));
+        }
+        let Some((handoff_direction, planned_ticket, publication)) = publication else {
             return Err(self.terminal_prepared_directional_persistent_sdma_failure(
-                publication_operation
-                    .err()
-                    .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
-                        "directional persistent SDMA publication did not execute",
-                    )),
+                prepare_and_publish_operation.err().unwrap_or(
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "directional persistent SDMA handoff did not publish",
+                    ),
+                ),
                 allocation,
                 prepared_use,
                 direction,
@@ -6281,31 +6332,31 @@ impl ComputeAqlQueueSessionV1 {
                 device_offset,
                 copy_bytes,
                 host_binding,
-                prepared_lower
-                    .expect("unexecuted publication retains preparation")
+                prepared_without_handoff
+                    .expect("failed handoff retains single preparation")
                     .into_request(),
                 Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
             ));
-        }
-        let (observation, lower_error) =
-            match publication.expect("executed publication stores outcome") {
-                Err(PreparedSingleSdmaPublicationFailureV1::Recoverable { error, prepared }) => (
-                    DirectionalPersistentSdmaPublicationObservationV1::Recoverable(
-                        prepared.into_request(),
-                    ),
-                    error,
+        };
+        let direction = handoff_direction;
+        let (observation, lower_error) = match publication {
+            Err(PreparedSingleSdmaPublicationFailureV1::Recoverable { error, prepared }) => (
+                DirectionalPersistentSdmaPublicationObservationV1::Recoverable(
+                    prepared.into_request(),
                 ),
-                Err(PreparedSingleSdmaPublicationFailureV1::Retained { error, ticket }) => (
-                    DirectionalPersistentSdmaPublicationObservationV1::Retained(ticket),
-                    error,
+                error,
+            ),
+            Err(PreparedSingleSdmaPublicationFailureV1::Retained { error, ticket }) => (
+                DirectionalPersistentSdmaPublicationObservationV1::Retained(ticket),
+                error,
+            ),
+            Ok(ticket) => (
+                DirectionalPersistentSdmaPublicationObservationV1::Confirmed(ticket),
+                Gfx942SdmaErrorV1::Contract(
+                    "directional persistent SDMA post-publication currentness",
                 ),
-                Ok(ticket) => (
-                    DirectionalPersistentSdmaPublicationObservationV1::Confirmed(ticket),
-                    Gfx942SdmaErrorV1::Contract(
-                        "directional persistent SDMA post-publication currentness",
-                    ),
-                ),
-            };
+            ),
+        };
         let closing = self.check_directional_persistent_sdma_operational_currentness();
         let transition = transition_directional_persistent_sdma_publication_v1(
             DirectionalPersistentSdmaPreparedCustodyV1 {
@@ -6319,11 +6370,11 @@ impl ComputeAqlQueueSessionV1 {
                 copy_bytes,
             },
             observation,
-            publication_operation.is_ok(),
+            prepare_and_publish_operation.is_ok(),
             closing.is_ok(),
         );
         self.finish_directional_persistent_sdma_publication_transition(
-            publication_operation
+            prepare_and_publish_operation
                 .err()
                 .or_else(|| closing.err())
                 .unwrap_or_else(|| lower_error.into()),
@@ -6624,6 +6675,16 @@ impl ComputeAqlQueueSessionV1 {
                 host,
             ));
         }
+        let mut planned_tickets = Vec::new();
+        if planned_tickets.try_reserve_exact(packet_count).is_err() {
+            return Err(retryable(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "directional persistent SDMA planned ticket roster allocation",
+                ),
+                allocation,
+                host,
+            ));
+        }
         if let Err(error) = self.check_directional_persistent_sdma_operational_currentness() {
             allocation
                 .owner
@@ -6717,103 +6778,90 @@ impl ComputeAqlQueueSessionV1 {
             copy_bytes,
         );
 
+        let handoff_queue = allocation.attachment.queue;
+        let handoff_native_queue_id = allocation.attachment.pair.queue_id(direction);
         let mut request = Some(request);
-        let mut preparation = None;
-        let prepare_operation = self.with_sdma_owner_memory(|owner, memory| {
-            preparation = Some(
-                owner.prepare_persistent_window_recoverable(
-                    memory,
-                    request
-                        .take()
-                        .expect("persistent window request consumed once"),
-                ),
-            );
+        let mut preparation_failure = None;
+        let mut preparation_contract_failed = false;
+        let mut prepared_without_handoff = None;
+        let mut handoff_attempted = false;
+        let mut publication = None;
+        let prepare_and_publish_operation = self.with_sdma_owner_memory(|owner, memory| {
+            match owner.prepare_persistent_window_recoverable(
+                memory,
+                request
+                    .take()
+                    .expect("persistent window request consumed once"),
+            ) {
+                Ok(prepared) => {
+                    if prepared.tickets().len() != packet_count {
+                        preparation_contract_failed = true;
+                        preparation_failure = Some((
+                            Gfx942SdmaErrorV1::Contract(
+                                "directional persistent SDMA window prepared ticket count",
+                            ),
+                            prepared.into_request(),
+                        ));
+                    } else {
+                        planned_tickets.extend_from_slice(prepared.tickets());
+                        handoff_attempted = true;
+                        if let Err(error) = memory.check_queue_operational_currentness() {
+                            prepared_without_handoff = Some(prepared);
+                            return Err(error.into());
+                        }
+                        let handoff = DirectionalPersistentSdmaWindowPreparedHandoffV1 {
+                            queue: handoff_queue,
+                            native_queue_id: handoff_native_queue_id,
+                            direction,
+                            packet_count,
+                            planned_tickets: core::mem::take(&mut planned_tickets),
+                            prepared,
+                        };
+                        publication = Some(handoff.publish(owner, memory));
+                    }
+                }
+                Err(failure) => preparation_failure = Some(failure),
+            }
             Ok(())
         });
-        let preparation = preparation.unwrap_or_else(|| {
-            Err((
-                Gfx942SdmaErrorV1::Contract(
-                    "directional persistent SDMA window preparation did not execute",
-                ),
-                request.expect("unexecuted window preparation retains request"),
-            ))
-        });
-        let closing_prepare = self.check_directional_persistent_sdma_operational_currentness();
-        let owner_poisoned = self
-            .sdma
-            .as_ref()
-            .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
-        let preparation_terminal = prepare_operation.is_err()
-            || closing_prepare.is_err()
-            || (preparation.is_err() && owner_poisoned);
-        let prepared_lower =
-            match preparation {
-                Ok(prepared) if !preparation_terminal => prepared,
-                Ok(prepared) => {
-                    return Err(self.terminal_prepared_directional_persistent_sdma_window_failure(
-                    prepare_operation
-                        .err()
-                        .or_else(|| closing_prepare.err())
-                        .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
-                            "directional persistent SDMA window preparation poisoned its queue",
-                        )),
-                    allocation,
-                    prepared_use,
-                    direction,
-                    host_offset,
-                    device_offset,
-                    copy_bytes,
-                    packet_count,
-                    host_binding,
-                    prepared.into_request(),
-                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-                ));
-                }
-                Err((error, request)) if !preparation_terminal => {
-                    let (mut allocation, host) = restore_directional_persistent_sdma_request_v1(
+        if !handoff_attempted {
+            let (lower_error, request) = preparation_failure.unwrap_or_else(|| {
+                (
+                    Gfx942SdmaErrorV1::Contract(
+                        "directional persistent SDMA window preparation did not execute",
+                    ),
+                    request.expect("unexecuted window preparation retains request"),
+                )
+            });
+            let closing_prepare = self.check_directional_persistent_sdma_operational_currentness();
+            let owner_poisoned = self
+                .sdma
+                .as_ref()
+                .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned);
+            if prepare_and_publish_operation.is_err()
+                || closing_prepare.is_err()
+                || owner_poisoned
+                || preparation_contract_failed
+            {
+                return Err(
+                    self.terminal_prepared_directional_persistent_sdma_window_failure(
+                        prepare_and_publish_operation
+                            .err()
+                            .or_else(|| closing_prepare.err())
+                            .unwrap_or_else(|| lower_error.into()),
                         allocation,
+                        prepared_use,
                         direction,
                         host_offset,
                         device_offset,
                         copy_bytes,
+                        packet_count,
                         host_binding,
                         request,
-                    )
-                    .unwrap_or_else(|_| unreachable!("exact prepared window request must restore"));
-                    allocation
-                        .owner
-                        .cancel_prepared(prepared_use)
-                        .expect("private prepared window use must cancel");
-                    return Err(retryable(error.into(), allocation, host));
-                }
-                Err((error, request)) => {
-                    return Err(
-                        self.terminal_prepared_directional_persistent_sdma_window_failure(
-                            prepare_operation
-                                .err()
-                                .or_else(|| closing_prepare.err())
-                                .unwrap_or_else(|| error.into()),
-                            allocation,
-                            prepared_use,
-                            direction,
-                            host_offset,
-                            device_offset,
-                            copy_bytes,
-                            packet_count,
-                            host_binding,
-                            request,
-                            Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-                        ),
-                    );
-                }
-            };
-
-        let mut planned_tickets = Vec::new();
-        if planned_tickets
-            .try_reserve_exact(prepared_lower.tickets().len())
-            .is_err()
-        {
-            let request = prepared_lower.into_request();
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                    ),
+                );
+            }
             let (mut allocation, host) = restore_directional_persistent_sdma_request_v1(
                 allocation,
                 direction,
@@ -6828,39 +6876,18 @@ impl ComputeAqlQueueSessionV1 {
                 .owner
                 .cancel_prepared(prepared_use)
                 .expect("private prepared window use must cancel");
-            return Err(retryable(
-                ComputeAqlQueueSessionErrorV1::Contract(
-                    "directional persistent SDMA planned ticket roster allocation",
-                ),
-                allocation,
-                host,
-            ));
+            return Err(retryable(lower_error.into(), allocation, host));
         }
-        planned_tickets.extend_from_slice(prepared_lower.tickets());
-        let mut prepared_lower = Some(prepared_lower);
-        let mut publication = None;
-        let publication_operation = self.with_sdma_owner_memory(|owner, memory| {
-            memory
-                .check_queue_operational_currentness()
-                .map_err(ComputeAqlQueueSessionErrorV1::from)?;
-            publication = Some(
-                owner.submit_prepared_persistent_window_with_custody(
-                    memory,
-                    prepared_lower
-                        .take()
-                        .expect("persistent window preparation consumed once"),
-                ),
-            );
-            Ok(())
-        });
-        if publication.is_none() {
+        let Some((handoff_direction, handoff_packet_count, planned_tickets, publication)) =
+            publication
+        else {
             return Err(
                 self.terminal_prepared_directional_persistent_sdma_window_failure(
-                    publication_operation
-                        .err()
-                        .unwrap_or(ComputeAqlQueueSessionErrorV1::Contract(
-                            "directional persistent SDMA window publication did not execute",
-                        )),
+                    prepare_and_publish_operation.err().unwrap_or(
+                        ComputeAqlQueueSessionErrorV1::Contract(
+                            "directional persistent SDMA window handoff did not publish",
+                        ),
+                    ),
                     allocation,
                     prepared_use,
                     direction,
@@ -6869,16 +6896,16 @@ impl ComputeAqlQueueSessionV1 {
                     copy_bytes,
                     packet_count,
                     host_binding,
-                    prepared_lower
-                        .expect("unexecuted window publication retains preparation")
+                    prepared_without_handoff
+                        .expect("failed handoff retains window preparation")
                         .into_request(),
                     Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
                 ),
             );
-        }
-        let (observation, lower_error) = match publication
-            .expect("executed window publication stores outcome")
-        {
+        };
+        let direction = handoff_direction;
+        let packet_count = handoff_packet_count;
+        let (observation, lower_error) = match publication {
             Err(PreparedPersistentSdmaWindowPublicationFailureV1::Recoverable {
                 error,
                 prepared,
@@ -6913,11 +6940,11 @@ impl ComputeAqlQueueSessionV1 {
                 packet_count,
             },
             observation,
-            publication_operation.is_ok(),
+            prepare_and_publish_operation.is_ok(),
             closing.is_ok(),
         );
         self.finish_directional_persistent_sdma_window_publication_transition(
-            publication_operation
+            prepare_and_publish_operation
                 .err()
                 .or_else(|| closing.err())
                 .unwrap_or_else(|| lower_error.into()),

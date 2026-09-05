@@ -2958,9 +2958,128 @@ mod tests {
                 .count(),
             1
         );
+        let shared_close_open = submission
+            .find("if let Err(error) = memory.check_queue_operational_currentness()")
+            .unwrap();
+        let handoff = submission
+            .find("DirectionalPersistentSdmaSinglePreparedHandoffV1")
+            .unwrap();
+        let publication = submission.find("handoff.publish(owner, memory)").unwrap();
+        let failed_prepare = submission.find("if !handoff_attempted").unwrap();
+        let handoff_failure = submission.find("let Some((handoff_direction").unwrap();
+        let missing_publication = submission
+            .find("directional persistent SDMA handoff did not publish")
+            .unwrap();
+        let final_close = submission
+            .rfind("check_directional_persistent_sdma_operational_currentness")
+            .unwrap();
+        assert!(shared_close_open < handoff);
+        assert!(handoff < publication);
+        let handoff_to_publication = &submission[handoff..publication];
+        assert!(!handoff_to_publication.contains("return Err"));
+        assert!(!handoff_to_publication.contains('?'));
+        assert!(!handoff_to_publication.contains("check_"));
+        assert!(publication < failed_prepare);
+        assert!(failed_prepare < handoff_failure);
+        assert!(handoff_failure < missing_publication);
+        assert!(missing_publication < final_close);
+        let failed_prepare_path = &submission[failed_prepare..handoff_failure];
+        assert_eq!(
+            failed_prepare_path
+                .matches("check_directional_persistent_sdma_operational_currentness")
+                .count(),
+            1
+        );
+        let handoff_failure_path = &submission[handoff_failure..final_close];
+        assert!(
+            handoff_failure_path.contains("terminal_prepared_directional_persistent_sdma_failure")
+        );
+        assert!(handoff_failure_path.contains("prepared_without_handoff"));
         assert!(!submission.contains("self.check_currentness()"));
         assert!(submission.contains("prepare_single_recoverable"));
         assert!(!submission.contains("vec![request]"));
+
+        let window = live
+            .split("pub fn submit_directional_persistent_sdma_window_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn poll_directional_persistent_sdma_window_v1")
+            .next()
+            .unwrap();
+        assert_eq!(
+            window
+                .matches("check_directional_persistent_sdma_operational_currentness")
+                .count(),
+            3
+        );
+        assert_eq!(
+            window
+                .matches("check_queue_operational_currentness")
+                .count(),
+            1
+        );
+        let roster_allocation = window.find("try_reserve_exact(packet_count)").unwrap();
+        let preparation_open = window
+            .find("check_directional_persistent_sdma_operational_currentness")
+            .unwrap();
+        let roster_count_guard = window
+            .find("if prepared.tickets().len() != packet_count")
+            .unwrap();
+        let roster_population = window
+            .find("planned_tickets.extend_from_slice(prepared.tickets())")
+            .unwrap();
+        let shared_close_open = window
+            .find("if let Err(error) = memory.check_queue_operational_currentness()")
+            .unwrap();
+        let handoff = window
+            .find("DirectionalPersistentSdmaWindowPreparedHandoffV1")
+            .unwrap();
+        let publication = window.find("handoff.publish(owner, memory)").unwrap();
+        let failed_prepare = window.find("if !handoff_attempted").unwrap();
+        let handoff_failure = window.find("let Some((handoff_direction").unwrap();
+        let missing_publication = window
+            .find("directional persistent SDMA window handoff did not publish")
+            .unwrap();
+        let final_close = window
+            .rfind("check_directional_persistent_sdma_operational_currentness")
+            .unwrap();
+        assert!(roster_allocation < preparation_open);
+        assert!(preparation_open < roster_count_guard);
+        assert!(roster_count_guard < roster_population);
+        assert!(roster_population < shared_close_open);
+        assert!(shared_close_open < handoff);
+        assert!(handoff < publication);
+        let handoff_to_publication = &window[handoff..publication];
+        assert!(!handoff_to_publication.contains("return Err"));
+        assert!(!handoff_to_publication.contains('?'));
+        assert!(!handoff_to_publication.contains("check_"));
+        assert!(publication < failed_prepare);
+        assert!(failed_prepare < handoff_failure);
+        assert!(handoff_failure < missing_publication);
+        assert!(missing_publication < final_close);
+        let failed_prepare_path = &window[failed_prepare..handoff_failure];
+        assert_eq!(
+            failed_prepare_path
+                .matches("check_directional_persistent_sdma_operational_currentness")
+                .count(),
+            1
+        );
+        assert!(failed_prepare_path.contains("preparation_contract_failed"));
+        let handoff_failure_path = &window[handoff_failure..final_close];
+        assert!(
+            handoff_failure_path
+                .contains("terminal_prepared_directional_persistent_sdma_window_failure")
+        );
+        assert!(handoff_failure_path.contains("prepared_without_handoff"));
+
+        let same_device = live
+            .split("pub fn submit_same_device_persistent_sdma_window_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn poll_same_device_persistent_sdma_window_v1")
+            .next()
+            .unwrap();
+        assert!(!same_device.contains("PreparedHandoffV1"));
 
         let lower = include_str!("sdma.rs")
             .split("pub(crate) fn poll(")
