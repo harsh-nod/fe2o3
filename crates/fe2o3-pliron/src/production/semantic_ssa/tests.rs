@@ -1,16 +1,18 @@
 use super::adapter::semantic_edge_role_v1;
 use super::*;
+use crate::ProductionSemanticMirLimitsV1;
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAbiIdentityV1, SemanticAbiValueV1, SemanticBasicBlockV1, SemanticBlockIdV1,
-    SemanticBlockIdentityV1, SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1,
-    SemanticCanonAbiV1, SemanticCompilerIntrinsicIdentityV1,
-    SemanticConstGenericArgumentsIdentityV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1,
-    SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticFunctionRoleV1,
-    SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
-    SemanticLayoutIdentityV1, SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1,
-    SemanticMemoryStoreV1, SemanticMonomorphizationIdentityV1, SemanticNonBodyCallableBindingV1,
-    SemanticProjectionV1, SemanticRvalueV1, SemanticStatementV1, SemanticSwitchTargetV1,
-    SemanticSwitchTargetsV1, SemanticTerminatorV1, SemanticTypeIdentityV1, SemanticTypeLayoutV1,
+    AdmittedInertSemanticMirV1, InertSemanticMirRequestV1, SemanticAbiIdentityV1,
+    SemanticAbiValueV1, SemanticBasicBlockV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
+    SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCanonAbiV1,
+    SemanticCompilerIntrinsicIdentityV1, SemanticConstGenericArgumentsIdentityV1,
+    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticExternAbiV1, SemanticFunctionAbiV1,
+    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    SemanticItemDefinitionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalDeclV1,
+    SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticMemoryStoreV1, SemanticMirLimitsV1,
+    SemanticMonomorphizationIdentityV1, SemanticNonBodyCallableBindingV1, SemanticProjectionV1,
+    SemanticRvalueV1, SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1,
+    SemanticTargetDataLayoutV1, SemanticTerminatorV1, SemanticTypeIdentityV1, SemanticTypeLayoutV1,
     SemanticUnwindActionV1, SemanticVolatilityV1,
 };
 
@@ -859,6 +861,459 @@ fn production_ssa_identity_binds_source_and_function_identity() {
     assert_ne!(make([1; 32], [2; 32]), make([1; 32], [4; 32]));
 }
 
+fn admitted_single_function_semantic() -> AdmittedInertSemanticMirV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let types = vec![SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(test_bytes(131)),
+        SemanticLayoutIdentityV1::from_sha256(test_bytes(132)),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            1,
+            fe2o3_mir_model::semantic_mir_v1::SemanticFieldsShapeV1::arbitrary(vec![], vec![])
+                .unwrap(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticRustcVariantsV1::Single { index: 0 },
+            fe2o3_mir_model::semantic_mir_v1::SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            1,
+            0,
+            fe2o3_mir_model::semantic_mir_v1::SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Unit,
+    )];
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(test_bytes(133)),
+        SemanticLayoutIdentityV1::from_sha256(test_bytes(134)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(test_bytes(135)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(test_bytes(136)),
+        SemanticMonomorphizationIdentityV1::from_sha256(test_bytes(137)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(test_bytes(138)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(test_bytes(139)),
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+        abi,
+        vec![test_local(140, 0, SemanticLocalRoleV1::Return)],
+        SemanticBlockIdV1::from_index(0),
+        vec![test_block(141, vec![], SemanticTerminatorKindV1::Return)],
+    )
+    .unwrap()
+    .with_kernel_entry(
+        fe2o3_mir_model::semantic_mir_v1::SemanticKernelEntryV1::new(
+            fe2o3_mir_model::semantic_mir_v1::SemanticLinkSymbolV1::new(
+                b"semantic_ssa_module_budget_test".to_vec(),
+            )
+            .unwrap(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticKernelBindingIdentityV1::from_sha256(
+                test_bytes(143),
+            ),
+            fe2o3_mir_model::semantic_mir_v1::SemanticKernelSourceContractV1::new(None, None, None)
+                .unwrap(),
+        ),
+    );
+    InertSemanticMirRequestV1::new(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(test_bytes(142))),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap()
+}
+
+#[test]
+fn module_limit_policy_has_exact_fixed_hard_bounds() {
+    let production = ProductionSemanticSsaModuleLimitsV1::production();
+    assert_eq!(
+        [
+            production.max_variables(),
+            production.max_blocks(),
+            production.max_edges(),
+            production.max_events(),
+            production.max_edge_definitions(),
+            production.max_output_items(),
+            production.max_storage_words(),
+            production.max_work_units(),
+        ],
+        [
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_VARIABLES_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_BLOCKS_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGES_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EVENTS_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGE_DEFINITIONS_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_OUTPUT_ITEMS_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_STORAGE_WORDS_V1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_WORK_UNITS_V1,
+        ]
+    );
+    assert_eq!(
+        production,
+        ProductionSemanticSsaLimitsV1::default().module()
+    );
+    let planner = SsaPlannerLimitsV1::default();
+    assert_eq!(
+        [
+            production.max_variables(),
+            production.max_blocks(),
+            production.max_edges(),
+            production.max_events(),
+            production.max_edge_definitions(),
+            production.max_output_items(),
+            production.max_storage_words(),
+            production.max_work_units(),
+        ],
+        [
+            planner.max_variables() * 4,
+            planner.max_blocks() * 4,
+            planner.max_edges() * 4,
+            planner.max_events() * 4,
+            planner.max_edge_definitions() * 4,
+            planner.max_output_items() * 4,
+            planner.max_storage_words() * 4,
+            planner.max_work_units() * 4,
+        ]
+    );
+    assert!(ProductionSemanticSsaModuleLimitsV1::try_new(0, 1, 0, 0, 0, 0, 1, 1).is_ok());
+
+    let invalid = [
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_VARIABLES_V1 + 1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(0, 0, 0, 0, 0, 0, 1, 1),
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            0,
+            1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGES_V1 + 1,
+            0,
+            0,
+            0,
+            1,
+            1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            0,
+            1,
+            0,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EVENTS_V1 + 1,
+            0,
+            0,
+            1,
+            1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            0,
+            1,
+            0,
+            0,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGE_DEFINITIONS_V1 + 1,
+            0,
+            1,
+            1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            0,
+            1,
+            0,
+            0,
+            0,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_OUTPUT_ITEMS_V1 + 1,
+            1,
+            1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(0, 1, 0, 0, 0, 0, 0, 1),
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_STORAGE_WORDS_V1 + 1,
+            1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(0, 1, 0, 0, 0, 0, 1, 0),
+        ProductionSemanticSsaModuleLimitsV1::try_new(
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_WORK_UNITS_V1 + 1,
+        ),
+        ProductionSemanticSsaModuleLimitsV1::try_new(usize::MAX, 1, 0, 0, 0, 0, 1, 1),
+    ];
+    assert!(
+        invalid.into_iter().all(|result| {
+            result == Err(ProductionSemanticSsaModuleLimitsErrorV1::InvalidLimits)
+        })
+    );
+}
+
+#[test]
+fn module_accounting_exceeds_one_function_budget_then_fails_the_module_budget() {
+    let input = SsaConstructionInputV1::new(
+        SsaBlockIdV1::new(0),
+        0,
+        vec![],
+        vec![],
+        vec![SsaBlockInputV1::new(vec![], vec![])],
+    );
+    let plan = plan_ssa_with_limits_v1(&input, SsaPlannerLimitsV1::default()).unwrap();
+    let resources = plan.resources().clone();
+    let function_plan = ProductionSemanticSsaFunctionPlanV1 {
+        function: SemanticFunctionIdV1::from_index(0),
+        function_identity: SemanticFunctionIdentityV1::from_sha256(test_bytes(130)),
+        plan,
+        partial_moves: ProductionSemanticPartialMoveCertificateV1::default(),
+        implicit_entry_variables: Box::new([]),
+        retained_cross_edge_variables: Box::new([]),
+        auxiliary_resources: SemanticSsaAuxiliaryResourcesV1::default(),
+    };
+    let twice = |value: usize| value.checked_mul(2).unwrap();
+    let planner = SsaPlannerLimitsV1::try_new(
+        0,
+        resources.input_blocks(),
+        resources.input_edges(),
+        resources.input_events(),
+        resources.input_edge_definitions(),
+        resources.output_items(),
+        resources.storage_words(),
+        resources.work_units(),
+    )
+    .unwrap();
+    let module = ProductionSemanticSsaModuleLimitsV1::try_new(
+        0,
+        twice(resources.input_blocks()),
+        twice(resources.input_edges()),
+        twice(resources.input_events()),
+        twice(resources.input_edge_definitions()),
+        twice(resources.output_items()),
+        twice(resources.storage_words()),
+        twice(resources.work_units()),
+    )
+    .unwrap();
+    let limits = ProductionSemanticSsaLimitsV1::with_module_limits(planner, module);
+    let mut summary = ProductionSemanticSsaSummaryV1 {
+        function_count: 2,
+        ..ProductionSemanticSsaSummaryV1::default()
+    };
+    accumulate_summary_v1(&mut summary, &function_plan, 0, limits).unwrap();
+    accumulate_summary_v1(&mut summary, &function_plan, 0, limits).unwrap();
+    assert!(summary.input_blocks() > planner.max_blocks());
+    assert!(summary.storage_words() > planner.max_storage_words());
+    assert!(summary.work_units() > planner.max_work_units());
+    assert_eq!(summary.input_blocks(), module.max_blocks());
+    assert_eq!(summary.storage_words(), module.max_storage_words());
+    assert_eq!(summary.work_units(), module.max_work_units());
+
+    assert_eq!(
+        accumulate_summary_v1(&mut summary, &function_plan, 0, limits),
+        Err(ProductionSemanticSsaErrorV1::AggregateResourceLimit {
+            resource: SsaPlannerResourceV1::Blocks,
+            required: module.max_blocks() + resources.input_blocks(),
+            limit: module.max_blocks(),
+        })
+    );
+}
+
+#[test]
+fn module_resource_boundaries_are_inclusive_and_overflow_safe() {
+    let module = ProductionSemanticSsaModuleLimitsV1::try_new(1, 1, 1, 1, 1, 1, 1, 1).unwrap();
+    let limits =
+        ProductionSemanticSsaLimitsV1::with_module_limits(SsaPlannerLimitsV1::default(), module);
+    let exact = ProductionSemanticSsaSummaryV1 {
+        promotable_variables: 1,
+        input_blocks: 1,
+        input_edges: 1,
+        input_events: 1,
+        input_edge_definitions: 1,
+        output_items: 1,
+        storage_words: 1,
+        work_units: 1,
+        ..ProductionSemanticSsaSummaryV1::default()
+    };
+    accounting::enforce_module_resource_limits_v1(exact, limits).unwrap();
+    for (resource, hostile) in [
+        (
+            SsaPlannerResourceV1::Variables,
+            ProductionSemanticSsaSummaryV1 {
+                promotable_variables: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::Blocks,
+            ProductionSemanticSsaSummaryV1 {
+                input_blocks: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::Edges,
+            ProductionSemanticSsaSummaryV1 {
+                input_edges: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::Events,
+            ProductionSemanticSsaSummaryV1 {
+                input_events: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::EdgeDefinitions,
+            ProductionSemanticSsaSummaryV1 {
+                input_edge_definitions: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::OutputItems,
+            ProductionSemanticSsaSummaryV1 {
+                output_items: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::StorageWords,
+            ProductionSemanticSsaSummaryV1 {
+                storage_words: 2,
+                ..exact
+            },
+        ),
+        (
+            SsaPlannerResourceV1::WorkUnits,
+            ProductionSemanticSsaSummaryV1 {
+                work_units: 2,
+                ..exact
+            },
+        ),
+    ] {
+        assert_eq!(
+            accounting::enforce_module_resource_limits_v1(hostile, limits),
+            Err(ProductionSemanticSsaErrorV1::AggregateResourceLimit {
+                resource,
+                required: 2,
+                limit: 1,
+            })
+        );
+    }
+    assert_eq!(
+        accounting::enforce_module_resource_limits_v1(
+            ProductionSemanticSsaSummaryV1 {
+                promotable_variables: usize::MAX,
+                memory_variables: 1,
+                ..ProductionSemanticSsaSummaryV1::default()
+            },
+            limits,
+        ),
+        Err(ProductionSemanticSsaErrorV1::ResourceOverflow)
+    );
+}
+
+#[test]
+fn permissive_module_ceilings_preserve_admitted_source_identity() {
+    let semantic = admitted_single_function_semantic();
+    let broad_limits = ProductionSemanticSsaLimitsV1::default();
+    let (broad_plans, broad_summary, broad_identity) =
+        construct_semantic_ssa_plans_v1(&semantic, broad_limits).unwrap();
+    let variables = broad_summary
+        .promotable_variables()
+        .checked_add(broad_summary.memory_variables())
+        .unwrap();
+    let exact_module = ProductionSemanticSsaModuleLimitsV1::try_new(
+        variables,
+        broad_summary.input_blocks(),
+        broad_summary.input_edges(),
+        broad_summary.input_events(),
+        broad_summary.input_edge_definitions(),
+        broad_summary.output_items(),
+        broad_summary.storage_words(),
+        broad_summary.work_units(),
+    )
+    .unwrap();
+    let exact_limits = ProductionSemanticSsaLimitsV1::with_module_limits(
+        SsaPlannerLimitsV1::default(),
+        exact_module,
+    );
+    let (exact_plans, exact_summary, exact_identity) =
+        construct_semantic_ssa_plans_v1(&semantic, exact_limits).unwrap();
+    assert_eq!(broad_plans, exact_plans);
+    assert_eq!(broad_summary, exact_summary);
+    assert_eq!(broad_identity, exact_identity);
+
+    let rejecting_module = ProductionSemanticSsaModuleLimitsV1::try_new(
+        variables,
+        broad_summary.input_blocks(),
+        broad_summary.input_edges(),
+        broad_summary.input_events(),
+        broad_summary.input_edge_definitions(),
+        broad_summary.output_items(),
+        broad_summary.storage_words(),
+        broad_summary.work_units() - 1,
+    )
+    .unwrap();
+    assert!(matches!(
+        construct_semantic_ssa_plans_v1(
+            &semantic,
+            ProductionSemanticSsaLimitsV1::with_module_limits(
+                SsaPlannerLimitsV1::default(),
+                rejecting_module,
+            ),
+        ),
+        Err(ProductionSemanticSsaErrorV1::AggregateResourceLimit {
+            resource: SsaPlannerResourceV1::WorkUnits,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn semantic_ssa_owner_replays_under_the_fixed_module_envelope() {
+    let source_owner = ProductionSemanticMirOwnerV1::try_new(
+        admitted_single_function_semantic(),
+        ProductionSemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let owner = ProductionSemanticSsaOwnerV1::try_new(
+        source_owner,
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    owner.verify_replay().unwrap();
+    assert_eq!(
+        owner.summary().function_count(),
+        owner.source_semantic().functions().len()
+    );
+    assert!(!owner.grants_proof_or_artifact_authority());
+}
+
 #[test]
 fn semantic_adapter_resource_limits_are_inclusive_and_fail_closed() {
     let function = test_function(vec![test_block(
@@ -903,6 +1358,7 @@ fn semantic_adapter_resource_limits_are_inclusive_and_fail_closed() {
     };
 
     plan_semantic_function_ssa_v1(function_id, &function, limits(storage, work)).unwrap();
+    assert!(limits(storage, work - 1).module().max_work_units() > work);
     assert!(matches!(
         plan_semantic_function_ssa_v1(function_id, &function, limits(storage - 1, work)),
         Err(ProductionSemanticSsaErrorV1::PartialMoveResourceLimit {

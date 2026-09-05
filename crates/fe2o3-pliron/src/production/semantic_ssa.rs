@@ -35,19 +35,181 @@ use super::{ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1};
 const PRODUCTION_SEMANTIC_SSA_IDENTITY_DOMAIN_V1: &[u8] =
     b"fe2o3.production-semantic-ssa-owner.v1\0";
 
+/// Fixed compiler envelope for variables retained across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_VARIABLES_V1: usize = 1_048_576;
+/// Fixed compiler envelope for input blocks retained across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_BLOCKS_V1: usize = 1_048_576;
+/// Fixed compiler envelope for input edges retained across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGES_V1: usize = 262_144;
+/// Fixed compiler envelope for input events retained across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EVENTS_V1: usize = 4_194_304;
+/// Fixed compiler envelope for edge definitions retained across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGE_DEFINITIONS_V1: usize = 262_144;
+/// Fixed compiler envelope for output items retained across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_OUTPUT_ITEMS_V1: usize = 4_194_304;
+/// Fixed compiler envelope for logical storage words across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_STORAGE_WORDS_V1: usize = 8_388_608;
+/// Fixed compiler envelope for deterministic work across one semantic module.
+pub const HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_WORK_UNITS_V1: usize = 268_435_456;
+
+/// A malformed or unbounded semantic-SSA module resource policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionSemanticSsaModuleLimitsErrorV1 {
+    InvalidLimits,
+}
+
+impl fmt::Display for ProductionSemanticSsaModuleLimitsErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidLimits => {
+                formatter.write_str("invalid production semantic SSA module limits")
+            }
+        }
+    }
+}
+
+impl Error for ProductionSemanticSsaModuleLimitsErrorV1 {}
+
+/// Fixed upper envelope for cumulative resources retained by one semantic module.
+///
+/// The hard maxima are four times the independent function-planner ceilings.
+/// This is one constant compiler resource envelope, not a multiplier applied
+/// to the module's function count. Individual functions remain subject to the
+/// unchanged [`SsaPlannerLimitsV1`] policy before module accounting begins.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionSemanticSsaModuleLimitsV1 {
+    max_variables: usize,
+    max_blocks: usize,
+    max_edges: usize,
+    max_events: usize,
+    max_edge_definitions: usize,
+    max_output_items: usize,
+    max_storage_words: usize,
+    max_work_units: usize,
+}
+
+impl ProductionSemanticSsaModuleLimitsV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        max_variables: usize,
+        max_blocks: usize,
+        max_edges: usize,
+        max_events: usize,
+        max_edge_definitions: usize,
+        max_output_items: usize,
+        max_storage_words: usize,
+        max_work_units: usize,
+    ) -> Result<Self, ProductionSemanticSsaModuleLimitsErrorV1> {
+        let limits = Self {
+            max_variables,
+            max_blocks,
+            max_edges,
+            max_events,
+            max_edge_definitions,
+            max_output_items,
+            max_storage_words,
+            max_work_units,
+        };
+        if limits.max_variables > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_VARIABLES_V1
+            || limits.max_blocks == 0
+            || limits.max_blocks > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_BLOCKS_V1
+            || limits.max_edges > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGES_V1
+            || limits.max_events > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EVENTS_V1
+            || limits.max_edge_definitions
+                > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGE_DEFINITIONS_V1
+            || limits.max_output_items > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_OUTPUT_ITEMS_V1
+            || limits.max_storage_words == 0
+            || limits.max_storage_words > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_STORAGE_WORDS_V1
+            || limits.max_work_units == 0
+            || limits.max_work_units > HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_WORK_UNITS_V1
+        {
+            return Err(ProductionSemanticSsaModuleLimitsErrorV1::InvalidLimits);
+        }
+        Ok(limits)
+    }
+
+    pub const fn production() -> Self {
+        Self {
+            max_variables: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_VARIABLES_V1,
+            max_blocks: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_BLOCKS_V1,
+            max_edges: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGES_V1,
+            max_events: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EVENTS_V1,
+            max_edge_definitions: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_EDGE_DEFINITIONS_V1,
+            max_output_items: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_OUTPUT_ITEMS_V1,
+            max_storage_words: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_STORAGE_WORDS_V1,
+            max_work_units: HARD_MAX_PRODUCTION_SEMANTIC_SSA_MODULE_WORK_UNITS_V1,
+        }
+    }
+
+    pub const fn max_variables(self) -> usize {
+        self.max_variables
+    }
+
+    pub const fn max_blocks(self) -> usize {
+        self.max_blocks
+    }
+
+    pub const fn max_edges(self) -> usize {
+        self.max_edges
+    }
+
+    pub const fn max_events(self) -> usize {
+        self.max_events
+    }
+
+    pub const fn max_edge_definitions(self) -> usize {
+        self.max_edge_definitions
+    }
+
+    pub const fn max_output_items(self) -> usize {
+        self.max_output_items
+    }
+
+    pub const fn max_storage_words(self) -> usize {
+        self.max_storage_words
+    }
+
+    pub const fn max_work_units(self) -> usize {
+        self.max_work_units
+    }
+}
+
+impl Default for ProductionSemanticSsaModuleLimitsV1 {
+    fn default() -> Self {
+        Self::production()
+    }
+}
+
 /// Bounded planner policy retained for deterministic replay.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProductionSemanticSsaLimitsV1 {
     planner: SsaPlannerLimitsV1,
+    module: ProductionSemanticSsaModuleLimitsV1,
 }
 
 impl ProductionSemanticSsaLimitsV1 {
     pub const fn new(planner: SsaPlannerLimitsV1) -> Self {
-        Self { planner }
+        Self {
+            planner,
+            module: ProductionSemanticSsaModuleLimitsV1::production(),
+        }
+    }
+
+    /// Retains a stricter validated module envelope without changing the
+    /// independent per-function planner limits.
+    pub const fn with_module_limits(
+        planner: SsaPlannerLimitsV1,
+        module: ProductionSemanticSsaModuleLimitsV1,
+    ) -> Self {
+        Self { planner, module }
     }
 
     pub const fn planner(self) -> SsaPlannerLimitsV1 {
         self.planner
+    }
+
+    pub const fn module(self) -> ProductionSemanticSsaModuleLimitsV1 {
+        self.module
     }
 }
 

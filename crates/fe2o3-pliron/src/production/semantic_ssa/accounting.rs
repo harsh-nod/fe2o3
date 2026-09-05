@@ -127,7 +127,14 @@ pub(super) fn accumulate_summary_v1(
     add!(work_units, function_plan.auxiliary_resources.work_units);
     add!(storage_words, partial_moves.state_entries());
     add!(work_units, partial_moves.work_units());
-    let planner = limits.planner();
+    enforce_module_resource_limits_v1(*summary, limits)
+}
+
+pub(super) fn enforce_module_resource_limits_v1(
+    summary: ProductionSemanticSsaSummaryV1,
+    limits: ProductionSemanticSsaLimitsV1,
+) -> Result<(), ProductionSemanticSsaErrorV1> {
+    let module = limits.module();
     let variables = summary
         .promotable_variables
         .checked_add(summary.memory_variables)
@@ -136,42 +143,42 @@ pub(super) fn accumulate_summary_v1(
         (
             SsaPlannerResourceV1::Variables,
             variables,
-            planner.max_variables(),
+            module.max_variables(),
         ),
         (
             SsaPlannerResourceV1::Blocks,
             summary.input_blocks,
-            planner.max_blocks(),
+            module.max_blocks(),
         ),
         (
             SsaPlannerResourceV1::Edges,
             summary.input_edges,
-            planner.max_edges(),
+            module.max_edges(),
         ),
         (
             SsaPlannerResourceV1::Events,
             summary.input_events,
-            planner.max_events(),
+            module.max_events(),
         ),
         (
             SsaPlannerResourceV1::EdgeDefinitions,
             summary.input_edge_definitions,
-            planner.max_edge_definitions(),
+            module.max_edge_definitions(),
         ),
         (
             SsaPlannerResourceV1::OutputItems,
             summary.output_items,
-            planner.max_output_items(),
+            module.max_output_items(),
         ),
         (
             SsaPlannerResourceV1::StorageWords,
             summary.storage_words,
-            planner.max_storage_words(),
+            module.max_storage_words(),
         ),
         (
             SsaPlannerResourceV1::WorkUnits,
             summary.work_units,
-            planner.max_work_units(),
+            module.max_work_units(),
         ),
     ] {
         if required > limit {
