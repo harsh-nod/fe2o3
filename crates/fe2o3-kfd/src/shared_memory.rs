@@ -90,7 +90,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r12-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r13-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
@@ -108,7 +108,7 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "queue-gtt-policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span,diagnostic-barrier-ring:plain-executable-gtt-or-selected-gpu-userptr-with-exact-final-rocr-derived-flags-and-no-full-rocr-allocation-or-map-order-parity,control:exact-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable\n",
     "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-or-caller-destination-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
     "completion-bridge=exact-retained-ring-and-host-coherent-mappings,private-packet-id-and-64-byte-signal-slot-index,backend-atomic-u32-header-and-atomic-i64-value-acquire-observe,immutable-kind-volatile-observe,and-release-reset,currentness-sandwiched\n",
-    "currentness=lifecycle-transitions-use-full-contracted-device-topology-aperture-composite;active-mapped-memory-submission-and-completion-use-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence;packet-atomics-execute-inside-explicit-owner-pre-post-scopes\n",
+    "currentness=lifecycle-transitions-and-persistent-control-open-close-use-full-contracted-device-topology-aperture-composite;exact-retained-control-replay-and-active-mapped-memory-submission-and-completion-use-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence;operational-fence-excludes-topology-and-aperture-reobservation-and-cannot-exclude-reset-counter-wrap-or-observation-ABA;packet-atomics-execute-inside-explicit-owner-pre-post-scopes\n",
     "executable=ordinary-ExecutableGttV1-only:cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted;diagnostic-ExecutableAqlQueueProbeGttV1-remains-cpu-mutable-after-gpu-map-for-aql-publication\n",
     "userptr-lifecycle=reserve-vma,anonymous-dontfork-read-write-pages,register-same-cpu-and-gpu-address,map-gpu,unmap-gpu,free-bo-before-cpu-vma-unmap,no-separate-reservation-unmap\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
@@ -119,11 +119,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83";
+    "1c138628cb0de247e71b97b0b7ff85090071163b5c8e737ae4dbdea6d2ac8c20";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0xfb, 0x01, 0xd0, 0x99, 0xee, 0xdf, 0xb3, 0x9a, 0x60, 0xa1, 0x76, 0x38, 0x97, 0x69, 0x16, 0x84,
-    0xb5, 0x47, 0xc5, 0x16, 0x10, 0xb5, 0xe6, 0x25, 0x29, 0xf2, 0xa6, 0xff, 0x0e, 0xb2, 0x7f, 0x83,
+    0x1c, 0x13, 0x86, 0x28, 0xcb, 0x0d, 0xe2, 0x47, 0xe7, 0x1b, 0x97, 0xb0, 0xb7, 0xff, 0x85, 0x09,
+    0x00, 0x71, 0x16, 0x3b, 0x5c, 0x8e, 0x73, 0x7a, 0xe4, 0xdb, 0xde, 0xa6, 0xd2, 0xac, 0x8c, 0x20,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1709,6 +1709,28 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             }
         }
         Ok(())
+    }
+
+    fn validate_live_queue_dispatch_memory(
+        &mut self,
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+        expected_device: DeviceKeyV1,
+        expected_vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_active()?;
+        self.check_currentness()?;
+        self.validate_dispatch_device_memory_set(authorities, expected_device, expected_vm)
+    }
+
+    fn validate_persistent_replay_dispatch_memory(
+        &mut self,
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+        expected_device: DeviceKeyV1,
+        expected_vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_active()?;
+        self.check_operational_currentness()?;
+        self.validate_dispatch_device_memory_set(authorities, expected_device, expected_vm)
     }
 
     fn map_device_memory(
@@ -3744,8 +3766,28 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
     ) -> Result<(), MemorySessionError> {
-        self.check_queue_currentness()?;
-        self.engine.validate_dispatch_device_memory_set(
+        self.engine.validate_live_queue_dispatch_memory(
+            authorities,
+            self.model_device.model_key(),
+            self.vm,
+        )
+    }
+
+    /// Revalidates an unchanged mapped device-memory set while retained
+    /// dispatch control remains owned by the same live queue.
+    ///
+    /// Persistent replay performs no allocation, mapping, or queue lifecycle
+    /// transition. It therefore uses the active-queue operational fence while
+    /// retaining the same exact complete authority-set validation. Initial
+    /// control creation and ordinary detached rebinding continue to use the
+    /// full composite observation above. As documented by the underlying
+    /// currentness contract, the operational fence does not re-observe topology
+    /// or apertures and cannot exclude reset-counter wrap or observation ABA.
+    pub(crate) fn validate_persistent_replay_dispatch_memory(
+        &mut self,
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+    ) -> Result<(), MemorySessionError> {
+        self.engine.validate_persistent_replay_dispatch_memory(
             authorities,
             self.model_device.model_key(),
             self.vm,
@@ -4882,6 +4924,8 @@ mod tests {
         corrupt_mapping_address: bool,
         currentness_calls: usize,
         fail_currentness_at: Option<usize>,
+        operational_currentness_calls: usize,
+        fail_operational_currentness_at: Option<usize>,
         reserve_va_calls: usize,
         alloc_calls: usize,
         map_cpu_calls: usize,
@@ -4918,6 +4962,8 @@ mod tests {
                 corrupt_mapping_address: false,
                 currentness_calls: 0,
                 fail_currentness_at: None,
+                operational_currentness_calls: 0,
+                fail_operational_currentness_at: None,
                 reserve_va_calls: 0,
                 alloc_calls: 0,
                 map_cpu_calls: 0,
@@ -4972,6 +5018,14 @@ mod tests {
                 Err(MemorySessionError::Injected("currentness"))
             } else {
                 self.check("currentness")
+            }
+        }
+        fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+            self.operational_currentness_calls += 1;
+            if self.fail_operational_currentness_at == Some(self.operational_currentness_calls) {
+                Err(MemorySessionError::Injected("operational_currentness"))
+            } else {
+                self.check("operational_currentness")
             }
         }
         fn acquire_vm(&mut self) -> Result<(), MemorySessionError> {
@@ -5678,17 +5732,17 @@ mod tests {
             let mut engine = acquired();
             let token = engine.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
             let token = engine.map_mutable(token).unwrap();
-            engine.backend.fail_currentness_at = Some(
+            engine.backend.fail_operational_currentness_at = Some(
                 engine
                     .backend
-                    .currentness_calls
+                    .operational_currentness_calls
                     .checked_add(currentness_delta)
                     .unwrap(),
             );
 
             assert!(matches!(
                 engine.sha256_mapped_host_visible_subrange(&token, 64, 32),
-                Err(MemorySessionError::Injected("currentness"))
+                Err(MemorySessionError::Injected("operational_currentness"))
             ));
             assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
             assert!(matches!(
@@ -7033,6 +7087,33 @@ mod tests {
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);
+    }
+
+    #[test]
+    fn persistent_replay_uses_only_operational_currentness_before_exact_set_validation() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let full_before = engine.backend.currentness_calls;
+        assert_eq!(engine.backend.operational_currentness_calls, 0);
+
+        engine
+            .validate_live_queue_dispatch_memory(&[], device, vm)
+            .unwrap();
+        assert_eq!(engine.backend.currentness_calls, full_before + 1);
+        assert_eq!(engine.backend.operational_currentness_calls, 0);
+
+        engine
+            .validate_persistent_replay_dispatch_memory(&[], device, vm)
+            .unwrap();
+        assert_eq!(engine.backend.currentness_calls, full_before + 1);
+        assert_eq!(engine.backend.operational_currentness_calls, 1);
+
+        engine.backend.fail_operational_currentness_at = Some(2);
+        assert!(matches!(
+            engine.validate_persistent_replay_dispatch_memory(&[], device, vm),
+            Err(MemorySessionError::Injected("operational_currentness"))
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
     }
 
     #[test]

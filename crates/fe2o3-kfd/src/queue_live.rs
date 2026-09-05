@@ -205,9 +205,9 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r36-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r37-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83\n",
+    "memory_profile_sha256=1c138628cb0de247e71b97b0b7ff85090071163b5c8e737ae4dbdea6d2ac8c20\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
@@ -235,10 +235,10 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-never-published-prepared-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,its-replay-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,initial-persistent-control-open-and-explicit-release-use-full-currentness,its-exact-retained-control-replay-uses-operational-currentness-and-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;published-owners-no-drop-ioctl-store-munmap-or-free;armed-unpublished-payload-guard-drop-zero-protect-unmap\n",
-    "currentness=active-queue-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence-before-publication,after-bounded-preparation,and-before-mmio;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-retain-full-device-topology-aperture-composite;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
+    "currentness=active-queue-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence-before-exact-persistent-replay,publication,after-bounded-preparation,and-before-mmio;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-and-persistent-control-open-close-retain-full-device-topology-aperture-composite;operational-fence-excludes-topology-and-aperture-reobservation-and-cannot-exclude-reset-counter-wrap-or-observation-ABA;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
     "event-lifecycle=linear-private-kfd-event,no-kfd-event-page-mmap,separate-private-payload-page-cleaned-on-unpublished-install-failure,armed-unpublished-payload-cleanup-through-all-pre-create-failures-until-immediately-before-native-create-queue-call,zeroized-protected-and-unmapped-immediately-after-event-destroy-before-runtime-disable-and-independent-of-later-resource-release,payload-cleanup-failure-after-event-destroy-aborts-process-before-owner-loss,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,published-owners-no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-create-address-except-exact-24-owned-fixed-private-anonymous-control-stack-pages,prot-none-then-dontfork-then-rw,whole-span-seal-then-exact-shadow-rw-restore;headers-and-control-stack-kfd-copy-targets,wave-state-remains-read-only-bo-mapped,event-payload-disjoint-from-all-control-stack-pages;ordinary-hardware-preemption-restore-contracted\n",
@@ -249,7 +249,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "90a78b051b6b1740a0e3123278edad5864509a6f1d3c7480e3416dafc634127d";
+    "457d55eec6f621de242734b4bdcda912853c6c2f121a1e21e96ada66e18e9cc5";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -9266,6 +9266,7 @@ impl ComputeAqlQueueSessionV1 {
             }
         };
         let retained_dispatch = self.dispatch.take();
+        let replaying_retained_control = retained_dispatch.is_some();
         let (prepared_dispatch, failed_retained_control) = {
             let memory = &mut self
                 .engine
@@ -9360,13 +9361,17 @@ impl ComputeAqlQueueSessionV1 {
             }
         };
         let device_authorities = prepared_dispatch.device_authorities();
-        let validation = self
+        let memory = &mut self
             .engine
             .as_mut()
             .expect("checked queue engine")
             .backend
-            .session
-            .validate_live_queue_dispatch_memory(&device_authorities);
+            .session;
+        let validation = if replaying_retained_control {
+            memory.validate_persistent_replay_dispatch_memory(&device_authorities)
+        } else {
+            memory.validate_live_queue_dispatch_memory(&device_authorities)
+        };
         if let Err(error) = validation {
             allocation
                 .owner
@@ -10295,6 +10300,23 @@ impl ComputeAqlQueueSessionV1 {
         if let Err(error) = dispatch.validate_detached_persistent_control_release_v1(generation) {
             self.poison_terminal();
             return Err(error.into());
+        }
+        let full_currentness = self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))
+            .and_then(|engine| {
+                engine
+                    .backend
+                    .session
+                    .check_queue_currentness()
+                    .map_err(Into::into)
+            });
+        if let Err(error) = full_currentness {
+            self.poison_terminal();
+            return Err(error);
         }
         let loan = self.restore_model_ownership_for_live_mutation()?;
         let dispatch = self
@@ -16163,7 +16185,7 @@ mod tests {
         )));
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "fb01d099eedfb39a60a1763897691684b547c51610b5e62529f2a6ff0eb27f83"
+            "1c138628cb0de247e71b97b0b7ff85090071163b5c8e737ae4dbdea6d2ac8c20"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -16327,5 +16349,64 @@ mod tests {
             1
         );
         assert!(!body.contains("engine.create(key)"));
+    }
+
+    #[test]
+    fn persistent_control_replay_uses_the_active_queue_currentness_policy() {
+        let source = include_str!("queue_live.rs");
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let bind = production
+            .split("pub fn bind_directional_persistent_fixed_dispatch_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn submit_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        let retained = bind
+            .find("let retained_dispatch = self.dispatch.take()")
+            .unwrap();
+        let replay_mode = bind
+            .find("let replaying_retained_control = retained_dispatch.is_some()")
+            .unwrap();
+        let replay_validation = bind
+            .find("validate_persistent_replay_dispatch_memory")
+            .unwrap();
+        let initial_validation = bind.find("validate_live_queue_dispatch_memory").unwrap();
+        assert!(retained < replay_mode);
+        assert!(replay_mode < replay_validation);
+        assert!(replay_mode < initial_validation);
+
+        let release = production
+            .split("pub fn release_retained_persistent_fixed_dispatch_control_v1")
+            .last()
+            .unwrap()
+            .split("fn detach_recycled_fixed_dispatch_inner")
+            .next()
+            .unwrap();
+        let close_audit = release.find(".check_queue_currentness()").unwrap();
+        let consume_control = release.find(".dispatch\n            .take()").unwrap();
+        assert!(close_audit < consume_control);
+
+        let shared_memory = include_str!("shared_memory.rs");
+        let operational = shared_memory
+            .split("fn validate_persistent_replay_dispatch_memory")
+            .nth(1)
+            .unwrap()
+            .split("fn map_device_memory")
+            .next()
+            .unwrap();
+        assert!(operational.contains("self.check_operational_currentness()?"));
+        assert!(operational.contains("validate_dispatch_device_memory_set"));
+        assert!(!operational.contains("self.check_currentness()?"));
+
+        let ordinary_rebind = production
+            .split("pub fn bind_fixed_dispatch<const N: usize>")
+            .last()
+            .unwrap()
+            .split("pub fn allocate_uninitialized_fixed_dispatch_data")
+            .next()
+            .unwrap();
+        assert!(ordinary_rebind.contains("validate_live_queue_dispatch_memory"));
+        assert!(!ordinary_rebind.contains("validate_persistent_replay_dispatch_memory"));
     }
 }
