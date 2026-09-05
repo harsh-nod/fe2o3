@@ -11,8 +11,9 @@ persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
 portable-progress, R25 persistent-compute storage-bridge, R27 persistent
 dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
 host-content-certificate, R31 single-packet/window-refinement, R32
-directional-currentness-handoff, and R33 fused-synchronous-directional-SDMA
-models. The authenticated runner proves 741 obligations and rejects 314
+directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, and
+R34 fused-asynchronous-directional-SDMA models. The authenticated runner proves
+795 obligations and rejects 318
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1536,6 +1537,87 @@ performance.
 | Executable fused-composition model | **Checked** | Twenty-three focused Rust transition/structure tests plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
 | Coupled boundary countermodels | **Rejected** | Four pinned mutated transition bodies fail their named alignment, timeout-custody, retirement-order, and completion-restoration-custody postconditions. |
 | Rust privacy/move semantics, concrete loans or allocation, currentness/completion truth, executable Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R33 proof boundary. |
+
+## R34 fused asynchronous directional SDMA
+
+`r34_fused_asynchronous_directional_sdma_v1.rs` proves 54 obligations for an
+independent finite comparison of the former and fused public asynchronous
+single-copy submission paths reviewed at production commit
+`b015b81f862220d48671e1c4809b8ce858a317e7`. Admission occurs before every
+modeled loan. The former composition then uses separate opening,
+lower-preparation/publication, and final-currentness loans. The fused
+composition uses one loan spanning opening currentness, persistent
+reserve/prepare/detach and request construction, lower preparation,
+prepublication currentness, immediate handoff/publication, final currentness,
+and retake. On a successful confirmed submission both compositions perform
+three currentness observations, while their abstract executed loan counts are
+exactly three and one. These are finite event counts, not allocation, syscall,
+latency, or performance measurements.
+
+The external-equivalence theorem requires an explicit input-only,
+path-sensitive loan premise. It does not call either runner or compare their
+outputs. The premise accounts for the former opening loan retaking before
+request construction while the fused loan retakes only at the end, requires a
+successful fused retake for retryable request-preparation rejection, relates
+the former execution/final retake conjunction to the fused retake only when it
+can change a lower-failure or publication result, and permits irrelevant
+retake differences after prepublication loss or retained publication. A
+bounded exhaustive Rust test independently enumerates the model's complete
+finite observation space and checks that every admitted premise implies the
+executable model's external-equivalence relation. This remains testing of the
+model, not Rust-to-Verus or production refinement.
+
+The transition set includes retryable and terminal admission; opening loan and
+currentness failure; use-request, reserve, prepare, and detach rejection;
+retryable and poisoned lower preparation; its closing observation;
+prepublication loss and the fused second closing observation; recoverable,
+retained, and confirmed publication; final currentness; planned-ticket
+occurrence validation; returned-ticket equality; and every former/fused retake
+stage. Request-preparation rejection remains retryable only after a successful
+fused retake. Once detach and request construction succeed, a fused retake
+failure is never retryable: lower/recoverable failures retain terminal prepared
+custody and confirmed publication retains terminal published custody. The
+former opening-retake failure instead occurs before request construction and
+retains terminal request custody.
+
+A failed prepublication observation performs the modeled second fused close
+but remains terminal prepared regardless of that result. The mathematical
+handoff is followed immediately by publication with zero intervening fallible
+or native actions. Recoverable publication returns retryable request custody
+only after successful final currentness and relevant retakes. Retained
+publication always retains terminal prepared-queue-retained custody. Confirmed
+publication succeeds only when final currentness and retake succeed, the
+planned ticket names the exact queue occurrence, and the returned ticket equals
+the plan; otherwise exact terminal published custody retains both ticket
+values. H2D preserves the host certificate. D2H invalidates it only after
+successful request construction, so opening and request-preparation failures
+preserve the prior certificate.
+
+The executable R34 model has 25 focused Rust tests, including the exhaustive
+finite premise check. A structural test checks that the private prepared
+handoff carrier has no `Clone` implementation, and a compile-fail doctest
+rejects cloning the public owning model. Verus mathematical values remain
+copyable, so these proofs do not establish Rust privacy, move-only ownership,
+loan mechanics, or borrow exclusivity. Four pinned independent mutations omit
+the final retake, return retryable custody after detach, insert fallible work
+between handoff and publication, and accept a substituted returned ticket.
+Each fails its named postcondition and imports no positive proof source.
+
+All currentness values, operation outcomes, identities, certificates, tickets,
+and loan results are contracted mathematical inputs. There is no Rust-to-Verus
+correspondence theorem and no proof that production Rust refines either finite
+machine. The model does not establish runtime/KFD/HSA/HIP behavior, driver or
+firmware correctness, hardware completion or coherence, progress, liveness,
+parity, or performance.
+
+## R34 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Premised former/fused external equivalence, exact successful 3-to-1 abstract-loan reduction with three currentness observations in both, admission/preparation order, path-sensitive retake requirements, immediate handoff/publication, exact retryable/terminal custody, and planned/returned ticket binding | **Proved** | Fifty-four obligations in `r34_fused_asynchronous_directional_sdma_v1.rs`; finite mathematical values and contracted observations only. |
+| Executable fused-composition model | **Checked** | Twenty-five focused Rust tests, including exhaustive finite observation enumeration, plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Four pinned mutations fail their named omitted-retake, retry-after-detach, intervening-fallible-work, and ticket-substitution postconditions. |
+| Rust privacy/move semantics, concrete loans or allocation, currentness truth, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R34 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

@@ -48,6 +48,7 @@ mod r30_bound_host_content_certificate;
 mod r31_single_packet_window_refinement;
 mod r32_directional_sdma_currentness_handoff;
 mod r33_fused_synchronous_directional_sdma;
+mod r34_fused_asynchronous_directional_sdma;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -83,6 +84,7 @@ pub use r30_bound_host_content_certificate::*;
 pub use r31_single_packet_window_refinement::*;
 pub use r32_directional_sdma_currentness_handoff::*;
 pub use r33_fused_synchronous_directional_sdma::*;
+pub use r34_fused_asynchronous_directional_sdma::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -143,6 +145,8 @@ mod r31_single_packet_window_refinement_tests;
 mod r32_directional_sdma_currentness_handoff_tests;
 #[cfg(test)]
 mod r33_fused_synchronous_directional_sdma_tests;
+#[cfg(test)]
+mod r34_fused_asynchronous_directional_sdma_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]
