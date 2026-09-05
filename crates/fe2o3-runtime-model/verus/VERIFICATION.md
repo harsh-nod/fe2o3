@@ -8,8 +8,9 @@ persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
 directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
 chunking, R21 runtime scripted-failure-seam, R22 batched directional
 persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
-portable-progress, R25 persistent-compute storage-bridge, and R27 persistent
-dispatch-control models. The authenticated runner proves 552 obligations and rejects 299
+portable-progress, R25 persistent-compute storage-bridge, R27 persistent
+dispatch-control, and R28 persistent-hot-currentness-scope models. The
+authenticated runner proves 583 obligations and rejects 301
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1218,6 +1219,54 @@ hardware execution, completion truth, liveness, parity, or performance.
 | Exact recycled predecessor and detached-phase replay, single-authority transfer, strict generation advance, identity-gated publication, and detached-ledger-preserving control eviction | **Proved** | Twenty obligations in `r27_persistent_dispatch_control_v1.rs`; finite mathematical values only. |
 | Boundary countermodels | **Rejected** | Six pinned standalone expected-negative witnesses fail only at their named postconditions and do not import the positive R27 model. |
 | Rust ownership, executable runtime/KFD/HSA/HIP, firmware, hardware truth, liveness, parity, or performance refinement | **Not established** | Explicitly outside the R27 proof boundary. |
+
+## R28 persistent hot-currentness scope
+
+`r28_persistent_hot_currentness_scope_v1.rs` proves 31 obligations for an
+independent finite policy model of the reviewed persistent-compute replay path.
+An initial bind consumes one full-audit outcome. A retained-control replay
+consumes one fresh operational checkpoint before submission. Successful submit,
+completion, and recycle transitions consume exactly three, two, and two
+operational checkpoints respectively. Ring occupancy is retryable only after
+the two pre-effect submit checkpoints and preserves the exact prepared receipt.
+
+Failure dispositions are stage-specific. They distinguish submit failures after
+zero, one, two, and three checkpoints from a post-submit publication-ledger
+failure; completion and recycle distinguish inner-operation failure from
+post-envelope ledger failure. Terminal states retain the address-free production
+custody stage: attached, published, completed, recycled, data detached, storage
+detached, restored, retained control, or control released. Detach and cancel
+encode the custody stages reported by the reviewed `queue_live.rs` paths. Close
+checks detached closeability before stable-binding authentication, consumes one
+full-audit outcome, and distinguishes retained from already released control.
+
+The active-attempt invariant binds the stable identity, attachment successor,
+and exact predecessor frontier. Each legal open, replay, submit, completion,
+recycle, detach, cancel, and close transition preserves the complete state
+invariant. Attachment or dispatch values without a successor are rejected
+atomically. Mathematical audit and completion counters do not drive a terminal
+transition; the executable observation counters saturate rather than fabricating
+a production generation failure.
+
+Two pinned expected-negative transition models retain the positive replay and
+close admission/control-flow shapes while respectively deleting the replay
+operational increment and the close full-audit increment. Their named
+postconditions fail under those coupled mutations.
+
+The Rust model's private owners are non-clone, but R28 proves no production
+authority count or Rust ownership theorem. Audit outcomes remain caller-supplied
+contracts. There is no Rust-to-Verus correspondence theorem and no proof of
+Linux currentness, reset detection, KFD/HSA/HIP behavior, hardware execution,
+completion truth, liveness, parity, or performance.
+
+## R28 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Full open/close, replay pulse, 3/2/2 success envelopes, retry boundary, exact binding frontier, terminal custody stages, cancellation, generation rejection, and transition invariant preservation | **Proved** | Thirty-one obligations in `r28_persistent_hot_currentness_scope_v1.rs`; contracted inputs and finite policy state only. |
+| Executable policy model | **Checked** | Focused Rust transition tests; private non-clone fields are not production authority evidence. |
+| Coupled boundary countermodels | **Rejected** | Two pinned mutated replay/close transition bodies fail their named checkpoint postconditions. |
+| Rust ownership, production authority conservation, concrete currentness, runtime/KFD/HSA/HIP, hardware truth, liveness, parity, or performance refinement | **Not established** | Explicitly outside the R28 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

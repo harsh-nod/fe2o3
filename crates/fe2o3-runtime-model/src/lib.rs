@@ -43,6 +43,7 @@ mod r22_batched_directional_persistent_sdma_windows;
 mod r23_same_device_d2d_persistent_sdma_windows;
 mod r24_portable_progress;
 mod r25_persistent_compute_storage_bridge;
+mod r28_persistent_hot_currentness_scope;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -73,6 +74,7 @@ pub use r22_batched_directional_persistent_sdma_windows::*;
 pub use r23_same_device_d2d_persistent_sdma_windows::*;
 pub use r24_portable_progress::*;
 pub use r25_persistent_compute_storage_bridge::*;
+pub use r28_persistent_hot_currentness_scope::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -123,6 +125,8 @@ mod r23_same_device_d2d_persistent_sdma_windows_tests;
 mod r24_portable_progress_tests;
 #[cfg(test)]
 mod r25_persistent_compute_storage_bridge_tests;
+#[cfg(test)]
+mod r28_persistent_hot_currentness_scope_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]
