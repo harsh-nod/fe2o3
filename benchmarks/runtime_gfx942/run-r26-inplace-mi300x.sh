@@ -65,6 +65,29 @@ sanitize_version() {
   "${qualification_env[@]}" /usr/bin/tr '[:space:]' '_'
 }
 
+capture_archived_rust_tool_version() {
+  local tool_name="$1"
+  local executable="$2"
+  local observed
+  local version_pattern='^[0-9]+\.[0-9]+\.[0-9]+([-+][^[:space:]]+)? \([0-9a-f]+ [0-9]{4}-[0-9]{2}-[0-9]{2}\)$'
+  if ! observed="$(
+    cd -- "${source_tree}" &&
+    "${rust_build_env[@]}" "${executable}" --version
+  )"; then
+    printf 'could not capture %s version from the archived source tree\n' \
+      "${tool_name}" >&2
+    return 2
+  fi
+  if [[ "${observed}" != "${tool_name} "* ||
+        "${observed}" == *$'\n'* || "${observed}" == *$'\r'* ||
+        ! "${observed#"${tool_name} "}" =~ ${version_pattern} ]]; then
+    printf 'malformed %s version from the archived source tree\n' \
+      "${tool_name}" >&2
+    return 2
+  fi
+  printf '%s\n' "${observed}" | sanitize_version
+}
+
 sha256_file() {
   local path="$1"
   local digest
@@ -478,13 +501,9 @@ rocm_version=unknown
   IFS= read -r rocm_version <"${rocm_path}/.info/version"
 rocm_version="$(printf '%s' "${rocm_version}" | sanitize_version)"
 readonly rocm_version
-cargo_version="$(
-  "${rust_build_env[@]}" "${cargo_executable}" --version | sanitize_version
-)"
+cargo_version="$(capture_archived_rust_tool_version cargo "${cargo_executable}")"
 readonly cargo_version
-rustc_version="$(
-  "${rust_build_env[@]}" "${rustc_executable}" --version | sanitize_version
-)"
+rustc_version="$(capture_archived_rust_tool_version rustc "${rustc_executable}")"
 readonly rustc_version
 hipcc_version="$(
   "${native_build_env[@]}" "${rocm_path}/bin/hipcc" --version |

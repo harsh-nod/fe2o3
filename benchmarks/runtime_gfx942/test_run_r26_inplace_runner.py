@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import pathlib
+import shlex
 import subprocess
+import tempfile
 import unittest
 
 
@@ -20,6 +22,57 @@ class R26RunnerContractTests(unittest.TestCase):
         cls.source = RUNNER.read_text(encoding="utf-8")
         cls.hsa_source = HSA_COMPARATOR.read_text(encoding="utf-8")
         cls.common_source = COMMON_HEADER.read_text(encoding="utf-8")
+
+    def runner_shell_function(self, name: str) -> str:
+        start = self.source.index(f"{name}() {{")
+        return self.source[start : self.source.index("\n}\n", start) + 3]
+
+    def run_version_capture(
+        self,
+        tool_name: str,
+        archived_output: str,
+        caller_output: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            caller = root / "caller"
+            source_tree = root / "archived-source"
+            caller.mkdir()
+            source_tree.mkdir()
+            shim = root / tool_name
+            if caller_output is None:
+                shim_body = f"printf '%s\\n' {shlex.quote(archived_output)}"
+            else:
+                shim_body = (
+                    f"if [[ $PWD == {shlex.quote(str(source_tree))} ]]; then\n"
+                    f"  printf '%s\\n' {shlex.quote(archived_output)}\n"
+                    "else\n"
+                    f"  printf '%s\\n' {shlex.quote(caller_output)}\n"
+                    "fi"
+                )
+            shim.write_text(f"#!/usr/bin/env bash\n{shim_body}\n", encoding="utf-8")
+            shim.chmod(0o700)
+            script = "\n".join(
+                (
+                    "set -euo pipefail",
+                    "qualification_env=(/usr/bin/env -i LANG=C LC_ALL=C "
+                    "PATH=/usr/bin:/bin)",
+                    "rust_build_env=(/usr/bin/env -i LANG=C LC_ALL=C "
+                    "PATH=/usr/bin:/bin)",
+                    f"source_tree={shlex.quote(str(source_tree))}",
+                    self.runner_shell_function("sanitize_version"),
+                    self.runner_shell_function("capture_archived_rust_tool_version"),
+                    f"cd -- {shlex.quote(str(caller))}",
+                    f"capture_archived_rust_tool_version {tool_name} "
+                    f"{shlex.quote(str(shim))}",
+                )
+            )
+            return subprocess.run(
+                ["/usr/bin/bash", "-c", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
     def test_shell_is_syntactically_valid(self) -> None:
         subprocess.run(["/usr/bin/bash", "-n", str(RUNNER)], check=True)
@@ -101,6 +154,53 @@ class R26RunnerContractTests(unittest.TestCase):
         self.assertIn(
             "placement=taskset-cpulist-then-numactl-physcpubind-membind-v1",
             self.source,
+        )
+
+    def test_rust_tool_versions_are_captured_from_the_archived_tree(self) -> None:
+        extraction = self.source.index(
+            '/usr/bin/tar --extract --file="${source_archive}"'
+        )
+        cargo_capture = self.source.index(
+            'cargo_version="$(capture_archived_rust_tool_version cargo '
+        )
+        rustc_capture = self.source.index(
+            'rustc_version="$(capture_archived_rust_tool_version rustc '
+        )
+        self.assertLess(extraction, cargo_capture)
+        self.assertLess(extraction, rustc_capture)
+
+        capture = self.source[
+            self.source.index(
+                "capture_archived_rust_tool_version() {"
+            ) : self.source.index(
+                "\n}\n", self.source.index("capture_archived_rust_tool_version() {")
+            )
+            + 3
+        ]
+        self.assertIn('cd -- "${source_tree}" &&', capture)
+        self.assertIn('"${rust_build_env[@]}" "${executable}" --version', capture)
+        self.assertIn("malformed %s version from the archived source tree", capture)
+        self.assertNotIn('cd -- "${repo_root}"', capture)
+
+    def test_caller_cwd_cannot_select_the_recorded_rust_toolchain(self) -> None:
+        completed = self.run_version_capture(
+            "cargo",
+            "cargo 9.9.9-source (abcdef123 2099-01-02)",
+            "cargo 0.0.0-caller (badcafe00 2000-01-01)",
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(
+            completed.stdout,
+            "cargo_9.9.9-source_(abcdef123_2099-01-02)_",
+        )
+
+    def test_malformed_archived_rust_tool_version_fails_closed(self) -> None:
+        completed = self.run_version_capture("rustc", "rustc not-a-version")
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertIn(
+            "malformed rustc version from the archived source tree",
+            completed.stderr,
         )
 
     def test_context_authenticates_collector_and_declares_build_contract(self) -> None:
