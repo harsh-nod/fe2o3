@@ -115,7 +115,13 @@ the write observation to equal the retained model, and applies
 `AqlSingleProducerRingModelV1` with the additive V2 transition to reserve one
 through 8192 packets while
 rejecting over-capacity, full, insufficient, replayed, regressed, impossible,
-or exhausted observations. After a second PID/device-currentness check it
+or exhausted observations. Every existing operational-currentness boundary is
+preserved. Each such check validates the opener PID before a non-draining
+zero-timeout reset-event readiness probe, compares one dedicated wrapping DRM
+VRAM-loss counter query with admission, and repeats the readiness probe. The
+readiness-to-nonempty-FIFO mapping is a pinned-source contract rather than
+loaded-kernel authentication; any poll error or unexpected result fails closed.
+After the second PID/device-currentness check, submission
 performs exactly one acquire-release fetch-add by the complete batch count on
 the actual write pointer. It selects every exact masked slot, copies all
 complete still-INVALID packet bodies before publishing any packet, and then

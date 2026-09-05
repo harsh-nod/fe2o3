@@ -60,6 +60,18 @@ subscribed whole-GPU resets, VRAM-loss resets, and all changes visible through
 the admitted identity, process, descriptor, XNACK, aperture, and topology
 queries.
 
+Active retained queues keep every existing pre/post operation boundary but use
+a narrower operational observation at each boundary: opener PID first, a
+zero-timeout non-draining reset-fd readiness check, one dedicated wrapping
+`AMDGPU_INFO_VRAM_LOST_COUNTER` query compared with admission, and a closing
+readiness check. Process-incarnation and mount-namespace reads, descriptor
+identity, KFD version/XNACK, full DRM identity, topology, and apertures remain
+full lifecycle observations, including persistent-control open and explicit
+release. The readiness-to-nonempty-FIFO mapping is a contract of the pinned KFD
+source, not authentication of the loaded kernel. Poll errors, hangup, invalid
+descriptors, and unexpected readiness bits fail closed and permanently poison
+the checked device.
+
 This crate checks userspace schema admission and encapsulates descriptor
 ownership. Verus proves the pure canonical-record projection and abstract
 generation/history relations. The executable validator checks the same record,

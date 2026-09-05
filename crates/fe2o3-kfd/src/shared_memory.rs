@@ -90,7 +90,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r13-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r14-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
@@ -108,7 +108,7 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "queue-gtt-policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span,diagnostic-barrier-ring:plain-executable-gtt-or-selected-gpu-userptr-with-exact-final-rocr-derived-flags-and-no-full-rocr-allocation-or-map-order-parity,control:exact-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable\n",
     "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-or-caller-destination-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
     "completion-bridge=exact-retained-ring-and-host-coherent-mappings,private-packet-id-and-64-byte-signal-slot-index,backend-atomic-u32-header-and-atomic-i64-value-acquire-observe,immutable-kind-volatile-observe,and-release-reset,currentness-sandwiched\n",
-    "currentness=lifecycle-transitions-and-persistent-control-open-close-use-full-contracted-device-topology-aperture-composite;exact-retained-control-replay-and-active-mapped-memory-submission-and-completion-use-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence;operational-fence-excludes-topology-and-aperture-reobservation-and-cannot-exclude-reset-counter-wrap-or-observation-ABA;packet-atomics-execute-inside-explicit-owner-pre-post-scopes\n",
+    "currentness=lifecycle-transitions-and-persistent-control-open-close-use-full-contracted-process-namespace-descriptor-uapi-xnack-drm-identity-vram-loss-topology-aperture-composite;exact-retained-control-replay-and-active-mapped-memory-submission-and-completion-use-opener-pid-before-non-draining-zero-timeout-reset-fifo-readiness-then-dedicated-wrapping-drm-vram-loss-counter-equality-then-closing-readiness-operational-fence;readiness-means-nonempty-fifo-only-by-pinned-kfd-source-contract-not-loaded-kernel-authentication;operational-fence-excludes-process-incarnation-namespace-descriptor-uapi-xnack-drm-identity-topology-and-aperture-reobservation-and-cannot-exclude-reset-counter-wrap-or-observation-ABA;packet-atomics-execute-inside-explicit-owner-pre-post-scopes\n",
     "executable=ordinary-ExecutableGttV1-only:cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted;diagnostic-ExecutableAqlQueueProbeGttV1-remains-cpu-mutable-after-gpu-map-for-aql-publication\n",
     "userptr-lifecycle=reserve-vma,anonymous-dontfork-read-write-pages,register-same-cpu-and-gpu-address,map-gpu,unmap-gpu,free-bo-before-cpu-vma-unmap,no-separate-reservation-unmap\n",
     "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
@@ -119,11 +119,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "1c138628cb0de247e71b97b0b7ff85090071163b5c8e737ae4dbdea6d2ac8c20";
+    "bc7724673724d8cb9b370ac19c92342b17b760217370b977b76c7ae403ef8f38";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x1c, 0x13, 0x86, 0x28, 0xcb, 0x0d, 0xe2, 0x47, 0xe7, 0x1b, 0x97, 0xb0, 0xb7, 0xff, 0x85, 0x09,
-    0x00, 0x71, 0x16, 0x3b, 0x5c, 0x8e, 0x73, 0x7a, 0xe4, 0xdb, 0xde, 0xa6, 0xd2, 0xac, 0x8c, 0x20,
+    0xbc, 0x77, 0x24, 0x67, 0x37, 0x24, 0xd8, 0xcb, 0x9b, 0x37, 0x0a, 0xc1, 0x9c, 0x92, 0x34, 0x2b,
+    0x17, 0xb7, 0x60, 0x21, 0x73, 0x70, 0xb9, 0x77, 0xb7, 0x6c, 0x7a, 0xe4, 0x03, 0xef, 0x8f, 0x38,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

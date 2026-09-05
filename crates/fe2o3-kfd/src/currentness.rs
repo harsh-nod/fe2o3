@@ -4,6 +4,7 @@ use std::fmt;
 use std::os::fd::FromRawFd;
 
 use fe2o3_kfd_uapi::{AMDKFD_IOC_SMI_EVENTS, KFD_SMI_EVENT_GPU_RESET_MASK, KfdIoctlSmiEventsArgs};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::OwnedFd;
 use rustix::io::FdFlags;
 use rustix::ioctl::{Opcode, Updater};
@@ -17,6 +18,38 @@ enum LatchInput {
     Clear,
     Event,
     ProtocolFailure,
+}
+
+fn classify_non_draining_reset_poll(ready: usize, events: PollFlags) -> LatchInput {
+    if ready == 0 && events.is_empty() {
+        return LatchInput::Clear;
+    }
+    let readable = PollFlags::IN | PollFlags::RDNORM;
+    if ready == 1 && events.intersects(readable) && (events.bits() & !readable.bits()) == 0 {
+        return LatchInput::Event;
+    }
+    LatchInput::ProtocolFailure
+}
+
+fn finish_non_draining_reset_poll(
+    result: Result<usize, rustix::io::Errno>,
+    events: PollFlags,
+) -> Result<LatchInput, DeviceBindingError> {
+    let ready = result.map_err(|source| DeviceBindingError::Syscall {
+        operation: "poll KFD reset-event fence",
+        source,
+    })?;
+    Ok(classify_non_draining_reset_poll(ready, events))
+}
+
+fn poll_reset_event_readiness(fd: &OwnedFd) -> Result<LatchInput, DeviceBindingError> {
+    let timeout = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let mut descriptors = [PollFd::new(fd, PollFlags::IN | PollFlags::RDNORM)];
+    let result = poll(&mut descriptors, Some(&timeout));
+    finish_non_draining_reset_poll(result, descriptors[0].revents())
 }
 
 #[derive(Debug, Default)]
@@ -143,6 +176,67 @@ impl ResetEventFence {
             Ok(_) => LatchInput::ProtocolFailure,
         };
         self.latch.observe(input)
+    }
+
+    /// Checks reset readiness without consuming bytes from the retained FIFO.
+    ///
+    /// The mapping from readable readiness to a nonempty reset FIFO is a
+    /// contract of the pinned KFD source, not proof of the loaded kernel.
+    pub(super) fn check_clear_non_draining(&mut self) -> Result<(), DeviceBindingError> {
+        if self.latch.poisoned {
+            return Err(DeviceBindingError::CurrentnessFencePoisoned);
+        }
+        let input = match poll_reset_event_readiness(&self.fd) {
+            Ok(input) => input,
+            Err(error) => {
+                self.latch.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.latch.observe(input)
+    }
+}
+
+trait OperationalCurrentnessObservation {
+    fn ensure_opener_process(&mut self) -> Result<(), DeviceBindingError>;
+    fn check_reset_readiness(&mut self) -> Result<(), DeviceBindingError>;
+    fn observe_vram_lost_counter(&mut self) -> Result<u32, DeviceBindingError>;
+}
+
+fn check_operational_observations(
+    observation: &mut impl OperationalCurrentnessObservation,
+    admitted_vram_lost_counter: u32,
+) -> Result<(), DeviceBindingError> {
+    // The opener check must precede any access to the inherited FIFO.
+    observation.ensure_opener_process()?;
+    observation.check_reset_readiness()?;
+    if observation.observe_vram_lost_counter()? != admitted_vram_lost_counter {
+        return Err(DeviceBindingError::ObservableCurrentnessChanged(
+            "DRM VRAM-loss counter",
+        ));
+    }
+    observation.check_reset_readiness()
+}
+
+struct LinuxOperationalCurrentnessObservation<'a> {
+    kfd: &'a crate::OpenedKfd,
+    render_fd: &'a OwnedFd,
+    reset_fence: &'a mut ResetEventFence,
+}
+
+impl OperationalCurrentnessObservation for LinuxOperationalCurrentnessObservation<'_> {
+    fn ensure_opener_process(&mut self) -> Result<(), DeviceBindingError> {
+        self.kfd
+            .ensure_process(std::process::id())
+            .map_err(DeviceBindingError::Kfd)
+    }
+
+    fn check_reset_readiness(&mut self) -> Result<(), DeviceBindingError> {
+        self.reset_fence.check_clear_non_draining()
+    }
+
+    fn observe_vram_lost_counter(&mut self) -> Result<u32, DeviceBindingError> {
+        crate::linux::observe_vram_lost_counter(self.render_fd)
     }
 }
 
@@ -386,16 +480,16 @@ impl CheckedGfx942XnackMinusDevice {
         self.reset_fence.check_clear()
     }
 
-    /// Rechecks the retained process, descriptors, UAPI mode, reset stream,
-    /// and DRM reset observation used by an already-created queue.
+    /// Rechecks the opener process, reset readiness, and the admitted DRM
+    /// VRAM-loss counter used by an already-created queue.
     ///
     /// The full composite observation remains mandatory around device, VM,
     /// allocation, mapping, and queue lifecycle transitions. An active queue
     /// uses this bounded fence around ordinary mapped-memory and submission
     /// operations so their cost does not scale with the number of host
     /// topology sysfs files. Topology and aperture equality are therefore
-    /// lifecycle observations; reset and descriptor loss remain hot-path
-    /// observations.
+    /// lifecycle observations. The prospective reset stream and wrapping
+    /// VRAM-loss counter are the retained-queue hot-path observations.
     pub(crate) fn check_operational_currentness(&mut self) -> Result<(), DeviceBindingError> {
         if self.currentness_poisoned {
             return Err(DeviceBindingError::CurrentnessFencePoisoned);
@@ -408,39 +502,13 @@ impl CheckedGfx942XnackMinusDevice {
     }
 
     fn check_operational_currentness_inner(&mut self) -> Result<(), DeviceBindingError> {
-        self.kfd
-            .opened
-            .ensure_process(std::process::id())
-            .map_err(DeviceBindingError::Kfd)?;
-        let process = crate::linux::observe_process_incarnation()?;
-        if process != self.process {
-            return Err(DeviceBindingError::ProcessIncarnationChanged);
-        }
-
-        // Check the prospective stream before and after the retained identity
-        // observations so a reset concurrent with this scope is latched.
-        self.reset_fence.check_clear()?;
-        crate::linux::revalidate_descriptor(
-            &self.kfd.opened.fd,
-            self.kfd.opened.node_observation(),
-            "KFD operational currentness fstat",
-        )?;
-        crate::linux::revalidate_render_descriptor(
-            &self.render_fd,
-            self.observation.render_descriptor(),
-        )?;
-        if crate::linux::observe_uapi(&self.kfd.opened.fd)? != self.kfd.uapi.reported_version() {
-            return Err(DeviceBindingError::UapiChanged);
-        }
-        if crate::linux::query_xnack_mode(&self.kfd.opened.fd)? != 0 {
-            return Err(DeviceBindingError::UnsupportedXnackMode);
-        }
-        if crate::linux::observe_drm_identity(&self.render_fd)? != self.observation.drm() {
-            return Err(DeviceBindingError::ObservableCurrentnessChanged(
-                "DRM identity or VRAM-loss counter",
-            ));
-        }
-        self.reset_fence.check_clear()
+        let admitted_vram_lost_counter = self.observation.drm().vram_lost_counter();
+        let mut observation = LinuxOperationalCurrentnessObservation {
+            kfd: &self.kfd.opened,
+            render_fd: &self.render_fd,
+            reset_fence: &mut self.reset_fence,
+        };
+        check_operational_observations(&mut observation, admitted_vram_lost_counter)
     }
 
     /// Rechecks every retained R1 identity observation under the prospective
@@ -550,6 +618,51 @@ impl CheckedGfx942XnackMinusDevice {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct ScriptedOperationalObservation {
+        steps: Vec<&'static str>,
+        fail_at: Option<&'static str>,
+        reset_checks: usize,
+        vram_lost_counter: u32,
+    }
+
+    impl OperationalCurrentnessObservation for ScriptedOperationalObservation {
+        fn ensure_opener_process(&mut self) -> Result<(), DeviceBindingError> {
+            self.steps.push("pid");
+            if self.fail_at == Some("pid") {
+                Err(DeviceBindingError::ProcessIncarnationChanged)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn check_reset_readiness(&mut self) -> Result<(), DeviceBindingError> {
+            self.reset_checks += 1;
+            let step = if self.reset_checks == 1 {
+                "reset-before"
+            } else {
+                "reset-after"
+            };
+            self.steps.push(step);
+            if self.fail_at == Some(step) {
+                Err(DeviceBindingError::ResetEventFenceProtocol)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn observe_vram_lost_counter(&mut self) -> Result<u32, DeviceBindingError> {
+            self.steps.push("vram");
+            if self.fail_at == Some("vram") {
+                Err(DeviceBindingError::ObservableCurrentnessChanged(
+                    "injected VRAM query failure",
+                ))
+            } else {
+                Ok(self.vram_lost_counter)
+            }
+        }
+    }
+
     #[test]
     fn clear_observations_do_not_poison() {
         let mut latch = PoisonLatch::default();
@@ -589,6 +702,169 @@ mod tests {
             latch.observe(LatchInput::Clear),
             Err(DeviceBindingError::CurrentnessFencePoisoned)
         ));
+    }
+
+    #[test]
+    fn non_draining_poll_classifier_accepts_only_clear_or_readable() {
+        assert_eq!(
+            classify_non_draining_reset_poll(0, PollFlags::empty()),
+            LatchInput::Clear
+        );
+        for readable in [
+            PollFlags::IN,
+            PollFlags::RDNORM,
+            PollFlags::IN | PollFlags::RDNORM,
+        ] {
+            assert_eq!(
+                classify_non_draining_reset_poll(1, readable),
+                LatchInput::Event
+            );
+        }
+    }
+
+    #[test]
+    fn non_draining_poll_classifier_rejects_errors_and_protocol_anomalies() {
+        for (ready, events) in [
+            (0, PollFlags::IN),
+            (1, PollFlags::empty()),
+            (2, PollFlags::IN),
+            (1, PollFlags::ERR),
+            (1, PollFlags::HUP),
+            (1, PollFlags::NVAL),
+            (1, PollFlags::OUT),
+            (1, PollFlags::PRI),
+            (1, PollFlags::RDHUP),
+            (1, PollFlags::IN | PollFlags::ERR),
+            (1, PollFlags::RDNORM | PollFlags::HUP),
+        ] {
+            assert_eq!(
+                classify_non_draining_reset_poll(ready, events),
+                LatchInput::ProtocolFailure,
+                "ready={ready}, events={events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_draining_poll_syscall_errors_fail_closed_without_retry() {
+        for source in [
+            rustix::io::Errno::INTR,
+            rustix::io::Errno::AGAIN,
+            rustix::io::Errno::BADF,
+        ] {
+            assert!(matches!(
+                finish_non_draining_reset_poll(Err(source), PollFlags::empty()),
+                Err(DeviceBindingError::Syscall {
+                    operation: "poll KFD reset-event fence",
+                    source: observed,
+                }) if observed == source
+            ));
+        }
+    }
+
+    #[test]
+    fn linux_readiness_probe_does_not_drain_a_readable_descriptor() {
+        use rustix::pipe::{PipeFlags, pipe_with};
+
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+        assert_eq!(
+            poll_reset_event_readiness(&reader).unwrap(),
+            LatchInput::Clear
+        );
+        assert_eq!(rustix::io::write(&writer, b"r").unwrap(), 1);
+        assert_eq!(
+            poll_reset_event_readiness(&reader).unwrap(),
+            LatchInput::Event
+        );
+        assert_eq!(
+            poll_reset_event_readiness(&reader).unwrap(),
+            LatchInput::Event
+        );
+
+        let mut byte = [0_u8; 1];
+        assert_eq!(rustix::io::read(&reader, &mut byte).unwrap(), 1);
+        assert_eq!(byte, *b"r");
+        assert_eq!(
+            poll_reset_event_readiness(&reader).unwrap(),
+            LatchInput::Clear
+        );
+    }
+
+    #[test]
+    fn linux_readiness_probe_and_latch_fail_closed_on_hangup_and_stay_poisoned() {
+        use rustix::pipe::{PipeFlags, pipe_with};
+
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+        drop(writer);
+        let mut fence = ResetEventFence {
+            fd: reader,
+            latch: PoisonLatch::default(),
+        };
+        assert!(matches!(
+            fence.check_clear_non_draining(),
+            Err(DeviceBindingError::ResetEventFenceProtocol)
+        ));
+        assert!(matches!(
+            fence.check_clear_non_draining(),
+            Err(DeviceBindingError::CurrentnessFencePoisoned)
+        ));
+    }
+
+    #[test]
+    fn operational_observations_preserve_pid_reset_counter_reset_order() {
+        let mut observation = ScriptedOperationalObservation {
+            vram_lost_counter: 17,
+            ..ScriptedOperationalObservation::default()
+        };
+        check_operational_observations(&mut observation, 17).unwrap();
+        assert_eq!(
+            observation.steps,
+            ["pid", "reset-before", "vram", "reset-after"]
+        );
+    }
+
+    #[test]
+    fn operational_observations_stop_before_fifo_after_process_change() {
+        let mut observation = ScriptedOperationalObservation {
+            fail_at: Some("pid"),
+            ..ScriptedOperationalObservation::default()
+        };
+        assert!(matches!(
+            check_operational_observations(&mut observation, 0),
+            Err(DeviceBindingError::ProcessIncarnationChanged)
+        ));
+        assert_eq!(observation.steps, ["pid"]);
+    }
+
+    #[test]
+    fn operational_observations_fail_closed_at_each_live_boundary() {
+        for (failure, expected_steps) in [
+            ("reset-before", &[][..]),
+            ("vram", &["vram"][..]),
+            ("reset-after", &["vram", "reset-after"][..]),
+        ] {
+            let mut observation = ScriptedOperationalObservation {
+                fail_at: Some(failure),
+                ..ScriptedOperationalObservation::default()
+            };
+            assert!(check_operational_observations(&mut observation, 0).is_err());
+            assert_eq!(&observation.steps[2..], expected_steps, "failure={failure}");
+        }
+    }
+
+    #[test]
+    fn operational_observations_reject_counter_change_before_closing_probe() {
+        let mut observation = ScriptedOperationalObservation {
+            vram_lost_counter: 18,
+            ..ScriptedOperationalObservation::default()
+        };
+        assert!(matches!(
+            check_operational_observations(&mut observation, 17),
+            Err(DeviceBindingError::ObservableCurrentnessChanged(
+                "DRM VRAM-loss counter"
+            ))
+        ));
+        assert_eq!(observation.steps, ["pid", "reset-before", "vram"]);
     }
 
     #[test]

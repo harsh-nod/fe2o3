@@ -110,8 +110,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r25-v1\n",
-    "compute_session_sha256=457d55eec6f621de242734b4bdcda912853c6c2f121a1e21e96ada66e18e9cc5\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r26-v1\n",
+    "compute_session_sha256=0dc31c8db1e395f0290ac607cbe9610e455238cd5b2ba95a77dfe47494b2a8dc\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -133,7 +133,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "905318ce60e81bf093823a1837d8c90d123534dc9ec589c7ee485499e413cf33";
+    "e0e6e2f9342717d1c793a6355c5b7c113e6452c2c8197973d3416633b7d1296b";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
