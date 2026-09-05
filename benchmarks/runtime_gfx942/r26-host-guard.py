@@ -387,6 +387,25 @@ def _is_target_process(
     return False
 
 
+def _target_process_identity(
+    proc_root: pathlib.Path,
+    pid: int,
+    root_pid: int,
+    root_start_time: int,
+) -> ProcessObservation | None:
+    before = _read_process(proc_root, pid)
+    if before is None or not _is_target_process(
+        proc_root, pid, root_pid, root_start_time
+    ):
+        return None
+    after = _read_process(proc_root, pid)
+    if after != before:
+        raise GuardError(
+            f"target process identity changed during authentication: PID {pid}"
+        )
+    return before
+
+
 def selected_gpu_queue_owners(
     kfd_proc_root: pathlib.Path, selected_gpu_id: int
 ) -> list[tuple[int, int]]:
@@ -409,6 +428,63 @@ def selected_gpu_queue_owners(
             if gpu_id == selected_gpu_id:
                 owners.append((pid, queue_id))
     return owners
+
+
+def _disappeared_during_census(error: GuardError) -> bool:
+    return isinstance(error.__cause__, FileNotFoundError)
+
+
+def _path_is_confirmed_absent(path: pathlib.Path, description: str) -> bool:
+    try:
+        path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except OSError as error:
+        raise GuardError(
+            f"cannot confirm {description} disappearance: {error}"
+        ) from error
+    return False
+
+
+def _live_queue_directories(
+    root: pathlib.Path,
+    description: str,
+    maximum_entries: int,
+    target_owned: bool,
+) -> tuple[list[tuple[int, pathlib.Path]], bool]:
+    try:
+        entries = list(os.scandir(root))
+    except OSError as error:
+        raise GuardError(f"cannot enumerate {description}: {root}: {error}") from error
+    if len(entries) > maximum_entries:
+        raise GuardError(f"{description} exceeds {maximum_entries} entries")
+    output: list[tuple[int, pathlib.Path]] = []
+    vanished = False
+    for entry in entries:
+        if DECIMAL_PATTERN.fullmatch(entry.name) is None:
+            raise GuardError(f"{description} contains a nonnumeric entry")
+        entry_path = pathlib.Path(entry.path)
+        try:
+            is_directory = entry.is_dir(follow_symlinks=False)
+        except FileNotFoundError as error:
+            if target_owned and _path_is_confirmed_absent(
+                entry_path, f"target KFD queue entry {entry.name}"
+            ):
+                vanished = True
+                continue
+            raise GuardError(f"cannot inspect {description} entry: {error}") from error
+        except OSError as error:
+            raise GuardError(f"cannot inspect {description} entry: {error}") from error
+        if not is_directory:
+            if target_owned and _path_is_confirmed_absent(
+                entry_path, f"target KFD queue entry {entry.name}"
+            ):
+                vanished = True
+                continue
+            raise GuardError(f"{description} contains a nondirectory entry")
+        output.append((int(entry.name), entry_path))
+    output.sort()
+    return output, vanished
 
 
 def foreign_selected_gpu_queues(
@@ -439,13 +515,73 @@ def classify_selected_gpu_queues(
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     target: list[tuple[int, int]] = []
     foreign: list[tuple[int, int]] = []
-    for owner in selected_gpu_queue_owners(kfd_proc_root, selected_gpu_id):
-        destination = (
-            target
-            if _is_target_process(proc_root, owner[0], root_pid, root_start_time)
-            else foreign
+    processes = _numeric_directories(
+        kfd_proc_root, "KFD process directory", MAX_KFD_PROCESSES
+    )
+    for pid, process_path in processes:
+        target_identity = _target_process_identity(
+            proc_root, pid, root_pid, root_start_time
         )
-        destination.append(owner)
+        selected_queues: list[int] = []
+        vanished = False
+        queues_path = process_path / "queues"
+        try:
+            queues, listing_vanished = _live_queue_directories(
+                queues_path,
+                f"KFD queue directory for PID {pid}",
+                MAX_QUEUES_PER_PROCESS,
+                target_identity is not None,
+            )
+            vanished = listing_vanished
+        except GuardError as error:
+            if (
+                target_identity is not None
+                and _disappeared_during_census(error)
+                and _path_is_confirmed_absent(
+                    process_path, f"target KFD process directory for PID {pid}"
+                )
+            ):
+                vanished = True
+                queues = []
+            else:
+                raise
+        for queue_id, queue_path in queues:
+            try:
+                raw_gpu_id = _read_text(
+                    queue_path / "gpuid", "KFD queue GPU ID"
+                )
+            except GuardError as error:
+                if (
+                    target_identity is not None
+                    and _disappeared_during_census(error)
+                    and _path_is_confirmed_absent(
+                        queue_path, f"target KFD queue {pid}/{queue_id}"
+                    )
+                ):
+                    vanished = True
+                    continue
+                raise
+            gpu_id = _parse_decimal(
+                raw_gpu_id,
+                "KFD queue GPU ID",
+                (1 << 32) - 1,
+            )
+            if gpu_id == selected_gpu_id:
+                selected_queues.append(queue_id)
+        if not selected_queues and not vanished:
+            continue
+        identity_after = _target_process_identity(
+            proc_root, pid, root_pid, root_start_time
+        )
+        stable_target = (
+            target_identity is not None and identity_after == target_identity
+        )
+        if vanished and not stable_target:
+            raise GuardError(
+                f"target process identity changed across queue disappearance: PID {pid}"
+            )
+        destination = target if stable_target else foreign
+        destination.extend((pid, queue_id) for queue_id in selected_queues)
     return target, foreign
 
 

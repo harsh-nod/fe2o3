@@ -261,6 +261,363 @@ class QueueCensusTests(unittest.TestCase):
         self.assertEqual(target, [])
         self.assertEqual(foreign, [(101, 0)])
 
+    def test_live_classifier_tolerates_confirmed_target_queue_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queues_path = kfd_root / "100" / "queues"
+            queue_path = queues_path / "0"
+            original = GUARD._live_queue_directories
+
+            def enumerate_then_remove(
+                path: pathlib.Path,
+                description: str,
+                maximum_entries: int,
+                target_owned: bool,
+            ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
+                entries = original(
+                    path, description, maximum_entries, target_owned
+                )
+                if path == queues_path:
+                    (queue_path / "gpuid").unlink()
+                    queue_path.rmdir()
+                return entries
+
+            with mock.patch.object(
+                GUARD, "_live_queue_directories", side_effect=enumerate_then_remove
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+
+    def test_live_queue_enumerator_types_both_disappearance_shapes(self) -> None:
+        class VanishedEntry:
+            name = "0"
+
+            def __init__(self, path: pathlib.Path, raises: bool) -> None:
+                self.path = str(path)
+                self.raises = raises
+
+            def is_dir(self, *, follow_symlinks: bool) -> bool:
+                self.test_follow_symlinks = follow_symlinks
+                if self.raises:
+                    raise FileNotFoundError(self.path)
+                return False
+
+        with tempfile.TemporaryDirectory() as temporary:
+            queue_path = pathlib.Path(temporary) / "vanished" / "0"
+            for raises in (True, False):
+                with self.subTest(raises=raises):
+                    entry = VanishedEntry(queue_path, raises)
+                    with mock.patch.object(GUARD.os, "scandir", return_value=[entry]):
+                        queues, vanished = GUARD._live_queue_directories(
+                            queue_path.parent, "KFD queue directory", 1, True
+                        )
+                    self.assertEqual(queues, [])
+                    self.assertTrue(vanished)
+                    self.assertFalse(entry.test_follow_symlinks)
+
+                    with (
+                        mock.patch.object(GUARD.os, "scandir", return_value=[entry]),
+                        self.assertRaises(GUARD.GuardError),
+                    ):
+                        GUARD._live_queue_directories(
+                            queue_path.parent, "KFD queue directory", 1, False
+                        )
+
+    def test_live_classifier_tolerates_confirmed_target_process_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            queues_path = kfd_root / "100" / "queues"
+            queues_path.mkdir(parents=True)
+            process_path = queues_path.parent
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            original = GUARD._numeric_directories
+
+            def enumerate_then_remove(
+                path: pathlib.Path, description: str, maximum_entries: int
+            ) -> list[tuple[int, pathlib.Path]]:
+                entries = original(path, description, maximum_entries)
+                if path == kfd_root:
+                    queues_path.rmdir()
+                    process_path.rmdir()
+                return entries
+
+            with mock.patch.object(
+                GUARD, "_numeric_directories", side_effect=enumerate_then_remove
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+
+    def test_strict_owner_census_rejects_queue_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            queues_path = kfd_root / "100" / "queues"
+            queue_path = queues_path / "0"
+            original = GUARD._numeric_directories
+
+            def enumerate_then_remove(
+                path: pathlib.Path, description: str, maximum_entries: int
+            ) -> list[tuple[int, pathlib.Path]]:
+                entries = original(path, description, maximum_entries)
+                if path == queues_path:
+                    (queue_path / "gpuid").unlink()
+                    queue_path.rmdir()
+                return entries
+
+            with (
+                mock.patch.object(
+                    GUARD, "_numeric_directories", side_effect=enumerate_then_remove
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+            ):
+                GUARD.selected_gpu_queue_owners(kfd_root, 28851)
+
+    def test_live_classifier_rejects_foreign_queue_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_process(proc_root, 200, ppid=1, process_group=200, start_time=2000)
+            write_queue(kfd_root, 200, 0, 28851)
+            queues_path = kfd_root / "200" / "queues"
+            queue_path = queues_path / "0"
+            original = GUARD._live_queue_directories
+
+            def enumerate_then_remove(
+                path: pathlib.Path,
+                description: str,
+                maximum_entries: int,
+                target_owned: bool,
+            ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
+                entries = original(
+                    path, description, maximum_entries, target_owned
+                )
+                if path == queues_path:
+                    (queue_path / "gpuid").unlink()
+                    queue_path.rmdir()
+                return entries
+
+            with (
+                mock.patch.object(
+                    GUARD, "_live_queue_directories", side_effect=enumerate_then_remove
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+    def test_target_disappearance_preserves_foreign_queue_in_either_order(self) -> None:
+        for target_pid, foreign_pid in ((200, 100), (100, 200)):
+            with self.subTest(target_pid=target_pid, foreign_pid=foreign_pid):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    proc_root = root / "proc"
+                    kfd_root = root / "kfd-proc"
+                    kfd_root.mkdir()
+                    write_process(
+                        proc_root, target_pid, ppid=1,
+                        process_group=target_pid, start_time=target_pid * 10,
+                    )
+                    write_process(
+                        proc_root, foreign_pid, ppid=1,
+                        process_group=foreign_pid, start_time=foreign_pid * 10,
+                    )
+                    write_queue(kfd_root, target_pid, 1, 28851)
+                    write_queue(kfd_root, foreign_pid, 0, 28851)
+                    queues_path = kfd_root / str(target_pid) / "queues"
+                    queue_path = queues_path / "1"
+                    original = GUARD._live_queue_directories
+
+                    def enumerate_then_remove(
+                        path: pathlib.Path,
+                        description: str,
+                        maximum_entries: int,
+                        target_owned: bool,
+                    ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
+                        entries = original(
+                            path, description, maximum_entries, target_owned
+                        )
+                        if path == queues_path:
+                            (queue_path / "gpuid").unlink()
+                            queue_path.rmdir()
+                        return entries
+
+                    with mock.patch.object(
+                        GUARD,
+                        "_live_queue_directories",
+                        side_effect=enumerate_then_remove,
+                    ):
+                        target, foreign = GUARD.classify_selected_gpu_queues(
+                            kfd_proc_root=kfd_root,
+                            proc_root=proc_root,
+                            selected_gpu_id=28851,
+                            root_pid=target_pid,
+                            root_start_time=target_pid * 10,
+                        )
+                self.assertEqual(target, [])
+                self.assertEqual(foreign, [(foreign_pid, 0)])
+
+    def test_selected_queue_requires_post_read_target_reauthentication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            with mock.patch.object(
+                GUARD, "_is_target_process", side_effect=[True, False]
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [(100, 0)])
+
+    def test_disappearance_requires_post_read_target_reauthentication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queues_path = kfd_root / "100" / "queues"
+            queue_path = queues_path / "0"
+            original = GUARD._live_queue_directories
+
+            def enumerate_then_remove(
+                path: pathlib.Path,
+                description: str,
+                maximum_entries: int,
+                target_owned: bool,
+            ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
+                entries = original(
+                    path, description, maximum_entries, target_owned
+                )
+                if path == queues_path:
+                    (queue_path / "gpuid").unlink()
+                    queue_path.rmdir()
+                return entries
+
+            with (
+                mock.patch.object(
+                    GUARD, "_live_queue_directories", side_effect=enumerate_then_remove
+                ),
+                mock.patch.object(
+                    GUARD, "_is_target_process", side_effect=[True, False]
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+    def test_persistently_missing_target_gpuid_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            (kfd_root / "100" / "queues" / "0").mkdir(parents=True)
+            with self.assertRaisesRegex(GUARD.GuardError, "cannot read"):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+    def test_unreadable_or_malformed_gpuid_fails_without_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
+            original = GUARD._read_text
+            reads = 0
+
+            def unreadable(path: pathlib.Path, description: str) -> str:
+                nonlocal reads
+                if path == gpu_id_path:
+                    reads += 1
+                    try:
+                        raise PermissionError("denied")
+                    except PermissionError as error:
+                        raise GUARD.GuardError("cannot read KFD queue GPU ID") from error
+                return original(path, description)
+
+            with (
+                mock.patch.object(GUARD, "_read_text", side_effect=unreadable),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+            ):
+                GUARD.selected_gpu_queue_owners(kfd_root, 28851)
+            with (
+                mock.patch.object(GUARD, "_read_text", side_effect=unreadable),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+            self.assertEqual(reads, 2)
+
+            gpu_id_path.write_text("028851\n", encoding="ascii")
+            with self.assertRaisesRegex(GUARD.GuardError, "canonical decimal"):
+                GUARD.selected_gpu_queue_owners(kfd_root, 28851)
+            with self.assertRaisesRegex(GUARD.GuardError, "canonical decimal"):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
     def test_cadence_fails_closed_on_large_or_nonmonotonic_gap(self) -> None:
         self.assertEqual(GUARD.MAX_OBSERVATION_GAP_NS, 10_000_000)
         cadence = GUARD.ObservationCadence(GUARD.MAX_OBSERVATION_GAP_NS)
@@ -1082,7 +1439,7 @@ except guard.GuardError as error:
                 mock.patch.object(
                     GUARD,
                     "selected_gpu_queue_owners",
-                    side_effect=[[], [(101, 0)], [(101, 0)], []],
+                    side_effect=[[], []],
                 ),
                 mock.patch.object(GUARD, "_process_group_exists", return_value=False),
             ):
