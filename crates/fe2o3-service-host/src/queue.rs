@@ -27,12 +27,13 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r19-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r20-v1\n",
     "source.compute_aql_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
+    "completion-wait=legacy-bounded-poll-count-or-monotonic-relative-millisecond-deadline-delegated-to-kfd,success-returns-completed-custody,timeout-or-error-quarantines-retained-queue\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,terminal-timeout-failure-borrows-addressless-currentness-enveloped-execution-observation,never-published-prepared-returning-destroy-or-exact-completion-and-signal-recycle-before-detach-rebind-or-published-history-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
@@ -47,7 +48,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "91395aed1e056439f2c8762c7f4b1e1fd6b125b7de537edfc0bdeee5a5b0f709";
+    "c9100bbd01f12883449c2c295a3bc5c0424e02747ab421cb8984c3c20c23e90e";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -409,16 +410,41 @@ impl<const N: usize> ServicePublishedQueueSessionV1<N> {
 
     /// Waits for every exact completion signal with the supplied bounded poll count.
     pub fn wait(
-        mut self,
+        self,
         polls: u32,
     ) -> Result<ServiceCompletedQueueSessionV1<N>, ServiceQueueOperationFailureV1> {
-        match self.owner.queue.wait_fixed_dispatch(self.batch, polls) {
-            Ok(completed) => Ok(ServiceCompletedQueueSessionV1 {
-                owner: self.owner,
-                completed,
-            }),
-            Err(error) => Err(quarantine(self.owner, error)),
+        let Self { mut owner, batch } = self;
+        let result = owner.queue.wait_fixed_dispatch(batch, polls);
+        match route_published_wait_custody(result, owner) {
+            Ok((owner, completed)) => Ok(ServiceCompletedQueueSessionV1 { owner, completed }),
+            Err((owner, error)) => Err(quarantine(owner, error)),
         }
+    }
+
+    /// Waits for every exact completion signal until KFD's monotonic relative
+    /// deadline for the supplied timeout in milliseconds.
+    ///
+    /// A timeout or any other terminal wait failure quarantines the retained
+    /// queue owner exactly as [`Self::wait`] does.
+    pub fn wait_for(
+        self,
+        timeout_milliseconds: u32,
+    ) -> Result<ServiceCompletedQueueSessionV1<N>, ServiceQueueOperationFailureV1> {
+        let Self { mut owner, batch } = self;
+        let result = owner
+            .queue
+            .wait_fixed_dispatch_for(batch, timeout_milliseconds);
+        match route_published_wait_custody(result, owner) {
+            Ok((owner, completed)) => Ok(ServiceCompletedQueueSessionV1 { owner, completed }),
+            Err((owner, error)) => Err(quarantine(owner, error)),
+        }
+    }
+}
+
+fn route_published_wait_custody<O, T, E>(result: Result<T, E>, owner: O) -> Result<(O, T), (O, E)> {
+    match result {
+        Ok(completed) => Ok((owner, completed)),
+        Err(error) => Err((owner, error)),
     }
 }
 
@@ -2184,6 +2210,38 @@ mod tests {
             validate_ring::<8192>(262_144),
             Err(ServiceQueueErrorV1::BatchContract(_))
         ));
+    }
+
+    #[test]
+    fn published_wait_custody_routes_success_and_failure_without_owner_loss() {
+        let success = route_published_wait_custody::<_, _, u32>(Ok(17_u32), 41_u32).unwrap();
+        assert_eq!(success, (41, 17));
+
+        let failure = route_published_wait_custody::<_, u32, _>(Err(23_u32), 43_u32).unwrap_err();
+        assert_eq!(failure, (43, 23));
+    }
+
+    #[test]
+    fn bounded_wait_delegates_to_kfd_and_routes_failure_to_quarantine() {
+        let method: fn(
+            ServicePublishedQueueSessionV1<1>,
+            u32,
+        ) -> Result<
+            ServiceCompletedQueueSessionV1<1>,
+            ServiceQueueOperationFailureV1,
+        > = ServicePublishedQueueSessionV1::<1>::wait_for;
+        let _ = method;
+
+        let source = include_str!("queue.rs");
+        let wait_for = source
+            .split_once("    pub fn wait_for(\n")
+            .expect("bounded wait method remains present")
+            .1
+            .split_once("\n    }\n}\n\nfn route_published_wait_custody")
+            .expect("bounded wait method remains custody-routed")
+            .0;
+        assert!(wait_for.contains(".wait_fixed_dispatch_for(batch, timeout_milliseconds)"));
+        assert!(wait_for.contains("Err((owner, error)) => Err(quarantine(owner, error))"));
     }
 
     #[test]

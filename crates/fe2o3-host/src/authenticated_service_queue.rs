@@ -826,6 +826,16 @@ pub struct AuthenticatedServicePublishedQueueSessionV1<const N: usize> {
     programs: AuthenticatedProgramCustodyV1,
 }
 
+fn route_authenticated_wait_custody<T, E>(
+    result: Result<T, E>,
+    programs: AuthenticatedProgramCustodyV1,
+) -> Result<(T, AuthenticatedProgramCustodyV1), (E, AuthenticatedProgramCustodyV1)> {
+    match result {
+        Ok(queue) => Ok((queue, programs)),
+        Err(error) => Err((error, programs)),
+    }
+}
+
 impl<const N: usize> fmt::Debug for AuthenticatedServicePublishedQueueSessionV1<N> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -903,9 +913,35 @@ impl<const N: usize> AuthenticatedServicePublishedQueueSessionV1<N> {
         AuthenticatedServiceQueueOperationFailureV1,
     > {
         let Self { queue, programs } = self;
-        match queue.wait(polls) {
-            Ok(queue) => Ok(AuthenticatedServiceCompletedQueueSessionV1 { queue, programs }),
-            Err(inner) => Err(AuthenticatedServiceQueueOperationFailureV1 {
+        match route_authenticated_wait_custody(queue.wait(polls), programs) {
+            Ok((queue, programs)) => {
+                Ok(AuthenticatedServiceCompletedQueueSessionV1 { queue, programs })
+            }
+            Err((inner, programs)) => Err(AuthenticatedServiceQueueOperationFailureV1 {
+                inner: Box::new(inner),
+                programs,
+            }),
+        }
+    }
+
+    /// Waits until KFD's monotonic relative millisecond deadline while
+    /// retaining every authenticated program owner.
+    ///
+    /// A timeout or any other terminal wait failure preserves the program
+    /// owners beside the lower opaque quarantined queue.
+    pub fn wait_for(
+        self,
+        timeout_milliseconds: u32,
+    ) -> Result<
+        AuthenticatedServiceCompletedQueueSessionV1<N>,
+        AuthenticatedServiceQueueOperationFailureV1,
+    > {
+        let Self { queue, programs } = self;
+        match route_authenticated_wait_custody(queue.wait_for(timeout_milliseconds), programs) {
+            Ok((queue, programs)) => {
+                Ok(AuthenticatedServiceCompletedQueueSessionV1 { queue, programs })
+            }
+            Err((inner, programs)) => Err(AuthenticatedServiceQueueOperationFailureV1 {
                 inner: Box::new(inner),
                 programs,
             }),
