@@ -99,6 +99,49 @@ impl AuthenticatedServiceQueueUnboundSessionV1 {
         }
     }
 
+    /// Removes one complete retained partitioned device-local allocation.
+    ///
+    /// Program custody remains paired with the unchanged queue after rejection,
+    /// the advanced queue after success, or the opaque quarantine after a
+    /// terminal native transition.
+    pub fn remove_partitioned_device_local<R, const N: usize>(
+        self,
+        old: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+    ) -> Result<Self, AuthenticatedServiceQueueDataUpdateFailureV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let Self { queue, programs } = self;
+        let route = match queue.remove_partitioned_device_local(old) {
+            Ok(queue) => DataUpdateRouteV1::Success(queue),
+            Err(ServiceQueueDataUpdateFailureV1::Rejected { error, queue }) => {
+                DataUpdateRouteV1::Rejected((error, *queue))
+            }
+            Err(ServiceQueueDataUpdateFailureV1::Terminal { error, retained }) => {
+                DataUpdateRouteV1::Terminal((error, *retained))
+            }
+        };
+        match route_data_update_custody(route, programs) {
+            DataUpdateCustodyRouteV1::Success { value: queue, programs } => {
+                Ok(Self { queue, programs })
+            }
+            DataUpdateCustodyRouteV1::Rejected {
+                value: (error, queue),
+                programs,
+            } => Err(AuthenticatedServiceQueueDataUpdateFailureV1::Rejected {
+                error: Box::new(error),
+                queue: Box::new(Self { queue, programs }),
+            }),
+            DataUpdateCustodyRouteV1::Terminal {
+                value: (error, queue),
+                programs,
+            } => Err(AuthenticatedServiceQueueDataUpdateFailureV1::Quarantined {
+                error: Box::new(error),
+                retained: Box::new(AuthenticatedQuarantinedServiceQueueV1 { queue, programs }),
+            }),
+        }
+    }
+
     /// Replaces one retained host-visible allocation without changing program custody.
     pub fn replace_initialized_host_visible<R>(
         self,
@@ -914,5 +957,43 @@ fn route_release_custody<T, E>(
     match result {
         Ok(value) => Ok((value, programs.into_program_sets())),
         Err(error) => Err((error, programs)),
+    }
+}
+
+enum DataUpdateRouteV1<S, R, T> {
+    Success(S),
+    Rejected(R),
+    Terminal(T),
+}
+
+enum DataUpdateCustodyRouteV1<S, R, T> {
+    Success {
+        value: S,
+        programs: AuthenticatedProgramCustodyV1,
+    },
+    Rejected {
+        value: R,
+        programs: AuthenticatedProgramCustodyV1,
+    },
+    Terminal {
+        value: T,
+        programs: AuthenticatedProgramCustodyV1,
+    },
+}
+
+fn route_data_update_custody<S, R, T>(
+    route: DataUpdateRouteV1<S, R, T>,
+    programs: AuthenticatedProgramCustodyV1,
+) -> DataUpdateCustodyRouteV1<S, R, T> {
+    match route {
+        DataUpdateRouteV1::Success(value) => {
+            DataUpdateCustodyRouteV1::Success { value, programs }
+        }
+        DataUpdateRouteV1::Rejected(value) => {
+            DataUpdateCustodyRouteV1::Rejected { value, programs }
+        }
+        DataUpdateRouteV1::Terminal(value) => {
+            DataUpdateCustodyRouteV1::Terminal { value, programs }
+        }
     }
 }

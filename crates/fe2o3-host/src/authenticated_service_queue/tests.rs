@@ -50,6 +50,66 @@ mod tests {
         fe2o3_amd_target::AmdTargetId::parse(name).unwrap()
     }
 
+    fn test_program_custody() -> AuthenticatedProgramCustodyV1 {
+        let gfx942 = target("gfx942:sramecc+:xnack-");
+        let set = |marker| AuthenticatedWorkerV3ProgramSetV1 {
+            rosters: vec![Box::new(TestErasedRosterV1 {
+                markers: vec![[marker; 32]],
+                is_current: true,
+            })],
+            target: gfx942,
+            marker_bindings: vec![[marker; 32]],
+        };
+        AuthenticatedProgramCustodyV1 {
+            active: Some(set(3)),
+            retired: vec![set(1), set(2)],
+        }
+    }
+
+    fn retained_program_markers(programs: AuthenticatedProgramCustodyV1) -> Vec<u8> {
+        programs
+            .into_program_sets()
+            .into_iter()
+            .map(|programs| programs.marker_bindings[0][0])
+            .collect()
+    }
+
+    #[test]
+    fn authenticated_partition_removal_success_preserves_program_custody() {
+        let route = DataUpdateRouteV1::<_, (u64, u64), (u64, u64)>::Success(41_u64);
+        match route_data_update_custody(route, test_program_custody()) {
+            DataUpdateCustodyRouteV1::Success { value, programs } => {
+                assert_eq!(value, 41);
+                assert_eq!(retained_program_markers(programs), [1, 2, 3]);
+            }
+            _ => panic!("success must retain custody beside the advanced queue"),
+        }
+    }
+
+    #[test]
+    fn authenticated_partition_removal_rejection_retains_exact_queue_and_programs() {
+        let route = DataUpdateRouteV1::<u64, _, (u64, u64)>::Rejected((17_u64, 23_u64));
+        match route_data_update_custody(route, test_program_custody()) {
+            DataUpdateCustodyRouteV1::Rejected { value, programs } => {
+                assert_eq!(value, (17, 23));
+                assert_eq!(retained_program_markers(programs), [1, 2, 3]);
+            }
+            _ => panic!("rejection must retain custody beside the unchanged queue"),
+        }
+    }
+
+    #[test]
+    fn authenticated_partition_removal_terminal_route_quarantines_exact_custody() {
+        let route = DataUpdateRouteV1::<u64, (u64, u64), _>::Terminal((29_u64, 31_u64));
+        match route_data_update_custody(route, test_program_custody()) {
+            DataUpdateCustodyRouteV1::Terminal { value, programs } => {
+                assert_eq!(value, (29, 31));
+                assert_eq!(retained_program_markers(programs), [1, 2, 3]);
+            }
+            _ => panic!("terminal transition must quarantine queue and program custody"),
+        }
+    }
+
     #[test]
     fn seven_heterogeneous_rosters_can_supply_twelve_unique_programs() {
         let gfx942 = target("gfx942:sramecc+:xnack-");
