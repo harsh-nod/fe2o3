@@ -15,8 +15,10 @@ use crate::persistent_allocation::{
     Gfx942PersistentCompletedV1, Gfx942PersistentDependencyFrontierV1, Gfx942PersistentPreparedV1,
     Gfx942PersistentPublishedV1, Gfx942PersistentUseLeaseV1,
 };
-use crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaWindowCompletedV1;
-use crate::persistent_directional_sdma::Gfx942DirectionalQueuePersistentAllocationV1;
+use crate::persistent_directional_sdma::{
+    Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
+    Gfx942DirectionalPersistentSdmaWindowCompletedV1, Gfx942DirectionalQueuePersistentAllocationV1,
+};
 use crate::queue::{
     ComputeAqlQueueSessionErrorV1, Gfx942CompletedDispatchBatchV1,
     Gfx942CompletionRecycleObservationV1, Gfx942DispatchBatchV1, Gfx942FixedDispatchDataV1,
@@ -29,9 +31,9 @@ pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-gfx942-kfd-persistent-local-compute-r25-v1\n",
     "target=gfx942:xnack-,one-primary-compute-queue-and-one-directional-sdma-pair\n",
     "admission=one-local-fresh-or-exact-size-pooled-logical-equals-physical-allocation,one-fixed-compute-packet,one-full-allocation-device-local-binding,complete-live-device-set-of-one,metadata-derived-access\n",
-    "binding=exact-parent-and-compute-queue-occurrence,attachment-generation,pool-generation,logical-and-physical-extent,mapped-storage-identity,persistent-owner-incarnation,and-dispatch-generation\n",
+    "binding=exact-parent-and-compute-queue-occurrence,attachment-generation,pool-generation,logical-and-physical-extent,mapped-storage-identity,persistent-owner-incarnation,dispatch-generation,and-prepare-once-control-identity-over-code-abi-packet-geometry-kernarg-content-role-and-storage-layout\n",
     "initialization=read-or-readwrite-requires-one-exact-full-h2d-completion-and-host-content-descriptor-match,h2d-source-host-owner-is-returned-separately,ready-retains-only-device-owner-and-sealed-byte-digest,bind-relabels-the-digest-to-the-final-kernel-role-without-copy,write-only-may-use-quiescent-uninitialized-custody,no-compute-write-initialization-promotion\n",
-    "lifecycle=preflight-reserve-prepare-detach-retain,confirmed-only-publish,pending-retains-all-custody,exact-completion-then-signal-recycle-then-dispatch-detach-and-native-restore-then-settle,explicit-frontier-retirement\n",
+    "lifecycle=first-launch-preflight-reserve-prepare-detach-and-allocate-map-retain-control,confirmed-only-publish,pending-retains-all-custody,exact-completion-then-signal-recycle-then-data-only-detach-native-restore-and-settle,subsequent-exact-replay-reattaches-only-data-to-the-retained-control-and-advances-generation,explicit-frontier-retirement,ordinary-destroy-releases-retained-control-exactly-once\n",
     "ledger=the-existing-directional-sdma-outstanding-buffer-debit-and-pool-generation-are-preserved\n",
     "failure=pre-retention-rejection-returns-input,confirmed-no-effect-ring-occupancy-retains-prepared-retry,post-retention-publication-completion-recycle-detach-or-restore-ambiguity-quarantines-and-requires-process-teardown\n",
     "partial-prepare=after-first-code-or-kernarg-allocation,the-terminal-queue-owned-shared-memory-session-registry-retains-every-native-record,linear-token-drop-performs-no-native-cleanup,and-process-teardown-is-required\n",
@@ -43,7 +45,7 @@ pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1`].
 pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_SHA256_V1: &str =
-    "b0621e41ae7d54a0fe73eec005e7cc3e51e9e897c0942e69eb66c7d9b8a0efca";
+    "47858123a88a3f6284c7438011ca7f6b779002c006737dad53d1e31f1428ba50";
 
 /// Metadata-derived aggregate access of the exact persistent compute binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +58,17 @@ pub enum Gfx942PersistentComputeEffectV1 {
 impl Gfx942PersistentComputeEffectV1 {
     pub const fn writes(self) -> bool {
         matches!(self, Self::Write | Self::ReadWrite)
+    }
+}
+
+const fn replay_authenticated_sha256_v1(
+    effect: Gfx942PersistentComputeEffectV1,
+    authenticated_sha256: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    if effect.writes() {
+        None
+    } else {
+        authenticated_sha256
     }
 }
 
@@ -182,13 +195,21 @@ pub enum Gfx942PersistentComputeInputV1 {
     Uninitialized(Gfx942DirectionalQueuePersistentAllocationV1),
     /// Exact full-H2D initialization was authenticated before frontier retirement.
     Initialized(Gfx942PersistentComputeReadyV1),
+    /// Exact predecessor compute completed, recycled, detached, restored, and
+    /// retired its dependency frontier while proving the full extent initialized.
+    InitializedAfterDispatch(Gfx942DirectionalQueuePersistentAllocationV1),
 }
 
 impl Gfx942PersistentComputeInputV1 {
+    pub const fn is_fully_initialized(&self) -> bool {
+        !matches!(self, Self::Uninitialized(_))
+    }
+
     pub(crate) fn belongs_to(&self, queue: QueueKeyV1) -> bool {
         match self {
             Self::Uninitialized(allocation) => allocation.attachment.queue == queue,
             Self::Initialized(ready) => ready.allocation.attachment.queue == queue,
+            Self::InitializedAfterDispatch(allocation) => allocation.attachment.queue == queue,
         }
     }
 
@@ -196,6 +217,7 @@ impl Gfx942PersistentComputeInputV1 {
         match self {
             Self::Uninitialized(allocation) => allocation.byte_len(),
             Self::Initialized(ready) => ready.byte_len(),
+            Self::InitializedAfterDispatch(allocation) => allocation.byte_len(),
         }
     }
 
@@ -203,6 +225,7 @@ impl Gfx942PersistentComputeInputV1 {
         match self {
             Self::Uninitialized(allocation) => allocation.physical_byte_len(),
             Self::Initialized(ready) => ready.physical_byte_len(),
+            Self::InitializedAfterDispatch(allocation) => allocation.physical_byte_len(),
         }
     }
 
@@ -216,19 +239,37 @@ impl Gfx942PersistentComputeInputV1 {
         match self {
             Self::Uninitialized(allocation) => (allocation, None, false),
             Self::Initialized(ready) => (ready.allocation, Some(ready.authenticated_sha256), true),
+            Self::InitializedAfterDispatch(allocation) => (allocation, None, true),
         }
     }
 
     pub(crate) fn from_parts(
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
         authenticated_sha256: Option<[u8; 32]>,
+        fully_initialized: bool,
     ) -> Self {
-        match authenticated_sha256 {
-            Some(authenticated_sha256) => Self::Initialized(Gfx942PersistentComputeReadyV1 {
-                allocation,
-                authenticated_sha256,
-            }),
-            None => Self::Uninitialized(allocation),
+        match (authenticated_sha256, fully_initialized) {
+            (Some(authenticated_sha256), true) => {
+                Self::Initialized(Gfx942PersistentComputeReadyV1 {
+                    allocation,
+                    authenticated_sha256,
+                })
+            }
+            (None, true) => Self::InitializedAfterDispatch(allocation),
+            (None, false) => Self::Uninitialized(allocation),
+            (Some(_), false) => {
+                debug_assert!(false, "authenticated persistent input must be initialized");
+                Self::Uninitialized(allocation)
+            }
+        }
+    }
+
+    pub fn into_allocation(self) -> Gfx942DirectionalQueuePersistentAllocationV1 {
+        match self {
+            Self::Uninitialized(allocation) | Self::InitializedAfterDispatch(allocation) => {
+                allocation
+            }
+            Self::Initialized(ready) => ready.allocation,
         }
     }
 }
@@ -237,7 +278,13 @@ impl fmt::Debug for Gfx942PersistentComputeInputV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Gfx942PersistentComputeInputV1")
-            .field("initialized", &matches!(self, Self::Initialized(_)))
+            .field(
+                "initialized",
+                &matches!(
+                    self,
+                    Self::Initialized(_) | Self::InitializedAfterDispatch(_)
+                ),
+            )
             .field("byte_len", &self.byte_len())
             .field("physical_byte_len", &self.physical_byte_len())
             .finish_non_exhaustive()
@@ -337,6 +384,8 @@ pub struct Gfx942PersistentComputeCompletedV1 {
     pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
     pub(crate) frontier: Gfx942PersistentDependencyFrontierV1,
     pub(crate) effect: Gfx942PersistentComputeEffectV1,
+    pub(crate) authenticated_sha256: Option<[u8; 32]>,
+    pub(crate) fully_initialized: bool,
 }
 
 impl Gfx942PersistentComputeCompletedV1 {
@@ -352,6 +401,34 @@ impl Gfx942PersistentComputeCompletedV1 {
         Gfx942PersistentComputeEffectV1,
     ) {
         (self.allocation, self.frontier, self.effect)
+    }
+
+    /// Retires the exact completed frontier and preserves the strongest valid
+    /// initialization proof for an exact persistent-control replay.
+    #[allow(clippy::result_large_err)]
+    pub fn retire_settled_frontier_for_replay_v1(
+        self,
+    ) -> Result<
+        (
+            Gfx942PersistentComputeInputV1,
+            Gfx942PersistentComputeEffectV1,
+        ),
+        Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
+    > {
+        let allocation = self.allocation.retire_settled_frontier_v1(self.frontier)?;
+        let authenticated_sha256 =
+            replay_authenticated_sha256_v1(self.effect, self.authenticated_sha256);
+        let input = match (authenticated_sha256, self.fully_initialized) {
+            (Some(authenticated_sha256), true) => {
+                Gfx942PersistentComputeInputV1::Initialized(Gfx942PersistentComputeReadyV1 {
+                    allocation,
+                    authenticated_sha256,
+                })
+            }
+            (None, true) => Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation),
+            (_, false) => Gfx942PersistentComputeInputV1::Uninitialized(allocation),
+        };
+        Ok((input, self.effect))
     }
 }
 
@@ -610,6 +687,23 @@ mod tests {
         assert!(!Gfx942PersistentComputeEffectV1::Read.writes());
         assert!(Gfx942PersistentComputeEffectV1::Write.writes());
         assert!(Gfx942PersistentComputeEffectV1::ReadWrite.writes());
+    }
+
+    #[test]
+    fn readwrite_completion_never_reuses_predispatch_authenticated_digest() {
+        let stale = Some([0x5a; 32]);
+        assert_eq!(
+            replay_authenticated_sha256_v1(Gfx942PersistentComputeEffectV1::Read, stale),
+            stale
+        );
+        assert_eq!(
+            replay_authenticated_sha256_v1(Gfx942PersistentComputeEffectV1::Write, stale),
+            None
+        );
+        assert_eq!(
+            replay_authenticated_sha256_v1(Gfx942PersistentComputeEffectV1::ReadWrite, stale),
+            None
+        );
     }
 
     #[test]

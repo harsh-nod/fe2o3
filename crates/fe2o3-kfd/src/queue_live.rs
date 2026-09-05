@@ -37,11 +37,11 @@ use super::dispatch_binding::{
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
     Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
     Gfx942FixedDispatchStorageIdentityV1, Gfx942RecycledDispatchWriteRequestV1,
-    ReturnedDispatchDataV1, TypedKernargImageV1, preflight_gfx942_persistent_compute_dispatch_v1,
+    ReturnedDispatchDataV1, TypedKernargImageV1, persistent_fixed_dispatch_control_identity_v1,
     prepare_dispatch_resources, prepare_persistent_fixed_dispatch_resources_v1,
-    prepare_public_fixed_dispatch_resources, prepare_public_fixed_dispatch_resources_after_recycle,
-    unwrap_completed, unwrap_published, validate_fixed_batch_ring, wrap_completed,
-    wrap_poll_with_progress, wrap_published,
+    prepare_public_fixed_dispatch_resources, prepare_public_fixed_dispatch_resources_after_detach,
+    prepare_public_fixed_dispatch_resources_after_recycle, unwrap_completed, unwrap_published,
+    validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress, wrap_published,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
@@ -214,7 +214,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "aql_completion_schema_sha256=4b7e1090eccbae41ea09ce7d5147470eb665ee295cb0f4526f5584225c86369a\n",
-    "dispatch_binding_schema_sha256=0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188\n",
+    "dispatch_binding_schema_sha256=811fbd200ac0b72e5aff81494225b6ea37f517d62bad3779544653c2aae6d815\n",
     "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -234,7 +234,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-never-published-prepared-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,its-replay-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;published-owners-no-drop-ioctl-store-munmap-or-free;armed-unpublished-payload-guard-drop-zero-protect-unmap\n",
     "currentness=active-queue-process-reset-event-retained-descriptor-uapi-xnack-and-drm-vram-loss-operational-fence-before-publication,after-bounded-preparation,and-before-mmio;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-retain-full-device-topology-aperture-composite;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
@@ -248,7 +248,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10";
+    "90a78b051b6b1740a0e3123278edad5864509a6f1d3c7480e3416dafc634127d";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -2909,12 +2909,6 @@ fn admit_detached_returning_destroy(
     let generation = preflight
         .detached_dispatch_generation
         .expect("checked detached generation");
-    if generation == 0 {
-        *terminal_poisoned = true;
-        return Err(ComputeAqlQueueSessionErrorV1::Contract(
-            "detached dispatch generation was zero",
-        ));
-    }
     Ok(generation)
 }
 
@@ -3153,8 +3147,12 @@ fn auxiliary_compute_lane_quiescence_from_facts_v1(
                     && detached_next_insertion_index.is_none()
             }
             None => {
-                detached_dispatch_generation.is_some_and(|generation| generation != 0)
-                    && detached_data_count <= super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1
+                detached_dispatch_generation.is_some_and(|generation| {
+                    generation != 0
+                        || (detached_data_count == 0
+                            && detached_identity_count == 0
+                            && detached_next_insertion_index == Some(0))
+                }) && detached_data_count <= super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1
                     && detached_identity_count == detached_data_count
                     && detached_next_insertion_index
                         .is_none_or(|index| index <= detached_identity_count)
@@ -3199,6 +3197,15 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         &mut self,
     ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
         self.session.detach_recycled_fixed_dispatch()
+    }
+
+    /// Releases prepare-once code and kernarg control after persistent data
+    /// was restored to its separate SDMA owner.
+    pub fn release_retained_persistent_fixed_dispatch_control_v1(
+        &mut self,
+    ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .release_retained_persistent_fixed_dispatch_control_v1()
     }
 
     pub fn bind_fixed_dispatch<const N: usize>(
@@ -8885,7 +8892,7 @@ impl ComputeAqlQueueSessionV1 {
                 ),
             });
         }
-        if self.persistent_compute.is_some() || self.dispatch.is_some() {
+        if self.persistent_compute.is_some() {
             return Err(recover(
                 Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
                 input,
@@ -8930,10 +8937,12 @@ impl ComputeAqlQueueSessionV1 {
         let authenticated_sha256 = match &input {
             Gfx942PersistentComputeInputV1::Uninitialized(_) => None,
             Gfx942PersistentComputeInputV1::Initialized(ready) => Some(ready.authenticated_sha256),
+            Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_) => None,
         };
-        let initialized = authenticated_sha256.is_some();
+        let initialized = !matches!(&input, Gfx942PersistentComputeInputV1::Uninitialized(_));
         let allocation = match &mut input {
-            Gfx942PersistentComputeInputV1::Uninitialized(allocation) => allocation,
+            Gfx942PersistentComputeInputV1::Uninitialized(allocation)
+            | Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) => allocation,
             Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
         };
         if allocation.attachment.queue != self.compute_lane_session
@@ -8966,15 +8975,38 @@ impl ComputeAqlQueueSessionV1 {
                 lease.storage_identity(),
             )
         };
-        let native_effect = match preflight_gfx942_persistent_compute_dispatch_v1(
+        // Exact replay may recover initialization from the queue-retained
+        // predecessor premise after identity/currentness validation. Initial
+        // read admission still requires an authenticated input.
+        let control_initialized = initialized || self.dispatch.is_some();
+        let control_identity = match persistent_fixed_dispatch_control_identity_v1(
+            self.key,
             &programs,
             &packets,
             layout,
-            initialized,
+            control_initialized,
+            content_role,
+            Gfx942SdmaBufferStorageIdentityV1::Device(storage_identity),
         ) {
-            Ok(effect) => effect,
+            Ok(identity) => identity,
             Err(error) => return Err(recover(error.into(), input)),
         };
+        if let Some(dispatch) = self.dispatch.as_ref() {
+            let Some(predecessor_generation) = detached_generation else {
+                return Err(recover(
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "retained persistent control requires a recycled predecessor generation",
+                    ),
+                    input,
+                ));
+            };
+            if let Err(error) =
+                dispatch.validate_persistent_replay_v1(control_identity, predecessor_generation)
+            {
+                return Err(recover(error.into(), input));
+            }
+        }
+        let native_effect = control_identity.effect();
         let (operation, effect) = match native_effect {
             DeviceDataEffectV1::ReadOnly => (
                 Gfx942PersistentOperationV1::ComputeRead,
@@ -9185,21 +9217,50 @@ impl ComputeAqlQueueSessionV1 {
                 });
             }
         };
-        let prepared_dispatch = {
+        let retained_dispatch = self.dispatch.take();
+        let (prepared_dispatch, failed_retained_control) = {
             let memory = &mut self
                 .engine
                 .as_mut()
                 .expect("model loan requires queue engine")
                 .backend
                 .session;
-            prepare_persistent_fixed_dispatch_resources_v1(
-                memory,
-                programs,
-                packets,
-                data,
-                detached_generation,
-            )
+            match retained_dispatch {
+                Some(mut dispatch) => {
+                    let predecessor_generation = detached_generation
+                        .expect("persistent replay was preflighted with a predecessor");
+                    match dispatch.retain_persistent_replay_data_v1(
+                        memory,
+                        control_identity,
+                        data,
+                        predecessor_generation,
+                    ) {
+                        Ok(()) => (Ok(dispatch), None),
+                        Err((error, data)) => (
+                            Err(super::dispatch_binding::PersistentFixedDispatchPreparationFailureV1 {
+                                error,
+                                data: vec![data],
+                            }),
+                            Some(dispatch),
+                        ),
+                    }
+                }
+                None => (
+                    prepare_persistent_fixed_dispatch_resources_v1(
+                        memory,
+                        programs,
+                        packets,
+                        data,
+                        detached_generation,
+                        control_identity,
+                    ),
+                    None,
+                ),
+            }
         };
+        if let Some(dispatch) = failed_retained_control {
+            self.dispatch = Some(dispatch);
+        }
         let retake = self.retake_model_ownership_after_live_mutation(loan);
         let prepared_dispatch = match (prepared_dispatch, retake) {
             (Ok(dispatch), Ok(())) => Ok(dispatch),
@@ -9526,6 +9587,7 @@ impl ComputeAqlQueueSessionV1 {
             });
         }
         let data = data.pop().expect("validated one returned data authority");
+        let fully_initialized = data.is_fully_initialized();
         let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
             unreachable!("validated device storage identity")
         };
@@ -9568,18 +9630,14 @@ impl ComputeAqlQueueSessionV1 {
                 retained: None,
             });
         }
-        if expected_generation == 0 {
-            self.detached_dispatch_generation = None;
-            self.detached_next_insertion_index = None;
-        } else {
-            self.detached_dispatch_generation = Some(expected_generation);
-            self.detached_next_insertion_index = Some(0);
-        }
+        self.detached_dispatch_generation = Some(expected_generation);
+        self.detached_next_insertion_index = Some(0);
         self.detached_data_count = 0;
         self.detached_data_identities.clear();
         Ok(Gfx942PersistentComputeInputV1::from_parts(
             attachment.allocation,
             attachment.authenticated_sha256,
+            fully_initialized,
         ))
     }
 
@@ -10006,7 +10064,9 @@ impl ComputeAqlQueueSessionV1 {
                 retained: None,
             });
         }
-        let (generation, mut data) = match self.release_persistent_dispatch_data(true) {
+        let (generation, mut data) = match self
+            .detach_persistent_dispatch_data_retaining_control_v1()
+        {
             Ok(returned) => returned,
             Err((error, data)) => {
                 let _ = attachment.allocation.owner.quarantine_completed(
@@ -10050,6 +10110,7 @@ impl ComputeAqlQueueSessionV1 {
             });
         }
         let data = data.pop().expect("validated one detached data authority");
+        let fully_initialized = data.is_fully_initialized();
         let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
             unreachable!("validated device storage identity")
         };
@@ -10100,6 +10161,10 @@ impl ComputeAqlQueueSessionV1 {
             allocation: attachment.allocation,
             frontier,
             effect: attachment.effect,
+            authenticated_sha256: (!attachment.effect.writes())
+                .then_some(attachment.authenticated_sha256)
+                .flatten(),
+            fully_initialized,
         })
     }
 
@@ -10113,6 +10178,61 @@ impl ComputeAqlQueueSessionV1 {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         self.detach_recycled_fixed_dispatch_inner()
+    }
+
+    /// Consumes a detached persistent dispatch's immutable code/kernarg
+    /// control without changing the queue's detached-generation ledger.
+    pub fn release_retained_persistent_fixed_dispatch_control_v1(
+        &mut self,
+    ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        let Some(dispatch) = self.dispatch.as_ref() else {
+            return Ok(false);
+        };
+        if !dispatch.persistent_data_is_detached_v1() {
+            return Ok(false);
+        }
+        let Some(generation) = self.detached_dispatch_generation else {
+            self.poison_terminal();
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "retained persistent control lost its detached generation",
+            ));
+        };
+        if let Err(error) = dispatch.validate_detached_persistent_control_release_v1(generation) {
+            self.poison_terminal();
+            return Err(error.into());
+        }
+        let loan = self.restore_model_ownership_for_live_mutation()?;
+        let dispatch = self
+            .dispatch
+            .take()
+            .expect("validated detached persistent control remains retained");
+        let release = dispatch.release_detached_persistent_control_v1(
+            &mut self
+                .engine
+                .as_mut()
+                .expect("model loan requires queue engine")
+                .backend
+                .session,
+            generation,
+        );
+        let retake = self.retake_model_ownership_after_live_mutation(loan);
+        match (release, retake) {
+            (Ok(()), Ok(())) => Ok(true),
+            (Err(error), Ok(())) => {
+                self.poison_terminal();
+                Err(error.into())
+            }
+            (_, Err(error)) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
     }
 
     fn detach_recycled_fixed_dispatch_inner(
@@ -10182,10 +10302,7 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
-        if self
-            .detached_dispatch_generation
-            .is_none_or(|generation| generation == 0)
-        {
+        if self.detached_dispatch_generation.is_none() {
             self.poison_terminal();
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
@@ -10220,7 +10337,7 @@ impl ComputeAqlQueueSessionV1 {
             .detached_dispatch_generation
             .expect("checked detached dispatch generation");
         let prepared = self.with_live_queue_memory_model(|memory| {
-            prepare_public_fixed_dispatch_resources_after_recycle(
+            prepare_public_fixed_dispatch_resources_after_detach(
                 memory,
                 programs,
                 packets,
@@ -10583,10 +10700,7 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
-        if self
-            .detached_dispatch_generation
-            .is_none_or(|generation| generation == 0)
-        {
+        if self.detached_dispatch_generation.is_none() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         if self.detached_data_count > super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
@@ -13112,6 +13226,26 @@ impl ComputeAqlQueueSessionV1 {
         result
     }
 
+    fn detach_persistent_dispatch_data_retaining_control_v1(
+        &mut self,
+    ) -> Result<
+        (u64, Vec<Gfx942FixedDispatchDataV1>),
+        (
+            ComputeAqlQueueSessionErrorV1,
+            Vec<Gfx942FixedDispatchDataV1>,
+        ),
+    > {
+        let Some(dispatch) = self.dispatch.as_mut() else {
+            return Err((
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                Vec::new(),
+            ));
+        };
+        dispatch
+            .detach_persistent_replay_data_after_recycle_v1()
+            .map_err(|error| (error.into(), Vec::new()))
+    }
+
     fn restore_model_ownership_for_live_mutation(
         &mut self,
     ) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
@@ -14570,6 +14704,14 @@ mod tests {
         ));
         assert!(auxiliary_compute_lane_quiescence_from_facts_v1(
             true,
+            None,
+            0,
+            Some(0),
+            0,
+            Some(0),
+        ));
+        assert!(auxiliary_compute_lane_quiescence_from_facts_v1(
+            true,
             Some(true),
             0,
             None,
@@ -14581,7 +14723,7 @@ mod tests {
             (true, Some(false), 0, None, 0, None),
             (true, Some(true), 1, None, 1, None),
             (true, Some(true), 0, Some(7), 0, Some(0)),
-            (true, None, 0, Some(0), 0, Some(0)),
+            (true, None, 1, Some(0), 1, Some(0)),
             (true, None, 2, Some(7), 1, None),
             (true, None, max + 1, Some(7), max + 1, None),
             (true, None, 1, Some(7), 1, Some(2)),
@@ -14664,7 +14806,8 @@ mod tests {
     fn prepared_persistent_compute_cancellation_fixture(
         queue: QueueKeyV1,
         id: u64,
-        authenticated_sha256: [u8; 32],
+        authenticated_sha256: Option<[u8; 32]>,
+        predecessor_dispatch_generation: Option<u64>,
     ) -> (
         ComputeAqlQueueSessionV1,
         Gfx942PreparedPersistentComputeDispatchV1,
@@ -14717,18 +14860,18 @@ mod tests {
         };
         let attachment = PersistentComputeAttachmentV1 {
             allocation,
-            authenticated_sha256: Some(authenticated_sha256),
+            authenticated_sha256,
             state: PersistentComputeUseStateV1::Prepared(prepared),
             binding,
             storage_identity,
             effect: Gfx942PersistentComputeEffectV1::ReadWrite,
-            predecessor_dispatch_generation: Some(7),
+            predecessor_dispatch_generation,
             terminal_custody: None,
         };
         let session = persistent_compute_cancellation_test_session(
             queue,
             Some(attachment),
-            Some((7, vec![data])),
+            Some((predecessor_dispatch_generation.unwrap_or(0), vec![data])),
         );
         (
             session,
@@ -14745,7 +14888,7 @@ mod tests {
         let queue = test_queue_key(161, 1);
         let digest = [0xa5; 32];
         let (mut session, prepared, storage_identity) =
-            prepared_persistent_compute_cancellation_fixture(queue, 6161, digest);
+            prepared_persistent_compute_cancellation_fixture(queue, 6161, Some(digest), Some(7));
 
         let input = session
             .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
@@ -14772,8 +14915,52 @@ mod tests {
         assert_eq!(session.detached_next_insertion_index, Some(0));
         assert_eq!(session.detached_data_count, 0);
         assert!(session.detached_data_identities.is_empty());
-        let input = Gfx942PersistentComputeInputV1::from_parts(allocation, Some(digest));
+        let input = Gfx942PersistentComputeInputV1::from_parts(allocation, Some(digest), true);
         assert!(preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(input, true).is_ok());
+    }
+
+    #[test]
+    fn prepared_replay_cancellation_preserves_initialized_after_dispatch_without_digest() {
+        let queue = test_queue_key(165, 1);
+        let (mut session, prepared, storage_identity) =
+            prepared_persistent_compute_cancellation_fixture(queue, 6565, None, Some(7));
+
+        let input = session
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect("exact replay cancellation must restore initialized input");
+        let Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation) = input else {
+            panic!("digest-free initialized replay must remain fully initialized")
+        };
+        assert_eq!(
+            allocation
+                .owner
+                .local_native_for_sdma()
+                .expect("cancellation restored local native custody")
+                .storage_identity(),
+            storage_identity
+        );
+        assert_eq!(session.detached_dispatch_generation, Some(7));
+        assert_eq!(session.detached_next_insertion_index, Some(0));
+    }
+
+    #[test]
+    fn prepared_initial_cancellation_records_never_published_detached_generation() {
+        let queue = test_queue_key(166, 1);
+        let digest = [0xd8; 32];
+        let (mut session, prepared, _) =
+            prepared_persistent_compute_cancellation_fixture(queue, 6666, Some(digest), None);
+
+        let input = session
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect("initial prepared cancellation must restore its input");
+        assert!(matches!(
+            input,
+            Gfx942PersistentComputeInputV1::Initialized(_)
+        ));
+        assert_eq!(session.detached_dispatch_generation, Some(0));
+        assert_eq!(session.detached_next_insertion_index, Some(0));
+        assert_eq!(session.detached_data_count, 0);
+        assert!(session.detached_data_identities.is_empty());
     }
 
     #[test]
@@ -14782,7 +14969,12 @@ mod tests {
         let receiver_key = test_queue_key(163, 1);
         let digest = [0xb6; 32];
         let (mut producer, prepared, storage_identity) =
-            prepared_persistent_compute_cancellation_fixture(producer_key, 6262, digest);
+            prepared_persistent_compute_cancellation_fixture(
+                producer_key,
+                6262,
+                Some(digest),
+                Some(7),
+            );
         let mut receiver = persistent_compute_cancellation_test_session(receiver_key, None, None);
 
         let failure = receiver
@@ -14832,8 +15024,12 @@ mod tests {
     #[test]
     fn terminal_self_owned_prepared_cancellation_is_absorbed_opaquely() {
         let queue = test_queue_key(164, 1);
-        let (mut session, prepared, _) =
-            prepared_persistent_compute_cancellation_fixture(queue, 6464, [0xc7; 32]);
+        let (mut session, prepared, _) = prepared_persistent_compute_cancellation_fixture(
+            queue,
+            6464,
+            Some([0xc7; 32]),
+            Some(7),
+        );
         session.terminal_poisoned = true;
 
         let failure = session
@@ -15365,6 +15561,18 @@ mod tests {
     }
 
     #[test]
+    fn detached_returning_destroy_preserves_never_published_generation_zero() {
+        let mut poisoned = false;
+        let generation = admit_detached_returning_destroy(
+            &mut poisoned,
+            detached_preflight(false, 0, Some(0), 0, 0, None),
+        )
+        .unwrap();
+        assert_eq!(generation, 0);
+        assert!(!poisoned);
+    }
+
+    #[test]
     fn detached_returning_destroy_rejects_fabricated_unbound_phase() {
         for (dispatch_attached, generation) in [(true, None), (false, None)] {
             let mut poisoned = false;
@@ -15520,7 +15728,7 @@ mod tests {
         );
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188"
+            "811fbd200ac0b72e5aff81494225b6ea37f517d62bad3779544653c2aae6d815"
         );
         assert!(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1.contains(&format!(
             "dispatch_binding_schema_sha256={}\n",

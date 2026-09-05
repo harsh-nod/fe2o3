@@ -260,14 +260,6 @@ impl PersistentComputeReadyOwnerV1 {
         }
     }
 
-    pub(super) fn into_native(self) -> Result<Gfx942PersistentComputeReadyV1, Self> {
-        match self {
-            Self::Native(ready) => Ok(ready),
-            #[cfg(test)]
-            ready @ Self::Scripted { .. } => Err(ready),
-        }
-    }
-
     pub(super) const fn from_native(ready: Gfx942PersistentComputeReadyV1) -> Self {
         Self::Native(ready)
     }

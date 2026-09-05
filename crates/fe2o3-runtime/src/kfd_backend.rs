@@ -187,6 +187,7 @@ pub struct KfdRuntimeLaunchPerformanceV1 {
     recycle: Duration,
     data_path: KfdRuntimeLaunchDataPathV1,
     user_data_materializations: u64,
+    persistent_control_reused: bool,
     ready_promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
 }
 
@@ -287,6 +288,11 @@ impl KfdRuntimeLaunchPerformanceV1 {
     /// included in this counter.
     pub const fn user_data_materializations(self) -> u64 {
         self.user_data_materializations
+    }
+
+    /// Returns whether the launch replayed the exact retained dispatch control.
+    pub const fn persistent_control_reused(self) -> bool {
+        self.persistent_control_reused
     }
 
     /// Returns the exact H2D-ready promotion consumed by the persistent launch.
@@ -567,6 +573,7 @@ enum KfdRuntimeSdmaStorageV1 {
     Synthetic,
     Host(SdmaBufferOwnerV1),
     Device(Box<DirectionalSdmaDeviceOwnerV1>),
+    PersistentReplay(Box<Gfx942PersistentComputeInputV1>),
     H2dReady(Box<PersistentComputeReadyStorageV1>),
     ComputeInFlight(u64),
     DemotedDevice(SdmaBufferOwnerV1),
@@ -579,12 +586,23 @@ struct PersistentComputeReadyStorageV1 {
     promotion: Option<KfdRuntimeReadyPromotionPerformanceV1>,
 }
 
+enum KfdRuntimePersistentComputeInputV1 {
+    Native(Gfx942PersistentComputeInputV1),
+    #[cfg(test)]
+    ScriptedReady(PersistentComputeReadyStorageV1),
+    #[cfg(test)]
+    ScriptedReplay(DirectionalSdmaDeviceOwnerV1),
+}
+
 impl KfdRuntimeSdmaStorageV1 {
     const fn is_available_for_kind_v1(&self, kind: RuntimeMemoryKindV1) -> bool {
         matches!(
             (self, kind),
             (Self::Host(_), RuntimeMemoryKindV1::HostVisible)
-                | (Self::Device(_), RuntimeMemoryKindV1::DeviceLocal)
+                | (
+                    Self::Device(_) | Self::PersistentReplay(_),
+                    RuntimeMemoryKindV1::DeviceLocal
+                )
         )
     }
 
@@ -716,7 +734,7 @@ enum ActiveComputeExecutionV1 {
     ScriptedPersistentPrepared {
         allocation: u64,
         access: RuntimeAccessV1,
-        ready: Box<PersistentComputeReadyStorageV1>,
+        input: Box<KfdRuntimePersistentComputeInputV1>,
         profile: PersistentPublicationProfileV1,
     },
     #[cfg(test)]
@@ -844,6 +862,7 @@ enum KfdRuntimeTerminalSdmaCustodyV1 {
     PersistentComputePublished(Gfx942PersistentComputeDispatchV1),
     PersistentComputeCompleted(Gfx942CompletedPersistentComputeDispatchV1),
     PersistentComputeRecycled(Gfx942RecycledPersistentComputeDispatchV1),
+    PersistentComputeInput(Gfx942PersistentComputeInputV1),
     Pair {
         device: DirectionalSdmaDeviceOwnerV1,
         host: SdmaBufferOwnerV1,
@@ -936,6 +955,32 @@ struct PersistentComputeReadyFactsV1 {
 struct PersistentFullRangeComputeAdmissionV1 {
     allocation: u64,
     access: RuntimeAccessV1,
+    source: PersistentFullRangeComputeSourceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistentFullRangeComputeSourceV1 {
+    AuthenticatedH2d,
+    RetainedControlReplay,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetainedPersistentDispatchV1 {
+    allocation: u64,
+    dispatch_shape_sha256: [u8; 32],
+}
+
+fn persistent_control_is_reused_v1(
+    retained: Option<RetainedPersistentDispatchV1>,
+    admission: Option<PersistentFullRangeComputeAdmissionV1>,
+    dispatch_shape_sha256: [u8; 32],
+) -> bool {
+    retained
+        .zip(admission)
+        .is_some_and(|(retained, admission)| {
+            retained.allocation == admission.allocation
+                && retained.dispatch_shape_sha256 == dispatch_shape_sha256
+        })
 }
 
 fn persistent_full_range_compute_admission_v1(
@@ -971,6 +1016,45 @@ fn persistent_full_range_compute_admission_v1(
         .then_some(PersistentFullRangeComputeAdmissionV1 {
             allocation: binding.region.allocation,
             access: binding.region.access,
+            source: PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
+        })
+}
+
+fn retained_persistent_full_range_compute_admission_v1(
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
+    bindings: &[BackendBindingV1],
+    stream_device: u64,
+    allocation: Option<&AllocationRecordV1>,
+    retained: RetainedPersistentDispatchV1,
+    dispatch_shape_sha256: [u8; 32],
+) -> Option<PersistentFullRangeComputeAdmissionV1> {
+    let [binding] = bindings else {
+        return None;
+    };
+    let allocation = allocation?;
+    let logical_bytes = u64::try_from(allocation.bytes.len()).ok()?;
+    let initialized = match &allocation.sdma_storage {
+        KfdRuntimeSdmaStorageV1::PersistentReplay(input) => input.is_fully_initialized(),
+        #[cfg(test)]
+        KfdRuntimeSdmaStorageV1::Device(_) => true,
+        _ => return None,
+    };
+    (semantic_launch == KfdRuntimeSemanticLaunchV1::Ordinary
+        && retained.allocation == binding.region.allocation
+        && retained.dispatch_shape_sha256 == dispatch_shape_sha256
+        && allocation.device == stream_device
+        && allocation.kind == RuntimeMemoryKindV1::DeviceLocal
+        && allocation.sdma_backed
+        && allocation.sdma_initialized
+        && allocation.native_dirty.is_empty()
+        && logical_bytes != 0
+        && binding.region.byte_offset == 0
+        && binding.region.byte_len == logical_bytes
+        && (binding.region.access == RuntimeAccessV1::Write || initialized))
+        .then_some(PersistentFullRangeComputeAdmissionV1 {
+            allocation: binding.region.allocation,
+            access: binding.region.access,
+            source: PersistentFullRangeComputeSourceV1::RetainedControlReplay,
         })
 }
 
@@ -1267,6 +1351,7 @@ enum PreparedLaunchStorageV1 {
 struct PersistentFullRangePreparedV1 {
     allocation: u64,
     access: RuntimeAccessV1,
+    source: PersistentFullRangeComputeSourceV1,
     descriptors: Vec<ResidentDataDescriptorV1>,
 }
 
@@ -1348,6 +1433,7 @@ pub struct KfdRuntimeBackendV1 {
     active: Option<ActiveSubmissionV1>,
     resident_data: Option<ResidentDataRosterV1>,
     recycled_dispatch: Option<RecycledDispatchV1>,
+    retained_persistent_dispatch: Option<RetainedPersistentDispatchV1>,
     auxiliary_compute_lanes: Vec<NativeComputeLaneRuntimeV1>,
     native_compute_lanes: Vec<Option<ComputeAqlQueueLaneV1>>,
     stream_compute_lanes: HashMap<u64, usize>,
@@ -1659,6 +1745,7 @@ impl KfdRuntimeBackendV1 {
             active: None,
             resident_data: None,
             recycled_dispatch: None,
+            retained_persistent_dispatch: None,
             auxiliary_compute_lanes: vec![NativeComputeLaneRuntimeV1::vacant()],
             native_compute_lanes: vec![None; KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1],
             stream_compute_lanes: HashMap::new(),
@@ -2626,6 +2713,10 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         mut active: ActiveSubmissionV1,
     ) -> crate::BackendCancellationV1 {
+        // Native cancellation consumes the prepared dispatch owner, including
+        // any previously retained immutable control. Keep the backend marker
+        // synchronized before another launch or resource release can observe it.
+        self.retained_persistent_dispatch = None;
         let module = self
             .kernels
             .get(&active.kernel)
@@ -2691,12 +2782,61 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self
+            .retained_persistent_dispatch
+            .is_some_and(|retained| retained.allocation == allocation)
+        {
+            self.release_retained_persistent_control_v1()?;
+        }
         for lane in 0..self.native_compute_lanes.len() {
             if self.compute_lane_caches_allocation_v1(lane, allocation) {
                 self.release_compute_lane_cache_v1(lane)?;
             }
         }
         Ok(())
+    }
+
+    fn release_retained_persistent_control_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if self.retained_persistent_dispatch.is_none() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if self.scripted_sdma.is_some() {
+            self.retained_persistent_dispatch = None;
+            return Ok(());
+        }
+        let primary = self
+            .native_compute_lanes
+            .first()
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                self.terminal_error("retained persistent control lost its primary compute lane")
+            })?;
+        let released = self
+            .queue
+            .as_mut()
+            .ok_or_else(|| "retained persistent control lost its queue".to_owned())
+            .and_then(|queue| {
+                queue
+                    .with_compute_lane_v1(primary, |lane| {
+                        lane.release_retained_persistent_fixed_dispatch_control_v1()
+                    })
+                    .map_err(|error| format!("KFD compute-lane selection: {error}"))?
+                    .map_err(|error| format!("KFD persistent-control release: {error}"))
+            });
+        match released {
+            Ok(true) => {
+                self.retained_persistent_dispatch = None;
+                Ok(())
+            }
+            Ok(false) => Err(self.terminal_error(
+                "backend retained persistent identity without detached queue control",
+            )),
+            Err(detail) => Err(self.terminal_error(detail)),
+        }
     }
 
     fn with_compute_lane_state_v1<R>(
@@ -3746,12 +3886,15 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let is_ready = self.allocations.get(&allocation).is_some_and(|record| {
-            matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::H2dReady(_))
+            matches!(
+                record.sdma_storage,
+                KfdRuntimeSdmaStorageV1::H2dReady(_) | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+            )
         });
         if !is_ready {
             return Ok(());
         }
-        let ready = match core::mem::replace(
+        let device = match core::mem::replace(
             &mut self
                 .allocations
                 .get_mut(&allocation)
@@ -3759,10 +3902,12 @@ impl KfdRuntimeBackendV1 {
                 .sdma_storage,
             KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous),
         ) {
-            KfdRuntimeSdmaStorageV1::H2dReady(ready) => *ready,
-            _ => unreachable!("preflighted H2D-ready storage remains ready"),
+            KfdRuntimeSdmaStorageV1::H2dReady(ready) => ready.owner.normalize(),
+            KfdRuntimeSdmaStorageV1::PersistentReplay(input) => {
+                DirectionalSdmaDeviceOwnerV1::Native(input.into_allocation())
+            }
+            _ => unreachable!("preflighted persistent-compute storage remains normalizable"),
         };
-        let device = ready.owner.normalize();
         let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
             matches!(
                 record.sdma_storage,
@@ -3782,6 +3927,7 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn take_h2d_ready_for_compute_v1(
         &mut self,
         allocation: u64,
@@ -3804,6 +3950,73 @@ impl KfdRuntimeBackendV1 {
                 Err(Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Busy,
                     "persistent-compute H2D-ready custody changed; materialization is forbidden",
+                ))
+            }
+        }
+    }
+
+    fn take_persistent_compute_input_v1(
+        &mut self,
+        allocation: u64,
+        submission: u64,
+        source: PersistentFullRangeComputeSourceV1,
+    ) -> Result<
+        (
+            KfdRuntimePersistentComputeInputV1,
+            Option<KfdRuntimeReadyPromotionPerformanceV1>,
+        ),
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        let record = self.allocations.get_mut(&allocation).ok_or_else(|| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                "persistent-compute allocation disappeared",
+            )
+        })?;
+        let storage = core::mem::replace(
+            &mut record.sdma_storage,
+            KfdRuntimeSdmaStorageV1::ComputeInFlight(submission),
+        );
+        match (source, storage) {
+            (
+                PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
+                KfdRuntimeSdmaStorageV1::H2dReady(ready),
+            ) => {
+                let ready = *ready;
+                let promotion = ready.promotion;
+                match ready.owner {
+                    PersistentComputeReadyOwnerV1::Native(ready) => Ok((
+                        KfdRuntimePersistentComputeInputV1::Native(
+                            Gfx942PersistentComputeInputV1::Initialized(ready),
+                        ),
+                        promotion,
+                    )),
+                    #[cfg(test)]
+                    owner @ PersistentComputeReadyOwnerV1::Scripted { .. } => Ok((
+                        KfdRuntimePersistentComputeInputV1::ScriptedReady(
+                            PersistentComputeReadyStorageV1 { owner, promotion },
+                        ),
+                        promotion,
+                    )),
+                }
+            }
+            (
+                PersistentFullRangeComputeSourceV1::RetainedControlReplay,
+                KfdRuntimeSdmaStorageV1::PersistentReplay(input),
+            ) => Ok((KfdRuntimePersistentComputeInputV1::Native(*input), None)),
+            #[cfg(test)]
+            (
+                PersistentFullRangeComputeSourceV1::RetainedControlReplay,
+                KfdRuntimeSdmaStorageV1::Device(device),
+            ) => Ok((
+                KfdRuntimePersistentComputeInputV1::ScriptedReplay(*device),
+                None,
+            )),
+            (_, storage) => {
+                record.sdma_storage = storage;
+                Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "persistent-compute input custody changed; materialization is forbidden",
                 ))
             }
         }
@@ -3850,17 +4063,54 @@ impl KfdRuntimeBackendV1 {
                         promotion,
                     },
                 ),
-            Gfx942PersistentComputeInputV1::Uninitialized(device) => {
-                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(
-                    DirectionalSdmaDeviceOwnerV1::Native(device),
-                ));
-                Err(self.terminal_error(
-                    "persistent-compute adapter returned uninitialized custody for an authenticated input",
-                ))
-            }
+            Gfx942PersistentComputeInputV1::Uninitialized(device) => self
+                .restore_persistent_compute_device_input_v1(
+                    allocation,
+                    submission,
+                    KfdRuntimeSdmaStorageV1::Device(Box::new(
+                        DirectionalSdmaDeviceOwnerV1::Native(device),
+                    )),
+                ),
+            input @ Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_) => self
+                .restore_persistent_compute_device_input_v1(
+                    allocation,
+                    submission,
+                    KfdRuntimeSdmaStorageV1::PersistentReplay(Box::new(input)),
+                ),
         }
     }
 
+    fn restore_persistent_compute_device_input_v1(
+        &mut self,
+        allocation: u64,
+        submission: u64,
+        storage: KfdRuntimeSdmaStorageV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let slot_matches = self.allocations.get(&allocation).is_some_and(|record| {
+            matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::ComputeInFlight(actual) if actual == submission)
+        });
+        if !slot_matches {
+            match storage {
+                KfdRuntimeSdmaStorageV1::Device(device) => self.retain_terminal_sdma_custody_v1(
+                    KfdRuntimeTerminalSdmaCustodyV1::Device(*device),
+                ),
+                KfdRuntimeSdmaStorageV1::PersistentReplay(input) => self
+                    .retain_terminal_sdma_custody_v1(
+                        KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeInput(*input),
+                    ),
+                _ => unreachable!("persistent compute restores one device input"),
+            }
+            return Err(self
+                .terminal_error("persistent-compute input restoration slot changed unexpectedly"));
+        }
+        self.allocations
+            .get_mut(&allocation)
+            .expect("persistent-compute allocation remains indexed")
+            .sdma_storage = storage;
+        Ok(())
+    }
+
+    #[cfg(test)]
     fn restore_persistent_compute_completion_v1(
         &mut self,
         allocation: u64,
@@ -3882,6 +4132,23 @@ impl KfdRuntimeBackendV1 {
             .get_mut(&allocation)
             .expect("persistent-compute allocation remains indexed");
         record.sdma_storage = KfdRuntimeSdmaStorageV1::Device(Box::new(device));
+        apply_persistent_compute_effect_v1(record, effect);
+        debug_assert!(record.native_dirty.is_empty());
+        Ok(())
+    }
+
+    fn restore_persistent_compute_completion_input_v1(
+        &mut self,
+        allocation: u64,
+        submission: u64,
+        input: Gfx942PersistentComputeInputV1,
+        effect: Gfx942PersistentComputeEffectV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.restore_persistent_compute_input_v1(allocation, submission, input, None)?;
+        let record = self
+            .allocations
+            .get_mut(&allocation)
+            .expect("restored persistent-compute allocation remains indexed");
         apply_persistent_compute_effect_v1(record, effect);
         debug_assert!(record.native_dirty.is_empty());
         Ok(())
@@ -3950,6 +4217,7 @@ impl KfdRuntimeBackendV1 {
             }
             KfdRuntimeSdmaStorageV1::Synthetic
             | KfdRuntimeSdmaStorageV1::H2dReady(_)
+            | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
             | KfdRuntimeSdmaStorageV1::ComputeInFlight(_)
             | KfdRuntimeSdmaStorageV1::InFlight(_) => {
                 unreachable!("preflighted releasable SDMA storage")
@@ -4800,20 +5068,33 @@ impl KfdRuntimeBackendV1 {
                         *device,
                         persistent_compute_effect_v1(access),
                     )?;
-                    backend.finish_restored_persistent_compute_v1(active, Duration::ZERO)
+                    backend.finish_restored_persistent_compute_v1(
+                        active,
+                        allocation,
+                        Duration::ZERO,
+                    )
                 }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                     allocation,
                     access,
-                    ready,
+                    input,
                     profile,
                 } => {
                     active.published_at = Instant::now();
+                    let device = match *input {
+                        KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
+                            ready.owner.normalize()
+                        }
+                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => device,
+                        KfdRuntimePersistentComputeInputV1::Native(_) => {
+                            unreachable!("scripted publication retained native input")
+                        }
+                    };
                     active.execution = Some(ActiveComputeExecutionV1::ScriptedPersistent {
                         allocation,
                         access,
-                        device: Box::new(ready.owner.normalize()),
+                        device: Box::new(device),
                     });
                     backend.observe_persistent_dispatch_published_v1(
                         active.id,
@@ -5077,13 +5358,32 @@ impl KfdRuntimeBackendV1 {
         let allocation = self.allocations.get(&binding.region.allocation);
         let ready =
             allocation.and_then(|record| record.sdma_storage.persistent_compute_ready_facts_v1());
-        persistent_full_range_compute_admission_v1(
+        let authenticated = persistent_full_range_compute_admission_v1(
             launch.semantic_launch,
             launch.bindings,
             stream_device,
             allocation,
             ready,
-        )
+        );
+        let Some(retained) = self.retained_persistent_dispatch else {
+            return authenticated;
+        };
+        let dispatch_shape_sha256 = dispatch_shape_sha256_v1(&launch, launch.semantic_launch);
+        if retained.allocation != binding.region.allocation
+            || retained.dispatch_shape_sha256 != dispatch_shape_sha256
+        {
+            return authenticated;
+        }
+        authenticated.or_else(|| {
+            retained_persistent_full_range_compute_admission_v1(
+                launch.semantic_launch,
+                launch.bindings,
+                stream_device,
+                allocation,
+                retained,
+                dispatch_shape_sha256,
+            )
+        })
     }
 
     fn prepare_launch(
@@ -5112,13 +5412,30 @@ impl KfdRuntimeBackendV1 {
             )
         })?;
         let persistent_admission = self.persistent_full_range_admission_for_launch_v1(launch);
+        let persistent_control_reused = persistent_selected
+            && persistent_control_is_reused_v1(
+                self.retained_persistent_dispatch,
+                persistent_admission,
+                dispatch_shape_sha256,
+            );
         if persistent_selected && persistent_admission.is_none() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "persistent-compute admission changed after path selection; materialization is forbidden",
             ));
         }
+        let replaces_retained_control = persistent_admission.is_some_and(|admission| {
+            admission.source == PersistentFullRangeComputeSourceV1::AuthenticatedH2d
+                && self.retained_persistent_dispatch.is_some_and(|retained| {
+                    retained.allocation != admission.allocation
+                        || retained.dispatch_shape_sha256 != dispatch_shape_sha256
+                })
+        });
+        if persistent_selected && replaces_retained_control {
+            self.release_retained_persistent_control_v1()?;
+        }
         if !persistent_selected {
+            self.release_retained_persistent_control_v1()?;
             let mut synchronized = HashSet::new();
             for binding in launch.bindings {
                 if synchronized.insert(binding.region.allocation) {
@@ -5177,6 +5494,8 @@ impl KfdRuntimeBackendV1 {
                     .expect("persistent admission has one binding"),
                 stream_device,
                 admission,
+                self.retained_persistent_dispatch,
+                dispatch_shape_sha256,
             )?,
             _ => snapshot_bound_data_v1(&self.allocations, launch.bindings, stream_device)?,
         };
@@ -5356,6 +5675,7 @@ impl KfdRuntimeBackendV1 {
                 PreparedLaunchStorageV1::PersistentFullRange(PersistentFullRangePreparedV1 {
                     allocation: admission.allocation,
                     access: admission.access,
+                    source: admission.source,
                     descriptors,
                 })
             }
@@ -5383,6 +5703,7 @@ impl KfdRuntimeBackendV1 {
                 preparation,
                 bound_snapshot,
                 authority,
+                persistent_control_reused,
                 ..KfdRuntimeLaunchPerformanceV1::default()
             },
         })
@@ -5871,8 +6192,9 @@ impl KfdRuntimeBackendV1 {
                 format!("KFD persistent content role: {error}"),
             )
         })?;
-        let ready = self.take_h2d_ready_for_compute_v1(persistent.allocation, id)?;
-        performance.ready_promotion = ready.promotion;
+        let (persistent_input, promotion) =
+            self.take_persistent_compute_input_v1(persistent.allocation, id, persistent.source)?;
+        performance.ready_promotion = promotion;
         let publication_profile = PersistentPublicationProfileV1 {
             launch: profile_launch,
             semantic_contract: profile_semantic_contract,
@@ -5899,13 +6221,19 @@ impl KfdRuntimeBackendV1 {
                     execution: Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                         allocation: persistent.allocation,
                         access: persistent.access,
-                        ready: Box::new(ready),
+                        input: Box::new(persistent_input),
                         profile: publication_profile,
                     }),
                 });
                 return Ok(());
             }
-            let device = Box::new(ready.owner.normalize());
+            let device = Box::new(match persistent_input {
+                KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
+                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => device,
+                KfdRuntimePersistentComputeInputV1::Native(_) => {
+                    unreachable!("scripted publication retained native input")
+                }
+            });
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
@@ -5933,20 +6261,29 @@ impl KfdRuntimeBackendV1 {
             );
             return Ok(());
         }
-        let PersistentComputeReadyStorageV1 {
-            owner: ready,
-            promotion,
-        } = ready;
-        let ready = match ready.into_native() {
-            Ok(ready) => ready,
-            Err(ready) => {
+        #[cfg(not(test))]
+        let KfdRuntimePersistentComputeInputV1::Native(input) = persistent_input;
+        #[cfg(test)]
+        let input = match persistent_input {
+            KfdRuntimePersistentComputeInputV1::Native(input) => input,
+            #[cfg(test)]
+            KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
                 self.restore_h2d_ready_after_compute_rejection_v1(
                     persistent.allocation,
                     id,
-                    PersistentComputeReadyStorageV1 {
-                        owner: ready,
-                        promotion,
-                    },
+                    ready,
+                )?;
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "scripted persistent-compute publication has no native queue",
+                ));
+            }
+            #[cfg(test)]
+            KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => {
+                self.restore_persistent_compute_device_input_v1(
+                    persistent.allocation,
+                    id,
+                    KfdRuntimeSdmaStorageV1::Device(Box::new(device)),
                 )?;
                 return Err(Self::rejected(
                     KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -5960,12 +6297,7 @@ impl KfdRuntimeBackendV1 {
             .queue
             .as_mut()
             .expect("H2D-ready native allocation retains its queue")
-            .bind_directional_persistent_fixed_dispatch_v1(
-                programs,
-                [packet],
-                Gfx942PersistentComputeInputV1::Initialized(ready),
-                content_role,
-            );
+            .bind_directional_persistent_fixed_dispatch_v1(programs, [packet], input, content_role);
         let binding = match binding {
             Ok(binding) => binding,
             Err(failure) => {
@@ -6243,10 +6575,8 @@ impl KfdRuntimeBackendV1 {
             }
         };
         let expected_effect = persistent_compute_effect_v1(access);
-        let actual_effect = completed.effect();
-        let (device, frontier, _) = completed.into_parts();
-        let device = match device.retire_settled_frontier_v1(frontier) {
-            Ok(device) => DirectionalSdmaDeviceOwnerV1::Native(device),
+        let (input, actual_effect) = match completed.retire_settled_frontier_for_replay_v1() {
+            Ok(completed) => completed,
             Err(failure) => {
                 self.retain_terminal_sdma_custody_v1(
                     KfdRuntimeTerminalSdmaCustodyV1::ComputeRetirement(failure),
@@ -6257,18 +6587,20 @@ impl KfdRuntimeBackendV1 {
             }
         };
         if actual_effect != expected_effect {
-            self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Device(device));
+            self.retain_terminal_sdma_custody_v1(
+                KfdRuntimeTerminalSdmaCustodyV1::PersistentComputeInput(input),
+            );
             return Err(self
                 .terminal_error("KFD persistent-compute effect changed after metadata admission"));
         }
-        self.restore_persistent_compute_completion_v1(
+        self.restore_persistent_compute_completion_input_v1(
             allocation,
             active.id,
-            device,
+            input,
             actual_effect,
         )?;
         let recycle = active.performance.recycle + recycle_started.elapsed();
-        self.finish_restored_persistent_compute_v1(active, recycle)
+        self.finish_restored_persistent_compute_v1(active, allocation, recycle)
     }
 
     #[cfg(test)]
@@ -6320,6 +6652,7 @@ impl KfdRuntimeBackendV1 {
     fn finish_restored_persistent_compute_v1(
         &mut self,
         mut active: ActiveSubmissionV1,
+        allocation: u64,
         recycle: Duration,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         active.performance.completed_readback = Duration::ZERO;
@@ -6329,6 +6662,10 @@ impl KfdRuntimeBackendV1 {
             active.performance.data_path,
             KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
         );
+        self.retained_persistent_dispatch = Some(RetainedPersistentDispatchV1 {
+            allocation,
+            dispatch_shape_sha256: active.dispatch_shape_sha256,
+        });
         let compute_lane = self.selected_compute_lane;
         let module = self
             .kernels
@@ -6446,6 +6783,7 @@ impl KfdRuntimeBackendV1 {
                 "logical runtime resources remain live",
             ));
         }
+        self.release_retained_persistent_control_v1()?;
         #[cfg(test)]
         if let Some(driver) = self.scripted_sdma.as_ref() {
             if !driver.is_exhausted()
@@ -7366,6 +7704,8 @@ fn snapshot_persistent_full_range_data_v1(
     binding: &BackendBindingV1,
     stream_device: u64,
     admission: PersistentFullRangeComputeAdmissionV1,
+    retained: Option<RetainedPersistentDispatchV1>,
+    dispatch_shape_sha256: [u8; 32],
 ) -> Result<StagedDataRosterV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
     if admission.allocation != binding.region.allocation
         || admission.access != binding.region.access
@@ -7381,29 +7721,40 @@ fn snapshot_persistent_full_range_data_v1(
             "persistent-compute allocation disappeared",
         )
     })?;
-    let ready = allocation
-        .sdma_storage
-        .persistent_compute_ready_facts_v1()
+    let current = match admission.source {
+        PersistentFullRangeComputeSourceV1::AuthenticatedH2d => allocation
+            .sdma_storage
+            .persistent_compute_ready_facts_v1()
+            .and_then(|ready| {
+                persistent_full_range_compute_admission_v1(
+                    KfdRuntimeSemanticLaunchV1::Ordinary,
+                    core::slice::from_ref(binding),
+                    stream_device,
+                    Some(allocation),
+                    Some(ready),
+                )
+            }),
+        PersistentFullRangeComputeSourceV1::RetainedControlReplay => {
+            retained.and_then(|retained| {
+                retained_persistent_full_range_compute_admission_v1(
+                    KfdRuntimeSemanticLaunchV1::Ordinary,
+                    core::slice::from_ref(binding),
+                    stream_device,
+                    Some(allocation),
+                    retained,
+                    dispatch_shape_sha256,
+                )
+            })
+        }
+    };
+    current
+        .filter(|actual| *actual == admission)
         .ok_or_else(|| {
             KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
-                "persistent-compute H2D-ready custody changed",
+                "persistent-compute admission changed while snapshotting",
             )
         })?;
-    persistent_full_range_compute_admission_v1(
-        KfdRuntimeSemanticLaunchV1::Ordinary,
-        core::slice::from_ref(binding),
-        stream_device,
-        Some(allocation),
-        Some(ready),
-    )
-    .filter(|actual| *actual == admission)
-    .ok_or_else(|| {
-        KfdRuntimeBackendV1::rejected(
-            KfdRuntimeBackendErrorKindV1::Busy,
-            "persistent-compute admission changed while snapshotting",
-        )
-    })?;
     let mut data = Vec::new();
     data.try_reserve_exact(1)
         .map_err(|_| KfdRuntimeBackendV1::capacity("KFD persistent snapshot allocation failed"))?;
@@ -8379,6 +8730,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "module is retained by a pending KFD dispatch",
             ));
         }
+        self.release_retained_persistent_control_v1()?;
         if self.recycled_dispatch.as_ref().is_some_and(|recycled| {
             self.kernels
                 .get(&recycled.kernel)
@@ -14163,11 +14515,27 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
                 }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedPersistentPrepared {
-                    allocation, ready, ..
+                    allocation, input, ..
                 } => {
-                    self.restore_h2d_ready_after_compute_rejection_v1(
-                        allocation, submission, *ready,
-                    )?;
+                    match *input {
+                        KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => self
+                            .restore_h2d_ready_after_compute_rejection_v1(
+                                allocation, submission, ready,
+                            )?,
+                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device) => self
+                            .restore_persistent_compute_device_input_v1(
+                                allocation,
+                                submission,
+                                KfdRuntimeSdmaStorageV1::Device(Box::new(device)),
+                            )?,
+                        KfdRuntimePersistentComputeInputV1::Native(input) => self
+                            .restore_persistent_compute_input_v1(
+                                allocation,
+                                submission,
+                                input,
+                                active.performance.ready_promotion,
+                            )?,
+                    }
                     return Ok(self.settle_cancelled_persistent_prepared_v1(active));
                 }
                 _ => unreachable!("prepared cancellation preflight selected a published launch"),
@@ -15666,6 +16034,452 @@ mod tests {
     }
 
     #[test]
+    fn scripted_persistent_compute_replays_same_launch_without_new_h2d() {
+        let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+        let mut steps = vec![
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len,
+            },
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        backend
+            .write_allocation_v1(host, 0, &vec![0x6a; byte_len])
+            .unwrap();
+        let (source, destination) =
+            scripted_copy_regions_v1(host, device, u64::try_from(byte_len).unwrap());
+        let copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::module())
+            .unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+
+        let first = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        let mut first_status = BackendPollV1::Pending;
+        for _ in 0..4 {
+            first_status = backend.poll_v1(first).unwrap();
+            if first_status != BackendPollV1::Pending {
+                break;
+            }
+        }
+        assert_eq!(first_status, BackendPollV1::Succeeded);
+        assert!(backend.retained_persistent_dispatch.is_some());
+        assert!(matches!(
+            backend.allocations[&device].sdma_storage,
+            KfdRuntimeSdmaStorageV1::Device(_)
+        ));
+
+        let second = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        assert!(matches!(
+            backend
+                .active
+                .as_ref()
+                .and_then(|active| active.execution.as_ref()),
+            Some(ActiveComputeExecutionV1::ScriptedPersistent { .. })
+        ));
+        let mut second_status = BackendPollV1::Pending;
+        for _ in 0..4 {
+            second_status = backend.poll_v1(second).unwrap();
+            if second_status != BackendPollV1::Pending {
+                break;
+            }
+        }
+        assert_eq!(second_status, BackendPollV1::Succeeded);
+        let performance = backend.last_launch_performance_v1().unwrap();
+        assert_eq!(
+            performance.data_path(),
+            KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
+        );
+        assert_eq!(performance.user_data_materializations(), 0);
+        assert!(performance.persistent_control_reused());
+
+        for submission in [copy, first, second] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        assert!(backend.retained_persistent_dispatch.is_some());
+        backend.unload_module_v1(module).unwrap();
+        assert!(backend.retained_persistent_dispatch.is_none());
+        release_scripted_direct_pair_v1(&mut backend, host, device);
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn scripted_cancelled_exact_replay_clears_retained_control_before_teardown() {
+        let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+        let mut steps = vec![
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len,
+            },
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        backend
+            .write_allocation_v1(host, 0, &vec![0x71; byte_len])
+            .unwrap();
+        let (source, destination) =
+            scripted_copy_regions_v1(host, device, u64::try_from(byte_len).unwrap());
+        let copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::module())
+            .unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+
+        let first = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        let mut first_status = BackendPollV1::Pending;
+        for _ in 0..4 {
+            first_status = backend.poll_v1(first).unwrap();
+            if first_status != BackendPollV1::Pending {
+                break;
+            }
+        }
+        assert_eq!(first_status, BackendPollV1::Succeeded);
+        assert!(backend.retained_persistent_dispatch.is_some());
+
+        backend.scripted_persistent_publication_retries = 1;
+        let cancelled = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        let active = backend.active.as_ref().unwrap();
+        assert!(matches!(
+            active.execution,
+            Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. })
+        ));
+        assert!(active.performance.persistent_control_reused());
+        assert_eq!(
+            backend.cancel_v1(cancelled).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        assert!(backend.retained_persistent_dispatch.is_none());
+        assert!(matches!(
+            backend.allocations[&device].sdma_storage,
+            KfdRuntimeSdmaStorageV1::Device(_)
+        ));
+        assert_eq!(
+            backend.poll_v1(cancelled).unwrap(),
+            BackendPollV1::Failed { code: -2 }
+        );
+
+        for submission in [copy, first, cancelled] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        backend.unload_module_v1(module).unwrap();
+        release_scripted_direct_pair_v1(&mut backend, host, device);
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn scripted_changed_identity_without_fresh_h2d_releases_control_and_materializes() {
+        let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+        let mut steps = vec![
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len,
+            },
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        backend
+            .write_allocation_v1(host, 0, &vec![0x7b; byte_len])
+            .unwrap();
+        let (source, destination) =
+            scripted_copy_regions_v1(host, device, u64::try_from(byte_len).unwrap());
+        let copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::module())
+            .unwrap();
+        let first_kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+        let changed_kernel_and_role = backend
+            .resolve_kernel_v1(module, "vecadd", [8; 32])
+            .unwrap();
+        let first = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            first_kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        let mut first_status = BackendPollV1::Pending;
+        for _ in 0..4 {
+            first_status = backend.poll_v1(first).unwrap();
+            if first_status != BackendPollV1::Pending {
+                break;
+            }
+        }
+        assert_eq!(first_status, BackendPollV1::Succeeded);
+        assert!(backend.retained_persistent_dispatch.is_some());
+
+        let explicit_kernarg = [0_u8; 16];
+        let fallback = backend
+            .submit_v1(BackendLaunchV1 {
+                stream,
+                kernel: changed_kernel_and_role,
+                explicit_kernarg: &explicit_kernarg,
+                bindings: &[BackendBindingV1 {
+                    region: BackendMemoryRegionV1 {
+                        allocation: device,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: u64::try_from(byte_len).unwrap(),
+                    },
+                    kernarg_byte_offset: 0,
+                }],
+                dependencies: &[],
+                geometry: crate::RuntimeLaunchGeometryV1 {
+                    grid: [32, 1, 1],
+                    workgroup: [32, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+            })
+            .unwrap();
+        backend.flush_stream_v1(stream).unwrap();
+        assert!(matches!(
+            backend
+                .active
+                .as_ref()
+                .and_then(|active| active.execution.as_ref()),
+            Some(ActiveComputeExecutionV1::ScriptedMaterialized)
+        ));
+        let mut fallback_status = BackendPollV1::Pending;
+        for _ in 0..4 {
+            fallback_status = backend.poll_v1(fallback).unwrap();
+            if fallback_status != BackendPollV1::Pending {
+                break;
+            }
+        }
+        assert!(backend.retained_persistent_dispatch.is_none());
+        assert_eq!(fallback_status, BackendPollV1::Succeeded);
+        let performance = backend.last_launch_performance_v1().unwrap();
+        assert_eq!(
+            performance.data_path(),
+            KfdRuntimeLaunchDataPathV1::Materialized
+        );
+        assert_eq!(performance.user_data_materializations(), 1);
+        assert!(!performance.persistent_control_reused());
+
+        for submission in [copy, first, fallback] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        backend.unload_module_v1(module).unwrap();
+        release_scripted_direct_pair_v1(&mut backend, host, device);
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn scripted_authenticated_h2d_replaces_mismatched_persistent_control() {
+        let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+        let mut steps = vec![
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len,
+            },
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        backend
+            .write_allocation_v1(host, 0, &vec![0x5d; byte_len])
+            .unwrap();
+        let (source, destination) =
+            scripted_copy_regions_v1(host, device, u64::try_from(byte_len).unwrap());
+        let first_copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(
+            backend.poll_v1(first_copy).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::module())
+            .unwrap();
+        let first_kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+        let changed_kernel_and_role = backend
+            .resolve_kernel_v1(module, "vecadd", [8; 32])
+            .unwrap();
+        let first = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            first_kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        assert_eq!(backend.poll_v1(first).unwrap(), BackendPollV1::Succeeded);
+        let first_retained = backend.retained_persistent_dispatch.unwrap();
+
+        let second_copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(
+            backend.poll_v1(second_copy).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        let explicit_kernarg = [0_u8; 16];
+        let changed = backend
+            .submit_v1(BackendLaunchV1 {
+                stream,
+                kernel: changed_kernel_and_role,
+                explicit_kernarg: &explicit_kernarg,
+                bindings: &[BackendBindingV1 {
+                    region: BackendMemoryRegionV1 {
+                        allocation: device,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: u64::try_from(byte_len).unwrap(),
+                    },
+                    kernarg_byte_offset: 0,
+                }],
+                dependencies: &[],
+                geometry: crate::RuntimeLaunchGeometryV1 {
+                    grid: [32, 1, 1],
+                    workgroup: [32, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+            })
+            .unwrap();
+        backend.flush_stream_v1(stream).unwrap();
+        assert!(matches!(
+            backend
+                .active
+                .as_ref()
+                .and_then(|active| active.execution.as_ref()),
+            Some(ActiveComputeExecutionV1::ScriptedPersistent { .. })
+        ));
+        assert_eq!(backend.poll_v1(changed).unwrap(), BackendPollV1::Succeeded);
+        let replaced = backend.retained_persistent_dispatch.unwrap();
+        assert_eq!(replaced.allocation, device);
+        assert_ne!(
+            replaced.dispatch_shape_sha256,
+            first_retained.dispatch_shape_sha256
+        );
+        let performance = backend.last_launch_performance_v1().unwrap();
+        assert_eq!(
+            performance.data_path(),
+            KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
+        );
+        assert_eq!(performance.user_data_materializations(), 0);
+        assert!(!performance.persistent_control_reused());
+
+        for submission in [first_copy, first, second_copy, changed] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        backend.unload_module_v1(module).unwrap();
+        release_scripted_direct_pair_v1(&mut backend, host, device);
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
     fn scripted_persistent_publication_retry_stays_accepted_and_never_materializes() {
         let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
         let mut steps = vec![
@@ -15901,6 +16715,117 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn scripted_initial_persistent_cancel_allows_materialized_retry() {
+        let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+        let mut steps = vec![
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len,
+            },
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                u32::try_from(byte_len).unwrap(),
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(byte_len, steps);
+        backend
+            .write_allocation_v1(host, 0, &vec![0x91; byte_len])
+            .unwrap();
+        let (source, destination) =
+            scripted_copy_regions_v1(host, device, u64::try_from(byte_len).unwrap());
+        let copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::module())
+            .unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+
+        backend.scripted_persistent_publication_retries = 1;
+        let cancelled = submit_scripted_read_v1(
+            &mut backend,
+            stream,
+            kernel,
+            device,
+            u64::try_from(byte_len).unwrap(),
+            &[],
+        );
+        backend.flush_stream_v1(stream).unwrap();
+        assert!(matches!(
+            backend
+                .active
+                .as_ref()
+                .and_then(|active| active.execution.as_ref()),
+            Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. })
+        ));
+        assert_eq!(
+            backend.cancel_v1(cancelled).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        assert!(backend.retained_persistent_dispatch.is_none());
+
+        let mut explicit_kernarg = [0_u8; 16];
+        explicit_kernarg[8..].copy_from_slice(&13_u64.to_le_bytes());
+        let retry = backend
+            .submit_v1(BackendLaunchV1 {
+                stream,
+                kernel,
+                explicit_kernarg: &explicit_kernarg,
+                bindings: &[BackendBindingV1 {
+                    region: BackendMemoryRegionV1 {
+                        allocation: device,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: u64::try_from(byte_len / 2).unwrap(),
+                    },
+                    kernarg_byte_offset: 0,
+                }],
+                dependencies: &[],
+                geometry: crate::RuntimeLaunchGeometryV1 {
+                    grid: [64, 1, 1],
+                    workgroup: [64, 1, 1],
+                    dynamic_shared_bytes: 0,
+                },
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+            })
+            .unwrap();
+        backend.flush_stream_v1(stream).unwrap();
+        let mut retry_status = BackendPollV1::Pending;
+        for _ in 0..4 {
+            retry_status = backend.poll_v1(retry).unwrap();
+            if retry_status != BackendPollV1::Pending {
+                break;
+            }
+        }
+        assert_eq!(retry_status, BackendPollV1::Succeeded);
+        let performance = backend.last_launch_performance_v1().unwrap();
+        assert_eq!(
+            performance.data_path(),
+            KfdRuntimeLaunchDataPathV1::Materialized
+        );
+        assert!(!performance.persistent_control_reused());
+
+        for submission in [copy, cancelled, retry] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        backend.unload_module_v1(module).unwrap();
+        release_scripted_direct_pair_v1(&mut backend, host, device);
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
     }
 
     #[test]
@@ -19296,7 +20221,7 @@ mod tests {
         let binding = BackendBindingV1 {
             region: BackendMemoryRegionV1 {
                 allocation: 11,
-                access: RuntimeAccessV1::ReadWrite,
+                access: RuntimeAccessV1::Read,
                 byte_offset: 0,
                 byte_len,
             },
@@ -19317,9 +20242,34 @@ mod tests {
             ),
             Some(PersistentFullRangeComputeAdmissionV1 {
                 allocation: 11,
-                access: RuntimeAccessV1::ReadWrite,
+                access: RuntimeAccessV1::Read,
+                source: PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
             })
         );
+        let dispatch_shape_sha256 = [0x42; 32];
+        let authenticated = persistent_full_range_compute_admission_v1(
+            KfdRuntimeSemanticLaunchV1::Ordinary,
+            &[binding],
+            7,
+            Some(&allocation),
+            Some(ready),
+        );
+        assert!(persistent_control_is_reused_v1(
+            Some(RetainedPersistentDispatchV1 {
+                allocation: binding.region.allocation,
+                dispatch_shape_sha256,
+            }),
+            authenticated,
+            dispatch_shape_sha256,
+        ));
+        assert!(!persistent_control_is_reused_v1(
+            Some(RetainedPersistentDispatchV1 {
+                allocation: binding.region.allocation,
+                dispatch_shape_sha256: [0x43; 32],
+            }),
+            authenticated,
+            dispatch_shape_sha256,
+        ));
         assert!(
             persistent_full_range_compute_admission_v1(
                 KfdRuntimeSemanticLaunchV1::Ordinary,

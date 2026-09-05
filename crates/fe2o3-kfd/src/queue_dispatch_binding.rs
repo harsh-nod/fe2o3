@@ -26,7 +26,7 @@ use super::completion::{
     Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942CompletionPollV1,
     Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
 };
-use super::device_content::Gfx942DeviceContentDescriptorV1;
+use super::device_content::{Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1};
 use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
 use crate::MemorySessionError;
 use crate::sdma::{Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1};
@@ -658,10 +658,10 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
     "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,conservative-wait-for-prior-default-with-explicit-independent-opt-in,one-generation-bound-template-retaining-the-final-header-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
-    "failure=all-layout-and-identity-validation-before-native-preparation;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
+    "failure=all-layout-and-identity-validation-before-native-preparation,persistent-control-replay-requires-exact-queue-code-abi-packet-kernarg-role-layout-storage-and-recycled-predecessor-identity;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
     "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
     "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
     "contracted=code-segment-permission-refinement,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence,acquire-observed-device-write-visibility\n",
@@ -670,7 +670,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "0a8d45c4050b754bda7591889ee3ae5cf83ffde1d83ec9cce750f12576bac188";
+    "811fbd200ac0b72e5aff81494225b6ea37f517d62bad3779544653c2aae6d815";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -766,6 +766,124 @@ pub(super) fn preflight_gfx942_persistent_compute_dispatch_v1(
             index: 0,
             detail: "persistent compute data must be referenced",
         })
+}
+
+/// Addressless identity for one prepare-once persistent dispatch control.
+///
+/// The semantic digest binds the authenticated code/ABI roster and every inert
+/// packet field. Storage is kept separate so replay can reject substitution
+/// without serializing or exposing a private allocation identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PersistentFixedDispatchControlIdentityV1 {
+    queue: QueueKeyV1,
+    semantic_sha256: [u8; 32],
+    content_role: Gfx942DeviceContentRoleV1,
+    data_layout: Gfx942FixedDispatchDataLayoutV1,
+    data_storage: Gfx942SdmaBufferStorageIdentityV1,
+    effect: DeviceDataEffectV1,
+}
+
+impl PersistentFixedDispatchControlIdentityV1 {
+    pub(super) const fn effect(self) -> DeviceDataEffectV1 {
+        self.effect
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PersistentFixedDispatchControlStateV1 {
+    Ordinary,
+    Attached(PersistentFixedDispatchControlIdentityV1),
+    DataDetached(PersistentFixedDispatchControlIdentityV1),
+}
+
+pub(super) fn persistent_fixed_dispatch_control_identity_v1(
+    queue: QueueKeyV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; 1],
+    data_layout: Gfx942FixedDispatchDataLayoutV1,
+    initialized: bool,
+    content_role: Gfx942DeviceContentRoleV1,
+    data_storage: Gfx942SdmaBufferStorageIdentityV1,
+) -> Result<PersistentFixedDispatchControlIdentityV1, Gfx942DispatchBindingErrorV1> {
+    let effect = preflight_gfx942_persistent_compute_dispatch_v1(
+        programs,
+        packets,
+        data_layout,
+        initialized,
+    )?;
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-gfx942-persistent-fixed-dispatch-control-v1\0");
+    digest.update((programs.len() as u64).to_le_bytes());
+    for program in programs {
+        let identity = program.identity_inputs();
+        digest.update(identity.object_sha256());
+        digest.update(identity.metadata_sha256());
+        digest.update(identity.descriptor_sha256());
+        digest.update(identity.entry_sha256());
+        digest.update(identity.closure_sha256());
+        match program.dispatch_abi_identity() {
+            Some(identity) => {
+                digest.update([1]);
+                digest.update(identity);
+            }
+            None => digest.update([0]),
+        }
+    }
+    for packet in packets {
+        digest.update((packet.program_index as u64).to_le_bytes());
+        for value in packet.geometry.grid() {
+            digest.update(value.to_le_bytes());
+        }
+        for value in packet.geometry.workgroup() {
+            digest.update(value.to_le_bytes());
+        }
+        digest.update(packet.geometry.dimensions().to_le_bytes());
+        digest.update(packet.ordering.header().to_le_bytes());
+        digest.update(packet.dynamic_group_segment_bytes.to_le_bytes());
+        digest.update((packet.kernarg_bytes.len() as u64).to_le_bytes());
+        digest.update(&packet.kernarg_bytes);
+        digest.update((packet.buffers.len() as u64).to_le_bytes());
+        for buffer in &packet.buffers {
+            digest.update((buffer.explicit_argument_index as u64).to_le_bytes());
+            digest.update((buffer.data_index as u64).to_le_bytes());
+            digest.update(buffer.data_byte_offset.to_le_bytes());
+            digest.update(buffer.byte_len.to_le_bytes());
+            match buffer.completed_snapshot {
+                Some(snapshot) => {
+                    digest.update([1]);
+                    digest.update(snapshot.offset.to_le_bytes());
+                    digest.update(snapshot.byte_len.to_le_bytes());
+                    digest.update(snapshot.interior_offset.to_le_bytes());
+                    digest.update(snapshot.interior_byte_len.to_le_bytes());
+                }
+                None => digest.update([0]),
+            }
+        }
+    }
+    digest.update(content_role.identity());
+    digest.update(content_role.ordinal().to_le_bytes());
+    digest.update([match data_layout.kind() {
+        Gfx942FixedDispatchDataKindV1::DeviceLocal => 1,
+        Gfx942FixedDispatchDataKindV1::HostVisibleCoherent => 2,
+    }]);
+    digest.update(data_layout.requested_bytes().to_le_bytes());
+    digest.update(data_layout.alignment().to_le_bytes());
+    // Initialization is an admission premise, not immutable control. A
+    // write-only first use may establish the premise consumed by exact replay.
+    digest.update([u8::from(initialized && effect.reads())]);
+    digest.update([match effect {
+        DeviceDataEffectV1::ReadOnly => 1,
+        DeviceDataEffectV1::WriteOnly => 2,
+        DeviceDataEffectV1::ReadWrite => 3,
+    }]);
+    Ok(PersistentFixedDispatchControlIdentityV1 {
+        queue,
+        semantic_sha256: digest.finalize().into(),
+        content_role,
+        data_layout,
+        data_storage,
+        effect,
+    })
 }
 
 /// Write-only premise for one whole uninitialized C3 allocation.
@@ -961,6 +1079,14 @@ impl DispatchGenerationOwnerV1 {
         })
     }
 
+    fn after_detached(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        if predecessor == 0 {
+            Ok(Self::new())
+        } else {
+            Self::after_recycled(predecessor)
+        }
+    }
+
     fn next(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
         self.ensure_prepared()?;
         let generation = self.next_generation;
@@ -1099,23 +1225,30 @@ impl ReturnedDispatchDataLeaseV1 {
     }
 
     pub(super) fn into_data(self) -> Gfx942FixedDispatchDataV1 {
-        match (self.authority, self.premise.fully_initialized) {
-            (DispatchDataAuthorityV1::Device(authority), true) => {
-                Gfx942FixedDispatchDataV1::initialized_after_dispatch(authority.into_lease())
-            }
-            (DispatchDataAuthorityV1::Device(authority), false) => {
-                Gfx942FixedDispatchDataV1::uninitialized(authority.into_lease())
-            }
-            (DispatchDataAuthorityV1::HostVisible(authority), true) => {
-                Gfx942FixedDispatchDataV1::host_visible_initialized(
-                    Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(
-                        authority.into_token(),
-                    ),
-                )
-            }
-            (DispatchDataAuthorityV1::HostVisible(authority), false) => {
-                Gfx942FixedDispatchDataV1::host_visible_uninitialized(authority.into_token())
-            }
+        dispatch_data_from_authority_v1(self.authority, self.premise.fully_initialized)
+    }
+}
+
+fn dispatch_data_from_authority_v1(
+    authority: DispatchDataAuthorityV1,
+    fully_initialized: bool,
+) -> Gfx942FixedDispatchDataV1 {
+    match (authority, fully_initialized) {
+        (DispatchDataAuthorityV1::Device(authority), true) => {
+            Gfx942FixedDispatchDataV1::initialized_after_dispatch(authority.into_lease())
+        }
+        (DispatchDataAuthorityV1::Device(authority), false) => {
+            Gfx942FixedDispatchDataV1::uninitialized(authority.into_lease())
+        }
+        (DispatchDataAuthorityV1::HostVisible(authority), true) => {
+            Gfx942FixedDispatchDataV1::host_visible_initialized(
+                Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(
+                    authority.into_token(),
+                ),
+            )
+        }
+        (DispatchDataAuthorityV1::HostVisible(authority), false) => {
+            Gfx942FixedDispatchDataV1::host_visible_uninitialized(authority.into_token())
         }
     }
 }
@@ -1171,9 +1304,140 @@ pub(super) struct DispatchResourceOwnerV1 {
     data: Vec<DispatchDataAuthorityV1>,
     data_premises: Vec<RetainedDataPremiseV1>,
     generation: DispatchGenerationOwnerV1,
+    persistent_control: PersistentFixedDispatchControlStateV1,
 }
 
 impl DispatchResourceOwnerV1 {
+    pub(super) fn validate_persistent_replay_v1(
+        &self,
+        identity: PersistentFixedDispatchControlIdentityV1,
+        predecessor_generation: u64,
+    ) -> Result<DeviceDataEffectV1, Gfx942DispatchBindingErrorV1> {
+        validate_persistent_control_replay_v1(
+            self.persistent_control,
+            self.data.len(),
+            self.data_premises.len(),
+            &self.generation,
+            identity,
+            predecessor_generation,
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn retain_persistent_replay_data_v1(
+        &mut self,
+        memory: &mut SharedGttMemorySessionV1,
+        identity: PersistentFixedDispatchControlIdentityV1,
+        data: Gfx942FixedDispatchDataV1,
+        predecessor_generation: u64,
+    ) -> Result<(), (Gfx942DispatchBindingErrorV1, Gfx942FixedDispatchDataV1)> {
+        if let Err(error) = self.validate_persistent_replay_v1(identity, predecessor_generation) {
+            return Err((error, data));
+        }
+        let retained_initialized = self
+            .data_premises
+            .first()
+            .is_some_and(|premise| premise.fully_initialized);
+        if data.layout() != identity.data_layout
+            || data.sdma_storage_identity() != identity.data_storage
+            || !persistent_replay_initialization_is_admitted_v1(
+                identity.effect,
+                data.is_fully_initialized(),
+                retained_initialized,
+            )
+        {
+            return Err((
+                Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: 0,
+                    detail: "persistent control replay storage, extent, or initialization",
+                },
+                data,
+            ));
+        }
+        let input = data.into_parts();
+        let DispatchDataInputStorageV1::Device(lease) = input.storage else {
+            unreachable!("persistent replay identity admits only device-local data")
+        };
+        let authority = match memory.retain_gfx942_device_memory_for_dispatch_recovering(lease) {
+            Ok(authority) => authority,
+            Err((error, lease)) => {
+                let recovered = recover_dispatch_input_v1(DispatchDataInputV1 {
+                    storage: DispatchDataInputStorageV1::Device(lease),
+                    ..input
+                });
+                return Err((error.into(), recovered));
+            }
+        };
+        self.data.push(DispatchDataAuthorityV1::Device(authority));
+        let premise = self
+            .data_premises
+            .first_mut()
+            .expect("validated persistent replay premise");
+        premise.initialized_content = input.initialized_content;
+        premise.fully_initialized = input.fully_initialized || retained_initialized;
+        self.persistent_control = PersistentFixedDispatchControlStateV1::Attached(identity);
+        Ok(())
+    }
+
+    pub(super) const fn persistent_data_is_detached_v1(&self) -> bool {
+        matches!(
+            self.persistent_control,
+            PersistentFixedDispatchControlStateV1::DataDetached(_)
+        )
+    }
+
+    pub(super) fn validate_detached_persistent_control_release_v1(
+        &self,
+        expected_generation: u64,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        validate_detached_persistent_control_release_state_v1(
+            self.persistent_control,
+            self.data.len(),
+            self.data_premises.len(),
+            self.generation.returned_generation()?,
+            expected_generation,
+        )
+    }
+
+    /// Consumes only retained immutable dispatch control after its exact data
+    /// authority was already detached and restored to the SDMA owner.
+    pub(super) fn release_detached_persistent_control_v1(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+        expected_generation: u64,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.validate_detached_persistent_control_release_v1(expected_generation)?;
+        let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
+        memory.release(kernarg)?;
+        for code in self.code {
+            let code = memory.unmap_executable_from_gpu(code.into_token())?;
+            memory.release_executable(code)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn detach_persistent_replay_data_after_recycle_v1(
+        &mut self,
+    ) -> Result<(u64, Vec<Gfx942FixedDispatchDataV1>), Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.returned_generation()?;
+        let PersistentFixedDispatchControlStateV1::Attached(identity) = self.persistent_control
+        else {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        };
+        if self.data.len() != 1 || self.data_premises.len() != 1 {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        let authority = self
+            .data
+            .pop()
+            .expect("validated persistent data authority");
+        let fully_initialized = self.data_premises[0].fully_initialized;
+        let data = dispatch_data_from_authority_v1(authority, fully_initialized);
+        debug_assert_eq!(data.is_fully_initialized(), fully_initialized);
+        self.persistent_control = PersistentFixedDispatchControlStateV1::DataDetached(identity);
+        Ok((generation, vec![data]))
+    }
+
     pub(super) fn device_authorities(&self) -> Vec<&Gfx942DeviceMemoryDispatchAuthorityV1> {
         self.data
             .iter()
@@ -1196,6 +1460,7 @@ impl DispatchResourceOwnerV1 {
         validate_packet_count::<N>()?;
         if self.packets.len() != N
             || self.code_identity.len() != self.code.len()
+            || self.data.len() != self.data_premises.len()
             || self
                 .code_identity
                 .iter()
@@ -1288,6 +1553,11 @@ impl DispatchResourceOwnerV1 {
     pub(super) fn ensure_returnable_for_destroy(
         &self,
     ) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        validate_returning_destroy_control_state_v1(
+            self.persistent_control,
+            self.data.len(),
+            self.data_premises.len(),
+        )?;
         self.generation.returning_destroy_generation()
     }
 
@@ -1595,6 +1865,101 @@ impl DispatchResourceOwnerV1 {
     fn require_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.generation.ensure_prepared()
     }
+}
+
+const fn persistent_replay_initialization_is_admitted_v1(
+    effect: DeviceDataEffectV1,
+    incoming_initialized: bool,
+    _retained_initialized: bool,
+) -> bool {
+    !effect.reads() || incoming_initialized
+}
+
+fn validate_detached_persistent_control_release_state_v1(
+    state: PersistentFixedDispatchControlStateV1,
+    data_authority_count: usize,
+    data_premise_count: usize,
+    returned_generation: u64,
+    expected_generation: u64,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if !matches!(
+        state,
+        PersistentFixedDispatchControlStateV1::DataDetached(_)
+    ) || data_authority_count != 0
+        || data_premise_count != 1
+        || returned_generation != expected_generation
+    {
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+    }
+    Ok(())
+}
+
+fn validate_persistent_control_replay_v1(
+    state: PersistentFixedDispatchControlStateV1,
+    data_authority_count: usize,
+    data_premise_count: usize,
+    generation: &DispatchGenerationOwnerV1,
+    requested: PersistentFixedDispatchControlIdentityV1,
+    predecessor_generation: u64,
+) -> Result<DeviceDataEffectV1, Gfx942DispatchBindingErrorV1> {
+    let PersistentFixedDispatchControlStateV1::DataDetached(retained) = state else {
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+    };
+    if retained.queue != requested.queue {
+        return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
+    }
+    if retained.semantic_sha256 != requested.semantic_sha256 {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "persistent control code, ABI, packet, geometry, or kernarg identity",
+        ));
+    }
+    if retained.content_role != requested.content_role {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "persistent control content role",
+        });
+    }
+    if retained.data_layout != requested.data_layout {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "persistent control storage layout or extent",
+        });
+    }
+    if retained.data_storage != requested.data_storage {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "persistent control mapped storage identity",
+        });
+    }
+    if retained.effect != requested.effect {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "persistent control metadata effect",
+        });
+    }
+    if data_authority_count != 0 || data_premise_count != 1 {
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+    }
+    if generation.returned_generation()? != predecessor_generation {
+        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+    }
+    Ok(requested.effect)
+}
+
+fn validate_returning_destroy_control_state_v1(
+    state: PersistentFixedDispatchControlStateV1,
+    data_authority_count: usize,
+    data_premise_count: usize,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if data_authority_count != data_premise_count
+        || matches!(
+            state,
+            PersistentFixedDispatchControlStateV1::DataDetached(_)
+        )
+    {
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+    }
+    Ok(())
 }
 
 fn validate_completed_read_request(
@@ -2140,6 +2505,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
         data: data_authorities,
         data_premises,
         generation: DispatchGenerationOwnerV1::new(),
+        persistent_control: PersistentFixedDispatchControlStateV1::Ordinary,
     })
 }
 
@@ -2426,6 +2792,20 @@ pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle<const N: usi
     .map_err(|failure| failure.error)
 }
 
+pub(super) fn prepare_public_fixed_dispatch_resources_after_detach<const N: usize>(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; N],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    predecessor_generation: u64,
+) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    let generation = DispatchGenerationOwnerV1::after_detached(predecessor_generation)?;
+    prepare_public_fixed_dispatch_resources_with_generation(
+        memory, programs, packets, data, generation, false,
+    )
+    .map_err(|failure| failure.error)
+}
+
 pub(super) struct PersistentFixedDispatchPreparationFailureV1 {
     pub(super) error: Gfx942DispatchBindingErrorV1,
     pub(super) data: Vec<Gfx942FixedDispatchDataV1>,
@@ -2437,6 +2817,7 @@ pub(super) fn prepare_persistent_fixed_dispatch_resources_v1(
     packets: [Gfx942FixedDispatchPacketV1; 1],
     data: Gfx942FixedDispatchDataV1,
     predecessor_generation: Option<u64>,
+    control_identity: PersistentFixedDispatchControlIdentityV1,
 ) -> Result<DispatchResourceOwnerV1, PersistentFixedDispatchPreparationFailureV1> {
     let generation = match predecessor_generation {
         Some(predecessor) => DispatchGenerationOwnerV1::after_recycled(predecessor),
@@ -2451,14 +2832,17 @@ pub(super) fn prepare_persistent_fixed_dispatch_resources_v1(
             });
         }
     };
-    prepare_public_fixed_dispatch_resources_with_generation(
+    let mut owner = prepare_public_fixed_dispatch_resources_with_generation(
         memory,
         programs,
         packets,
         vec![data],
         generation,
         true,
-    )
+    )?;
+    owner.data_premises[0].role_identity = control_identity.content_role.identity();
+    owner.persistent_control = PersistentFixedDispatchControlStateV1::Attached(control_identity);
+    Ok(owner)
 }
 
 fn recover_dispatch_input_v1(input: DispatchDataInputV1) -> Gfx942FixedDispatchDataV1 {
@@ -2737,6 +3121,7 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
         data: data_authorities,
         data_premises,
         generation,
+        persistent_control: PersistentFixedDispatchControlStateV1::Ordinary,
     })
 }
 
@@ -3689,6 +4074,7 @@ fn ranges_overlap_usize(left: usize, left_len: usize, right: usize, right_len: u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
 
     #[test]
     fn code_bound_kernarg_layout_requires_exact_dispatch_abi_identity() {
@@ -4505,6 +4891,559 @@ mod tests {
             owner.next(),
             Err(Gfx942DispatchBindingErrorV1::Poisoned)
         ));
+    }
+
+    fn persistent_control_test_queue(queue: u64) -> QueueKeyV1 {
+        QueueKeyV1 {
+            vm: fe2o3_runtime_model::VmKeyV1 {
+                device: fe2o3_runtime_model::DeviceKeyV1 {
+                    physical: fe2o3_runtime_model::PhysicalDeviceIdV1(7),
+                    generation: fe2o3_runtime_model::DeviceGenerationV1(11),
+                },
+                id: fe2o3_runtime_model::VmIdV1(13),
+            },
+            id: fe2o3_runtime_model::QueueInstanceIdV1(queue),
+            generation: fe2o3_runtime_model::QueueGenerationV1(17),
+        }
+    }
+
+    fn persistent_control_test_identity(
+        queue: QueueKeyV1,
+        storage: Gfx942SdmaBufferStorageIdentityV1,
+    ) -> PersistentFixedDispatchControlIdentityV1 {
+        PersistentFixedDispatchControlIdentityV1 {
+            queue,
+            semantic_sha256: [0x51; 32],
+            content_role: Gfx942DeviceContentRoleV1::new([0x61; 32], 0).unwrap(),
+            data_layout: Gfx942FixedDispatchDataLayoutV1::device_local(4096, 4096),
+            data_storage: storage,
+            effect: DeviceDataEffectV1::ReadWrite,
+        }
+    }
+
+    fn actual_persistent_control_test_program<'a>(
+        image: &'a [u8],
+        signature: [u8; 32],
+    ) -> ValidatedKernelEnvelope<'a> {
+        validate(image, AdmittedProfile::Gfx942XnackOffCov6)
+            .unwrap()
+            .bind_kernel("inplace_transform")
+            .unwrap()
+            .reconcile_dispatch_abi(
+                signature,
+                &[KernelGlobalBufferAbiV1::new(
+                    0,
+                    "data",
+                    0,
+                    1,
+                    ArgumentAccess::ReadWrite,
+                )],
+            )
+            .unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn actual_persistent_control_test_identity(
+        image: &[u8],
+        signature: [u8; 32],
+        grid_x: u32,
+        ordering: AqlDispatchOrderingV1,
+        dynamic_group_segment_bytes: u32,
+        scalar: u64,
+        data_byte_offset: u64,
+        byte_len: u64,
+    ) -> Result<PersistentFixedDispatchControlIdentityV1, Gfx942DispatchBindingErrorV1> {
+        let queue = persistent_control_test_queue(41);
+        let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 606);
+        let program = actual_persistent_control_test_program(image, signature);
+        let mut kernarg = [0_u8; 16];
+        kernarg[8..].copy_from_slice(&scalar.to_le_bytes());
+        let packet = Gfx942FixedDispatchPacketV1::new_with_ordering(
+            0,
+            AqlDispatchGeometryV1::new([grid_x, 1, 1], [256, 1, 1]).unwrap(),
+            ordering,
+            dynamic_group_segment_bytes,
+            kernarg.into(),
+            vec![Gfx942DispatchBufferBindingV1::new(
+                0,
+                0,
+                data_byte_offset,
+                byte_len,
+            )]
+            .into_boxed_slice(),
+        );
+        persistent_fixed_dispatch_control_identity_v1(
+            queue,
+            &[program],
+            &[packet],
+            Gfx942FixedDispatchDataLayoutV1::device_local(4096, 4096),
+            true,
+            Gfx942DeviceContentRoleV1::new([0x61; 32], 0).unwrap(),
+            device.storage_identity(),
+        )
+    }
+
+    #[test]
+    fn actual_program_and_packet_mutations_change_persistent_control_identity() {
+        let mut image = include_bytes!(
+            "../../fe2o3-runtime/fixtures/trusted-gfx942-inplace-transform-v1/inplace_transform.hsaco"
+        )
+        .to_vec();
+        let identity =
+            |image: &[u8], signature, grid_x, ordering, dynamic_group_segment_bytes, scalar| {
+                actual_persistent_control_test_identity(
+                    image,
+                    signature,
+                    grid_x,
+                    ordering,
+                    dynamic_group_segment_bytes,
+                    scalar,
+                    0,
+                    4096,
+                )
+                .unwrap()
+            };
+        let baseline = identity(
+            &image,
+            [0x71; 32],
+            1024,
+            AqlDispatchOrderingV1::WaitForPrior,
+            0,
+            1024,
+        );
+        assert_eq!(
+            baseline,
+            identity(
+                &image,
+                [0x71; 32],
+                1024,
+                AqlDispatchOrderingV1::WaitForPrior,
+                0,
+                1024,
+            )
+        );
+
+        let entry_offset = usize::try_from(
+            actual_persistent_control_test_program(&image, [0x71; 32])
+                .selected_binding()
+                .entry_file_offset(),
+        )
+        .unwrap();
+        image[entry_offset] ^= 1;
+        let changed_code = identity(
+            &image,
+            [0x71; 32],
+            1024,
+            AqlDispatchOrderingV1::WaitForPrior,
+            0,
+            1024,
+        );
+        image[entry_offset] ^= 1;
+
+        for changed in [
+            changed_code,
+            identity(
+                &image,
+                [0x72; 32],
+                1024,
+                AqlDispatchOrderingV1::WaitForPrior,
+                0,
+                1024,
+            ),
+            identity(
+                &image,
+                [0x71; 32],
+                2048,
+                AqlDispatchOrderingV1::WaitForPrior,
+                0,
+                1024,
+            ),
+            identity(
+                &image,
+                [0x71; 32],
+                1024,
+                AqlDispatchOrderingV1::Independent,
+                0,
+                1024,
+            ),
+            identity(
+                &image,
+                [0x71; 32],
+                1024,
+                AqlDispatchOrderingV1::WaitForPrior,
+                64,
+                1024,
+            ),
+            identity(
+                &image,
+                [0x71; 32],
+                1024,
+                AqlDispatchOrderingV1::WaitForPrior,
+                0,
+                2048,
+            ),
+        ] {
+            assert_ne!(baseline, changed);
+        }
+
+        for (data_byte_offset, byte_len) in [(1, 4096), (0, 4095)] {
+            assert!(matches!(
+                actual_persistent_control_test_identity(
+                    &image,
+                    [0x71; 32],
+                    1024,
+                    AqlDispatchOrderingV1::WaitForPrior,
+                    0,
+                    1024,
+                    data_byte_offset,
+                    byte_len,
+                ),
+                Err(Gfx942DispatchBindingErrorV1::InvalidData { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn persistent_control_replay_requires_exact_identity_and_recycled_generation() {
+        let queue = persistent_control_test_queue(19);
+        let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 101);
+        let expected = persistent_control_test_identity(queue, device.storage_identity());
+        let mut generation = DispatchGenerationOwnerV1::new();
+
+        assert!(matches!(
+            validate_persistent_control_replay_v1(
+                PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                0,
+                1,
+                &generation,
+                expected,
+                1,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+        let first = generation.next().unwrap();
+        generation.commit_begin(first);
+        generation.complete(first).unwrap();
+        generation.recycle(first).unwrap();
+        assert_eq!(
+            validate_persistent_control_replay_v1(
+                PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                0,
+                1,
+                &generation,
+                expected,
+                first,
+            )
+            .unwrap(),
+            DeviceDataEffectV1::ReadWrite
+        );
+        assert!(matches!(
+            validate_persistent_control_replay_v1(
+                PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                0,
+                1,
+                &generation,
+                expected,
+                first + 1,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+        ));
+        for (authorities, premises) in [(1, 1), (0, 0), (0, 2)] {
+            assert!(matches!(
+                validate_persistent_control_replay_v1(
+                    PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                    authorities,
+                    premises,
+                    &generation,
+                    expected,
+                    first,
+                ),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+        }
+    }
+
+    #[test]
+    fn persistent_control_replay_rejects_every_bound_identity_substitution() {
+        let queue = persistent_control_test_queue(23);
+        let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 202);
+        let (other_device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 203);
+        let expected = persistent_control_test_identity(queue, device.storage_identity());
+        let mut generation = DispatchGenerationOwnerV1::new();
+        let current = generation.next().unwrap();
+        generation.commit_begin(current);
+        generation.complete(current).unwrap();
+        generation.recycle(current).unwrap();
+
+        let substitutions = vec![
+            PersistentFixedDispatchControlIdentityV1 {
+                queue: persistent_control_test_queue(24),
+                ..expected
+            },
+            PersistentFixedDispatchControlIdentityV1 {
+                semantic_sha256: [0x52; 32],
+                ..expected
+            },
+            PersistentFixedDispatchControlIdentityV1 {
+                content_role: Gfx942DeviceContentRoleV1::new([0x62; 32], 0).unwrap(),
+                ..expected
+            },
+            PersistentFixedDispatchControlIdentityV1 {
+                data_layout: Gfx942FixedDispatchDataLayoutV1::device_local(8192, 4096),
+                ..expected
+            },
+            PersistentFixedDispatchControlIdentityV1 {
+                data_storage: other_device.storage_identity(),
+                ..expected
+            },
+            PersistentFixedDispatchControlIdentityV1 {
+                effect: DeviceDataEffectV1::ReadOnly,
+                ..expected
+            },
+        ];
+        for substituted in substitutions {
+            assert!(
+                validate_persistent_control_replay_v1(
+                    PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                    0,
+                    1,
+                    &generation,
+                    substituted,
+                    current,
+                )
+                .is_err()
+            );
+        }
+        assert!(matches!(
+            validate_persistent_control_replay_v1(
+                PersistentFixedDispatchControlStateV1::Ordinary,
+                0,
+                1,
+                &generation,
+                expected,
+                current,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+    }
+
+    #[test]
+    fn persistent_control_generation_advances_across_replay_cycles() {
+        let queue = persistent_control_test_queue(29);
+        let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 303);
+        let expected = persistent_control_test_identity(queue, device.storage_identity());
+        let mut generation = DispatchGenerationOwnerV1::new();
+        for expected_generation in 1..=4 {
+            let current = generation.next().unwrap();
+            assert_eq!(current, expected_generation);
+            generation.commit_begin(current);
+            generation.complete(current).unwrap();
+            generation.recycle(current).unwrap();
+            assert_eq!(
+                validate_persistent_control_replay_v1(
+                    PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                    0,
+                    1,
+                    &generation,
+                    expected,
+                    current,
+                )
+                .unwrap(),
+                DeviceDataEffectV1::ReadWrite
+            );
+        }
+    }
+
+    #[test]
+    fn never_published_detached_generation_rebinds_as_fresh_owner() {
+        let mut generation = DispatchGenerationOwnerV1::after_detached(0).unwrap();
+        assert_eq!(generation.next().unwrap(), 1);
+        generation.commit_begin(1);
+        generation.cancel(1).unwrap();
+        assert_eq!(generation.returning_destroy_generation().unwrap(), 0);
+
+        let recycled = DispatchGenerationOwnerV1::after_detached(7).unwrap();
+        assert_eq!(recycled.next().unwrap(), 8);
+        assert!(matches!(
+            DispatchGenerationOwnerV1::after_detached(u64::MAX),
+            Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+        ));
+    }
+
+    #[test]
+    fn persistent_control_detached_data_blocks_returning_destroy_but_not_ordinary_release() {
+        let queue = persistent_control_test_queue(31);
+        let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 404);
+        let identity = persistent_control_test_identity(queue, device.storage_identity());
+        assert!(
+            validate_returning_destroy_control_state_v1(
+                PersistentFixedDispatchControlStateV1::Ordinary,
+                1,
+                1,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_returning_destroy_control_state_v1(
+                PersistentFixedDispatchControlStateV1::Attached(identity),
+                1,
+                1,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_returning_destroy_control_state_v1(
+                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                0,
+                1,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+        assert!(matches!(
+            validate_returning_destroy_control_state_v1(
+                PersistentFixedDispatchControlStateV1::Attached(identity),
+                0,
+                1,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+
+        // Ordinary queue destruction consumes the owner through `release`,
+        // which deliberately accepts detached data because its separate SDMA
+        // owner releases that authority. Only code and kernarg remain here.
+        let mut generation = DispatchGenerationOwnerV1::new();
+        let current = generation.next().unwrap();
+        generation.commit_begin(current);
+        generation.complete(current).unwrap();
+        generation.recycle(current).unwrap();
+        assert!(generation.ensure_prepared().is_ok());
+
+        assert!(
+            validate_detached_persistent_control_release_state_v1(
+                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                0,
+                1,
+                current,
+                current,
+            )
+            .is_ok()
+        );
+        for (state, authorities, premises, returned, expected) in [
+            (
+                PersistentFixedDispatchControlStateV1::Attached(identity),
+                0,
+                1,
+                current,
+                current,
+            ),
+            (
+                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                1,
+                1,
+                current,
+                current,
+            ),
+            (
+                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                0,
+                0,
+                current,
+                current,
+            ),
+            (
+                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                0,
+                1,
+                current,
+                current + 1,
+            ),
+        ] {
+            assert!(
+                validate_detached_persistent_control_release_state_v1(
+                    state,
+                    authorities,
+                    premises,
+                    returned,
+                    expected,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn write_only_replay_accepts_uninitialized_exact_storage() {
+        assert!(persistent_replay_initialization_is_admitted_v1(
+            DeviceDataEffectV1::WriteOnly,
+            false,
+            false,
+        ));
+        assert!(!persistent_replay_initialization_is_admitted_v1(
+            DeviceDataEffectV1::ReadOnly,
+            false,
+            true,
+        ));
+        assert!(!persistent_replay_initialization_is_admitted_v1(
+            DeviceDataEffectV1::ReadOnly,
+            false,
+            false,
+        ));
+        assert!(!persistent_replay_initialization_is_admitted_v1(
+            DeviceDataEffectV1::ReadWrite,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn cancelled_replay_preserves_predecessor_and_cannot_double_reattach() {
+        let queue = persistent_control_test_queue(37);
+        let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 505);
+        let identity = persistent_control_test_identity(queue, device.storage_identity());
+        let mut generation = DispatchGenerationOwnerV1::new();
+        for expected in 1..=7 {
+            let current = generation.next().unwrap();
+            assert_eq!(current, expected);
+            generation.commit_begin(current);
+            generation.complete(current).unwrap();
+            generation.recycle(current).unwrap();
+        }
+        assert_eq!(
+            validate_persistent_control_replay_v1(
+                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                0,
+                1,
+                &generation,
+                identity,
+                7,
+            )
+            .unwrap(),
+            DeviceDataEffectV1::ReadWrite
+        );
+        let replay = generation.next().unwrap();
+        assert_eq!(replay, 8);
+        generation.commit_begin(replay);
+        generation.cancel(replay).unwrap();
+        assert_eq!(generation.returning_destroy_generation().unwrap(), 7);
+        assert!(matches!(
+            validate_persistent_control_replay_v1(
+                PersistentFixedDispatchControlStateV1::Attached(identity),
+                1,
+                1,
+                &generation,
+                identity,
+                7,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+        assert!(
+            validate_returning_destroy_control_state_v1(
+                PersistentFixedDispatchControlStateV1::Attached(identity),
+                1,
+                1,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
