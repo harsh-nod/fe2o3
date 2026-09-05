@@ -846,6 +846,83 @@ impl Gfx942PersistentDeviceAllocationV1 {
         Ok(())
     }
 
+    /// Quarantines a completed use when signal recycle or native-authority
+    /// restoration becomes indeterminate after device completion.
+    pub(crate) fn quarantine_completed(
+        &mut self,
+        lease: Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        reason: Gfx942PersistentQuarantineReasonV1,
+    ) -> Result<(), Gfx942PersistentTransitionFailureV1<Gfx942PersistentCompletedV1>> {
+        if let Err(error) = self.validate_lease(&lease, LedgerStateV1::Completed) {
+            return Err(Gfx942PersistentTransitionFailureV1 { error, lease });
+        }
+        self.ledger[usize::from(lease.slot)]
+            .as_mut()
+            .expect("validated ledger slot")
+            .state = LedgerStateV1::Quarantined;
+        self.quarantine = Some(reason);
+        Ok(())
+    }
+
+    /// Moves the exact local mapping into one inspected compute dispatch only
+    /// while the supplied prepared compute use is current.
+    pub(crate) fn detach_local_native_for_compute(
+        &mut self,
+        prepared: &Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, Gfx942PersistentUseErrorV1>
+    {
+        self.validate_lease(prepared, LedgerStateV1::Prepared)?;
+        if prepared.request.owner() != Gfx942PersistentUseOwnerV1::Compute {
+            return Err(Gfx942PersistentUseErrorV1::WrongState);
+        }
+        self.detach_local_native_for_sdma()
+    }
+
+    /// Restores only the exact mapping returned by the completed compute use.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn restore_local_native_from_compute(
+        &mut self,
+        completed: &Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<
+        (),
+        (
+            Gfx942PersistentUseErrorV1,
+            Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        ),
+    > {
+        if let Err(error) = self.validate_lease(completed, LedgerStateV1::Completed) {
+            return Err((error, lease));
+        }
+        if completed.request.owner() != Gfx942PersistentUseOwnerV1::Compute {
+            return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
+        }
+        self.restore_local_native_from_sdma(lease)
+    }
+
+    /// Restores a mapping detached for compute when the prepared dispatch was
+    /// cancelled before native publication.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn restore_local_native_from_cancelled_compute(
+        &mut self,
+        prepared: &Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<
+        (),
+        (
+            Gfx942PersistentUseErrorV1,
+            Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        ),
+    > {
+        if let Err(error) = self.validate_lease(prepared, LedgerStateV1::Prepared) {
+            return Err((error, lease));
+        }
+        if prepared.request.owner() != Gfx942PersistentUseOwnerV1::Compute {
+            return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
+        }
+        self.restore_local_native_from_sdma(lease)
+    }
+
     /// Temporarily moves the exact local mapping into a queue record. The
     /// queue adapter retains this owner while the native authority is absent.
     pub(crate) fn detach_local_native_for_sdma(
@@ -1624,6 +1701,37 @@ mod tests {
         owner.restore_local_native_from_sdma(lease).unwrap();
         assert!(owner.local_native_is_attached_for_sdma());
         assert_eq!(foreign.layout().requested_bytes(), owner.byte_len());
+    }
+
+    #[test]
+    fn compute_detach_cancel_and_completion_restore_the_exact_mapping() {
+        let mut owner = Gfx942PersistentDeviceAllocationV1::from_local_mapping(
+            local_mapping_for_persistent_sdma_test(16),
+        );
+        let request = request(Gfx942PersistentOperationV1::ComputeReadWrite, 0, 4096);
+        let reserved = owner.reserve(request, None).unwrap();
+        let prepared = owner.prepare(reserved).unwrap();
+        let lease = owner.detach_local_native_for_compute(&prepared).unwrap();
+        let foreign = local_mapping_for_persistent_sdma_test(17);
+        let (error, _foreign) = owner
+            .restore_local_native_from_cancelled_compute(&prepared, foreign)
+            .unwrap_err();
+        assert_eq!(error, Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        owner
+            .restore_local_native_from_cancelled_compute(&prepared, lease)
+            .unwrap();
+        owner.cancel_prepared(prepared).unwrap();
+
+        let reserved = owner.reserve(request, None).unwrap();
+        let prepared = owner.prepare(reserved).unwrap();
+        let lease = owner.detach_local_native_for_compute(&prepared).unwrap();
+        let published = owner.publish(prepared).unwrap();
+        let completed = owner.complete(published).unwrap();
+        owner
+            .restore_local_native_from_compute(&completed, lease)
+            .unwrap();
+        let _frontier = owner.settle(completed).unwrap();
+        assert!(owner.local_native_is_attached_for_sdma());
     }
 
     #[test]

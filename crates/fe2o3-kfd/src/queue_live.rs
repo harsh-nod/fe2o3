@@ -31,13 +31,14 @@ use super::completion::{
     initialize_pending_completion_signal_arena,
 };
 use super::dispatch_binding::{
-    DeviceDataAllocationInputV1, DispatchGeometryV1, DispatchResourceOwnerV1,
+    DeviceDataAllocationInputV1, DeviceDataEffectV1, DispatchGeometryV1, DispatchResourceOwnerV1,
     Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
     Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
     Gfx942FixedDispatchStorageIdentityV1, Gfx942RecycledDispatchWriteRequestV1,
-    ReturnedDispatchDataV1, TypedKernargImageV1, prepare_dispatch_resources,
+    ReturnedDispatchDataV1, TypedKernargImageV1, preflight_gfx942_persistent_compute_dispatch_v1,
+    prepare_dispatch_resources, prepare_persistent_fixed_dispatch_resources_v1,
     prepare_public_fixed_dispatch_resources, prepare_public_fixed_dispatch_resources_after_recycle,
     unwrap_completed, unwrap_published, validate_fixed_batch_ring, wrap_completed,
     wrap_poll_with_progress, wrap_published,
@@ -53,6 +54,20 @@ use crate::persistent_allocation::{
     Gfx942PersistentUseErrorV1, Gfx942PersistentUseLeaseV1, Gfx942PersistentUseRequestV1,
     cancel_prepared_local_sdma_pair_v1, detach_local_native_pair_for_sdma_v1,
     quarantine_published_local_sdma_pair_v1,
+};
+use crate::persistent_compute::{
+    Gfx942CompletedPersistentComputeDispatchV1, Gfx942PersistentComputeBindFailureCustodyV1,
+    Gfx942PersistentComputeBindFailureV1, Gfx942PersistentComputeBindTerminalCustodyV1,
+    Gfx942PersistentComputeCancelFailureV1, Gfx942PersistentComputeCompletedV1,
+    Gfx942PersistentComputeDetachFailureV1, Gfx942PersistentComputeDispatchV1,
+    Gfx942PersistentComputeEffectV1, Gfx942PersistentComputeExecutionFailureV1,
+    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollFailureV1,
+    Gfx942PersistentComputePollV1, Gfx942PersistentComputeReadyFailureCustodyV1,
+    Gfx942PersistentComputeReadyFailureV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
+    Gfx942PersistentComputeReadyV1, Gfx942PersistentComputeRecycleFailureV1,
+    Gfx942PreparedPersistentComputeDispatchV1, Gfx942RecycledPersistentComputeDispatchV1,
+    PersistentComputeAttachmentV1, PersistentComputeBindingKeyV1,
+    PersistentComputeTerminalNativeCustodyV1, PersistentComputeUseStateV1,
 };
 use crate::persistent_directional_sdma::{
     DirectionalPersistentSdmaCompletionObservationV1,
@@ -99,6 +114,7 @@ use crate::persistent_directional_sdma::{
 use crate::persistent_same_device_sdma::{
     Gfx942SameDevicePersistentSdmaWindowCompletedV1,
     Gfx942SameDevicePersistentSdmaWindowCopyPollV1,
+    Gfx942SameDevicePersistentSdmaWindowDescriptorV1,
     Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1,
     Gfx942SameDevicePersistentSdmaWindowExecutionFailureV1,
     Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1,
@@ -145,17 +161,17 @@ use crate::sdma::{
     MultiQueueSdmaSubmitFailureV1, PersistentSdmaWindowPollV1,
     PreparedPersistentSdmaWindowPublicationFailureV1, PreparedSdmaPublicationFailureV1,
     PreparedSingleSdmaPublicationFailureV1, allocate_device_buffer, allocate_host_buffer,
-    persistent_sdma_window_packet_count, read_host_buffer, release_buffer,
+    persistent_sdma_window_packet_count, read_host_buffer, release_buffer, sha256_host_buffer,
     striped_sdma_queue_count_is_admitted, write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
     AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
-    ExecutableGttV1, Gfx942InitializedHostVisibleMemoryV1, GttCpuWritableV1,
-    GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1,
-    LiveQueueModelFoundationLoanV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
-    SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1, UserptrAqlControlGttV1,
-    UserptrAqlQueueProbeGttV1,
+    ExecutableGttV1, Gfx942InitializedDeviceMemoryV1, Gfx942InitializedHostVisibleMemoryV1,
+    GttCpuWritableV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
+    HostVisibleCoherentGttV1, LiveQueueModelFoundationLoanV1, SharedGttAllocationV1,
+    SharedGttMappedResourceFactsV1, SharedGttMemorySessionV1, SharedGttQueueResourceAuthorityV1,
+    UserptrAqlControlGttV1, UserptrAqlQueueProbeGttV1,
 };
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -1159,6 +1175,14 @@ fn content_descriptor_matches_bytes(
 ) -> bool {
     u64::try_from(bytes.len()) == Ok(descriptor.byte_len())
         && <[u8; 32]>::from(Sha256::digest(bytes)) == descriptor.sha256()
+}
+
+fn content_descriptor_matches_sha256(
+    descriptor: Gfx942DeviceContentDescriptorV1,
+    byte_len: u64,
+    sha256: [u8; 32],
+) -> bool {
+    descriptor.byte_len() == byte_len && descriptor.sha256() == sha256
 }
 
 fn insert_detached_identity<T>(
@@ -2422,6 +2446,425 @@ struct DetachedReturningDestroyPreflightV1 {
     identity_mismatch: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenericRecycledDispatchAccessV1 {
+    Read,
+    ReadInto,
+    Snapshot,
+    Overwrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdmaPublicationModeV1 {
+    Persistent,
+    DirectionalCopy(Gfx942PersistentSdmaDirectionV1),
+    DirectionalWindow(Gfx942PersistentSdmaDirectionV1),
+    SameDeviceWindow,
+    Ordinary,
+    OrdinaryBatch,
+    StripedBatch,
+    ExecuteBatch,
+}
+
+fn admit_sdma_publication_while_compute_detached(
+    terminal_poisoned: bool,
+    persistent_compute_attached: bool,
+    mode: SdmaPublicationModeV1,
+) -> Result<SdmaPublicationModeV1, Gfx942DispatchBindingErrorV1> {
+    if terminal_poisoned {
+        Err(Gfx942DispatchBindingErrorV1::Poisoned)
+    } else if persistent_compute_attached {
+        Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    } else {
+        Ok(mode)
+    }
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn preserve_ordinary_sdma_publication_custody_v1(
+    persistent_compute_attached: bool,
+    source: Gfx942SdmaBufferV1,
+    destination: Gfx942SdmaBufferV1,
+) -> Result<(Gfx942SdmaBufferV1, Gfx942SdmaBufferV1), Gfx942SdmaSubmissionFailureV1> {
+    match admit_sdma_publication_while_compute_detached(
+        false,
+        persistent_compute_attached,
+        SdmaPublicationModeV1::Ordinary,
+    ) {
+        Ok(_) => Ok((source, destination)),
+        Err(error) => Err(Gfx942SdmaSubmissionFailureV1 {
+            error: error.into(),
+            recovered: Some((source, destination)),
+        }),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn preserve_directional_window_sdma_publication_custody_v1(
+    persistent_compute_attached: bool,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    host: Gfx942SdmaBufferV1,
+) -> Result<
+    (
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942SdmaBufferV1,
+    ),
+    Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1,
+> {
+    match admit_sdma_publication_while_compute_detached(
+        false,
+        persistent_compute_attached,
+        SdmaPublicationModeV1::DirectionalWindow(direction),
+    ) {
+        Ok(_) => Ok((allocation, host)),
+        Err(error) => Err(Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1 {
+            error: error.into(),
+            custody: Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                allocation,
+                host,
+            },
+        }),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(
+    input: Gfx942PersistentComputeInputV1,
+    directional_sdma_quiescent: bool,
+) -> Result<Gfx942PersistentComputeInputV1, Gfx942PersistentComputeBindFailureV1> {
+    if directional_sdma_quiescent {
+        Ok(input)
+    } else {
+        Err(Gfx942PersistentComputeBindFailureV1 {
+            error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+            custody: Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input),
+        })
+    }
+}
+
+fn admit_generic_recycled_dispatch_access(
+    terminal_poisoned: bool,
+    persistent_compute_attached: bool,
+    operation: GenericRecycledDispatchAccessV1,
+) -> Result<GenericRecycledDispatchAccessV1, Gfx942DispatchBindingErrorV1> {
+    if terminal_poisoned {
+        Err(Gfx942DispatchBindingErrorV1::Poisoned)
+    } else if persistent_compute_attached {
+        Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    } else {
+        Ok(operation)
+    }
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn preserve_persistent_compute_ready_preflight_custody_v1(
+    completed: Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+    terminal_poisoned: bool,
+    preflight: Result<(), ComputeAqlQueueSessionErrorV1>,
+) -> Result<Gfx942DirectionalPersistentSdmaWindowCompletedV1, Gfx942PersistentComputeReadyFailureV1>
+{
+    match preflight {
+        Ok(()) => Ok(completed),
+        Err(error) if terminal_poisoned => Err(Gfx942PersistentComputeReadyFailureV1 {
+            error,
+            custody: Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(
+                Gfx942PersistentComputeReadyTerminalCustodyV1 { completed },
+            ),
+        }),
+        Err(error) => Err(Gfx942PersistentComputeReadyFailureV1 {
+            error,
+            custody: Gfx942PersistentComputeReadyFailureCustodyV1::Retryable(
+                completed.into_parts(),
+            ),
+        }),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn preserve_persistent_compute_ready_affiliation_v1(
+    completed: Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+    queue: QueueKeyV1,
+    terminal_poisoned: bool,
+) -> Result<Gfx942DirectionalPersistentSdmaWindowCompletedV1, Gfx942PersistentComputeReadyFailureV1>
+{
+    if completed.belongs_to(queue) {
+        Ok(completed)
+    } else {
+        Err(Gfx942PersistentComputeReadyFailureV1 {
+            error: if terminal_poisoned {
+                Gfx942DispatchBindingErrorV1::Poisoned.into()
+            } else {
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute H2D completion owner substitution",
+                )
+            },
+            custody: Gfx942PersistentComputeReadyFailureCustodyV1::ForeignQueue(completed),
+        })
+    }
+}
+
+pub(crate) fn terminal_persistent_compute_ready_hash_failure_v1(
+    error: ComputeAqlQueueSessionErrorV1,
+    completed: Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+) -> Gfx942PersistentComputeReadyFailureV1 {
+    Gfx942PersistentComputeReadyFailureV1 {
+        error,
+        custody: Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(
+            Gfx942PersistentComputeReadyTerminalCustodyV1 { completed },
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+pub(crate) fn admit_directional_persistent_sdma_copy_input_v1(
+    queue: QueueKeyV1,
+    terminal_poisoned: bool,
+    mut allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host: Gfx942SdmaBufferV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+) -> Result<
+    (
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942SdmaBufferV1,
+    ),
+    Gfx942DirectionalPersistentSdmaSubmissionFailureV1,
+> {
+    let retryable = |error, allocation, host| Gfx942DirectionalPersistentSdmaSubmissionFailureV1 {
+        error,
+        custody: Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable { allocation, host },
+    };
+    if allocation.attachment.queue != queue || !host.belongs_to(queue) {
+        return Err(retryable(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "directional persistent SDMA submission owner substitution",
+            ),
+            allocation,
+            host,
+        ));
+    }
+    if terminal_poisoned {
+        allocation
+            .owner
+            .quarantine_for_caller_reported_currentness_loss();
+        return Err(Gfx942DirectionalPersistentSdmaSubmissionFailureV1 {
+            error: ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            ),
+            custody: Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::ProcessTeardown(
+                Gfx942DirectionalPersistentSdmaTerminalCustodyV1 {
+                    direction,
+                    sequence: None,
+                    state: Gfx942DirectionalPersistentSdmaTerminalStateV1::AdmissionRestored {
+                        allocation,
+                        host,
+                    },
+                },
+            ),
+        });
+    }
+    if host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
+        || copy_bytes == 0
+        || copy_bytes > crate::sdma::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1
+        || host_offset
+            .checked_add(u64::from(copy_bytes))
+            .is_none_or(|end| end > host.requested_bytes())
+        || device_offset
+            .checked_add(u64::from(copy_bytes))
+            .is_none_or(|end| end > allocation.byte_len())
+        || !allocation.owner.local_native_is_attached_for_sdma()
+    {
+        return Err(retryable(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "directional persistent SDMA submission owner, buffer, or range",
+            ),
+            allocation,
+            host,
+        ));
+    }
+    Ok((allocation, host))
+}
+
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+pub(crate) fn admit_directional_persistent_sdma_window_input_v1(
+    queue: QueueKeyV1,
+    terminal_poisoned: bool,
+    mut allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host: Gfx942SdmaBufferV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+) -> Result<
+    (
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942SdmaBufferV1,
+        usize,
+    ),
+    Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1,
+> {
+    let retryable =
+        |error, allocation, host| Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1 {
+            error,
+            custody: Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                allocation,
+                host,
+            },
+        };
+    if allocation.attachment.queue != queue || !host.belongs_to(queue) {
+        return Err(retryable(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "directional persistent SDMA window owner substitution",
+            ),
+            allocation,
+            host,
+        ));
+    }
+    if terminal_poisoned {
+        allocation
+            .owner
+            .quarantine_for_caller_reported_currentness_loss();
+        return Err(Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1 {
+            error: ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            ),
+            custody: Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
+                Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
+                    direction,
+                    sequence: None,
+                    packet_count: persistent_sdma_window_packet_count(copy_bytes).unwrap_or(0),
+                    state:
+                        Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::AdmissionRestored {
+                            allocation,
+                            host,
+                        },
+                },
+            ),
+        });
+    }
+    let packet_count = match persistent_sdma_window_packet_count(copy_bytes) {
+        Ok(packet_count) => packet_count,
+        Err(error) => return Err(retryable(error.into(), allocation, host)),
+    };
+    if host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
+        || host_offset
+            .checked_add(u64::from(copy_bytes))
+            .is_none_or(|end| end > host.requested_bytes())
+        || device_offset
+            .checked_add(u64::from(copy_bytes))
+            .is_none_or(|end| end > allocation.byte_len())
+        || !allocation.owner.local_native_is_attached_for_sdma()
+    {
+        return Err(retryable(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "directional persistent SDMA window owner, buffer, or range",
+            ),
+            allocation,
+            host,
+        ));
+    }
+    Ok((allocation, host, packet_count))
+}
+
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+pub(crate) fn admit_same_device_persistent_sdma_window_input_v1(
+    queue: QueueKeyV1,
+    terminal_poisoned: bool,
+    mut source: Gfx942DirectionalQueuePersistentAllocationV1,
+    source_offset: u64,
+    mut destination: Gfx942DirectionalQueuePersistentAllocationV1,
+    destination_offset: u64,
+    copy_bytes: u32,
+) -> Result<
+    (
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942DirectionalQueuePersistentAllocationV1,
+        Gfx942SameDevicePersistentSdmaWindowDescriptorV1,
+    ),
+    Gfx942SameDevicePersistentSdmaWindowSubmissionFailureV1,
+> {
+    let retryable =
+        |error, source, destination| Gfx942SameDevicePersistentSdmaWindowSubmissionFailureV1 {
+            error,
+            custody: Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                source,
+                destination,
+            },
+        };
+    if source.attachment.queue != queue || destination.attachment.queue != queue {
+        return Err(retryable(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "same-device persistent SDMA owner substitution",
+            ),
+            source,
+            destination,
+        ));
+    }
+    if terminal_poisoned {
+        source
+            .owner
+            .quarantine_for_caller_reported_currentness_loss();
+        destination
+            .owner
+            .quarantine_for_caller_reported_currentness_loss();
+        let packet_count = persistent_sdma_window_packet_count(copy_bytes).unwrap_or(0);
+        return Err(Gfx942SameDevicePersistentSdmaWindowSubmissionFailureV1 {
+            error: ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            ),
+            custody: Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
+                Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1 {
+                    source_sequence: None,
+                    destination_sequence: None,
+                    descriptor: same_device_persistent_sdma_descriptor_v1(
+                        source_offset,
+                        destination_offset,
+                        copy_bytes,
+                        packet_count,
+                    ),
+                    state: Gfx942SameDevicePersistentSdmaWindowTerminalStateV1::AdmissionRestored {
+                        source,
+                        destination,
+                    },
+                },
+            ),
+        });
+    }
+    let packet_count = match persistent_sdma_window_packet_count(copy_bytes) {
+        Ok(packet_count) => packet_count,
+        Err(error) => return Err(retryable(error.into(), source, destination)),
+    };
+    let descriptor = same_device_persistent_sdma_descriptor_v1(
+        source_offset,
+        destination_offset,
+        copy_bytes,
+        packet_count,
+    );
+    if source.attachment.pair != destination.attachment.pair
+        || source.attachment.storage_identity == destination.attachment.storage_identity
+        || source_offset
+            .checked_add(u64::from(copy_bytes))
+            .is_none_or(|end| end > source.byte_len())
+        || destination_offset
+            .checked_add(u64::from(copy_bytes))
+            .is_none_or(|end| end > destination.byte_len())
+        || !source.owner.local_native_is_attached_for_sdma()
+        || !destination.owner.local_native_is_attached_for_sdma()
+    {
+        return Err(retryable(
+            ComputeAqlQueueSessionErrorV1::Contract(
+                "same-device persistent SDMA owner, identity, or range",
+            ),
+            source,
+            destination,
+        ));
+    }
+    Ok((source, destination, descriptor))
+}
+
 fn admit_detached_returning_destroy(
     terminal_poisoned: &mut bool,
     preflight: DetachedReturningDestroyPreflightV1,
@@ -2489,6 +2932,10 @@ pub struct ComputeAqlQueueSessionV1 {
     detached_dispatch_generation: Option<u64>,
     detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     detached_next_insertion_index: Option<usize>,
+    persistent_compute: Option<PersistentComputeAttachmentV1>,
+    #[cfg(test)]
+    persistent_compute_test_release: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
+    next_persistent_compute_generation: u64,
     exception: Option<QueueExceptionStateV1>,
     sdma: Option<Gfx942SdmaQueueSetV1>,
     sdma_outstanding_buffers: usize,
@@ -2666,6 +3113,53 @@ fn admit_compute_lane_v1<T>(
         ));
     }
     Ok(AdmittedComputeLaneV1::Auxiliary(index))
+}
+
+fn auxiliary_compute_lanes_are_quiescent_v1(
+    lanes: &[AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1>],
+) -> bool {
+    lanes.iter().all(|slot| {
+        slot.state.as_ref().is_none_or(|state| {
+            auxiliary_compute_lane_quiescence_from_facts_v1(
+                state.completion_owner.ensure_releasable().is_ok(),
+                state
+                    .dispatch
+                    .as_ref()
+                    .map(|dispatch| dispatch.ensure_releasable().is_ok()),
+                state.detached_data_count,
+                state.detached_dispatch_generation,
+                state.detached_data_identities.len(),
+                state.detached_next_insertion_index,
+            )
+        })
+    })
+}
+
+fn auxiliary_compute_lane_quiescence_from_facts_v1(
+    completion_releasable: bool,
+    attached_dispatch_releasable: Option<bool>,
+    detached_data_count: usize,
+    detached_dispatch_generation: Option<u64>,
+    detached_identity_count: usize,
+    detached_next_insertion_index: Option<usize>,
+) -> bool {
+    completion_releasable
+        && match attached_dispatch_releasable {
+            Some(releasable) => {
+                releasable
+                    && detached_data_count == 0
+                    && detached_dispatch_generation.is_none()
+                    && detached_identity_count == 0
+                    && detached_next_insertion_index.is_none()
+            }
+            None => {
+                detached_dispatch_generation.is_some_and(|generation| generation != 0)
+                    && detached_data_count <= super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1
+                    && detached_identity_count == detached_data_count
+                    && detached_next_insertion_index
+                        .is_none_or(|index| index <= detached_identity_count)
+            }
+        }
 }
 
 fn take_after_auxiliary_destroy_preflight_v1<T>(
@@ -3303,6 +3797,248 @@ impl SharedGttMemorySessionV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
+    /// Reports only the terminal persistent-compute custody stage; native
+    /// identities and authorities remain retained inside the queue.
+    pub fn persistent_compute_terminal_stage_v1(
+        &self,
+    ) -> Option<crate::persistent_compute::Gfx942PersistentComputeTerminalStageV1> {
+        self.persistent_compute
+            .as_ref()?
+            .terminal_custody
+            .as_ref()
+            .map(PersistentComputeTerminalNativeCustodyV1::stage)
+    }
+
+    fn absorb_terminal_prepared_persistent_compute_v1(
+        &mut self,
+        binding: PersistentComputeBindingKeyV1,
+    ) -> bool {
+        let Some(mut attachment) = self.persistent_compute.take() else {
+            return false;
+        };
+        if attachment.binding != binding {
+            self.persistent_compute = Some(attachment);
+            return false;
+        }
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Prepared(prepared) = state else {
+            attachment.state = state;
+            self.persistent_compute = Some(attachment);
+            return false;
+        };
+        let _ = attachment.allocation.owner.quarantine_prepared(
+            prepared,
+            Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+        );
+        attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Attached);
+        self.persistent_compute = Some(attachment);
+        true
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn absorb_terminal_published_persistent_compute_v1(
+        &mut self,
+        binding: PersistentComputeBindingKeyV1,
+        batch: Gfx942DispatchBatchV1<1>,
+    ) -> Result<(), Gfx942DispatchBatchV1<1>> {
+        let Some(mut attachment) = self.persistent_compute.take() else {
+            return Err(batch);
+        };
+        if attachment.binding != binding {
+            self.persistent_compute = Some(attachment);
+            return Err(batch);
+        }
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Published(published) = state else {
+            attachment.state = state;
+            self.persistent_compute = Some(attachment);
+            return Err(batch);
+        };
+        let _ = attachment.allocation.owner.quarantine_published(
+            published,
+            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+        );
+        attachment.terminal_custody =
+            Some(PersistentComputeTerminalNativeCustodyV1::Published(batch));
+        self.persistent_compute = Some(attachment);
+        Ok(())
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn absorb_terminal_completed_persistent_compute_v1(
+        &mut self,
+        binding: PersistentComputeBindingKeyV1,
+        completed: Gfx942CompletedDispatchBatchV1<1>,
+    ) -> Result<(), Gfx942CompletedDispatchBatchV1<1>> {
+        let Some(mut attachment) = self.persistent_compute.take() else {
+            return Err(completed);
+        };
+        if attachment.binding != binding {
+            self.persistent_compute = Some(attachment);
+            return Err(completed);
+        }
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Completed(completed_use) = state else {
+            attachment.state = state;
+            self.persistent_compute = Some(attachment);
+            return Err(completed);
+        };
+        let _ = attachment.allocation.owner.quarantine_completed(
+            completed_use,
+            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+        );
+        attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Completed(
+            completed,
+        ));
+        self.persistent_compute = Some(attachment);
+        Ok(())
+    }
+
+    fn absorb_terminal_recycled_persistent_compute_v1(
+        &mut self,
+        binding: PersistentComputeBindingKeyV1,
+        recycle: Gfx942CompletionRecycleObservationV1,
+    ) -> Result<(), Gfx942CompletionRecycleObservationV1> {
+        let Some(mut attachment) = self.persistent_compute.take() else {
+            return Err(recycle);
+        };
+        if attachment.binding != binding {
+            self.persistent_compute = Some(attachment);
+            return Err(recycle);
+        }
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Recycled(completed_use) = state else {
+            attachment.state = state;
+            self.persistent_compute = Some(attachment);
+            return Err(recycle);
+        };
+        let _ = attachment.allocation.owner.quarantine_completed(
+            completed_use,
+            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+        );
+        attachment.terminal_custody =
+            Some(PersistentComputeTerminalNativeCustodyV1::Recycled(recycle));
+        self.persistent_compute = Some(attachment);
+        Ok(())
+    }
+
+    /// Authenticates one exact full-allocation H2D window and retires its
+    /// settled frontier into an initialized persistent-compute receipt.
+    #[allow(clippy::result_large_err)]
+    pub fn promote_full_h2d_to_persistent_compute_ready_v1(
+        &mut self,
+        completed: Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<
+        (Gfx942PersistentComputeReadyV1, Gfx942SdmaBufferV1),
+        Gfx942PersistentComputeReadyFailureV1,
+    > {
+        let completed = preserve_persistent_compute_ready_affiliation_v1(
+            completed,
+            self.key,
+            self.terminal_poisoned,
+        )?;
+        let preflight = self.require_sdma_enabled();
+        let completed = preserve_persistent_compute_ready_preflight_custody_v1(
+            completed,
+            self.terminal_poisoned,
+            preflight,
+        )?;
+        let direction = completed.direction();
+        let host_offset = completed.host_offset();
+        let device_offset = completed.device_offset();
+        let copy_bytes = u64::from(completed.copy_bytes());
+        let packet_count = completed.packet_count();
+        let (allocation, host, frontier) = completed.into_parts();
+        let valid = direction == Gfx942PersistentSdmaDirectionV1::HostToDevice
+            && host_offset == 0
+            && device_offset == 0
+            && allocation.byte_len() == allocation.physical_byte_len()
+            && copy_bytes == allocation.physical_byte_len()
+            && content.byte_len() == copy_bytes
+            && host.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+            && host.requested_bytes() == copy_bytes
+            && host.physical_bytes() == copy_bytes
+            && allocation.attachment.queue == self.compute_lane_session
+            && self.directional_persistent_sdma_attachment_is_current(&allocation.attachment);
+        if !valid {
+            return Err(Gfx942PersistentComputeReadyFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute initialization requires one exact full H2D window",
+                ),
+                custody: Gfx942PersistentComputeReadyFailureCustodyV1::Retryable((
+                    allocation, host, frontier,
+                )),
+            });
+        }
+        let observed = self.with_live_queue_memory_model(|memory| {
+            sha256_host_buffer(memory, &host, 0, copy_bytes).map_err(Into::into)
+        });
+        let observed = match observed {
+            Ok(observed) => observed,
+            Err(error) => {
+                self.poison_terminal();
+                let completed =
+                    Gfx942DirectionalPersistentSdmaWindowCompletedV1::from_parts_for_terminal(
+                        allocation,
+                        host,
+                        frontier,
+                        direction,
+                        host_offset,
+                        device_offset,
+                        u32::try_from(copy_bytes).expect("copy bytes came from u32"),
+                        packet_count,
+                    );
+                return Err(terminal_persistent_compute_ready_hash_failure_v1(
+                    error, completed,
+                ));
+            }
+        };
+        if !content_descriptor_matches_sha256(content, copy_bytes, observed) {
+            return Err(Gfx942PersistentComputeReadyFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute H2D content descriptor mismatch",
+                ),
+                custody: Gfx942PersistentComputeReadyFailureCustodyV1::Retryable((
+                    allocation, host, frontier,
+                )),
+            });
+        }
+        let allocation = match allocation.retire_settled_frontier_v1(frontier) {
+            Ok(allocation) => allocation,
+            Err(failure) => {
+                let (allocation, frontier) = failure.into_parts();
+                return Err(Gfx942PersistentComputeReadyFailureV1 {
+                    error: ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent compute H2D frontier retirement",
+                    ),
+                    custody: Gfx942PersistentComputeReadyFailureCustodyV1::Retryable((
+                        allocation, host, frontier,
+                    )),
+                });
+            }
+        };
+        Ok((
+            Gfx942PersistentComputeReadyV1 {
+                allocation,
+                authenticated_sha256: content.sha256(),
+            },
+            host,
+        ))
+    }
+
     /// Maximum number of independently publishable compute queues retained by
     /// one checked process-VM session in the reviewed runtime profile.
     pub const MAX_COMPUTE_LANES_V1: usize = 2;
@@ -3351,6 +4087,9 @@ impl ComputeAqlQueueSessionV1 {
         lane: ComputeAqlQueueLaneV1,
         operation: impl FnOnce(&mut ComputeAqlQueueLaneDispatchV1<'_>) -> R,
     ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
         let admitted = admit_compute_lane_v1(
             self.compute_lane_session,
             &self.auxiliary_compute_lanes,
@@ -3360,6 +4099,9 @@ impl ComputeAqlQueueSessionV1 {
             let mut lane = ComputeAqlQueueLaneDispatchV1 { session: self };
             return Ok(operation(&mut lane));
         };
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         let mut selected = self.auxiliary_compute_lanes[index]
             .state
             .take()
@@ -3392,6 +4134,9 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         validate_fixed_batch_ring::<N>(ring_bytes)?;
         let slot = prepare_auxiliary_compute_lane_slot_v1(&self.auxiliary_compute_lanes)?;
@@ -3970,6 +4715,10 @@ impl ComputeAqlQueueSessionV1 {
             detached_dispatch_generation: None,
             detached_data_identities: Vec::new(),
             detached_next_insertion_index: None,
+            persistent_compute: None,
+            #[cfg(test)]
+            persistent_compute_test_release: None,
+            next_persistent_compute_generation: 1,
             exception: Some(QueueExceptionStateV1 {
                 runtime,
                 runtime_control,
@@ -4417,9 +5166,44 @@ impl ComputeAqlQueueSessionV1 {
             custody: Gfx942PersistentSdmaSubmissionCustodyV1::Retryable { allocation, host },
         };
         let direction = allocation.direction();
-        if allocation.attachment.queue != self.key
-            || !host.belongs_to(self.key)
-            || host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
+        if allocation.attachment.queue != self.key || !host.belongs_to(self.key) {
+            return Err(retryable(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent SDMA submission owner substitution",
+                ),
+                allocation,
+                host,
+            ));
+        }
+        match admit_sdma_publication_while_compute_detached(
+            self.terminal_poisoned,
+            self.persistent_compute.is_some(),
+            SdmaPublicationModeV1::Persistent,
+        ) {
+            Ok(_) => {}
+            Err(Gfx942DispatchBindingErrorV1::Poisoned) => {
+                allocation
+                    .owner
+                    .quarantine_for_caller_reported_currentness_loss();
+                return Err(Gfx942PersistentSdmaSubmissionFailureV1 {
+                    error: ComputeAqlQueueSessionErrorV1::Contract(
+                        "terminal queue session requires process teardown",
+                    ),
+                    custody: Gfx942PersistentSdmaSubmissionCustodyV1::ProcessTeardown(
+                        Gfx942PersistentSdmaTerminalCustodyV1 {
+                            direction,
+                            sequence: None,
+                            state: Gfx942PersistentSdmaTerminalStateV1::AdmissionRestored {
+                                allocation,
+                                host,
+                            },
+                        },
+                    ),
+                });
+            }
+            Err(error) => return Err(retryable(error.into(), allocation, host)),
+        }
+        if host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
             || copy_bytes == 0
             || u64::from(copy_bytes) > u64::from(crate::sdma::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)
             || host_offset
@@ -5163,7 +5947,7 @@ impl ComputeAqlQueueSessionV1 {
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub fn submit_directional_persistent_sdma_copy_v1(
         &mut self,
-        mut allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
         direction: Gfx942PersistentSdmaDirectionV1,
         host: Gfx942SdmaBufferV1,
         host_offset: u64,
@@ -5181,46 +5965,22 @@ impl ComputeAqlQueueSessionV1 {
                     host,
                 },
             };
-        if allocation.attachment.queue != self.key
-            || !host.belongs_to(self.key)
-            || host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
-            || copy_bytes == 0
-            || copy_bytes > crate::sdma::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1
-            || host_offset
-                .checked_add(u64::from(copy_bytes))
-                .is_none_or(|end| end > host.requested_bytes())
-            || device_offset
-                .checked_add(u64::from(copy_bytes))
-                .is_none_or(|end| end > allocation.byte_len())
-            || !allocation.owner.local_native_is_attached_for_sdma()
-        {
-            return Err(retryable(
-                ComputeAqlQueueSessionErrorV1::Contract(
-                    "directional persistent SDMA submission owner, buffer, or range",
-                ),
-                allocation,
-                host,
-            ));
-        }
-        if self.terminal_poisoned {
-            allocation
-                .owner
-                .quarantine_for_caller_reported_currentness_loss();
-            return Err(Gfx942DirectionalPersistentSdmaSubmissionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "terminal queue session requires process teardown",
-                ),
-                custody: Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::ProcessTeardown(
-                    Gfx942DirectionalPersistentSdmaTerminalCustodyV1 {
-                        direction,
-                        sequence: None,
-                        state: Gfx942DirectionalPersistentSdmaTerminalStateV1::AdmissionRestored {
-                            allocation,
-                            host,
-                        },
-                    },
-                ),
-            });
+        let (mut allocation, host) = admit_directional_persistent_sdma_copy_input_v1(
+            self.key,
+            self.terminal_poisoned,
+            allocation,
+            direction,
+            host,
+            host_offset,
+            device_offset,
+            copy_bytes,
+        )?;
+        if let Err(error) = admit_sdma_publication_while_compute_detached(
+            false,
+            self.persistent_compute.is_some(),
+            SdmaPublicationModeV1::DirectionalCopy(direction),
+        ) {
+            return Err(retryable(error.into(), allocation, host));
         }
         if let Err(error) = self.require_sdma_enabled() {
             return Err(retryable(error, allocation, host));
@@ -5734,7 +6494,7 @@ impl ComputeAqlQueueSessionV1 {
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub fn submit_directional_persistent_sdma_window_v1(
         &mut self,
-        mut allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
         direction: Gfx942PersistentSdmaDirectionV1,
         host: Gfx942SdmaBufferV1,
         host_offset: u64,
@@ -5752,51 +6512,22 @@ impl ComputeAqlQueueSessionV1 {
                     host,
                 },
             };
-        let packet_count = match persistent_sdma_window_packet_count(copy_bytes) {
-            Ok(packet_count) => packet_count,
-            Err(error) => return Err(retryable(error.into(), allocation, host)),
-        };
-        if allocation.attachment.queue != self.key
-            || !host.belongs_to(self.key)
-            || host.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
-            || host_offset
-                .checked_add(u64::from(copy_bytes))
-                .is_none_or(|end| end > host.requested_bytes())
-            || device_offset
-                .checked_add(u64::from(copy_bytes))
-                .is_none_or(|end| end > allocation.byte_len())
-            || !allocation.owner.local_native_is_attached_for_sdma()
-        {
-            return Err(retryable(
-                ComputeAqlQueueSessionErrorV1::Contract(
-                    "directional persistent SDMA window owner, buffer, or range",
-                ),
-                allocation,
-                host,
-            ));
-        }
-        if self.terminal_poisoned {
-            allocation
-                .owner
-                .quarantine_for_caller_reported_currentness_loss();
-            return Err(Gfx942DirectionalPersistentSdmaWindowSubmissionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "terminal queue session requires process teardown",
-                ),
-                custody:
-                    Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
-                        Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1 {
-                            direction,
-                            sequence: None,
-                            packet_count,
-                            state: Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::AdmissionRestored {
-                                allocation,
-                                host,
-                            },
-                        },
-                    ),
-            });
-        }
+        let (allocation, host, packet_count) = admit_directional_persistent_sdma_window_input_v1(
+            self.key,
+            self.terminal_poisoned,
+            allocation,
+            direction,
+            host,
+            host_offset,
+            device_offset,
+            copy_bytes,
+        )?;
+        let (mut allocation, host) = preserve_directional_window_sdma_publication_custody_v1(
+            self.persistent_compute.is_some(),
+            direction,
+            allocation,
+            host,
+        )?;
         if let Err(error) = self.require_sdma_enabled() {
             return Err(retryable(error, allocation, host));
         }
@@ -6382,9 +7113,9 @@ impl ComputeAqlQueueSessionV1 {
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub fn submit_same_device_persistent_sdma_window_v1(
         &mut self,
-        mut source: Gfx942DirectionalQueuePersistentAllocationV1,
+        source: Gfx942DirectionalQueuePersistentAllocationV1,
         source_offset: u64,
-        mut destination: Gfx942DirectionalQueuePersistentAllocationV1,
+        destination: Gfx942DirectionalQueuePersistentAllocationV1,
         destination_offset: u64,
         copy_bytes: u32,
     ) -> Result<
@@ -6399,61 +7130,22 @@ impl ComputeAqlQueueSessionV1 {
                     destination,
                 },
             };
-        let packet_count = match persistent_sdma_window_packet_count(copy_bytes) {
-            Ok(packet_count) => packet_count,
-            Err(error) => return Err(retryable(error.into(), source, destination)),
-        };
-        let descriptor = same_device_persistent_sdma_descriptor_v1(
-            source_offset,
-            destination_offset,
-            copy_bytes,
-            packet_count,
-        );
-        if source.attachment.queue != self.key
-            || destination.attachment.queue != self.key
-            || source.attachment.pair != destination.attachment.pair
-            || source.attachment.storage_identity == destination.attachment.storage_identity
-            || source_offset
-                .checked_add(u64::from(copy_bytes))
-                .is_none_or(|end| end > source.byte_len())
-            || destination_offset
-                .checked_add(u64::from(copy_bytes))
-                .is_none_or(|end| end > destination.byte_len())
-            || !source.owner.local_native_is_attached_for_sdma()
-            || !destination.owner.local_native_is_attached_for_sdma()
-        {
-            return Err(retryable(
-                ComputeAqlQueueSessionErrorV1::Contract(
-                    "same-device persistent SDMA owner, identity, or range",
-                ),
+        let (mut source, mut destination, descriptor) =
+            admit_same_device_persistent_sdma_window_input_v1(
+                self.key,
+                self.terminal_poisoned,
                 source,
+                source_offset,
                 destination,
-            ));
-        }
-        if self.terminal_poisoned {
-            source
-                .owner
-                .quarantine_for_caller_reported_currentness_loss();
-            destination
-                .owner
-                .quarantine_for_caller_reported_currentness_loss();
-            return Err(Gfx942SameDevicePersistentSdmaWindowSubmissionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "terminal queue session requires process teardown",
-                ),
-                custody: Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
-                    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1 {
-                        source_sequence: None,
-                        destination_sequence: None,
-                        descriptor,
-                        state:
-                            Gfx942SameDevicePersistentSdmaWindowTerminalStateV1::AdmissionRestored {
-                                source,
-                                destination,
-                            },
-                    },
-                ),
-            });
+                destination_offset,
+                copy_bytes,
+            )?;
+        if let Err(error) = admit_sdma_publication_while_compute_detached(
+            false,
+            self.persistent_compute.is_some(),
+            SdmaPublicationModeV1::SameDeviceWindow,
+        ) {
+            return Err(retryable(error.into(), source, destination));
         }
         if let Err(error) = self.require_sdma_enabled() {
             return Err(retryable(error, source, destination));
@@ -7510,16 +8202,21 @@ impl ComputeAqlQueueSessionV1 {
         destination_offset: u64,
         copy_bytes: u32,
     ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942SdmaSubmissionFailureV1> {
-        if !source.belongs_to(self.key) || !destination.belongs_to(self.key) {
-            return Err(Gfx942SdmaSubmissionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
-                recovered: Some((source, destination)),
-            });
-        }
         if let Err(error) = self.require_sdma_enabled() {
             return Err(Gfx942SdmaSubmissionFailureV1 {
                 error,
                 recovered: None,
+            });
+        }
+        let (source, destination) = preserve_ordinary_sdma_publication_custody_v1(
+            self.persistent_compute.is_some(),
+            source,
+            destination,
+        )?;
+        if !source.belongs_to(self.key) || !destination.belongs_to(self.key) {
+            return Err(Gfx942SdmaSubmissionFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+                recovered: Some((source, destination)),
             });
         }
         if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
@@ -7600,18 +8297,28 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         requests: Vec<Gfx942SdmaCopyRequestV1>,
     ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942SdmaBatchSubmissionFailureV1> {
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error,
+                recovered: None,
+            });
+        }
+        if let Err(error) = admit_sdma_publication_while_compute_detached(
+            false,
+            self.persistent_compute.is_some(),
+            SdmaPublicationModeV1::OrdinaryBatch,
+        ) {
+            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
+                error: error.into(),
+                recovered: Some(requests),
+            });
+        }
         if requests.iter().any(|request| {
             !request.source.belongs_to(self.key) || !request.destination.belongs_to(self.key)
         }) {
             return Err(Gfx942SdmaBatchSubmissionFailureV1 {
                 error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
                 recovered: Some(requests),
-            });
-        }
-        if let Err(error) = self.require_sdma_enabled() {
-            return Err(Gfx942SdmaBatchSubmissionFailureV1 {
-                error,
-                recovered: None,
             });
         }
         if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
@@ -7707,6 +8414,17 @@ impl ComputeAqlQueueSessionV1 {
                 error,
                 disposition,
                 custody,
+            });
+        }
+        if let Err(error) = admit_sdma_publication_while_compute_detached(
+            false,
+            self.persistent_compute.is_some(),
+            SdmaPublicationModeV1::StripedBatch,
+        ) {
+            return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
+                error: error.into(),
+                disposition: Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight,
+                custody: Gfx942SdmaMultiQueueFailureCustodyV1::RetryableRequests(requests),
             });
         }
         if requests.iter().any(|request| {
@@ -7876,18 +8594,28 @@ impl ComputeAqlQueueSessionV1 {
         requests: Vec<Gfx942SdmaCopyRequestV1>,
         timeout: Duration,
     ) -> Result<Vec<Gfx942SdmaCompletedCopyV1>, Gfx942SdmaBatchExecutionFailureV1> {
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                error,
+                recovery: None,
+            });
+        }
+        if let Err(error) = admit_sdma_publication_while_compute_detached(
+            false,
+            self.persistent_compute.is_some(),
+            SdmaPublicationModeV1::ExecuteBatch,
+        ) {
+            return Err(Gfx942SdmaBatchExecutionFailureV1 {
+                error: error.into(),
+                recovery: Some(Gfx942SdmaBatchExecutionRecoveryV1::Requests(requests)),
+            });
+        }
         if requests.iter().any(|request| {
             !request.source.belongs_to(self.key) || !request.destination.belongs_to(self.key)
         }) {
             return Err(Gfx942SdmaBatchExecutionFailureV1 {
                 error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
                 recovery: Some(Gfx942SdmaBatchExecutionRecoveryV1::Requests(requests)),
-            });
-        }
-        if let Err(error) = self.require_sdma_enabled() {
-            return Err(Gfx942SdmaBatchExecutionFailureV1 {
-                error,
-                recovery: None,
             });
         }
         if let Err(error) = self.with_sdma_owner_memory(|_, memory| {
@@ -8124,7 +8852,1270 @@ impl ComputeAqlQueueSessionV1 {
 
     /// Detaches one exactly completed and recycled fixed batch while keeping
     /// the native queue and all queue resources live.
+    #[allow(clippy::result_large_err)]
+    pub fn bind_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; 1],
+        mut input: Gfx942PersistentComputeInputV1,
+        content_role: Gfx942DeviceContentRoleV1,
+    ) -> Result<Gfx942PreparedPersistentComputeDispatchV1, Gfx942PersistentComputeBindFailureV1>
+    {
+        let recover = |error, input| Gfx942PersistentComputeBindFailureV1 {
+            error,
+            custody: Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input),
+        };
+        if !input.belongs_to(self.compute_lane_session) {
+            return Err(recover(
+                if self.terminal_poisoned {
+                    Gfx942DispatchBindingErrorV1::Poisoned.into()
+                } else {
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent compute input owner substitution",
+                    )
+                },
+                input,
+            ));
+        }
+        if self.terminal_poisoned {
+            return Err(Gfx942PersistentComputeBindFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                    Gfx942PersistentComputeBindTerminalCustodyV1 { input: Some(input) },
+                ),
+            });
+        }
+        if self.persistent_compute.is_some() || self.dispatch.is_some() {
+            return Err(recover(
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                input,
+            ));
+        }
+        if self.key != self.compute_lane_session {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute requires the primary compute lane",
+                ),
+                input,
+            ));
+        }
+        let detached_generation = self.detached_dispatch_generation;
+        let detached_is_empty = self.detached_data_count == 0
+            && self.detached_data_identities.is_empty()
+            && match detached_generation {
+                None => self.detached_next_insertion_index.is_none(),
+                Some(_) => self.detached_next_insertion_index == Some(0),
+            };
+        if !detached_is_empty {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute requires an empty initial or recycled dispatch roster",
+                ),
+                input,
+            ));
+        }
+        if let Err(error) = self.require_sdma_enabled() {
+            return Err(recover(error, input));
+        }
+        let competing_queues_quiescent = self
+            .sdma
+            .as_ref()
+            .is_some_and(Gfx942SdmaQueueSetV1::persistent_compute_is_quiescent)
+            && auxiliary_compute_lanes_are_quiescent_v1(&self.auxiliary_compute_lanes);
+        input = preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(
+            input,
+            competing_queues_quiescent,
+        )?;
+
+        let authenticated_sha256 = match &input {
+            Gfx942PersistentComputeInputV1::Uninitialized(_) => None,
+            Gfx942PersistentComputeInputV1::Initialized(ready) => Some(ready.authenticated_sha256),
+        };
+        let initialized = authenticated_sha256.is_some();
+        let allocation = match &mut input {
+            Gfx942PersistentComputeInputV1::Uninitialized(allocation) => allocation,
+            Gfx942PersistentComputeInputV1::Initialized(ready) => &mut ready.allocation,
+        };
+        if allocation.attachment.queue != self.compute_lane_session
+            || !self.directional_persistent_sdma_attachment_is_current(&allocation.attachment)
+            || allocation.byte_len() != allocation.physical_byte_len()
+            || allocation.owner.live_use_count() != 0
+            || allocation.owner.retained_settled_use_count() != 0
+        {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute requires exact quiescent full-extent directional custody",
+                ),
+                input,
+            ));
+        }
+        let (layout, storage_identity) = {
+            let Some(lease) = allocation.owner.local_native_for_sdma() else {
+                return Err(recover(
+                    ComputeAqlQueueSessionErrorV1::Contract(
+                        "persistent compute requires attached local native custody",
+                    ),
+                    input,
+                ));
+            };
+            (
+                super::dispatch_binding::Gfx942FixedDispatchDataLayoutV1::device_local(
+                    lease.layout().requested_bytes(),
+                    lease.layout().alignment(),
+                ),
+                lease.storage_identity(),
+            )
+        };
+        let native_effect = match preflight_gfx942_persistent_compute_dispatch_v1(
+            &programs,
+            &packets,
+            layout,
+            initialized,
+        ) {
+            Ok(effect) => effect,
+            Err(error) => return Err(recover(error.into(), input)),
+        };
+        let (operation, effect) = match native_effect {
+            DeviceDataEffectV1::ReadOnly => (
+                Gfx942PersistentOperationV1::ComputeRead,
+                Gfx942PersistentComputeEffectV1::Read,
+            ),
+            DeviceDataEffectV1::WriteOnly => (
+                Gfx942PersistentOperationV1::ComputeWrite,
+                Gfx942PersistentComputeEffectV1::Write,
+            ),
+            DeviceDataEffectV1::ReadWrite => (
+                Gfx942PersistentOperationV1::ComputeReadWrite,
+                Gfx942PersistentComputeEffectV1::ReadWrite,
+            ),
+        };
+        let initialized_content = match authenticated_sha256 {
+            Some(sha256) => match Gfx942DeviceContentDescriptorV1::new(
+                content_role,
+                allocation.byte_len(),
+                sha256,
+            ) {
+                Ok(content) => Some(content),
+                Err(_) => {
+                    return Err(recover(
+                        ComputeAqlQueueSessionErrorV1::Contract(
+                            "persistent compute initialized-content relabeling",
+                        ),
+                        input,
+                    ));
+                }
+            },
+            None => None,
+        };
+        let attachment_generation = self.next_persistent_compute_generation;
+        let Some(next_attachment_generation) = attachment_generation.checked_add(1) else {
+            return Err(recover(
+                ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute attachment generation exhausted",
+                ),
+                input,
+            ));
+        };
+        let request = Gfx942PersistentUseRequestV1::new(operation, 0, allocation.byte_len())
+            .expect("nonzero admitted persistent allocation extent");
+        let reserved = match allocation.owner.reserve(request, None) {
+            Ok(reserved) => reserved,
+            Err(failure) => {
+                return Err(recover(
+                    map_directional_persistent_sdma_use_error_v1(failure.error()),
+                    input,
+                ));
+            }
+        };
+        let prepared = match allocation.owner.prepare(reserved) {
+            Ok(prepared) => prepared,
+            Err(failure) => {
+                let (error, reserved) = failure.into_parts();
+                let _ = allocation.owner.cancel_reserved(reserved);
+                return Err(recover(
+                    map_directional_persistent_sdma_use_error_v1(error),
+                    input,
+                ));
+            }
+        };
+        let validation = {
+            let lease = allocation
+                .owner
+                .local_native_for_sdma()
+                .expect("validated local native custody");
+            self.with_live_queue_memory_model(|memory| {
+                memory
+                    .mapped_gfx942_device_memory_facts(lease)
+                    .map(|_| ())
+                    .map_err(Into::into)
+            })
+        };
+        if let Err(error) = validation {
+            match allocation.owner.cancel_prepared(prepared) {
+                Ok(()) if !self.terminal_poisoned => return Err(recover(error, input)),
+                Ok(()) => {
+                    return Err(Gfx942PersistentComputeBindFailureV1 {
+                        error,
+                        custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                            Gfx942PersistentComputeBindTerminalCustodyV1 { input: Some(input) },
+                        ),
+                    });
+                }
+                Err(failure) => {
+                    let (_, prepared) = failure.into_parts();
+                    let (mut allocation, authenticated_sha256, _) = input.into_parts();
+                    let _ = allocation.owner.quarantine_prepared(
+                        prepared,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                    );
+                    self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                        allocation,
+                        authenticated_sha256,
+                        state: PersistentComputeUseStateV1::Quarantined,
+                        binding: PersistentComputeBindingKeyV1 {
+                            queue: self.key,
+                            attachment_generation,
+                        },
+                        storage_identity,
+                        effect,
+                        predecessor_dispatch_generation: detached_generation,
+                        terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
+                    });
+                    self.next_persistent_compute_generation = next_attachment_generation;
+                    self.poison_terminal();
+                    return Err(Gfx942PersistentComputeBindFailureV1 {
+                        error,
+                        custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                            Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+                        ),
+                    });
+                }
+            }
+        }
+        let lease = match allocation.owner.detach_local_native_for_compute(&prepared) {
+            Ok(lease) => lease,
+            Err(error) => {
+                let _ = allocation.owner.cancel_prepared(prepared);
+                return Err(recover(
+                    map_directional_persistent_sdma_use_error_v1(error),
+                    input,
+                ));
+            }
+        };
+        let (mut allocation, authenticated_sha256, initialized) = input.into_parts();
+        let data = match initialized_content {
+            Some(content) => {
+                match Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(
+                    lease, content,
+                ) {
+                    Ok(initialized) => Gfx942FixedDispatchDataV1::initialized(initialized),
+                    Err(_lease) => {
+                        allocation
+                            .owner
+                            .quarantine_prepared(
+                                prepared,
+                                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                            )
+                            .expect("private prepared use remains current");
+                        self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                            allocation,
+                            authenticated_sha256,
+                            state: PersistentComputeUseStateV1::Quarantined,
+                            binding: PersistentComputeBindingKeyV1 {
+                                queue: self.key,
+                                attachment_generation,
+                            },
+                            storage_identity,
+                            effect,
+                            predecessor_dispatch_generation: detached_generation,
+                            terminal_custody: Some(
+                                PersistentComputeTerminalNativeCustodyV1::Storage(
+                                    Gfx942SdmaBufferStorageV1::Device(_lease),
+                                ),
+                            ),
+                        });
+                        self.next_persistent_compute_generation = next_attachment_generation;
+                        self.poison_terminal();
+                        return Err(Gfx942PersistentComputeBindFailureV1 {
+                            error: ComputeAqlQueueSessionErrorV1::Contract(
+                                "persistent compute authenticated extent changed after preflight",
+                            ),
+                            custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                                Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+                            ),
+                        });
+                    }
+                }
+            }
+            None => Gfx942FixedDispatchDataV1::uninitialized(lease),
+        };
+        debug_assert_eq!(initialized, authenticated_sha256.is_some());
+        let loan = match self.restore_model_ownership_for_live_mutation() {
+            Ok(loan) => loan,
+            Err(error) => {
+                allocation
+                    .owner
+                    .quarantine_prepared(
+                        prepared,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                    )
+                    .expect("private prepared use remains current");
+                self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                    allocation,
+                    authenticated_sha256,
+                    state: PersistentComputeUseStateV1::Quarantined,
+                    binding: PersistentComputeBindingKeyV1 {
+                        queue: self.key,
+                        attachment_generation,
+                    },
+                    storage_identity,
+                    effect,
+                    predecessor_dispatch_generation: detached_generation,
+                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Data(vec![
+                        data,
+                    ])),
+                });
+                self.next_persistent_compute_generation = next_attachment_generation;
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputeBindFailureV1 {
+                    error,
+                    custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                        Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+                    ),
+                });
+            }
+        };
+        let prepared_dispatch = {
+            let memory = &mut self
+                .engine
+                .as_mut()
+                .expect("model loan requires queue engine")
+                .backend
+                .session;
+            prepare_persistent_fixed_dispatch_resources_v1(
+                memory,
+                programs,
+                packets,
+                data,
+                detached_generation,
+            )
+        };
+        let retake = self.retake_model_ownership_after_live_mutation(loan);
+        let prepared_dispatch = match (prepared_dispatch, retake) {
+            (Ok(dispatch), Ok(())) => Ok(dispatch),
+            (Err(failure), Ok(())) => Err((failure.error.into(), failure.data)),
+            (Ok(dispatch), Err(error)) => {
+                self.dispatch = Some(dispatch);
+                Err((error, Vec::new()))
+            }
+            (Err(failure), Err(error)) => {
+                let _ = failure.error;
+                Err((error, failure.data))
+            }
+        };
+        let prepared_dispatch = match prepared_dispatch {
+            Ok(dispatch) => dispatch,
+            Err((error, data)) => {
+                allocation
+                    .owner
+                    .quarantine_prepared(
+                        prepared,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                    )
+                    .expect("private prepared use remains current");
+                self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                    allocation,
+                    authenticated_sha256,
+                    state: PersistentComputeUseStateV1::Quarantined,
+                    binding: PersistentComputeBindingKeyV1 {
+                        queue: self.key,
+                        attachment_generation,
+                    },
+                    storage_identity,
+                    effect,
+                    predecessor_dispatch_generation: detached_generation,
+                    terminal_custody: Some(if data.is_empty() {
+                        PersistentComputeTerminalNativeCustodyV1::Attached
+                    } else {
+                        PersistentComputeTerminalNativeCustodyV1::Data(data)
+                    }),
+                });
+                self.next_persistent_compute_generation = next_attachment_generation;
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputeBindFailureV1 {
+                    error,
+                    custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                        Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+                    ),
+                });
+            }
+        };
+        let device_authorities = prepared_dispatch.device_authorities();
+        let validation = self
+            .engine
+            .as_mut()
+            .expect("checked queue engine")
+            .backend
+            .session
+            .validate_live_queue_dispatch_memory(&device_authorities);
+        if let Err(error) = validation {
+            allocation
+                .owner
+                .quarantine_prepared(
+                    prepared,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                )
+                .expect("private prepared use remains current");
+            self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+                allocation,
+                authenticated_sha256,
+                state: PersistentComputeUseStateV1::Quarantined,
+                binding: PersistentComputeBindingKeyV1 {
+                    queue: self.key,
+                    attachment_generation,
+                },
+                storage_identity,
+                effect,
+                predecessor_dispatch_generation: detached_generation,
+                terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
+            });
+            self.next_persistent_compute_generation = next_attachment_generation;
+            self.dispatch = Some(prepared_dispatch);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeBindFailureV1 {
+                error: error.into(),
+                custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                    Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
+                ),
+            });
+        }
+        let binding = PersistentComputeBindingKeyV1 {
+            queue: self.key,
+            attachment_generation,
+        };
+        self.dispatch = Some(prepared_dispatch);
+        self.detached_data_count = 0;
+        self.detached_dispatch_generation = None;
+        self.detached_data_identities.clear();
+        self.detached_next_insertion_index = None;
+        self.persistent_compute = Some(PersistentComputeAttachmentV1 {
+            allocation,
+            authenticated_sha256,
+            state: PersistentComputeUseStateV1::Prepared(prepared),
+            binding,
+            storage_identity,
+            effect,
+            predecessor_dispatch_generation: detached_generation,
+            terminal_custody: None,
+        });
+        self.next_persistent_compute_generation = next_attachment_generation;
+        Ok(Gfx942PreparedPersistentComputeDispatchV1 {
+            binding,
+            thread_affinity: PhantomData,
+        })
+    }
+
+    /// Publishes the exact prepared persistent-compute attachment.
+    #[allow(clippy::result_large_err)]
+    pub fn submit_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        prepared_receipt: Gfx942PreparedPersistentComputeDispatchV1,
+    ) -> Result<Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeExecutionFailureV1> {
+        let binding = prepared_receipt.binding;
+        if binding.queue != self.key {
+            return Err(Gfx942PersistentComputeExecutionFailureV1 {
+                error: if self.terminal_poisoned {
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                } else {
+                    Gfx942DispatchBindingErrorV1::ResourcePhase
+                }
+                .into(),
+                retryable: Some(prepared_receipt),
+            });
+        }
+        if self.terminal_poisoned {
+            let retryable = (!self.absorb_terminal_prepared_persistent_compute_v1(binding))
+                .then_some(prepared_receipt);
+            return Err(Gfx942PersistentComputeExecutionFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                retryable,
+            });
+        }
+        let valid = self
+            .persistent_compute
+            .as_ref()
+            .is_some_and(|attachment| attachment.binding == binding && binding.queue == self.key);
+        if !valid {
+            return Err(Gfx942PersistentComputeExecutionFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                retryable: Some(prepared_receipt),
+            });
+        }
+        let mut attachment = self
+            .persistent_compute
+            .take()
+            .expect("validated persistent compute attachment");
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Prepared(prepared) = state else {
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeExecutionFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                retryable: None,
+            });
+        };
+        match self.submit_fixed_dispatch_inner::<1>() {
+            Ok(batch) => match attachment.allocation.owner.publish(prepared) {
+                Ok(published) => {
+                    attachment.state = PersistentComputeUseStateV1::Published(published);
+                    self.persistent_compute = Some(attachment);
+                    Ok(Gfx942PersistentComputeDispatchV1 {
+                        binding,
+                        batch,
+                        thread_affinity: PhantomData,
+                    })
+                }
+                Err(failure) => {
+                    let (_, prepared) = failure.into_parts();
+                    let _ = attachment.allocation.owner.quarantine_prepared(
+                        prepared,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate,
+                    );
+                    attachment.terminal_custody =
+                        Some(PersistentComputeTerminalNativeCustodyV1::Published(batch));
+                    self.persistent_compute = Some(attachment);
+                    self.poison_terminal();
+                    Err(Gfx942PersistentComputeExecutionFailureV1 {
+                        error: ComputeAqlQueueSessionErrorV1::Contract(
+                            "persistent compute publication ledger transition",
+                        ),
+                        retryable: None,
+                    })
+                }
+            },
+            Err(error) if !self.terminal_poisoned => {
+                attachment.state = PersistentComputeUseStateV1::Prepared(prepared);
+                self.persistent_compute = Some(attachment);
+                Err(Gfx942PersistentComputeExecutionFailureV1 {
+                    error,
+                    retryable: Some(Gfx942PreparedPersistentComputeDispatchV1 {
+                        binding,
+                        thread_affinity: PhantomData,
+                    }),
+                })
+            }
+            Err(error) => {
+                let _ = attachment.allocation.owner.quarantine_prepared(
+                    prepared,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate,
+                );
+                attachment.terminal_custody =
+                    Some(PersistentComputeTerminalNativeCustodyV1::Attached);
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                Err(Gfx942PersistentComputeExecutionFailureV1 {
+                    error,
+                    retryable: None,
+                })
+            }
+        }
+    }
+
+    /// Cancels an exact prepared attachment before publication and restores
+    /// the original initialized or uninitialized persistent input.
+    #[allow(clippy::result_large_err)]
+    pub fn cancel_prepared_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        prepared_receipt: Gfx942PreparedPersistentComputeDispatchV1,
+    ) -> Result<Gfx942PersistentComputeInputV1, Gfx942PersistentComputeCancelFailureV1> {
+        let binding = prepared_receipt.binding;
+        if binding.queue != self.key {
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: if self.terminal_poisoned {
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                } else {
+                    Gfx942DispatchBindingErrorV1::ResourcePhase
+                }
+                .into(),
+                recovered: Some(prepared_receipt),
+                retained: None,
+            });
+        }
+        if self.terminal_poisoned {
+            let recovered = (!self.absorb_terminal_prepared_persistent_compute_v1(binding))
+                .then_some(prepared_receipt);
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                recovered,
+                retained: None,
+            });
+        }
+        let valid = self
+            .persistent_compute
+            .as_ref()
+            .is_some_and(|attachment| attachment.binding == binding && binding.queue == self.key);
+        if !valid {
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: Some(prepared_receipt),
+                retained: None,
+            });
+        }
+        let mut attachment = self
+            .persistent_compute
+            .take()
+            .expect("validated persistent compute attachment");
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Prepared(prepared) = state else {
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: None,
+                retained: None,
+            });
+        };
+        let returned = self.release_persistent_dispatch_data(false);
+        let (generation, mut data) = match returned {
+            Ok(returned) => returned,
+            Err((error, data)) => {
+                let _ = attachment.allocation.owner.quarantine_prepared(
+                    prepared,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                );
+                attachment.terminal_custody = Some(if data.is_empty() && self.dispatch.is_some() {
+                    PersistentComputeTerminalNativeCustodyV1::Attached
+                } else {
+                    PersistentComputeTerminalNativeCustodyV1::Data(data)
+                });
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputeCancelFailureV1 {
+                    error,
+                    recovered: None,
+                    retained: None,
+                });
+            }
+        };
+        let expected_generation = attachment.predecessor_dispatch_generation.unwrap_or(0);
+        let exact = generation == expected_generation
+            && data.len() == 1
+            && data[0].sdma_storage_identity()
+                == Gfx942SdmaBufferStorageIdentityV1::Device(attachment.storage_identity);
+        if !exact {
+            let _ = attachment.allocation.owner.quarantine_prepared(
+                prepared,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            );
+            attachment.terminal_custody =
+                Some(PersistentComputeTerminalNativeCustodyV1::Data(data));
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute cancellation returned substituted storage",
+                ),
+                recovered: None,
+                retained: None,
+            });
+        }
+        let data = data.pop().expect("validated one returned data authority");
+        let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
+            unreachable!("validated device storage identity")
+        };
+        if let Err((_error, lease)) = attachment
+            .allocation
+            .owner
+            .restore_local_native_from_cancelled_compute(&prepared, lease)
+        {
+            let _ = attachment.allocation.owner.quarantine_prepared(
+                prepared,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            );
+            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Storage(
+                Gfx942SdmaBufferStorageV1::Device(lease),
+            ));
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute cancellation native restore",
+                ),
+                recovered: None,
+                retained: None,
+            });
+        }
+        if attachment
+            .allocation
+            .owner
+            .cancel_prepared(prepared)
+            .is_err()
+        {
+            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Restored);
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeCancelFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute cancellation ledger transition",
+                ),
+                recovered: None,
+                retained: None,
+            });
+        }
+        if expected_generation == 0 {
+            self.detached_dispatch_generation = None;
+            self.detached_next_insertion_index = None;
+        } else {
+            self.detached_dispatch_generation = Some(expected_generation);
+            self.detached_next_insertion_index = Some(0);
+        }
+        self.detached_data_count = 0;
+        self.detached_data_identities.clear();
+        Ok(Gfx942PersistentComputeInputV1::from_parts(
+            attachment.allocation,
+            attachment.authenticated_sha256,
+        ))
+    }
+
+    /// Polls one published persistent-compute dispatch, retaining all custody
+    /// in either returned typestate.
+    #[allow(clippy::result_large_err)]
+    pub fn poll_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        dispatch_receipt: Gfx942PersistentComputeDispatchV1,
+    ) -> Result<Gfx942PersistentComputePollV1, Gfx942PersistentComputePollFailureV1> {
+        let binding = dispatch_receipt.binding;
+        if binding.queue != self.key {
+            return Err(Gfx942PersistentComputePollFailureV1 {
+                error: if self.terminal_poisoned {
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                } else {
+                    Gfx942DispatchBindingErrorV1::ResourcePhase
+                }
+                .into(),
+                recovered: Some(dispatch_receipt),
+                retained: None,
+            });
+        }
+        if self.terminal_poisoned {
+            return match self
+                .absorb_terminal_published_persistent_compute_v1(binding, dispatch_receipt.batch)
+            {
+                Ok(()) => Err(Gfx942PersistentComputePollFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                    recovered: None,
+                    retained: None,
+                }),
+                Err(batch) => Err(Gfx942PersistentComputePollFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                    recovered: Some(Gfx942PersistentComputeDispatchV1 {
+                        binding,
+                        batch,
+                        thread_affinity: PhantomData,
+                    }),
+                    retained: None,
+                }),
+            };
+        }
+        let valid = self
+            .persistent_compute
+            .as_ref()
+            .is_some_and(|attachment| attachment.binding == binding && binding.queue == self.key);
+        if !valid {
+            return Err(Gfx942PersistentComputePollFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: Some(dispatch_receipt),
+                retained: None,
+            });
+        }
+        let mut attachment = self
+            .persistent_compute
+            .take()
+            .expect("validated persistent compute attachment");
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Published(published) = state else {
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputePollFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: None,
+                retained: Some(PersistentComputeTerminalNativeCustodyV1::Published(
+                    dispatch_receipt.batch,
+                )),
+            });
+        };
+        let (completion, generation) = unwrap_published(dispatch_receipt.batch);
+        let generation_is_current = self
+            .dispatch
+            .as_ref()
+            .and_then(|dispatch| dispatch.active_generation().ok())
+            == Some(generation);
+        if !generation_is_current {
+            let batch = wrap_published(completion, generation);
+            let _ = attachment.allocation.owner.quarantine_published(
+                published,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+            );
+            attachment.terminal_custody =
+                Some(PersistentComputeTerminalNativeCustodyV1::Published(batch));
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputePollFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                recovered: None,
+                retained: None,
+            });
+        }
+        match self.poll_completion_batch_with_progress_retaining(completion) {
+            Ok(Gfx942CompletionPollWithProgressV1::Pending { batch, .. }) => {
+                attachment.state = PersistentComputeUseStateV1::Published(published);
+                self.persistent_compute = Some(attachment);
+                Ok(Gfx942PersistentComputePollV1::Pending(
+                    Gfx942PersistentComputeDispatchV1 {
+                        binding,
+                        batch: wrap_published(batch, generation),
+                        thread_affinity: PhantomData,
+                    },
+                ))
+            }
+            Ok(Gfx942CompletionPollWithProgressV1::Ready { completed, .. }) => {
+                let completed = wrap_completed(completed, generation);
+                if self
+                    .dispatch
+                    .as_mut()
+                    .expect("persistent dispatch retained")
+                    .mark_completed(generation)
+                    .is_err()
+                {
+                    let _ = attachment.allocation.owner.quarantine_published(
+                        published,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                    );
+                    attachment.terminal_custody = Some(
+                        PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+                    );
+                    self.persistent_compute = Some(attachment);
+                    self.poison_terminal();
+                    return Err(Gfx942PersistentComputePollFailureV1 {
+                        error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                        recovered: None,
+                        retained: None,
+                    });
+                }
+                match attachment.allocation.owner.complete(published) {
+                    Ok(completed_use) => {
+                        attachment.state = PersistentComputeUseStateV1::Completed(completed_use);
+                        self.persistent_compute = Some(attachment);
+                        Ok(Gfx942PersistentComputePollV1::Ready(
+                            Gfx942CompletedPersistentComputeDispatchV1 {
+                                binding,
+                                completed,
+                                thread_affinity: PhantomData,
+                            },
+                        ))
+                    }
+                    Err(failure) => {
+                        let (_, published) = failure.into_parts();
+                        let _ = attachment.allocation.owner.quarantine_published(
+                            published,
+                            Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                        );
+                        attachment.terminal_custody = Some(
+                            PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+                        );
+                        self.persistent_compute = Some(attachment);
+                        self.poison_terminal();
+                        Err(Gfx942PersistentComputePollFailureV1 {
+                            error: ComputeAqlQueueSessionErrorV1::Contract(
+                                "persistent compute completion ledger transition",
+                            ),
+                            recovered: None,
+                            retained: None,
+                        })
+                    }
+                }
+            }
+            Err((error, completion)) => {
+                let batch = wrap_published(completion, generation);
+                let _ = attachment.allocation.owner.quarantine_published(
+                    published,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                );
+                attachment.terminal_custody =
+                    Some(PersistentComputeTerminalNativeCustodyV1::Published(batch));
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                Err(Gfx942PersistentComputePollFailureV1 {
+                    error,
+                    recovered: None,
+                    retained: None,
+                })
+            }
+        }
+    }
+
+    /// Recycles the exact completion signal after device completion.
+    #[allow(clippy::result_large_err)]
+    pub fn recycle_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        completed_receipt: Gfx942CompletedPersistentComputeDispatchV1,
+    ) -> Result<Gfx942RecycledPersistentComputeDispatchV1, Gfx942PersistentComputeRecycleFailureV1>
+    {
+        let binding = completed_receipt.binding;
+        if binding.queue != self.key {
+            return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                error: if self.terminal_poisoned {
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                } else {
+                    Gfx942DispatchBindingErrorV1::ResourcePhase
+                }
+                .into(),
+                recovered: Some(completed_receipt),
+                retained: None,
+            });
+        }
+        if self.terminal_poisoned {
+            return match self.absorb_terminal_completed_persistent_compute_v1(
+                binding,
+                completed_receipt.completed,
+            ) {
+                Ok(()) => Err(Gfx942PersistentComputeRecycleFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                    recovered: None,
+                    retained: None,
+                }),
+                Err(completed) => Err(Gfx942PersistentComputeRecycleFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                    recovered: Some(Gfx942CompletedPersistentComputeDispatchV1 {
+                        binding,
+                        completed,
+                        thread_affinity: PhantomData,
+                    }),
+                    retained: None,
+                }),
+            };
+        }
+        let valid = self
+            .persistent_compute
+            .as_ref()
+            .is_some_and(|attachment| attachment.binding == binding && binding.queue == self.key);
+        if !valid {
+            return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: Some(completed_receipt),
+                retained: None,
+            });
+        }
+        let mut attachment = self
+            .persistent_compute
+            .take()
+            .expect("validated persistent compute attachment");
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Completed(completed_use) = state else {
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: None,
+                retained: Some(PersistentComputeTerminalNativeCustodyV1::Completed(
+                    completed_receipt.completed,
+                )),
+            });
+        };
+        let (completion, generation) = unwrap_completed(completed_receipt.completed);
+        let generation_is_current = self
+            .dispatch
+            .as_ref()
+            .and_then(|dispatch| dispatch.active_generation().ok())
+            == Some(generation);
+        if !generation_is_current {
+            let completed = wrap_completed(completion, generation);
+            let _ = attachment.allocation.owner.quarantine_completed(
+                completed_use,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+            );
+            attachment.terminal_custody = Some(
+                PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+            );
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                recovered: None,
+                retained: None,
+            });
+        }
+        match self.recycle_completion_batch_retaining(completion) {
+            Ok(recycle) => {
+                if self
+                    .dispatch
+                    .as_mut()
+                    .expect("persistent dispatch retained")
+                    .mark_recycled(generation)
+                    .is_err()
+                {
+                    let _ = attachment.allocation.owner.quarantine_completed(
+                        completed_use,
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                    );
+                    attachment.terminal_custody =
+                        Some(PersistentComputeTerminalNativeCustodyV1::Recycled(recycle));
+                    self.persistent_compute = Some(attachment);
+                    self.poison_terminal();
+                    return Err(Gfx942PersistentComputeRecycleFailureV1 {
+                        error: Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+                        recovered: None,
+                        retained: None,
+                    });
+                }
+                attachment.state = PersistentComputeUseStateV1::Recycled(completed_use);
+                self.persistent_compute = Some(attachment);
+                Ok(Gfx942RecycledPersistentComputeDispatchV1 {
+                    binding,
+                    recycle,
+                    thread_affinity: PhantomData,
+                })
+            }
+            Err((error, completion)) => {
+                let completed = wrap_completed(completion, generation);
+                let _ = attachment.allocation.owner.quarantine_completed(
+                    completed_use,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCompletionIndeterminate,
+                );
+                attachment.terminal_custody = Some(
+                    PersistentComputeTerminalNativeCustodyV1::Completed(completed),
+                );
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                Err(Gfx942PersistentComputeRecycleFailureV1 {
+                    error,
+                    recovered: None,
+                    retained: None,
+                })
+            }
+        }
+    }
+
+    /// Detaches the recycled batch, restores the exact mapped HBM authority to
+    /// its persistent owner, and settles the compute ledger use.
+    #[allow(clippy::result_large_err)]
+    pub fn detach_recycled_directional_persistent_fixed_dispatch_v1(
+        &mut self,
+        recycled_receipt: Gfx942RecycledPersistentComputeDispatchV1,
+    ) -> Result<Gfx942PersistentComputeCompletedV1, Gfx942PersistentComputeDetachFailureV1> {
+        let binding = recycled_receipt.binding;
+        if binding.queue != self.key {
+            return Err(Gfx942PersistentComputeDetachFailureV1 {
+                error: if self.terminal_poisoned {
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                } else {
+                    Gfx942DispatchBindingErrorV1::ResourcePhase
+                }
+                .into(),
+                recovered: Some(recycled_receipt),
+                retained: None,
+            });
+        }
+        if self.terminal_poisoned {
+            return match self
+                .absorb_terminal_recycled_persistent_compute_v1(binding, recycled_receipt.recycle)
+            {
+                Ok(()) => Err(Gfx942PersistentComputeDetachFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                    recovered: None,
+                    retained: None,
+                }),
+                Err(recycle) => Err(Gfx942PersistentComputeDetachFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
+                    recovered: Some(Gfx942RecycledPersistentComputeDispatchV1 {
+                        binding,
+                        recycle,
+                        thread_affinity: PhantomData,
+                    }),
+                    retained: None,
+                }),
+            };
+        }
+        let valid = self
+            .persistent_compute
+            .as_ref()
+            .is_some_and(|attachment| attachment.binding == binding && binding.queue == self.key);
+        if !valid {
+            return Err(Gfx942PersistentComputeDetachFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: Some(recycled_receipt),
+                retained: None,
+            });
+        }
+        let mut attachment = self
+            .persistent_compute
+            .take()
+            .expect("validated persistent compute attachment");
+        let state = core::mem::replace(
+            &mut attachment.state,
+            PersistentComputeUseStateV1::Quarantined,
+        );
+        let PersistentComputeUseStateV1::Recycled(completed_use) = state else {
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeDetachFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: None,
+                retained: Some(PersistentComputeTerminalNativeCustodyV1::Recycled(
+                    recycled_receipt.recycle,
+                )),
+            });
+        };
+        let release_preflight = self
+            .completion_owner
+            .ensure_releasable()
+            .map_err(ComputeAqlQueueSessionErrorV1::from)
+            .and_then(|()| {
+                (self.detached_data_count == 0
+                    && self.detached_dispatch_generation.is_none()
+                    && self.detached_data_identities.is_empty()
+                    && self.detached_next_insertion_index.is_none())
+                .then_some(())
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute detach requires an empty detached-data ledger",
+                ))
+            });
+        if let Err(error) = release_preflight {
+            let _ = attachment.allocation.owner.quarantine_completed(
+                completed_use,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            );
+            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Attached);
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeDetachFailureV1 {
+                error,
+                recovered: None,
+                retained: None,
+            });
+        }
+        let (generation, mut data) = match self.release_persistent_dispatch_data(true) {
+            Ok(returned) => returned,
+            Err((error, data)) => {
+                let _ = attachment.allocation.owner.quarantine_completed(
+                    completed_use,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                );
+                attachment.terminal_custody = Some(if data.is_empty() && self.dispatch.is_some() {
+                    PersistentComputeTerminalNativeCustodyV1::Attached
+                } else {
+                    PersistentComputeTerminalNativeCustodyV1::Data(data)
+                });
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputeDetachFailureV1 {
+                    error,
+                    recovered: None,
+                    retained: None,
+                });
+            }
+        };
+        let exact = generation != 0
+            && recycled_receipt.recycle.packet_count() == 1
+            && data.len() == 1
+            && data[0].sdma_storage_identity()
+                == Gfx942SdmaBufferStorageIdentityV1::Device(attachment.storage_identity);
+        if !exact {
+            let _ = attachment.allocation.owner.quarantine_completed(
+                completed_use,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            );
+            attachment.terminal_custody =
+                Some(PersistentComputeTerminalNativeCustodyV1::Data(data));
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeDetachFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract(
+                    "persistent compute detach returned substituted storage",
+                ),
+                recovered: None,
+                retained: None,
+            });
+        }
+        let data = data.pop().expect("validated one detached data authority");
+        let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
+            unreachable!("validated device storage identity")
+        };
+        if let Err((_error, lease)) = attachment
+            .allocation
+            .owner
+            .restore_local_native_from_compute(&completed_use, lease)
+        {
+            let _ = attachment.allocation.owner.quarantine_completed(
+                completed_use,
+                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+            );
+            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Storage(
+                Gfx942SdmaBufferStorageV1::Device(lease),
+            ));
+            self.persistent_compute = Some(attachment);
+            self.poison_terminal();
+            return Err(Gfx942PersistentComputeDetachFailureV1 {
+                error: ComputeAqlQueueSessionErrorV1::Contract("persistent compute native restore"),
+                recovered: None,
+                retained: None,
+            });
+        }
+        let frontier = match attachment.allocation.owner.settle(completed_use) {
+            Ok(frontier) => frontier,
+            Err(failure) => {
+                let (_, completed_use) = failure.into_parts();
+                let _ = attachment.allocation.owner.quarantine_completed(
+                    completed_use,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                );
+                attachment.terminal_custody =
+                    Some(PersistentComputeTerminalNativeCustodyV1::Restored);
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                return Err(Gfx942PersistentComputeDetachFailureV1 {
+                    error: ComputeAqlQueueSessionErrorV1::Contract("persistent compute settlement"),
+                    recovered: None,
+                    retained: None,
+                });
+            }
+        };
+        self.detached_dispatch_generation = Some(generation);
+        self.detached_data_count = 0;
+        self.detached_data_identities.clear();
+        self.detached_next_insertion_index = Some(0);
+        Ok(Gfx942PersistentComputeCompletedV1 {
+            allocation: attachment.allocation,
+            frontier,
+            effect: attachment.effect,
+        })
+    }
+
     pub fn detach_recycled_fixed_dispatch(
+        &mut self,
+    ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        self.detach_recycled_fixed_dispatch_inner()
+    }
+
+    fn detach_recycled_fixed_dispatch_inner(
         &mut self,
     ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
@@ -9063,6 +11054,18 @@ impl ComputeAqlQueueSessionV1 {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        self.submit_fixed_dispatch_inner::<N>()
+    }
+
+    fn submit_fixed_dispatch_inner<const N: usize>(
+        &mut self,
+    ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
         let templates = self
             .dispatch
             .as_mut()
@@ -9092,7 +11095,13 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         batch: Gfx942DispatchBatchV1<N>,
     ) -> Result<Gfx942DispatchPollV1<N>, ComputeAqlQueueSessionErrorV1> {
-        match self.poll_fixed_dispatch_with_progress(batch)? {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        match self.poll_fixed_dispatch_with_progress_inner(batch)? {
             Gfx942DispatchPollWithProgressV1::Pending { batch, .. } => {
                 Ok(Gfx942DispatchPollV1::Pending(batch))
             }
@@ -9104,6 +11113,19 @@ impl ComputeAqlQueueSessionV1 {
 
     /// Polls every packet signal once and returns custody plus same-scan progress.
     pub fn poll_fixed_dispatch_with_progress<const N: usize>(
+        &mut self,
+        batch: Gfx942DispatchBatchV1<N>,
+    ) -> Result<Gfx942DispatchPollWithProgressV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        self.poll_fixed_dispatch_with_progress_inner(batch)
+    }
+
+    fn poll_fixed_dispatch_with_progress_inner<const N: usize>(
         &mut self,
         batch: Gfx942DispatchBatchV1<N>,
     ) -> Result<Gfx942DispatchPollWithProgressV1<N>, ComputeAqlQueueSessionErrorV1> {
@@ -9148,6 +11170,12 @@ impl ComputeAqlQueueSessionV1 {
         batch: Gfx942DispatchBatchV1<N>,
         polls: u32,
     ) -> Result<Gfx942CompletedDispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         let (completion, generation) = unwrap_published(batch);
         if self
             .dispatch
@@ -9193,6 +11221,12 @@ impl ComputeAqlQueueSessionV1 {
         batch: Gfx942DispatchBatchV1<N>,
         timeout_milliseconds: u32,
     ) -> Result<Gfx942CompletedDispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         let (completion, generation) = unwrap_published(batch);
         if self
             .dispatch
@@ -9233,6 +11267,19 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         completed: Gfx942CompletedDispatchBatchV1<N>,
     ) -> Result<Gfx942CompletionRecycleObservationV1, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        self.recycle_fixed_dispatch_inner(completed)
+    }
+
+    fn recycle_fixed_dispatch_inner<const N: usize>(
+        &mut self,
+        completed: Gfx942CompletedDispatchBatchV1<N>,
+    ) -> Result<Gfx942CompletionRecycleObservationV1, ComputeAqlQueueSessionErrorV1> {
         let (completion, generation) = unwrap_completed(completed);
         if self
             .dispatch
@@ -9269,6 +11316,12 @@ impl ComputeAqlQueueSessionV1 {
     /// Returns the exact dispatch generation only while its completion signals
     /// have been observed and recycled and the same batch remains attached.
     pub fn recycled_fixed_dispatch_generation(&self) -> Result<u64, ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
+        if self.persistent_compute.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         self.dispatch
             .as_ref()
             .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
@@ -9286,6 +11339,11 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         request: Gfx942CompletedDispatchReadRequestV1,
     ) -> Result<Gfx942CompletedDispatchReadbackV1, ComputeAqlQueueSessionErrorV1> {
+        admit_generic_recycled_dispatch_access(
+            self.terminal_poisoned,
+            self.persistent_compute.is_some(),
+            GenericRecycledDispatchAccessV1::Read,
+        )?;
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -9318,6 +11376,11 @@ impl ComputeAqlQueueSessionV1 {
         request: Gfx942CompletedDispatchReadRequestV1,
         destination: &mut [u8],
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        admit_generic_recycled_dispatch_access(
+            self.terminal_poisoned,
+            self.persistent_compute.is_some(),
+            GenericRecycledDispatchAccessV1::ReadInto,
+        )?;
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -9350,6 +11413,11 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         request: Gfx942CompletedDispatchSnapshotRequestV1,
     ) -> Result<Gfx942CompletedDispatchReadbackV1, ComputeAqlQueueSessionErrorV1> {
+        admit_generic_recycled_dispatch_access(
+            self.terminal_poisoned,
+            self.persistent_compute.is_some(),
+            GenericRecycledDispatchAccessV1::Snapshot,
+        )?;
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -9379,6 +11447,11 @@ impl ComputeAqlQueueSessionV1 {
         request: Gfx942RecycledDispatchWriteRequestV1,
         source: &[u8],
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        admit_generic_recycled_dispatch_access(
+            self.terminal_poisoned,
+            self.persistent_compute.is_some(),
+            GenericRecycledDispatchAccessV1::Overwrite,
+        )?;
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -9457,6 +11530,58 @@ impl ComputeAqlQueueSessionV1 {
             self.poison_terminal();
         }
         result.map_err(Into::into)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn poll_completion_batch_with_progress_retaining<const N: usize>(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+    ) -> Result<
+        Gfx942CompletionPollWithProgressV1<N>,
+        (ComputeAqlQueueSessionErrorV1, Gfx942CompletionBatchV1<N>),
+    > {
+        if self.terminal_poisoned {
+            return Err((Gfx942CompletionErrorV1::Poisoned.into(), batch));
+        }
+        let result = {
+            let owner = &mut self.completion_owner;
+            let Some(engine) = self.engine.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine"),
+                    batch,
+                ));
+            };
+            if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("queue is not active"),
+                    batch,
+                ));
+            }
+            let Some(signals) = self.completion_signals.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                    batch,
+                ));
+            };
+            let Some(exception) = self.exception.as_ref() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue exception gate"),
+                    batch,
+                ));
+            };
+            let mut backend = LinuxCompletionSignalBackendV1 {
+                memory: &mut engine.backend.session,
+                signals,
+                exception,
+            };
+            owner
+                .observe_once_with_progress_retaining(batch, &mut backend)
+                .map_err(|(error, batch)| (error.into(), batch))
+        };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result
     }
 
     fn check_timeout_observation_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
@@ -9774,6 +11899,58 @@ impl ComputeAqlQueueSessionV1 {
         result.map_err(Into::into)
     }
 
+    #[allow(clippy::result_large_err)]
+    fn recycle_completion_batch_retaining<const N: usize>(
+        &mut self,
+        completed: Gfx942CompletedBatchV1<N>,
+    ) -> Result<
+        Gfx942CompletionRecycleObservationV1,
+        (ComputeAqlQueueSessionErrorV1, Gfx942CompletedBatchV1<N>),
+    > {
+        if self.terminal_poisoned {
+            return Err((Gfx942CompletionErrorV1::Poisoned.into(), completed));
+        }
+        let result = {
+            let owner = &mut self.completion_owner;
+            let Some(engine) = self.engine.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue engine"),
+                    completed,
+                ));
+            };
+            if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("queue is not active"),
+                    completed,
+                ));
+            }
+            let Some(signals) = self.completion_signals.as_mut() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+                    completed,
+                ));
+            };
+            let Some(exception) = self.exception.as_ref() else {
+                return Err((
+                    ComputeAqlQueueSessionErrorV1::Contract("missing queue exception gate"),
+                    completed,
+                ));
+            };
+            let mut backend = LinuxCompletionSignalBackendV1 {
+                memory: &mut engine.backend.session,
+                signals,
+                exception,
+            };
+            owner
+                .recycle_retaining(completed, &mut backend)
+                .map_err(|(error, completed)| (error.into(), completed))
+        };
+        if result.is_err() {
+            self.poison_terminal();
+        }
+        result
+    }
+
     fn poison_terminal(&mut self) {
         self.terminal_poisoned = true;
         self.completion_owner.poison_owner();
@@ -9968,6 +12145,11 @@ impl ComputeAqlQueueSessionV1 {
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
+            ));
+        }
+        if self.persistent_compute.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "persistent compute attachment must be restored before queue destruction",
             ));
         }
         if !directional_persistent_sdma_queue_destroy_is_admitted_v1(self.sdma_outstanding_buffers)
@@ -10876,6 +13058,56 @@ impl ComputeAqlQueueSessionV1 {
         if let Err(error) = self.retake_model_ownership_after_live_mutation(loan) {
             self.poison_terminal();
             return Err(error);
+        }
+        result
+    }
+
+    fn release_persistent_dispatch_data(
+        &mut self,
+        after_recycle: bool,
+    ) -> Result<
+        (u64, Vec<Gfx942FixedDispatchDataV1>),
+        (
+            ComputeAqlQueueSessionErrorV1,
+            Vec<Gfx942FixedDispatchDataV1>,
+        ),
+    > {
+        #[cfg(test)]
+        if !after_recycle && let Some(returned) = self.persistent_compute_test_release.take() {
+            return Ok(returned);
+        }
+        let loan = self
+            .restore_model_ownership_for_live_mutation()
+            .map_err(|error| (error, Vec::new()))?;
+        let Some(dispatch) = self.dispatch.take() else {
+            let retake = self.retake_model_ownership_after_live_mutation(loan);
+            return Err((
+                retake
+                    .err()
+                    .unwrap_or_else(|| Gfx942DispatchBindingErrorV1::ResourcePhase.into()),
+                Vec::new(),
+            ));
+        };
+        let result = {
+            let memory = &mut self
+                .engine
+                .as_mut()
+                .expect("model loan requires queue engine")
+                .backend
+                .session;
+            if after_recycle {
+                dispatch.release_persistent_data_after_recycle(memory)
+            } else {
+                dispatch.release_persistent_data_before_publication(memory)
+            }
+            .map_err(|(error, data)| (error.into(), data))
+        };
+        if let Err(error) = self.retake_model_ownership_after_live_mutation(loan) {
+            self.poison_terminal();
+            let data = match result {
+                Ok((_, data)) | Err((_, data)) => data,
+            };
+            return Err((error, data));
         }
         result
     }
@@ -12288,8 +14520,14 @@ mod tests {
         let bytes = b"exact initialized bytes";
         let role = Gfx942DeviceContentRoleV1::new([0x5a; 32], 7).unwrap();
         let descriptor = Gfx942DeviceContentDescriptorV1::from_bytes(role, bytes).unwrap();
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
 
         assert!(content_descriptor_matches_bytes(descriptor, bytes));
+        assert!(content_descriptor_matches_sha256(
+            descriptor,
+            bytes.len() as u64,
+            digest
+        ));
         assert!(!content_descriptor_matches_bytes(
             descriptor,
             b"exact initialized byte"
@@ -12298,6 +14536,386 @@ mod tests {
         let mut substituted = bytes.to_vec();
         substituted[0] ^= 1;
         assert!(!content_descriptor_matches_bytes(descriptor, &substituted));
+        let substituted_digest: [u8; 32] = Sha256::digest(&substituted).into();
+        assert!(!content_descriptor_matches_sha256(
+            descriptor,
+            bytes.len() as u64,
+            substituted_digest
+        ));
+        assert!(!content_descriptor_matches_sha256(
+            descriptor,
+            bytes.len() as u64 - 1,
+            digest
+        ));
+    }
+
+    #[test]
+    fn persistent_compute_auxiliary_quiescence_accepts_exact_detached_idle_states() {
+        let max = super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1;
+        assert!(auxiliary_compute_lane_quiescence_from_facts_v1(
+            true,
+            None,
+            2,
+            Some(7),
+            2,
+            None,
+        ));
+        assert!(auxiliary_compute_lane_quiescence_from_facts_v1(
+            true,
+            None,
+            0,
+            Some(7),
+            0,
+            Some(0),
+        ));
+        assert!(auxiliary_compute_lane_quiescence_from_facts_v1(
+            true,
+            Some(true),
+            0,
+            None,
+            0,
+            None,
+        ));
+        for facts in [
+            (false, None, 0, Some(7), 0, Some(0)),
+            (true, Some(false), 0, None, 0, None),
+            (true, Some(true), 1, None, 1, None),
+            (true, Some(true), 0, Some(7), 0, Some(0)),
+            (true, None, 0, Some(0), 0, Some(0)),
+            (true, None, 2, Some(7), 1, None),
+            (true, None, max + 1, Some(7), max + 1, None),
+            (true, None, 1, Some(7), 1, Some(2)),
+        ] {
+            assert!(!auxiliary_compute_lane_quiescence_from_facts_v1(
+                facts.0, facts.1, facts.2, facts.3, facts.4, facts.5,
+            ));
+        }
+    }
+
+    #[test]
+    fn persistent_compute_blocks_every_generic_recycled_dispatch_data_access() {
+        for operation in [
+            GenericRecycledDispatchAccessV1::Read,
+            GenericRecycledDispatchAccessV1::ReadInto,
+            GenericRecycledDispatchAccessV1::Snapshot,
+            GenericRecycledDispatchAccessV1::Overwrite,
+        ] {
+            assert!(matches!(
+                admit_generic_recycled_dispatch_access(false, true, operation),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+            assert!(matches!(
+                admit_generic_recycled_dispatch_access(false, false, operation),
+                Ok(observed) if observed == operation
+            ));
+            for persistent_compute_attached in [false, true] {
+                assert!(matches!(
+                    admit_generic_recycled_dispatch_access(
+                        true,
+                        persistent_compute_attached,
+                        operation,
+                    ),
+                    Err(Gfx942DispatchBindingErrorV1::Poisoned)
+                ));
+            }
+        }
+    }
+
+    fn persistent_compute_cancellation_test_session(
+        queue: QueueKeyV1,
+        persistent_compute: Option<PersistentComputeAttachmentV1>,
+        release: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
+    ) -> ComputeAqlQueueSessionV1 {
+        ComputeAqlQueueSessionV1 {
+            engine: None,
+            key: queue,
+            compute_lane_session: queue,
+            doorbell: None,
+            submission: None,
+            completion_signals: None,
+            completion_owner:
+                CompletionSignalArenaOwnerV1::for_persistent_compute_cancellation_test(queue),
+            dispatch: None,
+            detached_data_count: 0,
+            detached_dispatch_generation: None,
+            detached_data_identities: Vec::new(),
+            detached_next_insertion_index: None,
+            persistent_compute,
+            persistent_compute_test_release: release,
+            next_persistent_compute_generation: 2,
+            exception: None,
+            sdma: None,
+            sdma_outstanding_buffers: 0,
+            sdma_pool_free: Vec::new(),
+            sdma_pool_reuse_count: 0,
+            terminal_poisoned: false,
+            observation: ComputeAqlQueueObservationV1 {
+                queue_id: 0,
+                ring_bytes: 0,
+                doorbell_slice_bytes: 0,
+                doorbell_byte_offset: 0,
+                event_id: 0,
+                cwsr_shadow_pages: 0,
+            },
+            auxiliary_compute_lanes: Vec::new(),
+        }
+    }
+
+    fn prepared_persistent_compute_cancellation_fixture(
+        queue: QueueKeyV1,
+        id: u64,
+        authenticated_sha256: [u8; 32],
+    ) -> (
+        ComputeAqlQueueSessionV1,
+        Gfx942PreparedPersistentComputeDispatchV1,
+        crate::Gfx942DeviceMemoryIdentityV1,
+    ) {
+        let (mut device, _host) = crate::sdma::persistent_sdma_buffers_for_test(queue, id);
+        device.set_logical_bytes(device.physical_bytes());
+        let pair =
+            admit_persistent_directional_sdma_pair_v1(Gfx942DirectionalSdmaQueueObservationV1 {
+                host_to_device: Gfx942SdmaQueueObservationV1 {
+                    queue_id: 17,
+                    ring_bytes: crate::sdma::GFX942_SDMA_RING_BYTES_V1,
+                    maximum_in_flight: crate::sdma::GFX942_SDMA_MAX_IN_FLIGHT_V1 as u16,
+                    engine_index: Some(crate::sdma::GFX942_SDMA_H2D_ENGINE_INDEX_V1),
+                },
+                device_to_host: Gfx942SdmaQueueObservationV1 {
+                    queue_id: 23,
+                    ring_bytes: crate::sdma::GFX942_SDMA_RING_BYTES_V1,
+                    maximum_in_flight: crate::sdma::GFX942_SDMA_MAX_IN_FLIGHT_V1 as u16,
+                    engine_index: Some(crate::sdma::GFX942_SDMA_D2H_ENGINE_INDEX_V1),
+                },
+                admitted_engine_count: 2,
+                admitted_queues_per_engine: 8,
+            })
+            .unwrap();
+        let (mut allocation, outstanding) =
+            promote_directional_persistent_sdma_custody_v1(device, pair, 2).unwrap();
+        assert_eq!(outstanding, 2);
+        let storage_identity = allocation
+            .owner
+            .local_native_for_sdma()
+            .expect("promoted allocation retains local native custody")
+            .storage_identity();
+        let request = Gfx942PersistentUseRequestV1::new(
+            Gfx942PersistentOperationV1::ComputeReadWrite,
+            0,
+            allocation.byte_len(),
+        )
+        .unwrap();
+        let reserved = allocation.owner.reserve(request, None).unwrap();
+        let prepared = allocation.owner.prepare(reserved).unwrap();
+        let lease = allocation
+            .owner
+            .detach_local_native_for_compute(&prepared)
+            .unwrap();
+        let data = Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease);
+        let binding = PersistentComputeBindingKeyV1 {
+            queue,
+            attachment_generation: 1,
+        };
+        let attachment = PersistentComputeAttachmentV1 {
+            allocation,
+            authenticated_sha256: Some(authenticated_sha256),
+            state: PersistentComputeUseStateV1::Prepared(prepared),
+            binding,
+            storage_identity,
+            effect: Gfx942PersistentComputeEffectV1::ReadWrite,
+            predecessor_dispatch_generation: Some(7),
+            terminal_custody: None,
+        };
+        let session = persistent_compute_cancellation_test_session(
+            queue,
+            Some(attachment),
+            Some((7, vec![data])),
+        );
+        (
+            session,
+            Gfx942PreparedPersistentComputeDispatchV1 {
+                binding,
+                thread_affinity: PhantomData,
+            },
+            storage_identity,
+        )
+    }
+
+    #[test]
+    fn prepared_persistent_compute_cancellation_restores_initialized_rebind_input() {
+        let queue = test_queue_key(161, 1);
+        let digest = [0xa5; 32];
+        let (mut session, prepared, storage_identity) =
+            prepared_persistent_compute_cancellation_fixture(queue, 6161, digest);
+
+        let input = session
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect("exact prepared cancellation must restore persistent input");
+        let Gfx942PersistentComputeInputV1::Initialized(ready) = input else {
+            panic!("initialized attachment must cancel back to initialized input")
+        };
+        assert_eq!(ready.authenticated_sha256(), digest);
+        let allocation = ready.into_allocation();
+        assert_eq!(
+            allocation
+                .owner
+                .local_native_for_sdma()
+                .expect("cancellation restored local native custody")
+                .storage_identity(),
+            storage_identity
+        );
+        assert!(allocation.owner.local_native_is_attached_for_sdma());
+        assert_eq!(allocation.owner.live_use_count(), 0);
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+        assert!(session.persistent_compute.is_none());
+        assert!(session.dispatch.is_none());
+        assert_eq!(session.detached_dispatch_generation, Some(7));
+        assert_eq!(session.detached_next_insertion_index, Some(0));
+        assert_eq!(session.detached_data_count, 0);
+        assert!(session.detached_data_identities.is_empty());
+        let input = Gfx942PersistentComputeInputV1::from_parts(allocation, Some(digest));
+        assert!(preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(input, true).is_ok());
+    }
+
+    #[test]
+    fn foreign_prepared_cancellation_receipt_retries_on_its_producer() {
+        let producer_key = test_queue_key(162, 1);
+        let receiver_key = test_queue_key(163, 1);
+        let digest = [0xb6; 32];
+        let (mut producer, prepared, storage_identity) =
+            prepared_persistent_compute_cancellation_fixture(producer_key, 6262, digest);
+        let mut receiver = persistent_compute_cancellation_test_session(receiver_key, None, None);
+
+        let failure = receiver
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect_err("a live foreign queue must reject the exact prepared receipt");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::ResourcePhase
+            )
+        ));
+        let (_, custody) = failure.into_parts();
+        let crate::Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(prepared) = custody
+        else {
+            panic!("live foreign rejection must return the exact prepared receipt")
+        };
+        receiver.terminal_poisoned = true;
+        let failure = receiver
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect_err("a terminal foreign queue must still return the exact receipt");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::Poisoned)
+        ));
+        let (_, custody) = failure.into_parts();
+        let crate::Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(prepared) = custody
+        else {
+            panic!("terminal foreign rejection must return the exact prepared receipt")
+        };
+        let input = producer
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect("the producer must accept the unchanged prepared receipt");
+        let (allocation, observed_digest, initialized) = input.into_parts();
+        assert!(initialized);
+        assert_eq!(observed_digest, Some(digest));
+        assert_eq!(
+            allocation
+                .owner
+                .local_native_for_sdma()
+                .expect("producer cancellation restored local native custody")
+                .storage_identity(),
+            storage_identity
+        );
+        assert!(allocation.owner.local_native_is_attached_for_sdma());
+    }
+
+    #[test]
+    fn terminal_self_owned_prepared_cancellation_is_absorbed_opaquely() {
+        let queue = test_queue_key(164, 1);
+        let (mut session, prepared, _) =
+            prepared_persistent_compute_cancellation_fixture(queue, 6464, [0xc7; 32]);
+        session.terminal_poisoned = true;
+
+        let failure = session
+            .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect_err("terminal producer must absorb its prepared receipt");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::Poisoned)
+        ));
+        assert_eq!(
+            session.persistent_compute_terminal_stage_v1(),
+            Some(crate::Gfx942PersistentComputeTerminalStageV1::Attached)
+        );
+        let (_, custody) = failure.into_parts();
+        let crate::Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(terminal) =
+            custody
+        else {
+            panic!("self-owned terminal receipt must not return retryable authority")
+        };
+        assert_eq!(terminal.stage(), None);
+        let attachment = session
+            .persistent_compute
+            .as_ref()
+            .expect("terminal queue retains the exact attachment");
+        assert!(matches!(
+            attachment.state,
+            PersistentComputeUseStateV1::Quarantined
+        ));
+        assert!(matches!(
+            attachment.terminal_custody,
+            Some(PersistentComputeTerminalNativeCustodyV1::Attached)
+        ));
+    }
+
+    #[test]
+    fn persistent_compute_blocks_every_sdma_publication_and_both_directions() {
+        let modes = [
+            SdmaPublicationModeV1::Persistent,
+            SdmaPublicationModeV1::DirectionalCopy(Gfx942PersistentSdmaDirectionV1::HostToDevice),
+            SdmaPublicationModeV1::DirectionalCopy(Gfx942PersistentSdmaDirectionV1::DeviceToHost),
+            SdmaPublicationModeV1::DirectionalWindow(Gfx942PersistentSdmaDirectionV1::HostToDevice),
+            SdmaPublicationModeV1::DirectionalWindow(Gfx942PersistentSdmaDirectionV1::DeviceToHost),
+            SdmaPublicationModeV1::SameDeviceWindow,
+            SdmaPublicationModeV1::Ordinary,
+            SdmaPublicationModeV1::OrdinaryBatch,
+            SdmaPublicationModeV1::StripedBatch,
+            SdmaPublicationModeV1::ExecuteBatch,
+        ];
+        for mode in modes {
+            assert!(matches!(
+                admit_sdma_publication_while_compute_detached(false, true, mode),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+            assert!(matches!(
+                admit_sdma_publication_while_compute_detached(false, false, mode),
+                Ok(observed) if observed == mode
+            ));
+            assert!(matches!(
+                admit_sdma_publication_while_compute_detached(true, true, mode),
+                Err(Gfx942DispatchBindingErrorV1::Poisoned)
+            ));
+        }
+    }
+
+    #[test]
+    fn ordinary_sdma_publication_gate_returns_exact_buffer_custody() {
+        let queue = test_queue_key(151, 1);
+        let (source, destination) = crate::sdma::persistent_sdma_buffers_for_test(queue, 5151);
+        let source_identity = source.storage_identity();
+        let destination_identity = destination.storage_identity();
+        let failure = preserve_ordinary_sdma_publication_custody_v1(true, source, destination)
+            .expect_err("persistent compute must block ordinary SDMA publication");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::ResourcePhase
+            )
+        ));
+        let (_, recovered) = failure.into_parts();
+        let (source, destination) = recovered.expect("preflight returns both exact buffers");
+        assert_eq!(source.storage_identity(), source_identity);
+        assert_eq!(destination.storage_identity(), destination_identity);
     }
 
     #[test]

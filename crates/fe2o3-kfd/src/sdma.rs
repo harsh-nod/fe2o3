@@ -1239,6 +1239,16 @@ impl Gfx942SdmaEngineProfileV1 {
 }
 
 impl Gfx942SdmaQueueOwnerV1 {
+    fn is_live_and_quiescent(&self) -> bool {
+        !self.destroyed
+            && !self.poisoned
+            && self.uncertain_xgmi_ticket.is_none()
+            && self.records.iter().all(Option::is_none)
+            && self.xgmi_records.iter().all(Option::is_none)
+            && self.persistent_window_slots.iter().all(Option::is_none)
+            && self.persistent_window_records.iter().all(Option::is_none)
+    }
+
     pub(crate) fn create(
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
@@ -4186,6 +4196,19 @@ pub(crate) enum Gfx942SdmaQueueSetV1 {
 }
 
 impl Gfx942SdmaQueueSetV1 {
+    pub(crate) fn persistent_compute_is_quiescent(&self) -> bool {
+        let Self::Directional(owners) = self else {
+            return false;
+        };
+        let [device_to_host, host_to_device] = owners.as_slice() else {
+            return false;
+        };
+        directional_sdma_pair_quiescence_is_admitted(
+            device_to_host.is_live_and_quiescent(),
+            host_to_device.is_live_and_quiescent(),
+        )
+    }
+
     pub(crate) fn create_generic(
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
@@ -4966,6 +4989,13 @@ impl Gfx942SdmaQueueSetV1 {
     }
 }
 
+const fn directional_sdma_pair_quiescence_is_admitted(
+    device_to_host_quiescent: bool,
+    host_to_device_quiescent: bool,
+) -> bool {
+    device_to_host_quiescent && host_to_device_quiescent
+}
+
 struct MultiQueueShardBuildV1<R = Gfx942SdmaCopyRequestV1> {
     request_indices: Vec<u16>,
     requests: Vec<R>,
@@ -5465,6 +5495,29 @@ pub(crate) fn read_host_buffer(
     }
 }
 
+pub(crate) fn sha256_host_buffer(
+    memory: &mut SharedGttMemorySessionV1,
+    buffer: &Gfx942SdmaBufferV1,
+    offset: u64,
+    byte_len: u64,
+) -> Result<[u8; 32], Gfx942SdmaErrorV1> {
+    if byte_len == 0
+        || offset
+            .checked_add(byte_len)
+            .is_none_or(|end| end > buffer.logical_bytes)
+    {
+        return Err(Gfx942SdmaErrorV1::Contract("logical host hash range"));
+    }
+    match &buffer.storage {
+        Gfx942SdmaBufferStorageV1::Host(token) => {
+            Ok(memory.sha256_mapped_host_visible_subrange(token, offset, byte_len)?)
+        }
+        Gfx942SdmaBufferStorageV1::Device(_) => Err(Gfx942SdmaErrorV1::Contract(
+            "device-local buffer is not CPU readable",
+        )),
+    }
+}
+
 fn ranges_overlap(left: u64, left_bytes: u64, right: u64, right_bytes: u64) -> bool {
     let Some(left_end) = left.checked_add(left_bytes) else {
         return true;
@@ -5784,6 +5837,14 @@ mod tests {
         assert!(!exact_queue_owner(owner, queue_key(7, 3, 2)));
         assert_eq!(next_pool_generation(1).unwrap(), 2);
         assert!(next_pool_generation(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn persistent_compute_requires_both_directional_sdma_ledgers_quiescent() {
+        assert!(directional_sdma_pair_quiescence_is_admitted(true, true));
+        assert!(!directional_sdma_pair_quiescence_is_admitted(false, true));
+        assert!(!directional_sdma_pair_quiescence_is_admitted(true, false));
+        assert!(!directional_sdma_pair_quiescence_is_admitted(false, false));
     }
 
     #[test]

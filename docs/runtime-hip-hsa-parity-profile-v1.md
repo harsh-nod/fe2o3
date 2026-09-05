@@ -398,6 +398,50 @@ claim. Unified persistent compute/XGMI storage, production atomic/collective
 authority, broad Rust device language, hardware refinement, and the remaining
 qualification gates stay open.
 
+## Current R25 Status
+
+R25 connects one narrow persistent local allocation to ordinary fixed compute.
+An exact full-allocation H2D result over fresh or exact-size pooled storage may
+be promoted into content-authenticated readiness and bound as the only global
+buffer of one fixed compute packet on the primary compute lane. The KFD adapter
+preserves the same mapped HBM storage and its allocation/use/dispatch generations through
+publication, pending observation, exact completion, signal recycle, dispatch
+detach, native restoration, and frontier retirement. The runtime preserves the
+host source separately, selects lane zero only, and keeps the ready owner
+pending while that lane is busy.
+
+Admission requires ordinary semantics, one device-local binding at offset zero,
+equal nonzero logical and physical extents, at most one 63-packet H2D window,
+page alignment, no unresolved native or SDMA shadow dirtiness, and equality
+between the low-level authenticated H2D digest and the runtime shadow digest.
+The selected path cannot enter generic materialization. It serializes against
+all published SDMA work and all active compute lanes on the same queue; no
+overlap is admitted by this bounded bridge. Address-free launch
+performance reports `PersistentDeviceReused` with zero user-data
+materializations. Metadata-derived read and read/write effects require the
+authenticated initialization premise; any write invalidates the host shadow
+after exact completion. Retryable prepublication failure restores the ready
+owner. A no-effect full-ring publication remains pending in prepared custody
+for explicit progress, while prepublication cancellation withdraws it and
+restores the exact H2D-ready allocation without emitting false publication or
+completion profile events. Foreign-queue rejection returns the exact receipt,
+and later ambiguity retains opaque native custody for process teardown.
+
+The independent executable R25 model has 17 focused tests. Its abstract Verus
+artifact adds 38 obligations and 18 rejected mutations for pinned totals of 532
+obligations and 293 rejected mutations. The proof requires exact full extent,
+derived authorization, initialized reads, no selected-path fallback, pending
+and retryable custody, completion-coordinate authentication, absorbing
+quarantine, exact restoration, and exact frontier retirement. It does not prove
+the Rust implementation, metadata truth, KFD/firmware behavior, hardware
+execution, liveness, or performance.
+
+This is not G3 completion or HIP/HSA parity. Partial and padded pooled ranges,
+multiple bindings, auxiliary lanes, persistent XGMI sharing, unified multi-device
+compute, production atomic/collective authority, broad Rust device language,
+and matched hardware qualification remain open. No R25 performance ratio or
+orders-of-magnitude claim exists without a retained matched measurement.
+
 ## Required Gates
 
 ### G1: API and ownership

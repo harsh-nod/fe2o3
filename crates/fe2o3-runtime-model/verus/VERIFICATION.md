@@ -7,8 +7,9 @@ logical-scheduler, R14 async-observer, R16 Worker V5 semantic-boundary, R17
 persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
 directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
 chunking, R21 runtime scripted-failure-seam, R22 batched directional
-persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, and R24
-portable-progress models. The authenticated runner proves 494 obligations and rejects 275
+persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
+portable-progress, and R25 persistent-compute storage-bridge models. The
+authenticated runner proves 532 obligations and rejects 293
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1126,6 +1127,59 @@ independently but does not derive either predicate from a concrete roster.
 | Independent executable portable-progress model | **Checked** | Sixteen focused Rust tests; no Rust-to-Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Nineteen pinned standalone expected-negative witnesses fail only at their named postconditions; they do not import the positive R24 model. |
 | Rust/native runtime, runtime threads, KFD/HSA/HIP, firmware, hardware scheduling, hardware liveness, parity, or performance refinement | **Not established** | Explicitly outside the R24 proof boundary. |
+
+## R25 persistent-compute storage bridge
+
+`r25_persistent_compute_storage_bridge_v1.rs` proves 38 obligations for one
+independent finite storage bridge. One caller-constructed storage identity is
+retained through `FullH2dReady -> PreparedCompute -> Published -> Completed ->
+Restored -> Device`. Preparation derives Read, Write, or ReadWrite authority
+from abstract kernel effects. Read and ReadWrite require prior initialization;
+a full Write establishes initialization only at exact frontier retirement. The
+logical and physical ranges both start at zero and equal the single bounded
+storage extent. The extent is nonzero and at most 256 MiB.
+
+All preparation predicates are checked before the abstract phase changes.
+Successful preparation selects the persistent fast path, whose generic
+materialization count remains exactly zero. Retryable publication and restore
+are exact no-effect transitions. Pending completion retains the complete
+published state. Successful completion must authenticate the storage identity,
+operation generation, full range, and derived authorization before restore is
+enabled. Ambiguous publication, unauthenticated completion, ambiguous restore,
+and post-retention faults enter an absorbing quarantine.
+
+Only an authenticated Completed state may restore, and only the exact active
+frontier may retire Restored custody to quiescent Device state. Retirement
+preserves storage identity, records the active generation as the retired
+frontier, and makes the next admitted generation strictly newer. Stale storage,
+frontier, and active-generation values leave the model unchanged. Generation
+inputs and the storage extent are bounded by finite `u64` coordinates even
+though the Verus carrier uses mathematical natural numbers.
+
+The executable R25 model has 17 focused Rust tests. Eighteen pinned standalone
+expected-negative witnesses cover storage substitution, derived authorization,
+read initialization, exact full extent, fallback after fast-path selection,
+retryable and ambiguous publication, pending custody, completion-before-restore,
+completion-coordinate authentication, post-retention quarantine, retryable
+restore, exact retirement frontier, generation ABA, nonzero generic
+materialization, quarantine reopening, retirement storage substitution, and
+frontier advance. They do not import the positive R25 proof source.
+
+R25 identities, effects, outcomes, and completion coordinates are finite
+mathematical inputs, not native evidence. R25 establishes no Rust-to-Verus
+correspondence theorem and does not refine the executable model, runtime, KFD,
+HSA, HIP, firmware, coherence, hardware execution, completion truth, liveness,
+parity, or performance. It also does not prove that a concrete kernel's
+metadata truthfully describes its reads or writes.
+
+## R25 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Exact storage retention, derived access, initialization gate, full logical/physical extent, no fallback/materialization, pending and retryable retention, completion authentication before restore, terminal quarantine, exact frontier retirement, and generation rejection | **Proved** | Thirty-eight obligations in `r25_persistent_compute_storage_bridge_v1.rs`; finite mathematical values only. |
+| Independent executable persistent-compute bridge model | **Checked** | Seventeen focused Rust tests; no Rust-to-Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Eighteen pinned standalone expected-negative witnesses fail only at their named postconditions and do not import the positive R25 model. |
+| Rust ownership, executable-model refinement, runtime/KFD/HSA/HIP, firmware, hardware truth, liveness, parity, or performance | **Not established** | Explicitly outside the R25 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

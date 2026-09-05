@@ -753,6 +753,33 @@ pub struct Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
 }
 
 impl Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+    pub(crate) fn belongs_to(&self, queue: QueueKeyV1) -> bool {
+        self.allocation.attachment.queue == queue && self.host.belongs_to(queue)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts_for_terminal(
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+        frontier: Gfx942PersistentDependencyFrontierV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+        packet_count: usize,
+    ) -> Self {
+        Self {
+            allocation,
+            host,
+            frontier,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+            packet_count,
+        }
+    }
+
     pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
         self.direction
     }
@@ -2340,6 +2367,359 @@ mod tests {
         let (allocation, _, frontier) = completed.into_parts();
         let allocation = allocation.retire_settled_frontier_v1(frontier).unwrap();
         assert!(allocation.owner.local_native_is_attached_for_sdma());
+    }
+
+    #[test]
+    fn poisoned_queue_promotion_preflight_preserves_completed_h2d_frontier() {
+        let (submission, request) =
+            published_window_fixture(122, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Completed(completed) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 3,
+                    },
+                ),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let failure = match crate::queue::preserve_persistent_compute_ready_preflight_custody_v1(
+            completed,
+            true,
+            Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            )),
+        ) {
+            Ok(_) => panic!("a poisoned queue must reject H2D-ready promotion"),
+            Err(failure) => failure,
+        };
+        let (_, custody) = failure.into_parts();
+        let crate::Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(terminal) =
+            custody
+        else {
+            panic!("terminal preflight must return opaque process-teardown custody")
+        };
+        let (allocation, _host, frontier) = terminal.completed.into_parts();
+        assert_eq!(allocation.owner.retained_settled_use_count(), 1);
+        let allocation = allocation
+            .retire_settled_frontier_v1(frontier)
+            .expect("preflight must not retire the completed H2D frontier");
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+    }
+
+    #[test]
+    fn currentness_hash_failure_returns_opaque_completed_h2d_custody() {
+        let (submission, request) =
+            published_window_fixture(124, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Completed(completed) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 3,
+                    },
+                ),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let failure = crate::queue::terminal_persistent_compute_ready_hash_failure_v1(
+            crate::MemorySessionError::ProcessChanged.into(),
+            completed,
+        );
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::Memory(crate::MemorySessionError::ProcessChanged)
+        ));
+        let (_, custody) = failure.into_parts();
+        let crate::Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(terminal) =
+            custody
+        else {
+            panic!("currentness loss must seal exact completed-window custody")
+        };
+        let (allocation, _host, frontier) = terminal.completed.into_parts();
+        assert_eq!(allocation.owner.retained_settled_use_count(), 1);
+        let allocation = allocation
+            .retire_settled_frontier_v1(frontier)
+            .expect("hash failure must not retire the completed H2D frontier");
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+    }
+
+    #[test]
+    fn terminal_directional_admission_absorbs_self_owned_invalid_geometry() {
+        let (allocation, host) = promoted_fixture(125, 2048);
+        let allocation_identity = allocation.attachment.storage_identity;
+        let host_identity = host.storage_identity();
+        let failure = crate::queue::admit_directional_persistent_sdma_copy_input_v1(
+            queue_key(),
+            true,
+            allocation,
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            host,
+            u64::MAX,
+            u64::MAX,
+            0,
+        )
+        .expect_err("terminal custody must dominate invalid single-copy geometry");
+        let (_, custody) = failure.into_parts();
+        let Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::ProcessTeardown(terminal) = custody
+        else {
+            panic!("self-owned terminal input must not return retryable custody")
+        };
+        assert_eq!(
+            terminal.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::AdmissionRestored
+        );
+        let Gfx942DirectionalPersistentSdmaTerminalStateV1::AdmissionRestored { allocation, host } =
+            terminal.state
+        else {
+            unreachable!()
+        };
+        assert_eq!(allocation.attachment.storage_identity, allocation_identity);
+        assert_eq!(host.storage_identity(), host_identity);
+
+        let (allocation, host) = promoted_fixture(126, 2048);
+        let allocation_identity = allocation.attachment.storage_identity;
+        let host_identity = host.storage_identity();
+        let failure = crate::queue::admit_directional_persistent_sdma_window_input_v1(
+            queue_key(),
+            true,
+            allocation,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+            host,
+            u64::MAX,
+            u64::MAX,
+            0,
+        )
+        .expect_err("terminal custody must dominate invalid window geometry");
+        let (_, custody) = failure.into_parts();
+        let Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(terminal) =
+            custody
+        else {
+            panic!("self-owned terminal window must not return retryable custody")
+        };
+        assert_eq!(terminal.packet_count(), 0);
+        assert_eq!(
+            terminal.stage(),
+            Gfx942DirectionalPersistentSdmaTerminalStageV1::AdmissionRestored
+        );
+        let Gfx942DirectionalPersistentSdmaWindowTerminalStateV1::AdmissionRestored {
+            allocation,
+            host,
+        } = terminal.state
+        else {
+            unreachable!()
+        };
+        assert_eq!(allocation.attachment.storage_identity, allocation_identity);
+        assert_eq!(host.storage_identity(), host_identity);
+    }
+
+    #[test]
+    fn terminal_receiver_returns_foreign_directional_inputs_exactly() {
+        let (allocation, host) = promoted_fixture(127, 2048);
+        let allocation_identity = allocation.attachment.storage_identity;
+        let host_identity = host.storage_identity();
+        let failure = crate::queue::admit_directional_persistent_sdma_copy_input_v1(
+            queue_key_with_generation(2),
+            true,
+            allocation,
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            host,
+            0,
+            0,
+            1,
+        )
+        .expect_err("foreign input must be returned before terminal absorption");
+        let (_, custody) = failure.into_parts();
+        let Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable { allocation, host } =
+            custody
+        else {
+            panic!("foreign input must remain retryable on its producing queue")
+        };
+        assert_eq!(allocation.attachment.storage_identity, allocation_identity);
+        assert_eq!(host.storage_identity(), host_identity);
+        let retry = crate::queue::admit_directional_persistent_sdma_copy_input_v1(
+            queue_key(),
+            false,
+            allocation,
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            host,
+            0,
+            0,
+            1,
+        );
+        assert!(retry.is_ok());
+
+        let (allocation, host) = promoted_fixture(128, 2048);
+        let allocation_identity = allocation.attachment.storage_identity;
+        let host_identity = host.storage_identity();
+        let failure = crate::queue::admit_directional_persistent_sdma_window_input_v1(
+            queue_key_with_generation(2),
+            true,
+            allocation,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+            host,
+            0,
+            0,
+            1,
+        )
+        .expect_err("foreign window input must be returned before terminal absorption");
+        let (_, custody) = failure.into_parts();
+        let Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
+            allocation,
+            host,
+        } = custody
+        else {
+            panic!("foreign window input must remain retryable on its producing queue")
+        };
+        assert_eq!(allocation.attachment.storage_identity, allocation_identity);
+        assert_eq!(host.storage_identity(), host_identity);
+        let retry = crate::queue::admit_directional_persistent_sdma_window_input_v1(
+            queue_key(),
+            false,
+            allocation,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+            host,
+            0,
+            0,
+            1,
+        );
+        assert!(retry.is_ok());
+    }
+
+    #[test]
+    fn foreign_queue_ready_promotion_returns_exact_retryable_completed_receipt() {
+        let (submission, request) =
+            published_window_fixture(123, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
+        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Completed(completed) =
+            transition_directional_persistent_sdma_window_completion_v1(
+                submission,
+                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
+                    CompletedPersistentSdmaWindowV1 {
+                        request,
+                        packet_count: 3,
+                    },
+                ),
+                true,
+            )
+        else {
+            unreachable!()
+        };
+        let failure = match crate::queue::preserve_persistent_compute_ready_affiliation_v1(
+            completed,
+            queue_key_with_generation(2),
+            true,
+        ) {
+            Ok(_) => panic!("foreign queue must not consume completed H2D custody"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                crate::Gfx942DispatchBindingErrorV1::Poisoned
+            )
+        ));
+        let (_, custody) = failure.into_parts();
+        let crate::Gfx942PersistentComputeReadyFailureCustodyV1::ForeignQueue(completed) = custody
+        else {
+            panic!("foreign queue must return the original completed receipt")
+        };
+        let completed = crate::queue::preserve_persistent_compute_ready_affiliation_v1(
+            completed,
+            queue_key(),
+            false,
+        )
+        .expect("the producing queue must accept the unchanged receipt");
+        assert_eq!(completed.packet_count(), 3);
+        let (allocation, _host, frontier) = completed.into_parts();
+        let allocation = allocation.retire_settled_frontier_v1(frontier).unwrap();
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
+    }
+
+    #[test]
+    fn persistent_compute_window_gate_returns_exact_custody_in_both_directions() {
+        for (ordinal, direction) in [
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (allocation, host) = promoted_fixture(130 + ordinal as u64, 4096);
+            let allocation_identity = allocation.attachment.storage_identity;
+            let host_identity = host.storage_identity();
+            let failure =
+                match crate::queue::preserve_directional_window_sdma_publication_custody_v1(
+                    true, direction, allocation, host,
+                ) {
+                    Ok(_) => panic!("persistent compute must block directional window publication"),
+                    Err(failure) => failure,
+                };
+            assert!(matches!(
+                failure.error(),
+                ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                    crate::Gfx942DispatchBindingErrorV1::ResourcePhase
+                )
+            ));
+            let (_, custody) = failure.into_parts();
+            let Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                allocation,
+                host,
+            } = custody
+            else {
+                panic!("pure publication rejection must be retryable")
+            };
+            assert_eq!(allocation.attachment.storage_identity, allocation_identity);
+            assert_eq!(host.storage_identity(), host_identity);
+            assert_eq!(allocation.owner.live_use_count(), 0);
+        }
+    }
+
+    #[test]
+    fn active_directional_sdma_blocks_bind_and_returns_exact_compute_input() {
+        for (ordinal, direction) in [
+            Gfx942PersistentSdmaDirectionV1::HostToDevice,
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (active, _request) = published_window_fixture(140 + ordinal as u64, direction, 3);
+            let (allocation, _host) = promoted_fixture(150 + ordinal as u64, 4096);
+            let identity = allocation.attachment.storage_identity;
+            let input = crate::Gfx942PersistentComputeInputV1::Uninitialized(allocation);
+            let failure =
+                match crate::queue::preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(
+                    input,
+                    active.packet_count() == 0,
+                ) {
+                    Ok(_) => panic!("active directional SDMA must block persistent compute bind"),
+                    Err(failure) => failure,
+                };
+            assert_eq!(active.packet_count(), 3);
+            assert!(matches!(
+                failure.error(),
+                ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                    crate::Gfx942DispatchBindingErrorV1::ResourcePhase
+                )
+            ));
+            let (_, custody) = failure.into_parts();
+            let crate::Gfx942PersistentComputeBindFailureCustodyV1::Retryable(recovered) = custody
+            else {
+                panic!("quiescence rejection returns exact retryable compute input")
+            };
+            let (allocation, digest, initialized) = recovered.into_parts();
+            assert_eq!(allocation.attachment.storage_identity, identity);
+            assert_eq!(digest, None);
+            assert!(!initialized);
+            assert_eq!(allocation.owner.live_use_count(), 0);
+        }
     }
 
     #[test]

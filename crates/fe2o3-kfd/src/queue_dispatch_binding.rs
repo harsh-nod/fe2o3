@@ -263,6 +263,14 @@ pub struct Gfx942FixedDispatchDataLayoutV1 {
 }
 
 impl Gfx942FixedDispatchDataLayoutV1 {
+    pub(super) const fn device_local(requested_bytes: u64, alignment: u64) -> Self {
+        Self {
+            kind: Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            requested_bytes,
+            alignment,
+        }
+    }
+
     pub const fn kind(self) -> Gfx942FixedDispatchDataKindV1 {
         self.kind
     }
@@ -720,9 +728,44 @@ pub(crate) enum DeviceDataEffectV1 {
 }
 
 impl DeviceDataEffectV1 {
-    const fn reads(self) -> bool {
+    pub(crate) const fn reads(self) -> bool {
         matches!(self, Self::ReadOnly | Self::ReadWrite)
     }
+}
+
+/// Validates the exact R25 one-packet, one-data, full-allocation contract and
+/// returns only the access derived from authenticated kernel metadata.
+pub(super) fn preflight_gfx942_persistent_compute_dispatch_v1(
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; 1],
+    layout: Gfx942FixedDispatchDataLayoutV1,
+    initialized: bool,
+) -> Result<DeviceDataEffectV1, Gfx942DispatchBindingErrorV1> {
+    if layout.kind != Gfx942FixedDispatchDataKindV1::DeviceLocal
+        || packets[0].buffers.len() != 1
+        || packets[0].buffers[0].data_index != 0
+        || packets[0].buffers[0].data_byte_offset != 0
+        || packets[0].buffers[0].byte_len != layout.requested_bytes
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "persistent compute requires one full-allocation device binding",
+        });
+    }
+    let plan = plan_public_fixed_dispatch_resources(
+        programs,
+        packets,
+        core::slice::from_ref(&layout),
+        core::slice::from_ref(&initialized),
+    )?;
+    plan.data
+        .into_iter()
+        .next()
+        .and_then(|data| data.effect)
+        .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "persistent compute data must be referenced",
+        })
 }
 
 /// Write-only premise for one whole uninitialized C3 allocation.
@@ -1449,6 +1492,78 @@ impl DispatchResourceOwnerV1 {
     ) -> Result<ReturnedDispatchDataV1, Gfx942DispatchBindingErrorV1> {
         let generation = self.generation.returning_destroy_generation()?;
         self.release_non_data(memory, generation)
+    }
+
+    /// Releases code and kernarg while returning the persistent data owner on
+    /// both success and terminal cleanup failure.
+    pub(super) fn release_persistent_data_before_publication(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<
+        (u64, Vec<Gfx942FixedDispatchDataV1>),
+        (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),
+    > {
+        let generation = match self.generation.returning_destroy_generation() {
+            Ok(generation) => generation,
+            Err(error) => return Err((error, Vec::new())),
+        };
+        self.release_persistent_data(memory, generation)
+    }
+
+    /// Releases code and kernarg after exact recycle while retaining the
+    /// persistent data owner on every later failure.
+    pub(super) fn release_persistent_data_after_recycle(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+    ) -> Result<
+        (u64, Vec<Gfx942FixedDispatchDataV1>),
+        (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),
+    > {
+        let generation = match self.generation.returned_generation() {
+            Ok(generation) => generation,
+            Err(error) => return Err((error, Vec::new())),
+        };
+        self.release_persistent_data(memory, generation)
+    }
+
+    fn release_persistent_data(
+        self,
+        memory: &mut SharedGttMemorySessionV1,
+        generation: u64,
+    ) -> Result<
+        (u64, Vec<Gfx942FixedDispatchDataV1>),
+        (Gfx942DispatchBindingErrorV1, Vec<Gfx942FixedDispatchDataV1>),
+    > {
+        if self.data.len() != self.data_premises.len() {
+            return Err((
+                Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: self.data.len().min(self.data_premises.len()),
+                    detail: "retained data/premise cardinality",
+                },
+                Vec::new(),
+            ));
+        }
+        let data: Vec<_> = self
+            .data
+            .into_iter()
+            .zip(self.data_premises)
+            .map(|(authority, premise)| {
+                ReturnedDispatchDataLeaseV1 { authority, premise }.into_data()
+            })
+            .collect();
+        let release = (|| {
+            let kernarg = memory.unmap_from_gpu(self.kernarg.into_token())?;
+            memory.release(kernarg)?;
+            for code in self.code {
+                let code = memory.unmap_executable_from_gpu(code.into_token())?;
+                memory.release_executable(code)?;
+            }
+            Ok(())
+        })();
+        match release {
+            Ok(()) => Ok((generation, data)),
+            Err(error) => Err((error, data)),
+        }
     }
 
     fn release_non_data(
@@ -2292,7 +2407,9 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         packets,
         data,
         DispatchGenerationOwnerV1::new(),
+        false,
     )
+    .map_err(|failure| failure.error)
 }
 
 pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle<const N: usize>(
@@ -2304,8 +2421,86 @@ pub(super) fn prepare_public_fixed_dispatch_resources_after_recycle<const N: usi
 ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
     let generation = DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
     prepare_public_fixed_dispatch_resources_with_generation(
-        memory, programs, packets, data, generation,
+        memory, programs, packets, data, generation, false,
     )
+    .map_err(|failure| failure.error)
+}
+
+pub(super) struct PersistentFixedDispatchPreparationFailureV1 {
+    pub(super) error: Gfx942DispatchBindingErrorV1,
+    pub(super) data: Vec<Gfx942FixedDispatchDataV1>,
+}
+
+pub(super) fn prepare_persistent_fixed_dispatch_resources_v1(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; 1],
+    data: Gfx942FixedDispatchDataV1,
+    predecessor_generation: Option<u64>,
+) -> Result<DispatchResourceOwnerV1, PersistentFixedDispatchPreparationFailureV1> {
+    let generation = match predecessor_generation {
+        Some(predecessor) => DispatchGenerationOwnerV1::after_recycled(predecessor),
+        None => Ok(DispatchGenerationOwnerV1::new()),
+    };
+    let generation = match generation {
+        Ok(generation) => generation,
+        Err(error) => {
+            return Err(PersistentFixedDispatchPreparationFailureV1 {
+                error,
+                data: vec![data],
+            });
+        }
+    };
+    prepare_public_fixed_dispatch_resources_with_generation(
+        memory,
+        programs,
+        packets,
+        vec![data],
+        generation,
+        true,
+    )
+}
+
+fn recover_dispatch_input_v1(input: DispatchDataInputV1) -> Gfx942FixedDispatchDataV1 {
+    match input.storage {
+        DispatchDataInputStorageV1::Device(lease) => {
+            if let Some(content) = input.initialized_content {
+                match Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(
+                    lease, content,
+                ) {
+                    Ok(initialized) => Gfx942FixedDispatchDataV1::initialized(initialized),
+                    Err(lease) => Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
+                }
+            } else if input.fully_initialized {
+                Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
+            } else {
+                Gfx942FixedDispatchDataV1::uninitialized(lease)
+            }
+        }
+        DispatchDataInputStorageV1::HostVisible(token) if input.fully_initialized => {
+            Gfx942FixedDispatchDataV1::host_visible_initialized(
+                Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(token),
+            )
+        }
+        DispatchDataInputStorageV1::HostVisible(token) => {
+            Gfx942FixedDispatchDataV1::host_visible_uninitialized(token)
+        }
+    }
+}
+
+fn recover_retained_dispatch_data_v1(
+    authorities: Vec<DispatchDataAuthorityV1>,
+    premises: Vec<RetainedDataPremiseV1>,
+    enabled: bool,
+) -> Vec<Gfx942FixedDispatchDataV1> {
+    if !enabled {
+        return Vec::new();
+    }
+    authorities
+        .into_iter()
+        .zip(premises)
+        .map(|(authority, premise)| ReturnedDispatchDataLeaseV1 { authority, premise }.into_data())
+        .collect()
 }
 
 fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
@@ -2314,7 +2509,8 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
     packets: [Gfx942FixedDispatchPacketV1; N],
     data: Vec<Gfx942FixedDispatchDataV1>,
     generation: DispatchGenerationOwnerV1,
-) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+    retain_failure_data: bool,
+) -> Result<DispatchResourceOwnerV1, PersistentFixedDispatchPreparationFailureV1> {
     let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
     let data_initialized: Vec<_> = data
         .iter()
@@ -2325,12 +2521,24 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
         packets: packet_plans,
         data: data_plans,
         kernarg_arena_bytes,
-    } = plan_public_fixed_dispatch_resources(
+    } = match plan_public_fixed_dispatch_resources(
         &programs,
         &packets,
         &data_layouts,
         &data_initialized,
-    )?;
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return Err(PersistentFixedDispatchPreparationFailureV1 {
+                error,
+                data: if retain_failure_data {
+                    data
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+    };
 
     let mut data_authorities = Vec::with_capacity(data.len());
     let mut data_premises = Vec::with_capacity(data.len());
@@ -2339,12 +2547,43 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
         debug_assert_eq!(input.layout, plan.layout);
         debug_assert_eq!(input.fully_initialized, plan.fully_initialized);
         let authority = match input.storage {
-            DispatchDataInputStorageV1::Device(lease) => DispatchDataAuthorityV1::Device(
-                memory.retain_gfx942_device_memory_for_dispatch(lease)?,
-            ),
-            DispatchDataInputStorageV1::HostVisible(token) => DispatchDataAuthorityV1::HostVisible(
-                memory.retain_aql_dispatch_host_data_resource(token)?,
-            ),
+            DispatchDataInputStorageV1::Device(lease) if retain_failure_data => {
+                match memory.retain_gfx942_device_memory_for_dispatch_recovering(lease) {
+                    Ok(authority) => DispatchDataAuthorityV1::Device(authority),
+                    Err((error, lease)) => {
+                        let input = DispatchDataInputV1 {
+                            storage: DispatchDataInputStorageV1::Device(lease),
+                            ..input
+                        };
+                        return Err(PersistentFixedDispatchPreparationFailureV1 {
+                            error: error.into(),
+                            data: vec![recover_dispatch_input_v1(input)],
+                        });
+                    }
+                }
+            }
+            DispatchDataInputStorageV1::Device(lease) => {
+                match memory.retain_gfx942_device_memory_for_dispatch(lease) {
+                    Ok(authority) => DispatchDataAuthorityV1::Device(authority),
+                    Err(error) => {
+                        return Err(PersistentFixedDispatchPreparationFailureV1 {
+                            error: error.into(),
+                            data: Vec::new(),
+                        });
+                    }
+                }
+            }
+            DispatchDataInputStorageV1::HostVisible(token) => {
+                match memory.retain_aql_dispatch_host_data_resource(token) {
+                    Ok(authority) => DispatchDataAuthorityV1::HostVisible(authority),
+                    Err(error) => {
+                        return Err(PersistentFixedDispatchPreparationFailureV1 {
+                            error: error.into(),
+                            data: Vec::new(),
+                        });
+                    }
+                }
+            }
         };
         data_authorities.push(authority);
         data_premises.push(RetainedDataPremiseV1 {
@@ -2359,33 +2598,62 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
         });
     }
 
+    macro_rules! prepare_or_retain_data {
+        ($operation:expr) => {
+            match $operation {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(PersistentFixedDispatchPreparationFailureV1 {
+                        error: error.into(),
+                        data: recover_retained_dispatch_data_v1(
+                            data_authorities,
+                            data_premises,
+                            retain_failure_data,
+                        ),
+                    });
+                }
+            }
+        };
+    }
+
     let mut code = Vec::with_capacity(programs.len());
     let mut code_identity = Vec::with_capacity(programs.len());
     for (kernel, plan) in programs.into_iter().zip(&program_plans) {
-        let mut allocation = memory.allocate_executable(plan.image_len)?;
-        let materialized_sha256 = memory.with_bytes_mut(&mut allocation, |bytes| {
-            kernel
-                .materialize_into(bytes)
-                .map(|()| Sha256::digest(bytes).into())
-        })?;
+        let mut allocation = prepare_or_retain_data!(memory.allocate_executable(plan.image_len));
+        let materialized_sha256 =
+            prepare_or_retain_data!(memory.with_bytes_mut(&mut allocation, |bytes| {
+                kernel
+                    .materialize_into(bytes)
+                    .map(|()| Sha256::digest(bytes).into())
+            }));
         let materialized_sha256 = match materialized_sha256 {
             Ok(digest) => digest,
             Err(_) => {
                 let _ =
                     memory.quarantine_queue_composition("dispatch code materialization failure");
-                return Err(Gfx942DispatchBindingErrorV1::InvalidCode("materialization"));
+                return Err(PersistentFixedDispatchPreparationFailureV1 {
+                    error: Gfx942DispatchBindingErrorV1::InvalidCode("materialization"),
+                    data: recover_retained_dispatch_data_v1(
+                        data_authorities,
+                        data_premises,
+                        retain_failure_data,
+                    ),
+                });
             }
         };
-        let allocation = memory.seal_executable(allocation)?;
-        let allocation = memory.map_executable_to_gpu(allocation)?;
-        let allocation = memory.retain_aql_dispatch_code_resource(allocation)?;
-        let descriptor_address = allocation
-            .facts()
-            .checked_gpu_subrange(plan.descriptor_offset, KERNEL_DESCRIPTOR_BYTES_V1, 64)
-            .and_then(|address| ObservedGpuAddressV1::new(address).ok())
-            .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
-                "resolved descriptor address",
-            ))?;
+        let allocation = prepare_or_retain_data!(memory.seal_executable(allocation));
+        let allocation = prepare_or_retain_data!(memory.map_executable_to_gpu(allocation));
+        let allocation =
+            prepare_or_retain_data!(memory.retain_aql_dispatch_code_resource(allocation));
+        let descriptor_address = prepare_or_retain_data!(
+            allocation
+                .facts()
+                .checked_gpu_subrange(plan.descriptor_offset, KERNEL_DESCRIPTOR_BYTES_V1, 64)
+                .and_then(|address| ObservedGpuAddressV1::new(address).ok())
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidCode(
+                    "resolved descriptor address",
+                ))
+        );
         code_identity.push(ResolvedCodeIdentityV1 {
             authenticated: kernel.identity_inputs(),
             dispatch_abi_identity: kernel
@@ -2398,8 +2666,8 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
         code.push(allocation);
     }
 
-    let mut kernarg = memory.allocate_kernarg(kernarg_arena_bytes)?;
-    memory.with_bytes_mut(&mut kernarg, |bytes| {
+    let mut kernarg = prepare_or_retain_data!(memory.allocate_kernarg(kernarg_arena_bytes));
+    prepare_or_retain_data!(memory.with_bytes_mut(&mut kernarg, |bytes| {
         bytes.fill(0);
         for (input, packet) in packets.iter().zip(&packet_plans) {
             let start = packet.kernarg_offset;
@@ -2428,23 +2696,25 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
                 _ => unreachable!("implicit-kernarg preflight plan/value mismatch"),
             }
         }
-    })?;
-    let kernarg = memory.map_to_gpu(kernarg)?;
-    let kernarg = memory.retain_aql_dispatch_kernarg_resource(kernarg)?;
+    }));
+    let kernarg = prepare_or_retain_data!(memory.map_to_gpu(kernarg));
+    let kernarg = prepare_or_retain_data!(memory.retain_aql_dispatch_kernarg_resource(kernarg));
     let mut prepared_packets = Vec::with_capacity(N);
     for (input, packet) in packets.iter().zip(packet_plans) {
-        let kernarg_address = kernarg
-            .facts()
-            .checked_gpu_subrange(
-                packet.kernarg_offset as u64,
-                input.kernarg_bytes.len() as u64,
-                packet.kernarg_alignment as u64,
-            )
-            .and_then(|address| ObservedGpuAddressV1::new(address).ok())
-            .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: prepared_packets.len(),
-                detail: "mapped kernarg address",
-            })?;
+        let kernarg_address = prepare_or_retain_data!(
+            kernarg
+                .facts()
+                .checked_gpu_subrange(
+                    packet.kernarg_offset as u64,
+                    input.kernarg_bytes.len() as u64,
+                    packet.kernarg_alignment as u64,
+                )
+                .and_then(|address| ObservedGpuAddressV1::new(address).ok())
+                .ok_or(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                    packet: prepared_packets.len(),
+                    detail: "mapped kernarg address",
+                })
+        );
         prepared_packets.push(PreparedDispatchPacketV1 {
             geometry: input.geometry,
             ordering: input.ordering,

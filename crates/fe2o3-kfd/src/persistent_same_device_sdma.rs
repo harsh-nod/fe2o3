@@ -1164,6 +1164,93 @@ mod tests {
     }
 
     #[test]
+    fn terminal_same_device_admission_absorbs_invalid_geometry_after_affiliation() {
+        let source = allocation(31);
+        let destination = allocation(32);
+        let source_identity = source.attachment.storage_identity;
+        let destination_identity = destination.attachment.storage_identity;
+        let failure = crate::queue::admit_same_device_persistent_sdma_window_input_v1(
+            queue_key(),
+            true,
+            source,
+            u64::MAX,
+            destination,
+            u64::MAX,
+            0,
+        )
+        .expect_err("terminal custody must dominate invalid same-device geometry");
+        let (_, custody) = failure.into_parts();
+        let Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(terminal) =
+            custody
+        else {
+            panic!("self-owned terminal inputs must not return retryable custody")
+        };
+        assert_eq!(
+            terminal.stage(),
+            Gfx942SameDevicePersistentSdmaWindowTerminalStageV1::AdmissionRestored
+        );
+        assert_eq!(terminal.descriptor().copy_bytes(), 0);
+        assert_eq!(terminal.descriptor().packet_count(), 0);
+        let Gfx942SameDevicePersistentSdmaWindowTerminalStateV1::AdmissionRestored {
+            source,
+            destination,
+        } = terminal.state
+        else {
+            unreachable!()
+        };
+        assert_eq!(source.attachment.storage_identity, source_identity);
+        assert_eq!(
+            destination.attachment.storage_identity,
+            destination_identity
+        );
+    }
+
+    #[test]
+    fn terminal_receiver_returns_foreign_same_device_inputs_exactly() {
+        let source = allocation(33);
+        let destination = allocation(34);
+        let source_identity = source.attachment.storage_identity;
+        let destination_identity = destination.attachment.storage_identity;
+        let receiver = QueueKeyV1 {
+            generation: QueueGenerationV1(2),
+            ..queue_key()
+        };
+        let failure = crate::queue::admit_same_device_persistent_sdma_window_input_v1(
+            receiver,
+            true,
+            source,
+            0,
+            destination,
+            0,
+            1,
+        )
+        .expect_err("foreign inputs must be returned before terminal absorption");
+        let (_, custody) = failure.into_parts();
+        let Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1::Retryable {
+            source,
+            destination,
+        } = custody
+        else {
+            panic!("foreign inputs must remain retryable on their producing queue")
+        };
+        assert_eq!(source.attachment.storage_identity, source_identity);
+        assert_eq!(
+            destination.attachment.storage_identity,
+            destination_identity
+        );
+        let retry = crate::queue::admit_same_device_persistent_sdma_window_input_v1(
+            queue_key(),
+            false,
+            source,
+            0,
+            destination,
+            0,
+            1,
+        );
+        assert!(retry.is_ok());
+    }
+
+    #[test]
     fn same_device_leases_have_distinct_read_and_write_roles() {
         let (prepared, request, _) = prepared_fixture(3);
         assert_eq!(

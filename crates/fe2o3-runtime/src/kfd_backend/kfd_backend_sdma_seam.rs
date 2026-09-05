@@ -13,7 +13,8 @@
 )]
 
 use fe2o3_kfd::{
-    ComputeAqlQueueSessionV1, GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
+    ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
+    GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
     GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
     Gfx942DirectionalPersistentSdmaDemotionCustodyV1,
     Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
@@ -26,7 +27,9 @@ use fe2o3_kfd::{
     Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1,
     Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
     Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1,
-    Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentSdmaDirectionV1,
+    Gfx942DirectionalQueuePersistentAllocationV1, Gfx942DispatchBindingErrorV1,
+    Gfx942PersistentComputeReadyFailureCustodyV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
+    Gfx942PersistentComputeReadyV1, Gfx942PersistentSdmaDirectionV1,
     Gfx942SameDevicePersistentSdmaWindowCompletedV1,
     Gfx942SameDevicePersistentSdmaWindowCopyPollV1,
     Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1,
@@ -34,6 +37,8 @@ use fe2o3_kfd::{
     Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
     Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaBufferV1,
 };
+#[cfg(test)]
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -194,6 +199,95 @@ pub(super) enum DirectionalSdmaCompletedOwnerV1 {
     Scripted(ScriptedCompletedOwnerV1),
 }
 
+pub(super) enum PersistentComputeReadyOwnerV1 {
+    Native(Gfx942PersistentComputeReadyV1),
+    #[cfg(test)]
+    Scripted {
+        device: ScriptedDeviceOwnerV1,
+        authenticated_sha256: [u8; 32],
+    },
+}
+
+impl core::fmt::Debug for PersistentComputeReadyOwnerV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("PersistentComputeReadyOwnerV1")
+            .field("byte_len", &self.byte_len())
+            .field("physical_byte_len", &self.physical_byte_len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PersistentComputeReadyOwnerV1 {
+    pub(super) fn byte_len(&self) -> u64 {
+        match self {
+            Self::Native(ready) => ready.byte_len(),
+            #[cfg(test)]
+            Self::Scripted { device, .. } => {
+                u64::try_from(device.bytes.len()).expect("scripted device length fits u64")
+            }
+        }
+    }
+
+    pub(super) fn physical_byte_len(&self) -> u64 {
+        match self {
+            Self::Native(ready) => ready.physical_byte_len(),
+            #[cfg(test)]
+            Self::Scripted { device, .. } => {
+                u64::try_from(device.bytes.len()).expect("scripted device length fits u64")
+            }
+        }
+    }
+
+    pub(super) fn authenticated_sha256(&self) -> [u8; 32] {
+        match self {
+            Self::Native(ready) => ready.authenticated_sha256(),
+            #[cfg(test)]
+            Self::Scripted {
+                authenticated_sha256,
+                ..
+            } => *authenticated_sha256,
+        }
+    }
+
+    pub(super) fn normalize(self) -> DirectionalSdmaDeviceOwnerV1 {
+        match self {
+            Self::Native(ready) => DirectionalSdmaDeviceOwnerV1::Native(
+                fe2o3_kfd::normalize_persistent_compute_ready_v1(ready),
+            ),
+            #[cfg(test)]
+            Self::Scripted { device, .. } => DirectionalSdmaDeviceOwnerV1::Scripted(device),
+        }
+    }
+
+    pub(super) fn into_native(self) -> Result<Gfx942PersistentComputeReadyV1, Self> {
+        match self {
+            Self::Native(ready) => Ok(ready),
+            #[cfg(test)]
+            ready @ Self::Scripted { .. } => Err(ready),
+        }
+    }
+
+    pub(super) const fn from_native(ready: Gfx942PersistentComputeReadyV1) -> Self {
+        Self::Native(ready)
+    }
+}
+
+pub(super) enum PersistentComputeReadyTransitionFailureV1 {
+    Recovered {
+        pair: DirectionalSdmaPairOwnerV1,
+    },
+    ForeignQueue {
+        detail: String,
+        terminal_receiver: bool,
+        completed: DirectionalSdmaCompletedOwnerV1,
+    },
+    ProcessTeardown {
+        detail: String,
+        custody: Option<SdmaTerminalCustodyV1>,
+    },
+}
+
 impl core::fmt::Debug for DirectionalSdmaCompletedOwnerV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -321,6 +415,7 @@ pub(super) enum NativeDirectionalSdmaTerminalCustodyV1 {
         failure: Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
         host: Gfx942SdmaBufferV1,
     },
+    ReadyPromotion(Gfx942PersistentComputeReadyTerminalCustodyV1),
 }
 
 #[allow(dead_code)]
@@ -830,6 +925,126 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
+    pub(super) fn promote_full_h2d_to_compute_ready(
+        &mut self,
+        completed: DirectionalSdmaCompletedOwnerV1,
+        content: fe2o3_kfd::Gfx942DeviceContentDescriptorV1,
+    ) -> Result<
+        (PersistentComputeReadyOwnerV1, SdmaBufferOwnerV1),
+        PersistentComputeReadyTransitionFailureV1,
+    > {
+        match (self, completed) {
+            (Self::Native(queue), DirectionalSdmaCompletedOwnerV1::Native { completed }) => {
+                match queue.promote_full_h2d_to_persistent_compute_ready_v1(completed, content) {
+                    Ok((ready, host)) => Ok((
+                        PersistentComputeReadyOwnerV1::Native(ready),
+                        SdmaBufferOwnerV1::Native(host),
+                    )),
+                    Err(failure) => {
+                        let (error, custody) = failure.into_parts();
+                        let terminal_receiver = matches!(
+                            error,
+                            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                                Gfx942DispatchBindingErrorV1::Poisoned
+                            )
+                        );
+                        let detail = error.to_string();
+                        let (device, host, frontier) = match custody {
+                            Gfx942PersistentComputeReadyFailureCustodyV1::Retryable(parts) => parts,
+                            Gfx942PersistentComputeReadyFailureCustodyV1::ForeignQueue(
+                                completed,
+                            ) => {
+                                return Err(
+                                    PersistentComputeReadyTransitionFailureV1::ForeignQueue {
+                                        detail,
+                                        terminal_receiver,
+                                        completed: DirectionalSdmaCompletedOwnerV1::Native {
+                                            completed,
+                                        },
+                                    },
+                                );
+                            }
+                            Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(
+                                custody,
+                            ) => {
+                                return Err(
+                                    PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
+                                        detail,
+                                        custody: Some(SdmaTerminalCustodyV1::Native(
+                                            NativeDirectionalSdmaTerminalCustodyV1::ReadyPromotion(
+                                                custody,
+                                            ),
+                                        )),
+                                    },
+                                );
+                            }
+                        };
+                        match device.retire_settled_frontier_v1(frontier) {
+                            Ok(device) => {
+                                Err(PersistentComputeReadyTransitionFailureV1::Recovered {
+                                    pair: DirectionalSdmaPairOwnerV1 {
+                                        device: DirectionalSdmaDeviceOwnerV1::Native(device),
+                                        host: SdmaBufferOwnerV1::Native(host),
+                                    },
+                                })
+                            }
+                            Err(failure) => {
+                                Err(PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
+                                    detail,
+                                    custody: Some(SdmaTerminalCustodyV1::Native(
+                                        NativeDirectionalSdmaTerminalCustodyV1::Retirement {
+                                            failure,
+                                            host,
+                                        },
+                                    )),
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+            #[cfg(test)]
+            (Self::Scripted(driver), DirectionalSdmaCompletedOwnerV1::Scripted(completed)) => {
+                match driver.promote_full_h2d_to_compute_ready(completed, content) {
+                    Ok((device, host)) => Ok((
+                        PersistentComputeReadyOwnerV1::Scripted {
+                            device,
+                            authenticated_sha256: content.sha256(),
+                        },
+                        SdmaBufferOwnerV1::Scripted(host),
+                    )),
+                    Err(scripted::ScriptedPersistentComputeReadyFailureV1::Recovered(pair)) => {
+                        Err(PersistentComputeReadyTransitionFailureV1::Recovered { pair })
+                    }
+                    Err(scripted::ScriptedPersistentComputeReadyFailureV1::ForeignQueue {
+                        completed,
+                        terminal_receiver,
+                    }) => Err(PersistentComputeReadyTransitionFailureV1::ForeignQueue {
+                        detail: "scripted persistent-compute ready promotion foreign queue"
+                            .to_owned(),
+                        terminal_receiver,
+                        completed: DirectionalSdmaCompletedOwnerV1::Scripted(completed),
+                    }),
+                    Err(scripted::ScriptedPersistentComputeReadyFailureV1::ProcessTeardown(
+                        completed,
+                    )) => Err(PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
+                        detail: "scripted persistent-compute ready promotion teardown".to_owned(),
+                        custody: Some(SdmaTerminalCustodyV1::Scripted(
+                            ScriptedTerminalCustodyV1::Completed(
+                                DirectionalSdmaCompletedOwnerV1::Scripted(completed),
+                            ),
+                        )),
+                    }),
+                }
+            }
+            #[cfg(test)]
+            (_, completed) => Err(PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
+                detail: "directional SDMA owner/driver mismatch during H2D promotion".to_owned(),
+                custody: Some(scripted_mismatch_completed(completed, "H2D promotion")),
+            }),
+        }
+    }
+
     pub(super) fn submit_same_device(
         &mut self,
         pair: SameDeviceSdmaPairOwnerV1,
@@ -1216,6 +1431,9 @@ mod scripted {
             byte_len: u64,
         },
         Promote(ScriptedFailureModeV1),
+        PromoteComputeReady(ScriptedFailureModeV1),
+        PromoteComputeReadyForeignQueue,
+        PromoteComputeReadyForeignQueueTerminal,
         Demote(ScriptedFailureModeV1),
         Submit {
             direction: Gfx942PersistentSdmaDirectionV1,
@@ -1338,6 +1556,15 @@ mod scripted {
         pub(super) device_offset: u64,
         pub(super) copy_bytes: u32,
         pub(super) packet_count: usize,
+    }
+
+    pub(super) enum ScriptedPersistentComputeReadyFailureV1 {
+        Recovered(DirectionalSdmaPairOwnerV1),
+        ForeignQueue {
+            completed: ScriptedCompletedOwnerV1,
+            terminal_receiver: bool,
+        },
+        ProcessTeardown(ScriptedCompletedOwnerV1),
     }
 
     #[derive(Debug)]
@@ -1975,6 +2202,90 @@ mod scripted {
                         ),
                     })
                 }
+            }
+        }
+
+        pub(super) fn promote_full_h2d_to_compute_ready(
+            &mut self,
+            completed: ScriptedCompletedOwnerV1,
+            content: fe2o3_kfd::Gfx942DeviceContentDescriptorV1,
+        ) -> Result<
+            (ScriptedDeviceOwnerV1, ScriptedBufferOwnerV1),
+            ScriptedPersistentComputeReadyFailureV1,
+        > {
+            if !self.owns_completed(&completed) {
+                return Err(ScriptedPersistentComputeReadyFailureV1::ProcessTeardown(
+                    completed,
+                ));
+            }
+            let promotion = match self.steps.front() {
+                Some(ScriptedSdmaStepV1::PromoteComputeReadyForeignQueue) => {
+                    let _ = self.pop();
+                    return Err(ScriptedPersistentComputeReadyFailureV1::ForeignQueue {
+                        completed,
+                        terminal_receiver: false,
+                    });
+                }
+                Some(ScriptedSdmaStepV1::PromoteComputeReadyForeignQueueTerminal) => {
+                    let _ = self.pop();
+                    return Err(ScriptedPersistentComputeReadyFailureV1::ForeignQueue {
+                        completed,
+                        terminal_receiver: true,
+                    });
+                }
+                Some(ScriptedSdmaStepV1::PromoteComputeReady(_)) => match self.pop() {
+                    Ok(ScriptedSdmaStepV1::PromoteComputeReady(outcome)) => outcome,
+                    _ => {
+                        unreachable!("peeked scripted ready-promotion step remains ready promotion")
+                    }
+                },
+                _ => ScriptedFailureModeV1::Success,
+            };
+            match promotion {
+                ScriptedFailureModeV1::Success => {}
+                ScriptedFailureModeV1::Retryable => {
+                    return Err(ScriptedPersistentComputeReadyFailureV1::Recovered(
+                        completed.pair,
+                    ));
+                }
+                ScriptedFailureModeV1::ProcessTeardown => {
+                    return Err(ScriptedPersistentComputeReadyFailureV1::ProcessTeardown(
+                        completed,
+                    ));
+                }
+            }
+            let ScriptedCompletedOwnerV1 {
+                pair,
+                direction,
+                host_offset,
+                device_offset,
+                copy_bytes,
+                ..
+            } = completed;
+            let DirectionalSdmaPairOwnerV1 {
+                device: DirectionalSdmaDeviceOwnerV1::Scripted(device),
+                host: SdmaBufferOwnerV1::Scripted(host),
+            } = pair
+            else {
+                unreachable!("scripted completion retains a scripted pair")
+            };
+            let observed_sha256: [u8; 32] = Sha256::digest(&host.bytes).into();
+            let exact = direction == Gfx942PersistentSdmaDirectionV1::HostToDevice
+                && host_offset == 0
+                && device_offset == 0
+                && u64::from(copy_bytes) == content.byte_len()
+                && device.bytes.len() == host.bytes.len()
+                && u64::try_from(device.bytes.len()).ok() == Some(content.byte_len())
+                && observed_sha256 == content.sha256();
+            if exact {
+                Ok((device, host))
+            } else {
+                Err(ScriptedPersistentComputeReadyFailureV1::Recovered(
+                    DirectionalSdmaPairOwnerV1 {
+                        device: DirectionalSdmaDeviceOwnerV1::Scripted(device),
+                        host: SdmaBufferOwnerV1::Scripted(host),
+                    },
+                ))
             }
         }
 

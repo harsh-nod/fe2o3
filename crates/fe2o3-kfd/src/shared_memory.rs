@@ -474,6 +474,18 @@ impl fmt::Debug for Gfx942InitializedDeviceMemoryV1 {
 }
 
 impl Gfx942InitializedDeviceMemoryV1 {
+    /// Seals an already-mapped lease after a separate trusted transfer path
+    /// authenticated the complete requested extent against `content`.
+    pub(crate) fn from_authenticated_full_transfer(
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<Self, Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>> {
+        if lease.layout().requested_bytes() != content.byte_len() {
+            return Err(lease);
+        }
+        Ok(Self { lease, content })
+    }
+
     /// Returns the checked layout without native identities or addresses.
     pub const fn layout(&self) -> Gfx942DeviceMemoryLayoutV1 {
         self.lease.layout()
@@ -2471,6 +2483,47 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
     }
 
+    fn sha256_mapped_host_visible_subrange(
+        &mut self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        byte_len: u64,
+    ) -> Result<[u8; 32], MemorySessionError> {
+        self.check_operational_currentness()?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let requested = self.allocations[index].layout.requested_bytes;
+        let start = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let len = usize::try_from(byte_len).map_err(|_| MemorySessionError::SizeOverflow)?;
+        let end = start
+            .checked_add(len)
+            .ok_or(MemorySessionError::SizeOverflow)?;
+        if len == 0 || end > requested {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let outcome = {
+            let mapping = self.allocations[index]
+                .mapping
+                .as_ref()
+                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes(mapping, requested, |bytes| {
+                    Sha256::digest(&bytes[start..end]).into()
+                })
+            }))
+        };
+        let post = self.check_operational_currentness();
+        match outcome {
+            Ok(digest) => {
+                post?;
+                Ok(digest)
+            }
+            Err(payload) => {
+                let _ = post;
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
     fn copy_mapped_host_visible_subrange_into(
         &mut self,
         token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -3997,12 +4050,31 @@ impl SharedGttMemorySessionV1 {
         &self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     ) -> Result<Gfx942DeviceMemoryDispatchAuthorityV1, MemorySessionError> {
-        let index = self
+        self.retain_gfx942_device_memory_for_dispatch_recovering(lease)
+            .map_err(|(error, _lease)| error)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn retain_gfx942_device_memory_for_dispatch_recovering(
+        &self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<
+        Gfx942DeviceMemoryDispatchAuthorityV1,
+        (
+            MemorySessionError,
+            Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        ),
+    > {
+        let index = match self
             .engine
-            .device_memory_index(&lease, DeviceMemoryPhaseV1::Mapped)?;
+            .device_memory_index(&lease, DeviceMemoryPhaseV1::Mapped)
+        {
+            Ok(index) => index,
+            Err(error) => return Err((error, lease)),
+        };
         let record = &self.engine.device_memory[index];
         if record.device != self.model_device.model_key() || record.vm != self.vm {
-            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+            return Err((MemorySessionError::InvalidDeviceMemoryAuthority, lease));
         }
         Ok(Gfx942DeviceMemoryDispatchAuthorityV1 {
             facts: Gfx942DeviceMemoryDispatchFactsV1 {
@@ -4260,6 +4332,16 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<Box<[u8]>, MemorySessionError> {
         self.engine
             .copy_mapped_host_visible_subrange(token, offset, byte_len)
+    }
+
+    pub(crate) fn sha256_mapped_host_visible_subrange(
+        &mut self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        byte_len: u64,
+    ) -> Result<[u8; 32], MemorySessionError> {
+        self.engine
+            .sha256_mapped_host_visible_subrange(token, offset, byte_len)
     }
 
     #[allow(dead_code)]
@@ -5532,6 +5614,12 @@ mod tests {
             .copy_mapped_host_visible_subrange(&token, 64, 32)
             .unwrap();
         assert_eq!(copied.as_ref(), &(64_u8..96).collect::<Vec<_>>());
+        assert_eq!(
+            engine
+                .sha256_mapped_host_visible_subrange(&token, 64, 32)
+                .unwrap(),
+            <[u8; 32]>::from(Sha256::digest(copied.as_ref()))
+        );
         let mut copied_into = [0_u8; 32];
         engine
             .copy_mapped_host_visible_subrange_into(&token, 64, &mut copied_into)
@@ -5577,6 +5665,37 @@ mod tests {
                 .copy_mapped_host_visible_subrange(&stale, 64, 32)
                 .is_err()
         );
+        assert!(
+            engine
+                .sha256_mapped_host_visible_subrange(&stale, 64, 32)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mapped_coherent_hash_currentness_failure_quarantines_session() {
+        for currentness_delta in [1, 2] {
+            let mut engine = acquired();
+            let token = engine.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
+            let token = engine.map_mutable(token).unwrap();
+            engine.backend.fail_currentness_at = Some(
+                engine
+                    .backend
+                    .currentness_calls
+                    .checked_add(currentness_delta)
+                    .unwrap(),
+            );
+
+            assert!(matches!(
+                engine.sha256_mapped_host_visible_subrange(&token, 64, 32),
+                Err(MemorySessionError::Injected("currentness"))
+            ));
+            assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            assert!(matches!(
+                engine.sha256_mapped_host_visible_subrange(&token, 64, 32),
+                Err(MemorySessionError::SharedSessionQuarantined)
+            ));
+        }
     }
 
     #[test]
@@ -5701,6 +5820,41 @@ mod tests {
         assert_eq!(engine.retained_gpu_va_bytes, 0);
         assert_eq!(engine.backend.free_calls, 4);
         assert_eq!(engine.backend.release_va_calls, 4);
+    }
+
+    #[test]
+    fn dropped_partial_dispatch_code_and_kernarg_tokens_remain_registry_owned() {
+        let mut engine = acquired();
+        let executable = engine.allocate::<ExecutableGttV1>(8192).unwrap();
+        let executable = engine.seal_executable(executable).unwrap();
+        let executable = engine.map_executable(executable).unwrap();
+        let kernarg = engine.allocate::<KernargGttV1>(256).unwrap();
+        let kernarg = engine.map_mutable(kernarg).unwrap();
+
+        drop(executable);
+        drop(kernarg);
+
+        assert_eq!(engine.allocations.len(), 2);
+        assert!(engine.allocations.iter().all(|record| {
+            record.phase != SharedAllocationPhaseV1::Released
+                && record.handle.is_some()
+                && record.mapping.is_some()
+        }));
+        assert_eq!(engine.backend.free_calls, 0);
+        assert_eq!(engine.backend.release_va_calls, 0);
+
+        assert!(matches!(
+            engine
+                .quarantine::<()>(MemorySessionError::KernelResultMalformed(
+                    "partial fixed dispatch preparation",
+                ))
+                .unwrap_err(),
+            MemorySessionError::KernelResultMalformed("partial fixed dispatch preparation")
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.allocations.len(), 2);
+        assert_eq!(engine.backend.free_calls, 0);
+        assert_eq!(engine.backend.release_va_calls, 0);
     }
 
     #[test]

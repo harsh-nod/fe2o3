@@ -698,6 +698,26 @@ impl CompletionSignalArenaOwnerV1 {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn for_persistent_compute_cancellation_test(queue: QueueKeyV1) -> Self {
+        Self {
+            queue,
+            signal_mapping: MemoryMappingKeyV1 {
+                allocation: fe2o3_runtime_model::MemoryAllocationKeyV1 {
+                    vm: queue.vm,
+                    id: fe2o3_runtime_model::AllocationIdV1(1),
+                    generation: fe2o3_runtime_model::AllocationGenerationV1(1),
+                },
+                id: fe2o3_runtime_model::MappingIdV1(1),
+            },
+            gpu_base: AMD_SIGNAL_ALIGNMENT_V1 as u64,
+            next_batch_id: 1,
+            slots: allocate_completion_slot_records_v1()
+                .expect("fixed completion test roster is allocatable"),
+            phase: CompletionOwnerPhaseV1::Ready,
+        }
+    }
+
     pub(super) fn bind_barrier_probe(
         &mut self,
     ) -> Result<BoundBarrierProbeV1, Gfx942CompletionErrorV1> {
@@ -1072,8 +1092,28 @@ impl CompletionSignalArenaOwnerV1 {
         batch: Gfx942CompletionBatchV1<N>,
         backend: &mut B,
     ) -> Result<Gfx942CompletionPollWithProgressV1<N>, Gfx942CompletionErrorV1> {
-        self.require_ready()?;
-        self.validate_published(&batch.retention)?;
+        self.observe_once_with_progress_retaining(batch, backend)
+            .map_err(|(error, _batch)| error)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_once_with_progress_retaining<
+        const N: usize,
+        B: NativeCompletionSignalBackendV1,
+    >(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<N>,
+        backend: &mut B,
+    ) -> Result<
+        Gfx942CompletionPollWithProgressV1<N>,
+        (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<N>),
+    > {
+        if let Err(error) = self.require_ready() {
+            return Err((error, batch));
+        }
+        if let Err(error) = self.validate_published(&batch.retention) {
+            return Err((error, batch));
+        }
         let slot_indices: Vec<u32> = batch
             .retention
             .slots
@@ -1083,12 +1123,17 @@ impl CompletionSignalArenaOwnerV1 {
         let observations = match backend.observe_batch_acquire(&slot_indices) {
             Ok(observations) if observations.len() == N => observations,
             Ok(_) | Err(Gfx942CompletionErrorV1::Observation) => {
-                return self.poison(Gfx942CompletionErrorV1::Observation);
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((Gfx942CompletionErrorV1::Observation, batch));
             }
             Err(Gfx942CompletionErrorV1::Currentness) => {
-                return self.poison(Gfx942CompletionErrorV1::Currentness);
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((Gfx942CompletionErrorV1::Currentness, batch));
             }
-            Err(_) => return self.poison(Gfx942CompletionErrorV1::Observation),
+            Err(_) => {
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((Gfx942CompletionErrorV1::Observation, batch));
+            }
         };
         let mut completed_count = 0_u16;
         let mut pending_count = 0_u16;
@@ -1105,10 +1150,14 @@ impl CompletionSignalArenaOwnerV1 {
                 }
                 AqlCompletionObservationV1::Completed => completed_count += 1,
                 AqlCompletionObservationV1::Unexpected(value) => {
-                    return self.poison(Gfx942CompletionErrorV1::Fault {
-                        slot: slot.index,
-                        value,
-                    });
+                    self.phase = CompletionOwnerPhaseV1::Poisoned;
+                    return Err((
+                        Gfx942CompletionErrorV1::Fault {
+                            slot: slot.index,
+                            value,
+                        },
+                        batch,
+                    ));
                 }
             }
         }
@@ -1213,23 +1262,49 @@ impl CompletionSignalArenaOwnerV1 {
         completed: Gfx942CompletedBatchV1<N>,
         backend: &mut B,
     ) -> Result<Gfx942CompletionRecycleObservationV1, Gfx942CompletionErrorV1> {
-        self.require_ready()?;
-        self.validate_completed(&completed.retention)?;
+        self.recycle_retaining(completed, backend)
+            .map_err(|(error, _completed)| error)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn recycle_retaining<const N: usize, B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        completed: Gfx942CompletedBatchV1<N>,
+        backend: &mut B,
+    ) -> Result<
+        Gfx942CompletionRecycleObservationV1,
+        (Gfx942CompletionErrorV1, Gfx942CompletedBatchV1<N>),
+    > {
+        if let Err(error) = self.require_ready() {
+            return Err((error, completed));
+        }
+        if let Err(error) = self.validate_completed(&completed.retention) {
+            return Err((error, completed));
+        }
         if completed.retention.slots.iter().any(|slot| {
             self.slots[slot.index as usize]
                 .generation
                 .checked_add(1)
                 .is_none()
         }) {
-            return self.poison(Gfx942CompletionErrorV1::SignalGenerationExhausted);
+            self.phase = CompletionOwnerPhaseV1::Poisoned;
+            return Err((
+                Gfx942CompletionErrorV1::SignalGenerationExhausted,
+                completed,
+            ));
         }
-        self.checked_currentness(backend)?;
+        if let Err(error) = self.checked_currentness(backend) {
+            return Err((error, completed));
+        }
         for slot in completed.retention.slots.iter() {
             if backend.reset_pending_release(slot.index).is_err() {
-                return self.poison(Gfx942CompletionErrorV1::Recycle);
+                self.phase = CompletionOwnerPhaseV1::Poisoned;
+                return Err((Gfx942CompletionErrorV1::Recycle, completed));
             }
         }
-        self.checked_currentness(backend)?;
+        if let Err(error) = self.checked_currentness(backend) {
+            return Err((error, completed));
+        }
         for slot in completed.retention.slots.iter() {
             let record = &mut self.slots[slot.index as usize];
             record.generation += 1;

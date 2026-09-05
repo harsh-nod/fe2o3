@@ -545,3 +545,48 @@ The seam does not inject kernel-driver failures, prove correspondence between
 the Rust and Verus state machines, or establish cleanup liveness, hardware
 correctness, HIP/HSA parity, or performance. Batched large-copy publication is
 the next local-SDMA throughput requirement.
+
+## Runtime R25 Status
+
+R25 adds the first bounded bridge from runtime-owned persistent HBM copy
+storage to fixed compute dispatch. After one exact full-allocation H2D transfer,
+the direct gfx942 backend can bind the same mapped, exact-extent device
+allocation to one metadata-inspected compute packet on primary lane zero. The
+bridge accepts exactly one full-range global binding and preserves the allocation,
+storage identity, content authentication, use generation, dispatch generation,
+completion custody, and exact settled frontier through publication, polling,
+recycle, detach, restoration, and retirement. Once selected, this path cannot
+fall back to generic host-data materialization. Its public performance
+observation reports `PersistentDeviceReused` and zero user-data
+materializations.
+
+Read and read/write access require the exact authenticated H2D content digest.
+Write effects invalidate the runtime host shadow after completion; read-only
+effects preserve it. Primary-lane contention leaves the submission pending with
+the H2D-ready owner untouched. The bridge serializes against every published
+SDMA submission and every active compute lane on the queue; it does not claim
+compute/copy or multi-lane overlap. Clean prepublication rejection restores the
+exact input. A no-effect full-ring publication remains pending in prepared
+custody and is retried by explicit progress. Cancellation before publication
+withdraws that prepared dispatch, restores the exact H2D-ready allocation, and
+releases its runtime reservations without inventing profile publication or
+completion records. Any uncertainty after native retention poisons the queue
+and keeps the batch, completion, detached data, or mapped storage in opaque
+terminal custody until process teardown. Foreign-queue rejection preserves the
+exact retryable owner.
+
+The independent executable model has 17 focused tests. Its pinned Verus model
+adds 38 obligations and 18 expected-negative mutations, bringing the abstract
+totals to 532 obligations and 293 rejected mutations. These models cover exact
+storage/range/generation retention, derived access, initialization, no
+materialization fallback, completion authentication, quarantine, restoration,
+and frontier retirement. They are not a correspondence theorem for the Rust
+implementation or evidence about KFD, firmware, or hardware truth.
+
+R25 does not establish HIP/HSA parity or a speedup. It admits fresh or
+exact-size pooled storage, but not partial or padded pooled ranges, multiple
+global bindings, auxiliary compute lanes, concurrent SDMA, persistent XGMI
+sharing, or a unified multi-device compute owner. Native
+MI300X execution and matched KFD/HSA/HIP timing for this exact path remain the
+next qualification step. The separate measured local-copy throughput gap also
+remains open.

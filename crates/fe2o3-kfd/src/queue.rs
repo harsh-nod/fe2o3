@@ -24,6 +24,18 @@ use fe2o3_runtime_model::{
 #[path = "queue_live.rs"]
 mod live;
 
+#[cfg(test)]
+pub(crate) use live::{
+    admit_directional_persistent_sdma_copy_input_v1,
+    admit_directional_persistent_sdma_window_input_v1,
+    admit_same_device_persistent_sdma_window_input_v1,
+    preserve_directional_window_sdma_publication_custody_v1,
+    preserve_persistent_compute_bind_input_for_sdma_quiescence_v1,
+    preserve_persistent_compute_ready_affiliation_v1,
+    preserve_persistent_compute_ready_preflight_custody_v1,
+    terminal_persistent_compute_ready_hash_failure_v1,
+};
+
 #[allow(unsafe_code)]
 #[path = "queue_submit.rs"]
 pub(crate) mod submit;
