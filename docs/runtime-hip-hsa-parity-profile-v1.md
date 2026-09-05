@@ -442,6 +442,68 @@ compute, production atomic/collective authority, broad Rust device language,
 and matched hardware qualification remain open. No R25 performance ratio or
 orders-of-magnitude claim exists without a retained matched measurement.
 
+## Current R26-R32 Status
+
+R26 adds the matched, counterbalanced direct-KFD/raw-HSA/HIP qualification
+harness at exact commit `8953f757c6771823e5132708f45a43c32f459081` for one
+1 MiB in-place `u32` transform on one idle MI300X. R27 retains and replays one
+exact persistent dispatch control instead of reconstructing it for each launch
+(`f0ec1c3acc57c1bb86f8b33da651bc1f3f543113`, with the independent model at
+`e659d148c46221163aa36258d4279237c8d51e25`). R28 scopes retained-control hot
+replay to operational currentness observations while keeping full audits at
+lifecycle boundaries (`1fb39f8301d1859ab136058255bc58d41eed66e8`, model
+`c9dc306aa2071656a0e1011438955502a8d5ef46`). R29 narrows each active retained
+queue observation to opener PID, reset-event readiness, and a dedicated
+VRAM-loss-counter comparison at
+`7970da879291292bcf02fd99a07b5f3c9a3b6427`; full identity, topology, aperture,
+and process-incarnation audits remain lifecycle operations.
+
+R30 binds a full-write host-content certificate before H2D and consumes it only
+after exact completed-H2D custody and promotion currentness checks
+(`dc1887e9999135e450e53e99a8d3d99bf933c689`, model
+`9e78aafa27e3c737f6a6e491a5c0fa6bbe190ff1`). In the bounded R26 V4 workload,
+the retained [R30 evidence](evidence/mi300x-r30-authenticated-h2d-2026-09-05.md)
+reports a 60.92% median unadjusted E2E reduction against the exact R29 baseline,
+but the R30 KFD path remained about 3.30x-3.34x slower than HIP E2E. R31 routes
+copies no larger than one gfx942 linear packet through the existing scalar
+owner path (`2f95b4619a6ca95cd37159821429d9db196d5550`, model
+`ce54ae7b06d51b5c2cd5844103def858ec93d6b7`). Its retained
+[R31 evidence](evidence/mi300x-r31-single-packet-2026-09-05.md) found no
+meaningful speedup and did not support one-packet vector construction as the
+dominant bottleneck in that run.
+
+R32 fuses directional preparation and publication under one owner/memory loan,
+uses one shared currentness observation before an immediate no-fail handoff,
+and retains the final post-publication close at exact production commit
+`9f715189b8f35d4adb58be303900f937d88389ad`. The retained
+[R32 evidence](evidence/mi300x-r32-currentness-handoff-2026-09-05.md) measures
+the same R26 V4 1 MiB workload and reports a 9.32% median slot-matched
+unadjusted E2E reduction against R31. KFD still measured approximately 3.01x
+slower than HIP E2E in every slot. These are `n=3` descriptive cross-revision
+effects for one workload, not a generic parity, application-speedup, or
+orders-of-magnitude result.
+
+The authenticated aggregate formal runner now includes the R27, R28, R30, R31,
+and R32 independent bounded models. Across the complete included proof set, 31
+positive sources establish 696 obligations and 310 pinned mutations are
+rejected; transcript SHA-256 is
+`cc0277abffd2a47a19525773b7d840e5ca5b0353cbccd5e6db9f358ca6b9e52a`.
+R32 contributes 34 obligations and three transition-coupled negatives for the
+mathematical shared-observation handoff relation. The proof inputs contract
+currentness, lower outcomes, identities, certificates, and ticket rosters;
+there is no Rust-to-Verus correspondence or proof of syscalls, driver,
+firmware, hardware, DMA visibility, liveness, parity, or performance.
+
+R26-R32 therefore improve one narrow persistent single-device path but do not
+close the profile. Remaining blockers include ordinary public source-to-GPU
+execution authority; broader native scheduling and concurrency beyond the
+bounded two-lane, caller-flush path; full persistent memory, pool, and
+concurrent-range behavior; unified compute plus native XGMI custody; production
+atomic/collective authority and native litmus evidence; broad
+Rust/device-language support; authenticated GPU execution profiling; broader
+target and reset qualification; and concrete Rust/native refinement. The
+normative gates below remain open.
+
 ## Required Gates
 
 ### G1: API and ownership
