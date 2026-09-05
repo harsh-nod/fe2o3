@@ -2096,11 +2096,8 @@ impl KfdRuntimeBackendV1 {
             let mut submissions = new_stream_queue
                 .expect("new active SDMA stream queue was reserved before retention");
             submissions.push_back(submission);
-            debug_assert!(
-                self.active_sdma_streams
-                    .insert(stream, submissions)
-                    .is_none()
-            );
+            let replaced = self.active_sdma_streams.insert(stream, submissions);
+            debug_assert!(replaced.is_none());
         }
     }
 
@@ -2197,11 +2194,8 @@ impl KfdRuntimeBackendV1 {
         new_entries: Vec<(u64, RuntimeAllocationCustodyV1)>,
     ) {
         for (allocation, custody) in new_entries {
-            debug_assert!(
-                self.allocation_custody
-                    .insert(allocation, custody)
-                    .is_none()
-            );
+            let replaced = self.allocation_custody.insert(allocation, custody);
+            debug_assert!(replaced.is_none());
         }
         for (index, allocation) in allocations.iter().copied().enumerate() {
             if allocations[..index].contains(&allocation) {
@@ -2525,12 +2519,11 @@ impl KfdRuntimeBackendV1 {
     }
 
     fn release_compute_lane_lease_v1(&mut self, stream: u64, lane: usize) {
-        debug_assert_eq!(self.stream_compute_lanes.remove(&stream), Some(lane));
+        let removed = self.stream_compute_lanes.remove(&stream);
+        debug_assert_eq!(removed, Some(lane));
         if lane != 0 {
-            debug_assert_eq!(
-                self.auxiliary_compute_lanes[lane - 1].owner_stream.take(),
-                Some(stream)
-            );
+            let owner = self.auxiliary_compute_lanes[lane - 1].owner_stream.take();
+            debug_assert_eq!(owner, Some(stream));
         }
     }
 
