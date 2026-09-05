@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <iterator>
 #include <limits>
 #include <vector>
 
@@ -26,6 +25,8 @@
   } while (false)
 
 namespace {
+
+constexpr std::streamoff kMaximumHsacoBytes = 64 * 1024 * 1024;
 
 struct Agents {
   std::vector<hsa_agent_t> cpus;
@@ -116,15 +117,33 @@ void queue_error(hsa_status_t status, hsa_queue_t *, void *) {
 }
 
 std::vector<char> read_binary(const char *path) {
-  std::ifstream input(path, std::ios::binary);
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) {
     std::fprintf(stderr, "could not open HSACO: %s\n", path);
     std::exit(2);
   }
-  std::vector<char> bytes((std::istreambuf_iterator<char>(input)),
-                          std::istreambuf_iterator<char>());
-  if (!input.eof() || bytes.empty()) {
+  const std::streamoff byte_count = input.tellg();
+  if (byte_count <= 0 || byte_count > kMaximumHsacoBytes) {
+    std::fprintf(stderr, "HSACO size is empty or exceeds the limit: %s\n",
+                 path);
+    std::exit(2);
+  }
+  input.seekg(0, std::ios::beg);
+  if (!input) {
+    std::fprintf(stderr, "could not seek HSACO: %s\n", path);
+    std::exit(2);
+  }
+  std::vector<char> bytes(static_cast<std::size_t>(byte_count));
+  const auto expected_byte_count = static_cast<std::streamsize>(byte_count);
+  input.read(bytes.data(), expected_byte_count);
+  if (!input || input.gcount() != expected_byte_count) {
     std::fprintf(stderr, "could not read nonempty HSACO: %s\n", path);
+    std::exit(2);
+  }
+  char trailing_byte = 0;
+  input.read(&trailing_byte, 1);
+  if (input.gcount() != 0 || !input.eof() || input.bad()) {
+    std::fprintf(stderr, "HSACO changed or failed while reading: %s\n", path);
     std::exit(2);
   }
   return bytes;

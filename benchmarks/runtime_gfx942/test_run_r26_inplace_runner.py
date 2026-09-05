@@ -10,12 +10,14 @@ import unittest
 
 
 RUNNER = pathlib.Path(__file__).with_name("run-r26-inplace-mi300x.sh")
+HSA_COMPARATOR = pathlib.Path(__file__).with_name("inplace_transform_hsa.cpp")
 
 
 class R26RunnerContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = RUNNER.read_text(encoding="utf-8")
+        cls.hsa_source = HSA_COMPARATOR.read_text(encoding="utf-8")
 
     def test_shell_is_syntactically_valid(self) -> None:
         subprocess.run(["/usr/bin/bash", "-n", str(RUNNER)], check=True)
@@ -137,6 +139,18 @@ class R26RunnerContractTests(unittest.TestCase):
             '} | "${qualification_env[@]}" /usr/bin/tee "${slot_log}"',
             self.source,
         )
+
+    def test_hsa_comparator_reads_one_bounded_exact_size_code_object(self) -> None:
+        self.assertIn("kMaximumHsacoBytes", self.hsa_source)
+        self.assertIn("std::ios::binary | std::ios::ate", self.hsa_source)
+        self.assertIn(
+            "const std::streamoff byte_count = input.tellg()", self.hsa_source
+        )
+        self.assertIn("input.read(bytes.data()", self.hsa_source)
+        self.assertIn("input.gcount() != expected_byte_count", self.hsa_source)
+        self.assertIn("input.read(&trailing_byte, 1)", self.hsa_source)
+        self.assertIn("input.gcount() != 0 || !input.eof()", self.hsa_source)
+        self.assertNotIn("istreambuf_iterator", self.hsa_source)
 
     def test_rocm_smi_and_persistence_tools_use_fixed_environments(self) -> None:
         rocm_invocations = [
