@@ -46,6 +46,7 @@ mod r25_persistent_compute_storage_bridge;
 mod r28_persistent_hot_currentness_scope;
 mod r30_bound_host_content_certificate;
 mod r31_single_packet_window_refinement;
+mod r32_directional_sdma_currentness_handoff;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -79,6 +80,7 @@ pub use r25_persistent_compute_storage_bridge::*;
 pub use r28_persistent_hot_currentness_scope::*;
 pub use r30_bound_host_content_certificate::*;
 pub use r31_single_packet_window_refinement::*;
+pub use r32_directional_sdma_currentness_handoff::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -135,6 +137,8 @@ mod r28_persistent_hot_currentness_scope_tests;
 mod r30_bound_host_content_certificate_tests;
 #[cfg(test)]
 mod r31_single_packet_window_refinement_tests;
+#[cfg(test)]
+mod r32_directional_sdma_currentness_handoff_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

@@ -10,8 +10,9 @@ chunking, R21 runtime scripted-failure-seam, R22 batched directional
 persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
 portable-progress, R25 persistent-compute storage-bridge, R27 persistent
 dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
-host-content-certificate, and R31 single-packet/window-refinement models. The
-authenticated runner proves 662 obligations and rejects 307
+host-content-certificate, R31 single-packet/window-refinement, and R32
+directional-currentness-handoff models. The
+authenticated runner proves 696 obligations and rejects 310
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1379,6 +1380,68 @@ performance refinement.
 | Executable single/window model | **Checked** | Sixteen focused Rust transition tests; no Rust-to-Verus correspondence theorem. |
 | Coupled boundary countermodels | **Rejected** | Three pinned mutated transition bodies fail their named invalidation, completion-offset, and promotion-retirement postconditions. |
 | Allocation behavior, currentness/completion truth, executable Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R31 proof boundary. |
+
+## R32 directional currentness handoff
+
+`r32_directional_sdma_currentness_handoff_v1.rs` proves 34 obligations for an
+independent finite comparison of the former directional SDMA publication
+lifecycle and the R32 shared-currentness lifecycle. The reference machine uses
+separate successful-prepare close and publication-open observations. The R32
+machine uses one shared queue observation after successful preparation, moves a
+queue-occurrence/native-queue/direction/packet-roster-bound handoff directly
+into publication, and retains the final directional close. Under the explicit
+refinement premise that the former close and open receive the same contracted
+currentness value, both machines return the same external outcome, exact
+request/prepared/published custody class, binding, ticket roster, certificate
+state, and publication-attempt classification.
+
+On successful preparation and a current shared observation, the reference
+machine records four operational checks and R32 records three. The proof models
+these as abstract event counts; it does not establish the cost or truth of any
+Linux observation. The shared event and publication are adjacent, and the
+modeled interval contains zero fallible and zero native actions. A failed shared
+observation is terminal with prepared custody, attempts no publication, and
+does not execute the post-publication close. Once publication is attempted, all
+recoverable, retained, and published outcomes retain that final close and exact
+custody classification.
+
+Every modeled lower preparation failure, including the release-checked ticket
+roster mismatch, takes the old explicit close. Only a retryable lower failure
+with a current close restores request custody; close loss, owner poison, and
+roster mismatch retain terminal request custody. Ticket rosters contain one to
+64 occurrences and bind every ticket to the logical queue generation, native
+queue, direction, and exact occurrence. H2D certificate state is unchanged and
+D2H certificate state remains invalidated. The same-device D2D state is an
+identity projection and is not transformed by R32.
+
+The executable R32 model has 16 focused Rust tests. A structural test confirms
+that its private handoff carrier has no `Clone` derive or implementation, and a
+compile-fail doctest rejects cloning the public owning model. The formal
+mathematical handoff is openly represented so Verus can prove its coordinate
+equalities; Verus mathematical values do not prove Rust privacy, move-only
+ownership, or non-duplication. Production privacy and source ordering therefore
+remain executable/source-review properties, not consequences of this proof.
+Three pinned transition-coupled mutations respectively elide the retained
+prepare-failure close, expose shared-check failure as retryable request custody,
+and insert a native action between shared observation and publication. Each
+fails only at its named postcondition and imports no positive proof source.
+
+Currentness values, lower preparation/publication outcomes, identities,
+certificates, and roster contents are contracted mathematical inputs. There is
+no Rust-to-Verus correspondence theorem and no proof that production Rust
+refines either finite machine. The model does not cover allocation success,
+owner-memory loan mechanics, borrow exclusivity, compiler reordering, unwind,
+panic, reset detection, syscalls, KFD/HSA/HIP, driver, firmware, hardware,
+coherence, DMA visibility, progress, liveness, parity, or performance.
+
+## R32 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Shared observation refinement, exact 4-to-3 successful check count, failure custody, immediate handoff/publication event order, final-close retention, full ticket binding, certificate preservation/invalidation, and same-device identity | **Proved** | Thirty-four obligations in `r32_directional_sdma_currentness_handoff_v1.rs`; finite mathematical values and contracted observations only. |
+| Executable handoff model | **Checked** | Sixteen focused Rust transition/structure tests plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
+| Coupled boundary countermodels | **Rejected** | Three pinned mutated transition bodies fail their named close-retention, terminal-prepared-custody, and immediate-publication postconditions. |
+| Rust privacy/move semantics, allocation/loan behavior, currentness truth, executable Rust refinement, KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R32 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
