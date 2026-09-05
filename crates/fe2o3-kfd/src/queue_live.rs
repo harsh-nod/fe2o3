@@ -44,8 +44,9 @@ use super::dispatch_binding::{
     validate_fixed_batch_ring, wrap_completed, wrap_poll_with_progress, wrap_published,
 };
 use super::submit::{
-    NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
-    NativeBarrierAndSubmissionFailureV1, initialize_amd_aql_control, initialize_invalid_ring,
+    NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionFailureV1,
+    NativeAqlSubmissionOwnerV1, NativeBarrierAndSubmissionFailureV1, initialize_amd_aql_control,
+    initialize_invalid_ring,
 };
 use super::*;
 use crate::persistent_allocation::{
@@ -1226,6 +1227,53 @@ enum QueueDestroyModeV1 {
     Release,
     ReturnAttached,
     ReturnDetached(Vec<Gfx942FixedDispatchDataV1>),
+}
+
+#[derive(Debug)]
+enum FixedDispatchSubmissionFailureV1 {
+    RejectedBeforeSideEffect(ComputeAqlQueueSessionErrorV1),
+    RetryableBeforeSideEffect(ComputeAqlQueueSessionErrorV1),
+    Terminal(ComputeAqlQueueSessionErrorV1),
+}
+
+impl FixedDispatchSubmissionFailureV1 {
+    fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::RejectedBeforeSideEffect(error)
+            | Self::RetryableBeforeSideEffect(error)
+            | Self::Terminal(error) => error,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FixedDispatchBindingModeV1 {
+    Ordinary,
+    ExactPersistentAttachment,
+}
+
+fn finish_fixed_dispatch_submission<const N: usize>(
+    generation: u64,
+    completion: Result<Gfx942CompletionBatchV1<N>, FixedDispatchSubmissionFailureV1>,
+    cancel_binding: impl FnOnce(u64) -> Result<(), Gfx942DispatchBindingErrorV1>,
+) -> Result<Gfx942DispatchBatchV1<N>, FixedDispatchSubmissionFailureV1> {
+    match completion {
+        Ok(completion) => Ok(wrap_published(completion, generation)),
+        Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
+            match cancel_binding(generation) {
+                Ok(()) => Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
+                    error,
+                )),
+                Err(cancel_error) => Err(FixedDispatchSubmissionFailureV1::Terminal(
+                    cancel_error.into(),
+                )),
+            }
+        }
+        Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))
+        | Err(FixedDispatchSubmissionFailureV1::Terminal(error)) => {
+            Err(FixedDispatchSubmissionFailureV1::Terminal(error))
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -9382,6 +9430,22 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         prepared_receipt: Gfx942PreparedPersistentComputeDispatchV1,
     ) -> Result<Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeExecutionFailureV1> {
+        self.submit_directional_persistent_fixed_dispatch_v1_using(prepared_receipt, |session| {
+            session.submit_fixed_dispatch_inner_classified::<1>(
+                FixedDispatchBindingModeV1::ExactPersistentAttachment,
+            )
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn submit_directional_persistent_fixed_dispatch_v1_using(
+        &mut self,
+        prepared_receipt: Gfx942PreparedPersistentComputeDispatchV1,
+        submit: impl FnOnce(
+            &mut Self,
+        )
+            -> Result<Gfx942DispatchBatchV1<1>, FixedDispatchSubmissionFailureV1>,
+    ) -> Result<Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeExecutionFailureV1> {
         let binding = prepared_receipt.binding;
         if binding.queue != self.key {
             return Err(Gfx942PersistentComputeExecutionFailureV1 {
@@ -9428,7 +9492,7 @@ impl ComputeAqlQueueSessionV1 {
                 retryable: None,
             });
         };
-        match self.submit_fixed_dispatch_inner::<1>() {
+        match submit(self) {
             Ok(batch) => match attachment.allocation.owner.publish(prepared) {
                 Ok(published) => {
                     attachment.state = PersistentComputeUseStateV1::Published(published);
@@ -9457,18 +9521,11 @@ impl ComputeAqlQueueSessionV1 {
                     })
                 }
             },
-            Err(error) if !self.terminal_poisoned => {
-                attachment.state = PersistentComputeUseStateV1::Prepared(prepared);
-                self.persistent_compute = Some(attachment);
-                Err(Gfx942PersistentComputeExecutionFailureV1 {
-                    error,
-                    retryable: Some(Gfx942PreparedPersistentComputeDispatchV1 {
-                        binding,
-                        thread_affinity: PhantomData,
-                    }),
-                })
-            }
-            Err(error) => {
+            Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error)) => Err(self
+                .restore_retryable_persistent_compute_submission(
+                    attachment, prepared, binding, error,
+                )),
+            Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)) => {
                 let _ = attachment.allocation.owner.quarantine_prepared(
                     prepared,
                     Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate,
@@ -9482,6 +9539,38 @@ impl ComputeAqlQueueSessionV1 {
                     retryable: None,
                 })
             }
+            Err(FixedDispatchSubmissionFailureV1::Terminal(error)) => {
+                let _ = attachment.allocation.owner.quarantine_prepared(
+                    prepared,
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedPublicationIndeterminate,
+                );
+                attachment.terminal_custody =
+                    Some(PersistentComputeTerminalNativeCustodyV1::Attached);
+                self.persistent_compute = Some(attachment);
+                self.poison_terminal();
+                Err(Gfx942PersistentComputeExecutionFailureV1 {
+                    error,
+                    retryable: None,
+                })
+            }
+        }
+    }
+
+    fn restore_retryable_persistent_compute_submission(
+        &mut self,
+        mut attachment: PersistentComputeAttachmentV1,
+        prepared: Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+        binding: PersistentComputeBindingKeyV1,
+        error: ComputeAqlQueueSessionErrorV1,
+    ) -> Gfx942PersistentComputeExecutionFailureV1 {
+        attachment.state = PersistentComputeUseStateV1::Prepared(prepared);
+        self.persistent_compute = Some(attachment);
+        Gfx942PersistentComputeExecutionFailureV1 {
+            error,
+            retryable: Some(Gfx942PreparedPersistentComputeDispatchV1 {
+                binding,
+                thread_affinity: PhantomData,
+            }),
         }
     }
 
@@ -10829,69 +10918,70 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         batch: AqlPreparedKernelDispatchBatchV2<N>,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
-        if self.terminal_poisoned {
-            return Err(NativeAqlSubmissionErrorV1::Poisoned);
-        }
-        let exception = self
-            .exception
-            .as_ref()
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
-                "missing queue exception gate",
-            ))?;
-        let owner = self
-            .submission
-            .as_mut()
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
-                "missing submission owner",
-            ))?;
-        let engine = self
-            .engine
-            .as_mut()
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
-                "missing queue engine",
-            ))?;
-        if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
-            return Err(NativeAqlSubmissionErrorV1::InvalidQueue(
-                "queue is not active",
-            ));
-        }
-        let (backend, resources) = (&mut engine.backend, &mut engine.resources);
-        let resource = resources
-            .iter_mut()
-            .find(|resource| resource.key == self.key)
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
-                "missing queue resources",
-            ))?;
-        let authority =
-            resource
-                .authority
-                .as_mut()
-                .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue(
-                    "released queue resources",
-                ))?;
-        let doorbell = self
-            .doorbell
-            .as_mut()
-            .ok_or(NativeAqlSubmissionErrorV1::InvalidQueue("missing doorbell"))?;
-        let mut native = LinuxAqlSubmissionBackendV1 {
-            memory: &mut backend.session,
-            ring: &mut authority.ring,
-            control: &mut authority.control,
-            doorbell,
-            exception,
-        };
-        let result = owner.submit_batch(batch, &mut native);
-        if let Err(error) = &result {
-            let ordinary_occupancy = matches!(
-                error,
-                NativeAqlSubmissionErrorV1::Ring(
-                    fe2o3_aql::AqlRingReservationError::Full
-                        | fe2o3_aql::AqlRingReservationError::InsufficientSpace { .. }
-                )
-            );
-            if !ordinary_occupancy {
-                self.terminal_poisoned = true;
+        self.submit_prepared_batch_classified(batch)
+            .map_err(NativeAqlSubmissionFailureV1::into_error)
+    }
+
+    fn submit_prepared_batch_classified<const N: usize>(
+        &mut self,
+        batch: AqlPreparedKernelDispatchBatchV2<N>,
+    ) -> Result<u64, NativeAqlSubmissionFailureV1> {
+        let result = (|| {
+            if self.terminal_poisoned {
+                return Err(NativeAqlSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::Poisoned,
+                ));
             }
+            let exception = self.exception.as_ref().ok_or({
+                NativeAqlSubmissionFailureV1::Terminal(NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "missing queue exception gate",
+                ))
+            })?;
+            let owner = self.submission.as_mut().ok_or({
+                NativeAqlSubmissionFailureV1::Terminal(NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "missing submission owner",
+                ))
+            })?;
+            let engine = self.engine.as_mut().ok_or({
+                NativeAqlSubmissionFailureV1::Terminal(NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "missing queue engine",
+                ))
+            })?;
+            if engine.phase(self.key) != Some(ComputeAqlQueuePhaseV1::Active) {
+                return Err(NativeAqlSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::InvalidQueue("queue is not active"),
+                ));
+            }
+            let (backend, resources) = (&mut engine.backend, &mut engine.resources);
+            let resource = resources
+                .iter_mut()
+                .find(|resource| resource.key == self.key)
+                .ok_or({
+                    NativeAqlSubmissionFailureV1::Terminal(
+                        NativeAqlSubmissionErrorV1::InvalidQueue("missing queue resources"),
+                    )
+                })?;
+            let authority = resource.authority.as_mut().ok_or({
+                NativeAqlSubmissionFailureV1::Terminal(NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "released queue resources",
+                ))
+            })?;
+            let doorbell = self.doorbell.as_mut().ok_or({
+                NativeAqlSubmissionFailureV1::Terminal(NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "missing doorbell",
+                ))
+            })?;
+            let mut native = LinuxAqlSubmissionBackendV1 {
+                memory: &mut backend.session,
+                ring: &mut authority.ring,
+                control: &mut authority.control,
+                doorbell,
+                exception,
+            };
+            owner.submit_batch_classified(batch, &mut native)
+        })();
+        if matches!(&result, Err(NativeAqlSubmissionFailureV1::Terminal(_))) {
+            self.poison_terminal();
         }
         result
     }
@@ -11117,13 +11207,45 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         templates: [CompletionPacketTemplateV1; N],
     ) -> Result<Gfx942CompletionBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.submit_with_completions_classified(templates)
+            .map_err(FixedDispatchSubmissionFailureV1::into_error)
+    }
+
+    fn submit_with_completions_classified<const N: usize>(
+        &mut self,
+        templates: [CompletionPacketTemplateV1; N],
+    ) -> Result<Gfx942CompletionBatchV1<N>, FixedDispatchSubmissionFailureV1> {
+        self.submit_with_completions_classified_using(templates, |session, packets| {
+            session.submit_prepared_batch_classified(packets)
+        })
+    }
+
+    fn submit_with_completions_classified_using<const N: usize>(
+        &mut self,
+        templates: [CompletionPacketTemplateV1; N],
+        submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942CompletionBatchV1<N>, FixedDispatchSubmissionFailureV1> {
         if self.terminal_poisoned {
-            return Err(Gfx942CompletionErrorV1::Poisoned.into());
+            return Err(FixedDispatchSubmissionFailureV1::Terminal(
+                Gfx942CompletionErrorV1::Poisoned.into(),
+            ));
         }
-        let bound = self.completion_owner.bind_batch(templates)?;
+        let bound = match self.completion_owner.bind_batch(templates) {
+            Ok(bound) => bound,
+            Err(error) => {
+                self.poison_terminal();
+                return Err(FixedDispatchSubmissionFailureV1::Terminal(error.into()));
+            }
+        };
         let (packets, retention) = bound.into_parts();
-        self.completion_owner.validate_bound(&retention)?;
-        match self.submit_prepared_batch(packets) {
+        if let Err(error) = self.completion_owner.validate_bound(&retention) {
+            self.poison_terminal();
+            return Err(FixedDispatchSubmissionFailureV1::Terminal(error.into()));
+        }
+        match submit(self, packets) {
             Ok(last_packet_id) => {
                 match self
                     .completion_owner
@@ -11132,27 +11254,26 @@ impl ComputeAqlQueueSessionV1 {
                     Ok(batch) => Ok(batch),
                     Err(error) => {
                         self.poison_terminal();
-                        Err(error.into())
+                        Err(FixedDispatchSubmissionFailureV1::Terminal(error.into()))
                     }
                 }
             }
-            Err(error) => {
-                let ordinary_occupancy = matches!(
-                    error,
-                    NativeAqlSubmissionErrorV1::Ring(
-                        fe2o3_aql::AqlRingReservationError::Full
-                            | fe2o3_aql::AqlRingReservationError::InsufficientSpace { .. }
-                    )
-                );
-                if ordinary_occupancy {
-                    if let Err(cancel_error) = self.completion_owner.cancel_bound(retention) {
-                        self.poison_terminal();
-                        return Err(cancel_error.into());
-                    }
-                } else {
-                    self.completion_owner.poison_owner();
+            Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
+                if let Err(cancel_error) = self.completion_owner.cancel_bound(retention) {
+                    self.poison_terminal();
+                    return Err(FixedDispatchSubmissionFailureV1::Terminal(
+                        cancel_error.into(),
+                    ));
                 }
-                Err(map_submission(error))
+                Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
+                    map_submission(error),
+                ))
+            }
+            Err(NativeAqlSubmissionFailureV1::Terminal(error)) => {
+                self.poison_terminal();
+                Err(FixedDispatchSubmissionFailureV1::Terminal(map_submission(
+                    error,
+                )))
             }
         }
     }
@@ -11177,31 +11298,91 @@ impl ComputeAqlQueueSessionV1 {
     fn submit_fixed_dispatch_inner<const N: usize>(
         &mut self,
     ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.submit_fixed_dispatch_inner_classified::<N>(FixedDispatchBindingModeV1::Ordinary)
+            .map_err(FixedDispatchSubmissionFailureV1::into_error)
+    }
+
+    fn submit_fixed_dispatch_inner_classified<const N: usize>(
+        &mut self,
+        mode: FixedDispatchBindingModeV1,
+    ) -> Result<Gfx942DispatchBatchV1<N>, FixedDispatchSubmissionFailureV1> {
         if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+            return Err(FixedDispatchSubmissionFailureV1::Terminal(
+                Gfx942DispatchBindingErrorV1::Poisoned.into(),
+            ));
         }
-        let templates = self
+        let binding = self
             .dispatch
             .as_mut()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
-            .bind_templates::<N>(self.key)?;
-        let generation = self
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            .and_then(|dispatch| dispatch.bind_templates::<N>(self.key));
+        let templates = self.classify_fixed_dispatch_binding(mode, binding)?;
+        let generation = match self
             .dispatch
             .as_ref()
             .expect("dispatch owner was just bound")
-            .active_generation()?;
-        match self.submit_with_completions(templates) {
-            Ok(completion) => Ok(wrap_published(completion, generation)),
+            .active_generation()
+        {
+            Ok(generation) => generation,
             Err(error) => {
-                let dispatch = self.dispatch.as_mut().expect("dispatch owner retained");
-                if self.terminal_poisoned {
-                    dispatch.poison();
-                } else if dispatch.cancel_binding(generation).is_err() {
-                    self.poison_terminal();
-                }
-                Err(error)
+                self.poison_terminal();
+                return Err(FixedDispatchSubmissionFailureV1::Terminal(error.into()));
             }
+        };
+        let completion = self.submit_with_completions_classified(templates);
+        let result = finish_fixed_dispatch_submission(generation, completion, |generation| {
+            self.dispatch
+                .as_mut()
+                .expect("dispatch owner retained")
+                .cancel_binding(generation)
+        });
+        if matches!(&result, Err(FixedDispatchSubmissionFailureV1::Terminal(_))) {
+            self.poison_terminal();
         }
+        result
+    }
+
+    #[cfg(test)]
+    fn submit_fixed_dispatch_inner_classified_with_test_owner(
+        &mut self,
+        owner: &mut super::dispatch_binding::TestOnlyDispatchGenerationOwnerV1,
+        template: impl FnOnce(u64) -> CompletionPacketTemplateV1,
+        native_submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<1>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942DispatchBatchV1<1>, FixedDispatchSubmissionFailureV1> {
+        let generation = owner
+            .bind_one()
+            .map_err(|error| FixedDispatchSubmissionFailureV1::Terminal(error.into()))?;
+        let completion =
+            self.submit_with_completions_classified_using([template(generation)], native_submit);
+        let result = finish_fixed_dispatch_submission(generation, completion, |generation| {
+            owner.cancel_binding(generation)
+        });
+        if matches!(&result, Err(FixedDispatchSubmissionFailureV1::Terminal(_))) {
+            self.poison_terminal();
+        }
+        result
+    }
+
+    fn classify_fixed_dispatch_binding<T>(
+        &mut self,
+        mode: FixedDispatchBindingModeV1,
+        binding: Result<T, Gfx942DispatchBindingErrorV1>,
+    ) -> Result<T, FixedDispatchSubmissionFailureV1> {
+        binding.map_err(|error| {
+            let error = error.into();
+            match mode {
+                FixedDispatchBindingModeV1::Ordinary => {
+                    FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)
+                }
+                FixedDispatchBindingModeV1::ExactPersistentAttachment => {
+                    self.poison_terminal();
+                    FixedDispatchSubmissionFailureV1::Terminal(error)
+                }
+            }
+        })
     }
 
     /// Polls every packet signal once and returns linear pending or completed custody.
@@ -13709,6 +13890,41 @@ mod tests {
         }
     }
 
+    fn test_completion_mapping(
+        queue: QueueKeyV1,
+        id: u64,
+    ) -> fe2o3_runtime_model::MemoryMappingKeyV1 {
+        fe2o3_runtime_model::MemoryMappingKeyV1 {
+            allocation: fe2o3_runtime_model::MemoryAllocationKeyV1 {
+                vm: queue.vm,
+                id: fe2o3_runtime_model::AllocationIdV1(id),
+                generation: fe2o3_runtime_model::AllocationGenerationV1(1),
+            },
+            id: fe2o3_runtime_model::MappingIdV1(id),
+        }
+    }
+
+    fn test_completion_template(
+        queue: QueueKeyV1,
+        dispatch_generation: u64,
+    ) -> CompletionPacketTemplateV1 {
+        CompletionPacketTemplateV1::new(
+            fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            fe2o3_aql::AqlDispatchOrderingV1::WaitForPrior,
+            0,
+            0,
+            fe2o3_aql::ObservedGpuAddressV1::new(0x40_0000).unwrap(),
+            fe2o3_aql::ObservedGpuAddressV1::new(0x50_0000).unwrap(),
+            16,
+            super::super::completion::CompletionDispatchGenerationBindingV1::new(
+                queue,
+                test_completion_mapping(queue, 30),
+                test_completion_mapping(queue, 31),
+                dispatch_generation,
+            ),
+        )
+    }
+
     fn persistent_restore_fixture(
         direction: Gfx942PersistentSdmaDirectionV1,
         id: u64,
@@ -14884,6 +15100,129 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_template_validation_rejection_is_clean_and_next_binding_can_publish() {
+        let queue = test_queue_key(170, 1);
+        let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+        for error in [
+            Gfx942DispatchBindingErrorV1::ZeroPacketCount,
+            Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum {
+                requested: GFX942_MAX_FIXED_DISPATCH_PACKETS_V1 + 1,
+                maximum: GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
+            },
+            Gfx942DispatchBindingErrorV1::WrongQueueGeneration,
+        ] {
+            let failure = session
+                .classify_fixed_dispatch_binding::<[CompletionPacketTemplateV1; 1]>(
+                    FixedDispatchBindingModeV1::Ordinary,
+                    Err(error),
+                )
+                .expect_err("ordinary pre-mutation validation must reject");
+            assert!(matches!(
+                failure,
+                FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(_)
+            ));
+            assert!(!session.terminal_poisoned);
+        }
+
+        let templates = session
+            .classify_fixed_dispatch_binding(
+                FixedDispatchBindingModeV1::Ordinary,
+                Ok([test_completion_template(queue, 8)]),
+            )
+            .expect("a corrected batch remains admissible");
+        let _published = session
+            .submit_with_completions_classified_using(templates, |_, packets| {
+                assert_eq!(packets.packet_count(), 1);
+                Ok(41)
+            })
+            .expect("clean validation rejection leaves completion submission usable");
+        assert!(!session.terminal_poisoned);
+    }
+
+    #[test]
+    fn persistent_exact_occupancy_retry_restores_every_layer_then_succeeds() {
+        for occupancy in [
+            fe2o3_aql::AqlRingReservationError::Full,
+            fe2o3_aql::AqlRingReservationError::InsufficientSpace {
+                requested: 1,
+                available: 0,
+            },
+        ] {
+            let queue = test_queue_key(171, 1);
+            let (mut session, prepared, _) =
+                prepared_persistent_compute_cancellation_fixture(queue, 6969, None, Some(7));
+            let expected_binding = prepared.binding;
+            let mut dispatch =
+                super::super::dispatch_binding::TestOnlyDispatchGenerationOwnerV1::after_recycled(
+                    7,
+                )
+                .expect("fixture admits a production-reachable recycled predecessor");
+
+            let failure = session
+                .submit_directional_persistent_fixed_dispatch_v1_using(prepared, |session| {
+                    session.submit_fixed_dispatch_inner_classified_with_test_owner(
+                        &mut dispatch,
+                        |generation| test_completion_template(queue, generation),
+                        |_, packets| {
+                            assert_eq!(packets.packet_count(), 1);
+                            Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(
+                                NativeAqlSubmissionErrorV1::Ring(occupancy),
+                            ))
+                        },
+                    )
+                })
+                .expect_err("exact pre-side-effect occupancy must restore retry custody");
+            assert!(matches!(
+                failure.error(),
+                ComputeAqlQueueSessionErrorV1::Native("submission ring occupancy")
+            ));
+            let (_, retryable) = failure.into_parts();
+            let retryable = retryable.expect("outer persistent receipt is restored");
+            assert_eq!(retryable.binding, expected_binding);
+            assert_eq!(dispatch.predecessor_generation(), 7);
+            assert_eq!(dispatch.last_cancelled_generation(), Some(8));
+            assert!(matches!(
+                dispatch.active_generation(),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+            let attachment = session
+                .persistent_compute
+                .as_ref()
+                .expect("persistent attachment is restored");
+            assert_eq!(attachment.predecessor_dispatch_generation, Some(7));
+            assert!(matches!(
+                attachment.state,
+                PersistentComputeUseStateV1::Prepared(_)
+            ));
+            assert!(!session.terminal_poisoned);
+
+            let _published = session
+                .submit_directional_persistent_fixed_dispatch_v1_using(retryable, |session| {
+                    session.submit_fixed_dispatch_inner_classified_with_test_owner(
+                        &mut dispatch,
+                        |generation| test_completion_template(queue, generation),
+                        |_, packets| {
+                            assert_eq!(packets.packet_count(), 1);
+                            Ok(64)
+                        },
+                    )
+                })
+                .expect("the unchanged persistent receipt succeeds exactly once on retry");
+            assert!(matches!(dispatch.active_generation(), Ok(9)));
+            let attachment = session
+                .persistent_compute
+                .as_ref()
+                .expect("successful retry retains published attachment custody");
+            assert_eq!(attachment.predecessor_dispatch_generation, Some(7));
+            assert!(matches!(
+                attachment.state,
+                PersistentComputeUseStateV1::Published(_)
+            ));
+            assert!(!session.terminal_poisoned);
+        }
+    }
+
+    #[test]
     fn prepared_persistent_compute_cancellation_restores_initialized_rebind_input() {
         let queue = test_queue_key(161, 1);
         let digest = [0xa5; 32];
@@ -14961,6 +15300,94 @@ mod tests {
         assert_eq!(session.detached_next_insertion_index, Some(0));
         assert_eq!(session.detached_data_count, 0);
         assert!(session.detached_data_identities.is_empty());
+    }
+
+    #[test]
+    fn exact_prepared_persistent_submit_structural_failure_is_terminal_and_opaque() {
+        let queue = test_queue_key(167, 1);
+        let (mut session, prepared, _) = prepared_persistent_compute_cancellation_fixture(
+            queue,
+            6767,
+            Some([0xe9; 32]),
+            Some(7),
+        );
+
+        let failure = session
+            .submit_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect_err("missing retained dispatch owner is a terminal structural failure");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::ResourcePhase
+            )
+        ));
+        let (_, retryable) = failure.into_parts();
+        assert!(retryable.is_none());
+        assert!(session.terminal_poisoned);
+        assert_eq!(
+            session.persistent_compute_terminal_stage_v1(),
+            Some(crate::Gfx942PersistentComputeTerminalStageV1::Attached)
+        );
+        let attachment = session
+            .persistent_compute
+            .as_ref()
+            .expect("terminal submit retains the exact attachment");
+        assert!(matches!(
+            attachment.state,
+            PersistentComputeUseStateV1::Quarantined
+        ));
+        assert!(matches!(
+            attachment.terminal_custody,
+            Some(PersistentComputeTerminalNativeCustodyV1::Attached)
+        ));
+        assert!(matches!(
+            session.release_retained_persistent_fixed_dispatch_control_v1(),
+            Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::Poisoned
+            ))
+        ));
+    }
+
+    #[test]
+    fn foreign_prepared_persistent_submit_receipt_remains_recoverable() {
+        let producer_key = test_queue_key(168, 1);
+        let receiver_key = test_queue_key(169, 1);
+        let (mut producer, prepared, _) = prepared_persistent_compute_cancellation_fixture(
+            producer_key,
+            6868,
+            Some([0xfa; 32]),
+            Some(7),
+        );
+        let mut receiver = persistent_compute_cancellation_test_session(receiver_key, None, None);
+
+        let failure = receiver
+            .submit_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect_err("foreign receipt must be rejected before local attachment consumption");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                Gfx942DispatchBindingErrorV1::ResourcePhase
+            )
+        ));
+        let (_, retryable) = failure.into_parts();
+        let prepared = retryable.expect("foreign receipt remains owned by its producer");
+        assert!(!receiver.terminal_poisoned);
+        assert!(receiver.persistent_compute.is_none());
+        receiver.terminal_poisoned = true;
+        let failure = receiver
+            .submit_directional_persistent_fixed_dispatch_v1(prepared)
+            .expect_err("terminal foreign receiver cannot absorb another queue's receipt");
+        assert!(matches!(
+            failure.error(),
+            ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::Poisoned)
+        ));
+        let (_, retryable) = failure.into_parts();
+        let prepared = retryable.expect("terminal foreign receiver returns exact custody");
+        assert!(
+            producer
+                .cancel_prepared_directional_persistent_fixed_dispatch_v1(prepared)
+                .is_ok()
+        );
     }
 
     #[test]

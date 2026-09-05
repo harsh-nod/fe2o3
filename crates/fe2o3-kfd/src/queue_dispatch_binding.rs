@@ -1165,6 +1165,62 @@ impl DispatchGenerationOwnerV1 {
     }
 }
 
+/// Test-only logical dispatch owner for exercising queue-live orchestration
+/// without fabricating code, kernarg, data, or native memory authority.
+#[cfg(test)]
+pub(super) struct TestOnlyDispatchGenerationOwnerV1 {
+    generation: DispatchGenerationOwnerV1,
+    predecessor_generation: u64,
+    last_cancelled_generation: Option<u64>,
+}
+
+#[cfg(test)]
+impl TestOnlyDispatchGenerationOwnerV1 {
+    pub(super) fn after_recycled(
+        predecessor_generation: u64,
+    ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        let generation = DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
+        if generation.next_generation != predecessor_generation + 1
+            || generation.phase != DispatchOwnerPhaseV1::Prepared
+            || generation.recycled_generation.is_some()
+        {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        Ok(Self {
+            generation,
+            predecessor_generation,
+            last_cancelled_generation: None,
+        })
+    }
+
+    pub(super) fn bind_one(&mut self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        let generation = self.generation.next()?;
+        self.generation.commit_begin(generation);
+        Ok(generation)
+    }
+
+    pub(super) fn cancel_binding(
+        &mut self,
+        generation: u64,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.cancel(generation)?;
+        self.last_cancelled_generation = Some(generation);
+        Ok(())
+    }
+
+    pub(super) const fn predecessor_generation(&self) -> u64 {
+        self.predecessor_generation
+    }
+
+    pub(super) const fn last_cancelled_generation(&self) -> Option<u64> {
+        self.last_cancelled_generation
+    }
+
+    pub(super) fn active_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.generation.active()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolvedCodeIdentityV1 {
     authenticated: KernelIdentityInputsV1,

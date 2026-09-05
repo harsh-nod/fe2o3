@@ -52,6 +52,21 @@ pub(crate) enum NativeAqlSubmissionErrorV1 {
     Doorbell,
 }
 
+/// Side-effect classification for one kernel-dispatch batch submission.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum NativeAqlSubmissionFailureV1 {
+    RetryableBeforeSideEffect(NativeAqlSubmissionErrorV1),
+    Terminal(NativeAqlSubmissionErrorV1),
+}
+
+impl NativeAqlSubmissionFailureV1 {
+    pub(super) fn into_error(self) -> NativeAqlSubmissionErrorV1 {
+        match self {
+            Self::RetryableBeforeSideEffect(error) | Self::Terminal(error) => error,
+        }
+    }
+}
+
 /// Side-effect classification for the isolated BARRIER_AND submission.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum NativeBarrierAndSubmissionFailureV1 {
@@ -103,40 +118,54 @@ impl NativeAqlSubmissionOwnerV1 {
         self.submit_batch(AqlPreparedKernelDispatchBatchV2::one(packet), backend)
     }
 
+    #[cfg(test)]
     pub(super) fn submit_batch<const N: usize, B: NativeAqlSubmissionBackendV1>(
         &mut self,
         batch: AqlPreparedKernelDispatchBatchV2<N>,
         backend: &mut B,
     ) -> Result<u64, NativeAqlSubmissionErrorV1> {
+        self.submit_batch_classified(batch, backend)
+            .map_err(NativeAqlSubmissionFailureV1::into_error)
+    }
+
+    pub(super) fn submit_batch_classified<const N: usize, B: NativeAqlSubmissionBackendV1>(
+        &mut self,
+        batch: AqlPreparedKernelDispatchBatchV2<N>,
+        backend: &mut B,
+    ) -> Result<u64, NativeAqlSubmissionFailureV1> {
         if self.phase != SubmissionPhaseV1::Ready {
-            return Err(NativeAqlSubmissionErrorV1::Poisoned);
+            return Err(NativeAqlSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::Poisoned,
+            ));
         }
 
         if let Err(error) = backend.check_currentness() {
             self.phase = SubmissionPhaseV1::Poisoned;
-            return Err(error);
+            return Err(NativeAqlSubmissionFailureV1::Terminal(error));
         }
         let (observed_write, observed_read) = match backend.observe_counters_acquire() {
             Ok(observation) => observation,
             Err(error) => {
                 self.phase = SubmissionPhaseV1::Poisoned;
-                return Err(error);
+                return Err(NativeAqlSubmissionFailureV1::Terminal(error));
             }
         };
         let expected_write = self.ring.write();
         if observed_write != expected_write {
             self.phase = SubmissionPhaseV1::Poisoned;
-            return Err(NativeAqlSubmissionErrorV1::WriteCounterReplay {
-                expected: expected_write,
-                observed: observed_write,
-            });
+            return Err(NativeAqlSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::WriteCounterReplay {
+                    expected: expected_write,
+                    observed: observed_write,
+                },
+            ));
         }
 
         // This is the final check after bounded read/capacity preparation and
         // before the first shared-memory side effect.
         if let Err(error) = backend.check_currentness() {
             self.phase = SubmissionPhaseV1::Poisoned;
-            return Err(error);
+            return Err(NativeAqlSubmissionFailureV1::Terminal(error));
         }
         let reservation = match self
             .ring
@@ -144,34 +173,48 @@ impl NativeAqlSubmissionOwnerV1 {
         {
             Ok(reservation) => reservation,
             Err(error) if retryable_occupancy(&error) => {
-                return Err(NativeAqlSubmissionErrorV1::Ring(error));
+                return Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(
+                    NativeAqlSubmissionErrorV1::Ring(error),
+                ));
             }
             Err(error) => {
                 self.phase = SubmissionPhaseV1::Poisoned;
-                return Err(NativeAqlSubmissionErrorV1::Ring(error));
+                return Err(NativeAqlSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::Ring(error),
+                ));
             }
         };
 
         // From here on, even a reported error may follow a native side effect.
         self.phase = SubmissionPhaseV1::Poisoned;
-        let old_write = backend.fetch_add_write_acq_rel(u64::from(batch.packet_count()))?;
+        let old_write = backend
+            .fetch_add_write_acq_rel(u64::from(batch.packet_count()))
+            .map_err(NativeAqlSubmissionFailureV1::Terminal)?;
         if old_write != reservation.first_packet_id() {
-            return Err(NativeAqlSubmissionErrorV1::WriteCounterRace {
-                expected: reservation.first_packet_id(),
-                observed: old_write,
-            });
+            return Err(NativeAqlSubmissionFailureV1::Terminal(
+                NativeAqlSubmissionErrorV1::WriteCounterRace {
+                    expected: reservation.first_packet_id(),
+                    observed: old_write,
+                },
+            ));
         }
 
         let mut target = NativePacketBatchTargetV1 {
             backend,
             reservation: &reservation,
         };
-        batch.publish_with(&mut target)?;
+        batch
+            .publish_with(&mut target)
+            .map_err(NativeAqlSubmissionFailureV1::Terminal)?;
 
         // Every packet is already published here. Failure prevents MMIO but
         // is not recoverable or retryable by this owner.
-        backend.check_currentness()?;
-        backend.ring_doorbell_release(reservation.last_packet_id())?;
+        backend
+            .check_currentness()
+            .map_err(NativeAqlSubmissionFailureV1::Terminal)?;
+        backend
+            .ring_doorbell_release(reservation.last_packet_id())
+            .map_err(NativeAqlSubmissionFailureV1::Terminal)?;
         self.phase = SubmissionPhaseV1::Ready;
         Ok(reservation.last_packet_id())
     }
@@ -1083,26 +1126,29 @@ mod tests {
         let mut full = NativeAqlSubmissionOwnerV1::from_counters(4_096, 64, 0).unwrap();
         let mut full_backend = FakeBackend::new(64, 0);
         assert_eq!(
-            full.submit_batch(batch::<2>(), &mut full_backend),
-            Err(NativeAqlSubmissionErrorV1::Ring(
-                AqlRingReservationError::Full
+            full.submit_batch_classified(batch::<2>(), &mut full_backend),
+            Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(
+                NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full)
             ))
         );
         assert_eq!(full_backend.trace, ["check", "observe", "check"]);
         assert_eq!(full_backend.write.load(Ordering::Relaxed), 64);
         assert!(full_backend.doorbells.is_empty());
         full_backend.read.store(2, Ordering::Release);
-        assert_eq!(full.submit_batch(batch::<2>(), &mut full_backend), Ok(65));
+        assert_eq!(
+            full.submit_batch_classified(batch::<2>(), &mut full_backend),
+            Ok(65)
+        );
 
         let mut insufficient = NativeAqlSubmissionOwnerV1::from_counters(4_096, 63, 0).unwrap();
         let mut insufficient_backend = FakeBackend::new(63, 0);
         assert_eq!(
-            insufficient.submit_batch(batch::<2>(), &mut insufficient_backend),
-            Err(NativeAqlSubmissionErrorV1::Ring(
-                AqlRingReservationError::InsufficientSpace {
+            insufficient.submit_batch_classified(batch::<2>(), &mut insufficient_backend),
+            Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(
+                NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::InsufficientSpace {
                     requested: 2,
                     available: 1,
-                }
+                })
             ))
         );
         assert_eq!(insufficient_backend.trace, ["check", "observe", "check"]);
@@ -1110,9 +1156,48 @@ mod tests {
         assert!(insufficient_backend.doorbells.is_empty());
         insufficient_backend.read.store(2, Ordering::Release);
         assert_eq!(
-            insufficient.submit_batch(batch::<2>(), &mut insufficient_backend),
+            insufficient.submit_batch_classified(batch::<2>(), &mut insufficient_backend),
             Ok(64)
         );
+    }
+
+    #[test]
+    fn occupancy_shaped_backend_errors_are_terminal_at_every_checkpoint() {
+        for failed_check in [1, 2, 3] {
+            for insufficient in [false, true] {
+                let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+                let mut backend = FakeBackend::new(0, 0);
+                backend.fail_check = Some(failed_check);
+                backend.fail_check_error =
+                    Some(NativeAqlSubmissionErrorV1::Ring(if insufficient {
+                        AqlRingReservationError::InsufficientSpace {
+                            requested: 1,
+                            available: 0,
+                        }
+                    } else {
+                        AqlRingReservationError::Full
+                    }));
+
+                let result = owner.submit_batch_classified(batch::<1>(), &mut backend);
+                assert!(matches!(
+                    result,
+                    Err(NativeAqlSubmissionFailureV1::Terminal(
+                        NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full)
+                            | NativeAqlSubmissionErrorV1::Ring(
+                                AqlRingReservationError::InsufficientSpace { .. }
+                            )
+                    ))
+                ));
+                let trace = backend.trace.clone();
+                assert_eq!(
+                    owner.submit_batch_classified(batch::<1>(), &mut backend),
+                    Err(NativeAqlSubmissionFailureV1::Terminal(
+                        NativeAqlSubmissionErrorV1::Poisoned
+                    ))
+                );
+                assert_eq!(backend.trace, trace);
+            }
+        }
     }
 
     #[test]
@@ -1166,8 +1251,8 @@ mod tests {
             let mut backend = FakeBackend::new(0, 0);
             backend.fail_after = Some(failure);
             assert_eq!(
-                owner.submit_batch(batch::<4>(), &mut backend),
-                Err(expected)
+                owner.submit_batch_classified(batch::<4>(), &mut backend),
+                Err(NativeAqlSubmissionFailureV1::Terminal(expected))
             );
             assert_eq!(backend.write.load(Ordering::Relaxed), 4, "{failure:?}");
             assert!(backend.doorbells.len() <= 1, "{failure:?}");
@@ -1179,8 +1264,10 @@ mod tests {
 
             let trace = backend.trace.clone();
             assert_eq!(
-                owner.submit_batch(batch::<4>(), &mut backend),
-                Err(NativeAqlSubmissionErrorV1::Poisoned),
+                owner.submit_batch_classified(batch::<4>(), &mut backend),
+                Err(NativeAqlSubmissionFailureV1::Terminal(
+                    NativeAqlSubmissionErrorV1::Poisoned
+                )),
                 "{failure:?}"
             );
             assert_eq!(backend.trace, trace, "{failure:?}");
@@ -1188,6 +1275,49 @@ mod tests {
                 let _terminal_owner = owner;
             }
             assert_eq!(backend.trace, trace, "Drop must not clean up {failure:?}");
+        }
+    }
+
+    #[test]
+    fn occupancy_shaped_batch_side_effect_errors_are_terminal_and_sticky() {
+        for failure in [
+            FailureAfterV1::FetchAdd,
+            FailureAfterV1::Body(0),
+            FailureAfterV1::Header(0),
+            FailureAfterV1::Doorbell,
+        ] {
+            for insufficient in [false, true] {
+                let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+                let mut backend = FakeBackend::new(0, 0);
+                backend.fail_after = Some(failure);
+                backend.fail_error = Some(NativeAqlSubmissionErrorV1::Ring(if insufficient {
+                    AqlRingReservationError::InsufficientSpace {
+                        requested: 1,
+                        available: 0,
+                    }
+                } else {
+                    AqlRingReservationError::Full
+                }));
+
+                let result = owner.submit_batch_classified(batch::<1>(), &mut backend);
+                assert!(matches!(
+                    result,
+                    Err(NativeAqlSubmissionFailureV1::Terminal(
+                        NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full)
+                            | NativeAqlSubmissionErrorV1::Ring(
+                                AqlRingReservationError::InsufficientSpace { .. }
+                            )
+                    ))
+                ));
+                let trace = backend.trace.clone();
+                assert_eq!(
+                    owner.submit_batch_classified(batch::<1>(), &mut backend),
+                    Err(NativeAqlSubmissionFailureV1::Terminal(
+                        NativeAqlSubmissionErrorV1::Poisoned
+                    ))
+                );
+                assert_eq!(backend.trace, trace);
+            }
         }
     }
 
