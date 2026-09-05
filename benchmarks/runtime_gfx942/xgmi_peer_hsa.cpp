@@ -1,6 +1,8 @@
 #include <hsa/hsa.h>
 #include <hsa/hsa_ext_amd.h>
 
+#include "native_benchmark_args.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -203,20 +205,23 @@ int main(int argc, char **argv) {
                  "usage: xgmi-peer-hsa <gpu-0> <gpu-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1>\n");
     return 2;
   }
-  const size_t indices[2] = {std::strtoull(argv[1], nullptr, 10),
-                             std::strtoull(argv[2], nullptr, 10)};
-  const size_t bytes = std::strtoull(argv[3], nullptr, 10);
-  const size_t depth = std::strtoull(argv[4], nullptr, 10);
-  const size_t warmups = std::strtoull(argv[5], nullptr, 10);
-  const size_t samples = std::strtoull(argv[6], nullptr, 10);
-  const uint64_t unique_ids[2] = {std::strtoull(argv[7], nullptr, 0),
-                                  std::strtoull(argv[8], nullptr, 0)};
-  if (indices[0] == indices[1] || bytes == 0 || depth == 0 || samples == 0 ||
+  size_t indices[2] = {};
+  uint64_t unique_ids[2] = {};
+  fe2o3::runtime_gfx942::WorkloadShape workload;
+  if (!fe2o3::runtime_gfx942::parse_size(argv[1], &indices[0]) ||
+      !fe2o3::runtime_gfx942::parse_size(argv[2], &indices[1]) ||
+      !fe2o3::runtime_gfx942::parse_workload_shape(
+          argv[3], argv[4], argv[5], argv[6], 1, &workload) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[7], &unique_ids[0]) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[8], &unique_ids[1]) ||
+      indices[0] == indices[1] ||
       unique_ids[0] == 0 || unique_ids[1] == 0 ||
-      unique_ids[0] == unique_ids[1] ||
-      bytes > std::numeric_limits<size_t>::max() / depth ||
-      warmups > std::numeric_limits<size_t>::max() - samples)
+      unique_ids[0] == unique_ids[1])
     return 2;
+  const size_t bytes = workload.bytes;
+  const size_t depth = workload.depth;
+  const size_t warmups = workload.warmups;
+  const size_t samples = workload.samples;
 
   HSA_CHECK(hsa_init());
   bool xnack_enabled = true;
@@ -278,7 +283,7 @@ int main(int argc, char **argv) {
   std::vector<uint64_t> forward_samples, reverse_samples;
   forward_samples.reserve(samples);
   reverse_samples.reserve(samples);
-  for (size_t round = 0; round < warmups + samples; ++round) {
+  for (size_t round = 0; round < workload.total_iterations; ++round) {
     const uint64_t forward_ns = run_direction(
         forward, gpus[0], gpus[1], cpu, bytes, round, 0);
     const uint64_t reverse_ns = run_direction(
@@ -304,8 +309,10 @@ int main(int argc, char **argv) {
       static_cast<unsigned long long>(unique_ids[1]), targets[0], targets[1],
       bytes, depth, warmups, samples,
       static_cast<unsigned long long>(forward_p50),
-      static_cast<unsigned long long>(forward_p95), gbps(bytes * depth, forward_p50),
+      static_cast<unsigned long long>(forward_p95),
+      gbps(workload.transfer_bytes, forward_p50),
       static_cast<unsigned long long>(reverse_p50),
-      static_cast<unsigned long long>(reverse_p95), gbps(bytes * depth, reverse_p50));
+      static_cast<unsigned long long>(reverse_p95),
+      gbps(workload.transfer_bytes, reverse_p50));
   return 0;
 }

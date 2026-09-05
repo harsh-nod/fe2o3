@@ -1,12 +1,13 @@
 #include <hip/hip_runtime.h>
 
+#include "native_benchmark_args.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <vector>
 
 #define HIP_CHECK(call)                                                        \
@@ -131,19 +132,23 @@ int main(int argc, char **argv) {
                  "usage: xgmi-peer-hip <device-0> <device-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1>\n");
     return 2;
   }
-  const int devices[2] = {std::atoi(argv[1]), std::atoi(argv[2])};
-  const size_t bytes = std::strtoull(argv[3], nullptr, 10);
-  const size_t depth = std::strtoull(argv[4], nullptr, 10);
-  const size_t warmups = std::strtoull(argv[5], nullptr, 10);
-  const size_t samples = std::strtoull(argv[6], nullptr, 10);
-  const uint64_t unique_ids[2] = {std::strtoull(argv[7], nullptr, 0),
-                                  std::strtoull(argv[8], nullptr, 0)};
-  if (devices[0] == devices[1] || bytes == 0 || depth == 0 || samples == 0 ||
+  int devices[2] = {};
+  uint64_t unique_ids[2] = {};
+  fe2o3::runtime_gfx942::WorkloadShape workload;
+  if (!fe2o3::runtime_gfx942::parse_device_index(argv[1], &devices[0]) ||
+      !fe2o3::runtime_gfx942::parse_device_index(argv[2], &devices[1]) ||
+      !fe2o3::runtime_gfx942::parse_workload_shape(
+          argv[3], argv[4], argv[5], argv[6], 1, &workload) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[7], &unique_ids[0]) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[8], &unique_ids[1]) ||
+      devices[0] == devices[1] ||
       unique_ids[0] == 0 || unique_ids[1] == 0 ||
-      unique_ids[0] == unique_ids[1] ||
-      bytes > std::numeric_limits<size_t>::max() / depth ||
-      warmups > std::numeric_limits<size_t>::max() - samples)
+      unique_ids[0] == unique_ids[1])
     return 2;
+  const size_t bytes = workload.bytes;
+  const size_t depth = workload.depth;
+  const size_t warmups = workload.warmups;
+  const size_t samples = workload.samples;
 
   hipDeviceProp_t properties[2] = {};
   for (size_t index = 0; index < 2; ++index) {
@@ -173,7 +178,7 @@ int main(int argc, char **argv) {
   std::vector<uint64_t> forward_samples, reverse_samples;
   forward_samples.reserve(samples);
   reverse_samples.reserve(samples);
-  for (size_t round = 0; round < warmups + samples; ++round) {
+  for (size_t round = 0; round < workload.total_iterations; ++round) {
     const uint64_t forward_ns =
         run_direction(forward, devices[0], devices[1], bytes, round, 0);
     const uint64_t reverse_ns =
@@ -198,8 +203,10 @@ int main(int argc, char **argv) {
       static_cast<unsigned long long>(unique_ids[1]), properties[0].gcnArchName,
       properties[1].gcnArchName, bytes, depth, warmups, samples,
       static_cast<unsigned long long>(forward_p50),
-      static_cast<unsigned long long>(forward_p95), gbps(bytes * depth, forward_p50),
+      static_cast<unsigned long long>(forward_p95),
+      gbps(workload.transfer_bytes, forward_p50),
       static_cast<unsigned long long>(reverse_p50),
-      static_cast<unsigned long long>(reverse_p95), gbps(bytes * depth, reverse_p50));
+      static_cast<unsigned long long>(reverse_p95),
+      gbps(workload.transfer_bytes, reverse_p50));
   return 0;
 }

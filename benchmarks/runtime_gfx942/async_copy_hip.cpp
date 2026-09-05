@@ -1,5 +1,7 @@
 #include <hip/hip_runtime.h>
 
+#include "native_benchmark_args.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -50,13 +52,20 @@ int main(int argc, char** argv) {
                  "usage: async-copy-hip <device-index> <bytes> <depth> <warmups> <samples> <expected-unique-id>\n");
     return 2;
   }
-  int device_index = std::atoi(argv[1]);
-  size_t bytes = std::strtoull(argv[2], nullptr, 10);
-  size_t depth = std::strtoull(argv[3], nullptr, 10);
-  size_t warmups = std::strtoull(argv[4], nullptr, 10);
-  size_t samples = std::strtoull(argv[5], nullptr, 10);
-  uint64_t expected_unique_id = std::strtoull(argv[6], nullptr, 0);
-  if (bytes == 0 || depth == 0 || samples == 0 || expected_unique_id == 0) return 2;
+  int device_index = 0;
+  uint64_t expected_unique_id = 0;
+  fe2o3::runtime_gfx942::WorkloadShape workload;
+  if (!fe2o3::runtime_gfx942::parse_device_index(argv[1], &device_index) ||
+      !fe2o3::runtime_gfx942::parse_workload_shape(
+          argv[2], argv[3], argv[4], argv[5], 1, &workload) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[6],
+                                              &expected_unique_id) ||
+      expected_unique_id == 0)
+    return 2;
+  const size_t bytes = workload.bytes;
+  const size_t depth = workload.depth;
+  const size_t warmups = workload.warmups;
+  const size_t samples = workload.samples;
   HIP_CHECK(hipSetDevice(device_index));
   hipUUID uuid{};
   hipDeviceProp_t properties{};
@@ -81,7 +90,8 @@ int main(int argc, char** argv) {
   std::vector<uint64_t> h2d, d2h;
   h2d.reserve(samples);
   d2h.reserve(samples);
-  for (size_t iteration = 0; iteration < warmups + samples; ++iteration) {
+  for (size_t iteration = 0; iteration < workload.total_iterations;
+       ++iteration) {
     for (size_t i = 0; i < depth; ++i) {
       uint8_t value = round_pattern(iteration, i);
       std::memset(upload[i], value, bytes);
@@ -136,9 +146,11 @@ int main(int argc, char** argv) {
       device_index, static_cast<unsigned long long>(expected_unique_id),
       properties.gcnArchName, bytes, depth, warmups, samples,
       static_cast<unsigned long long>(h2d_p50),
-      static_cast<unsigned long long>(h2d_p95), gbps(bytes * depth, h2d_p50),
+      static_cast<unsigned long long>(h2d_p95),
+      gbps(workload.transfer_bytes, h2d_p50),
       static_cast<unsigned long long>(d2h_p50),
-      static_cast<unsigned long long>(d2h_p95), gbps(bytes * depth, d2h_p50),
+      static_cast<unsigned long long>(d2h_p95),
+      gbps(workload.transfer_bytes, d2h_p50),
       static_cast<unsigned long long>(pool_ns));
   return 0;
 }

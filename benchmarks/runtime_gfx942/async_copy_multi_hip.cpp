@@ -1,5 +1,7 @@
 #include <hip/hip_runtime.h>
 
+#include "native_benchmark_args.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -50,19 +52,27 @@ int main(int argc, char** argv) {
                  "usage: async-copy-multi-hip <device-0> <device-1> <bytes> <depth-per-device> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1>\n");
     return 2;
   }
-  const int devices[2] = {std::atoi(argv[1]), std::atoi(argv[2])};
-  size_t bytes = std::strtoull(argv[3], nullptr, 10);
-  size_t depth = std::strtoull(argv[4], nullptr, 10);
-  size_t warmups = std::strtoull(argv[5], nullptr, 10);
-  size_t samples = std::strtoull(argv[6], nullptr, 10);
-  const uint64_t expected_unique_ids[2] = {
-      std::strtoull(argv[7], nullptr, 0), std::strtoull(argv[8], nullptr, 0)};
-  if (devices[0] == devices[1] || bytes == 0 || depth == 0 || samples == 0 ||
+  int devices[2] = {};
+  uint64_t expected_unique_ids[2] = {};
+  fe2o3::runtime_gfx942::WorkloadShape workload;
+  if (!fe2o3::runtime_gfx942::parse_device_index(argv[1], &devices[0]) ||
+      !fe2o3::runtime_gfx942::parse_device_index(argv[2], &devices[1]) ||
+      !fe2o3::runtime_gfx942::parse_workload_shape(
+          argv[3], argv[4], argv[5], argv[6], 2, &workload) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[7],
+                                              &expected_unique_ids[0]) ||
+      !fe2o3::runtime_gfx942::parse_unique_id(argv[8],
+                                              &expected_unique_ids[1]) ||
+      devices[0] == devices[1] ||
       expected_unique_ids[0] == 0 || expected_unique_ids[1] == 0 ||
       expected_unique_ids[0] == expected_unique_ids[1])
     return 2;
+  const size_t bytes = workload.bytes;
+  const size_t depth = workload.depth;
+  const size_t warmups = workload.warmups;
+  const size_t samples = workload.samples;
 
-  const size_t total = depth * 2;
+  const size_t total = workload.total_depth;
   std::vector<hipStream_t> streams(total);
   std::vector<uint8_t*> upload(total), download(total);
   std::vector<void*> device_memory(total);
@@ -87,7 +97,8 @@ int main(int argc, char** argv) {
   std::vector<uint64_t> h2d, d2h;
   h2d.reserve(samples);
   d2h.reserve(samples);
-  for (size_t iteration = 0; iteration < warmups + samples; ++iteration) {
+  for (size_t iteration = 0; iteration < workload.total_iterations;
+       ++iteration) {
     for (size_t device = 0; device < 2; ++device)
       for (size_t i = 0; i < depth; ++i) {
         const size_t index = device * depth + i;
@@ -157,8 +168,10 @@ int main(int argc, char** argv) {
       static_cast<unsigned long long>(expected_unique_ids[1]),
       properties[0].gcnArchName, properties[1].gcnArchName, bytes, depth,
       warmups, samples, static_cast<unsigned long long>(h2d_p50),
-      static_cast<unsigned long long>(h2d_p95), gbps(bytes * total, h2d_p50),
+      static_cast<unsigned long long>(h2d_p95),
+      gbps(workload.transfer_bytes, h2d_p50),
       static_cast<unsigned long long>(d2h_p50),
-      static_cast<unsigned long long>(d2h_p95), gbps(bytes * total, d2h_p50));
+      static_cast<unsigned long long>(d2h_p95),
+      gbps(workload.transfer_bytes, d2h_p50));
   return 0;
 }
